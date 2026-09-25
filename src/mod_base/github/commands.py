@@ -1,4 +1,11 @@
-"""``download`` and ``budget`` (MB1). Flags are frozen by SPEC §2.2."""
+"""``download`` and ``budget`` (MB1). Flags are frozen by SPEC §2.2.
+
+``download`` fetches one kit artifact by immutable id through a read-only client and extracts it
+with the bounded-ZIP limits of its artifact kind. ``budget`` is Quick Skin's
+``github_api_budget_snapshot``: one advisory ``/rate_limit`` read printed as canonical JSON of the
+numeric ``core`` counters only; an unavailable snapshot is reported on stderr and never fails the
+step, because telemetry can neither authorize nor reject evidence.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +13,7 @@ import argparse
 import sys
 
 from mod_base import cli
-from mod_base.errors import MbError
+from mod_base.errors import MbError, single_line
 from mod_base.github import api as github_api
 from mod_base.github import artifacts
 from mod_base.io.bounded_zip import LIMITS_BY_KIND
@@ -39,6 +46,12 @@ def run_download(args: argparse.Namespace) -> int:
 
 
 def run_budget(args: argparse.Namespace) -> int:
-    client = github_api.from_environment(cli.environ())
-    sys.stdout.buffer.write(canonical_json(client.rate_limit_snapshot()))
+    try:
+        counters = github_api.from_environment(cli.environ()).rate_limit_snapshot()
+    except MbError as exc:
+        print(f"GitHub REST core budget telemetry unavailable ({single_line(exc.reason, limit=60)}).",
+              file=sys.stderr)
+        return 0
+    sys.stdout.write(canonical_json(counters).decode("ascii"))
+    sys.stdout.flush()
     return 0

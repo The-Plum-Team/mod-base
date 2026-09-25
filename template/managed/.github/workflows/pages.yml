@@ -1,0 +1,256 @@
+# >>> mod-base managed: pages caller v1 — edit only in The-Plum-Team/mod-base template/managed/.github/workflows/pages.yml
+name: Project site
+
+# Privileged publication always executes the protected default-branch head (github.sha) together
+# with the mod-base commit pinned below. Producers only wake it; every artifact is reselected and
+# revalidated as hostile data. verify-kit, deploy and request-rotation stay in this caller: kit
+# YAML never holds pages or id-token permission, and only caller-owned code binds the kit commit.
+on:
+  schedule:
+    - cron: "43 * * * *"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: manual (operator recovery) or internal deploy / family / rotate
+        required: true
+        default: manual
+        type: choice
+        options: [manual, deploy, family, rotate]
+      run_id: {description: Internal exact producer or Pages owner run, required: false, type: string}
+      sha: {description: Internal exact commit of that run, required: false, type: string}
+      family: {description: Internal family id, required: false, type: string}
+      bundle_key: {description: Internal family bundle key, required: false, type: string}
+      artifact_id: {description: Internal family handoff artifact id, required: false, type: string}
+      artifact_digest: {description: Internal family handoff digest, required: false, type: string}
+      coverage_sha: {description: Internal family coverage commit, required: false, type: string}
+
+permissions: {}
+
+concurrency:
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'rotate' &&
+    'mod-base-pages-rotation' || 'mod-base-pages-publication' }}
+  cancel-in-progress: false
+
+jobs:
+  verify-kit:
+    name: Verify pinned mod-base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      kit_sha: ${{ steps.kit.outputs.kit_sha }}
+    steps:
+      - name: Bind the executing callee to the protected pin
+        id: kit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Pinned mod-base: %s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch || "$GITHUB_EVENT_NAME" == schedule ]] ||
+            fail "Pages runs only on workflow_dispatch or schedule"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "malformed run identity"
+          default_branch="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+          [[ "$GITHUB_REF" == "refs/heads/$default_branch" ]] || fail "Pages runs only on the default branch"
+          run="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+          jq -e --argjson id "$GITHUB_RUN_ID" --arg sha "$GITHUB_SHA" --arg branch "$default_branch" \
+              --arg event "$GITHUB_EVENT_NAME" --arg repository "$GITHUB_REPOSITORY" '
+                .id == $id and .path == ".github/workflows/pages.yml" and .head_sha == $sha and
+                .head_branch == $branch and .event == $event and .head_repository.full_name == $repository' \
+              <<< "$run" > /dev/null || fail "this run is not the default branch's pages.yml at github.sha"
+          mapfile -t referenced < <(jq -r '.referenced_workflows // [] | .[]
+            | select(.path | ascii_downcase | startswith("the-plum-team/mod-base/.github/workflows/"))
+            | if (.path | sub("^.*@"; "")) == .sha then .sha else "path-sha-mismatch" end' <<< "$run" | sort -u)
+          [[ "${#referenced[@]}" == 1 && "${referenced[0]}" =~ ^[0-9a-f]{40}$ ]] ||
+            fail "the run did not resolve exactly one mod-base commit"
+          kit_sha="${referenced[0]}"
+          declared="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/contents/.github/workflows/pages.yml?ref=$GITHUB_SHA" \
+            --jq .content | base64 -d | grep -oiE 'The-Plum-Team/mod-base/[^@[:space:]]+@[0-9a-f]{40}' \
+            | sed 's/.*@//' | sort -u)" || fail "pages.yml at github.sha declares no mod-base pin"
+          [[ "$declared" == "$kit_sha" ]] || fail "the executing mod-base commit is not the pin in pages.yml"
+          reach="$(protected_gh_api_retry "repos/The-Plum-Team/mod-base/compare/$kit_sha...main" \
+            --jq '[.status, (.behind_by | tostring)] | join(" ")')"
+          [[ "$reach" == "ahead 0" || "$reach" == "identical 0" ]] ||
+            fail "the pinned commit $kit_sha is not reachable from mod-base main"
+          printf 'kit_sha=%s\n' "$kit_sha" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish
+    needs: verify-kit
+    if: inputs.operation != 'rotate'
+    permissions:
+      actions: read
+      contents: read
+    uses: The-Plum-Team/mod-base/.github/workflows/publish.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.verify-kit.outputs.kit_sha }}
+      operation: ${{ github.event_name == 'schedule' && 'recovery' || inputs.operation }}
+      run-id: ${{ inputs.run_id }}
+      sha: ${{ inputs.sha }}
+      family: ${{ inputs.family }}
+      bundle-key: ${{ inputs.bundle_key }}
+      artifact-id: ${{ inputs.artifact_id }}
+      artifact-digest: ${{ inputs.artifact_digest }}
+      coverage-sha: ${{ inputs.coverage_sha }}
+
+  deploy:
+    name: Deploy GitHub Pages
+    needs: publish
+    if: needs.publish.outputs.eligible == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Recheck every published source head immediately before deployment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEADS: ${{ needs.publish.outputs.heads }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Deployment recheck: %s\n' "$1" >&2; exit 1; }
+          jq -e 'type == "object" and length >= 1 and length <= 64 and all(to_entries[];
+            (.key | test("^(?!/)(?!.*(?:\\.\\.|//))[A-Za-z0-9._/-]{1,200}$")) and
+            (.value | type == "string" and test("^[0-9a-f]{40}$")))' <<< "$HEADS" > /dev/null 2>&1 ||
+            fail "the published heads are malformed"
+          default_branch="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+          [[ "$GITHUB_REF" == "refs/heads/$default_branch" ]] || fail "Pages deploys only from the default branch"
+          [[ "$(jq -r --arg branch "$default_branch" '.[$branch] // ""' <<< "$HEADS")" == "$GITHUB_SHA" ]] ||
+            fail "the published default-branch head is not github.sha"
+          while IFS=$'\t' read -r branch sha; do
+            encoded="$(jq -rn --arg value "$branch" '$value | @uri')"
+            current="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/branches/$encoded" --jq .commit.sha)"
+            if [[ "$current" != "$sha" ]]; then
+              printf 'Source %s advanced before deployment; retaining the deployed site.\n' "$branch" >&2
+              exit 1
+            fi
+          done < <(jq -r 'to_entries[] | [.key, .value] | @tsv' <<< "$HEADS")
+      - name: Deploy the immutable site artifact
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+
+  finalize:
+    name: Finalize
+    needs: [verify-kit, publish, deploy]
+    if: needs.deploy.result == 'success'
+    permissions:
+      actions: read
+      contents: read
+    uses: The-Plum-Team/mod-base/.github/workflows/finalize.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.verify-kit.outputs.kit_sha }}
+      bundle-keys: ${{ needs.publish.outputs.bundle_keys }}
+      families: ${{ needs.publish.outputs.families }}
+      heads: ${{ needs.publish.outputs.heads }}
+
+  request-rotation:
+    name: Request post-success evidence rotation
+    needs: [publish, finalize]
+    if: always() && needs.publish.outputs.eligible == 'true' && needs.finalize.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      # The separately locked rotate run authenticates this owner only after it has reached
+      # completed/success. GH_REPO gives gh the repository because this job has no checkout.
+      - name: Dispatch the separately locked exact-ID rotation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Rotation request: %s\n' "$1" >&2; exit 1; }
+          [[ "$GH_REPO" == "$GITHUB_REPOSITORY" ]] || fail "GH_REPO is not this repository"
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed run identity"
+          default_branch="$(protected_gh_api_retry "repos/$GH_REPO" --jq .default_branch)"
+          [[ "$GITHUB_REF" == "refs/heads/$default_branch" ]] || fail "rotation is requested only from the default branch"
+          gh workflow run pages.yml --ref "$default_branch" -f operation=rotate -f run_id="$GITHUB_RUN_ID" \
+            -f sha="$GITHUB_SHA"
+
+  rotate:
+    name: Rotate
+    needs: verify-kit
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'rotate'
+    permissions:
+      actions: write
+      contents: read
+    uses: The-Plum-Team/mod-base/.github/workflows/rotate.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.verify-kit.outputs.kit_sha }}
+      pages-run-id: ${{ inputs.run_id }}
+      pages-run-sha: ${{ inputs.sha }}
+# <<< mod-base managed
+# >>> mod-local extensions: only jobs whose id starts with "ext-"; no mod-base uses, no pages/id-token/actions:write
+# <<< mod-local extensions

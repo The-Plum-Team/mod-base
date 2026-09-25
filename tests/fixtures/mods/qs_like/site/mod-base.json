@@ -1,0 +1,196 @@
+{
+  "adapter": {
+    "api": 1,
+    "extensions": [
+      "quick-skin.runtime_source",
+      "quick-skin.feature_selection"
+    ],
+    "fixtures_path": "scripts/pages/mod_base_fixtures.py",
+    "network_hooks": [
+      "authenticate_extensions",
+      "compose",
+      "verify_publication"
+    ],
+    "path": "scripts/pages/mod_base_adapter.py",
+    "python_path": [
+      "scripts/pages",
+      "e2e"
+    ],
+    "timeout_seconds": 120
+  },
+  "admission": {
+    "coalesce_seconds": 600,
+    "defer_on_active_source_runs": true,
+    "max_failed_publications": 3,
+    "mode": "progress",
+    "partial_deadline_seconds": 2700,
+    "recovery_interval_seconds": 3600
+  },
+  "anchor": {
+    "enabled": true,
+    "retention_days": 90,
+    "successor_grace_days": 0
+  },
+  "baseline_archive": {
+    "enabled": true,
+    "retention_days": 90
+  },
+  "canonical_branch": "master",
+  "copy": {
+    "evidence_lead": "Every public frame comes from a successful packaged-JAR scenario and is bound to a branch, commit, loader and Actions run. Completed optional-mod lanes add compact clean-versus-modded comparisons.",
+    "family_notes": {
+      "mod-compatibility": "Each lane shows its contracted local, first-person, remote and late-join pairs (2, 5 or 7)."
+    },
+    "gallery_lead": "Browse every validated capture by version, align the same semantic checkpoint across supported Minecraft versions and loaders, or inspect paired evidence from the optional-mod compatibility runs. Select any regular capture to open its complete validation record: the checkpoint contract, the assertion the packaged client actually passed, the pixel and comparison measurements, the tested JAR digest and the exact runs that produced it.",
+    "methodology": [
+      "The required E2E gate validates mod state, screenshot integrity and expected pixel changes. These images let humans compare the resulting UI and rendering across versions.",
+      "Every capture carries the evidence that admitted it: the versioned scenario contract it belongs to, the passed deterministic assertion emitted by the packaged client, the decoded pixel measurements of both the original PNG and the published image, the required pixel change against its paired checkpoint, and the SHA-256 of the exact mod JAR under test. Open a capture to read that record; nothing on this page is published without it.",
+      "The AI visual review remains advisory for normal release evidence. Optional-mod comparisons are published only after the complete compatibility lane passes its deterministic runtime assertions and every reviewed frame receives a clean visual verdict. Absence of compatibility evidence is not a claim of incompatibility."
+    ],
+    "principles": [
+      "The same staged production jars launch under their exact Minecraft and loader versions.",
+      "Required screenshots pass integrity, entropy and before/after pixel checks.",
+      "The gallery publishes only curated images and provenance—never logs, crash reports or secrets.",
+      "Optional-mod pairs appear only after the full runtime lane and complete visual review are clean."
+    ]
+  },
+  "families": [
+    {
+      "carry_forward": true,
+      "description": "Clean reference versus mod-installed pairs, published only after a complete clean review.",
+      "handoff_max_bytes": 536870912,
+      "id": "mod-compatibility",
+      "image_policy": {
+        "derivative_box": [
+          1280,
+          720
+        ],
+        "webp_method": 6,
+        "webp_quality": 80
+      },
+      "producer": {
+        "events": [
+          "repository_dispatch",
+          "schedule",
+          "workflow_dispatch"
+        ],
+        "job": "Publish compact compatibility evidence",
+        "step": "Upload the mod-base family handoff",
+        "workflow": ".github/workflows/mod-compatibility-review.yml"
+      },
+      "retention_days": 7,
+      "title": "Mod compatibility"
+    }
+  ],
+  "images": {
+    "cross_check_runtime_metrics": true,
+    "derivative_box": [
+      160,
+      90
+    ],
+    "pixel_metrics_version": 1,
+    "source_size": [
+      192,
+      108
+    ],
+    "webp_method": 6,
+    "webp_quality": 82
+  },
+  "kind": "mod-base.config",
+  "labels": {
+    "loaders": {
+      "fabric": "Fabric",
+      "forge": "Forge",
+      "neoforge": "NeoForge"
+    },
+    "release_prefix": "Minecraft",
+    "roles": {
+      "client_a": "Client A",
+      "client_b": "Client B"
+    },
+    "scenarios": {
+      "feature-navigation": "Feature navigation",
+      "full": "Full suite",
+      "mod-compatibility": "Mod compatibility",
+      "mod-compatibility-cpm-first-person": "CPM first person",
+      "mod-compatibility-late-join": "Late join",
+      "mod-compatibility-remote": "Remote observer",
+      "phase0-smoke": "Smoke",
+      "propagation": "Propagation",
+      "propagation-live": "Live propagation",
+      "server-policy": "Server policy",
+      "session": "Session"
+    },
+    "search_placeholder": "Cape, skin, title screen…",
+    "tiers": {
+      "all": "Full review",
+      "key": "Key checkpoint"
+    }
+  },
+  "project": {
+    "description": {
+      "from_matrix": "project.description"
+    },
+    "eyebrow": "Minecraft appearance mod",
+    "icon": null,
+    "license_label": "All Rights Reserved",
+    "links": [
+      {
+        "description": "Download Quick Skin from Modrinth.",
+        "id": "modrinth",
+        "title": "Modrinth",
+        "url": "https://modrinth.com/mod/quick-skin"
+      },
+      {
+        "description": "Download Quick Skin from CurseForge.",
+        "id": "curseforge",
+        "title": "CurseForge",
+        "url": "https://www.curseforge.com/minecraft/mc-mods/quick-skin"
+      }
+    ],
+    "name": "Quick Skin",
+    "tagline": "Change your look. Stay in the game."
+  },
+  "schema_version": 1,
+  "source": {
+    "attestation_job": null,
+    "delegated_reuse_extension": "quick-skin.runtime_source",
+    "display_title": null,
+    "events": {
+      "canonical": [
+        "workflow_dispatch"
+      ],
+      "other": []
+    },
+    "handoff_job": "Prepare public evidence for {key} (advisory)",
+    "handoff_step": "Upload stable public evidence for this Minecraft target",
+    "require_job_graph": false,
+    "require_newest_run": false,
+    "workflow": ".github/workflows/on-demand-e2e.yml"
+  },
+  "targets": {
+    "max": 64,
+    "mode": "default-branch"
+  },
+  "template": {
+    "agents_local": [],
+    "deferred": []
+  },
+  "theme": {
+    "dark": {
+      "accent": "#77e39b",
+      "accent_strong": "#40c973",
+      "bg": "#0d120f",
+      "danger": "#ff9b91",
+      "highlight": "#e6c875",
+      "image_well": "#080b09",
+      "line": "#304137",
+      "muted": "#a9b7ac",
+      "surface": "#141b16",
+      "surface_raised": "#1a241d",
+      "surface_soft": "#202c24",
+      "text": "#f3f7f3"
+    },
+    "light": null
+  }
+}

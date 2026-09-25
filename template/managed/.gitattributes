@@ -1,0 +1,9 @@
+# Gradle ships gradlew.bat with CRLF line endings, as a Windows batch file must have.
+# Without this, git's whitespace check reads each carriage return as a trailing space and
+# reports every changed line as an error. That is not cosmetic here: the version-port
+# packager runs `git diff --cached --check` over the staged port, so a wrapper bump makes
+# every release-branch port abort before it can be validated or published.
+#
+# `cr-at-eol` adds to git's default rules rather than replacing them, so genuine trailing
+# whitespace before the carriage return is still reported.
+*.bat whitespace=cr-at-eol

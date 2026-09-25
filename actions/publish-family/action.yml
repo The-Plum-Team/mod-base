@@ -1,0 +1,131 @@
+name: mod-base publish-family
+description: >-
+  Wrap a mod-native family bundle (for example Quick Skin's compatibility bundle) in its
+  mod-base.family.envelope, validate the envelope in a fresh process and upload the single
+  mb-family-handoff artifact. No adapter code runs here: the Pages family job validates the native
+  bundle through the adapter.
+inputs:
+  mod-root:
+    description: The mod checkout at the subject commit, relative to the workspace
+    required: false
+    default: "."
+  family:
+    description: The configured family id
+    required: true
+  key:
+    description: The bundle key the family generation belongs to
+    required: true
+  bundle:
+    description: The native family bundle directory
+    required: true
+  coverage-sha:
+    description: The commit the native bundle covers
+    required: true
+  subject-branch:
+    description: The branch of the subject commit
+    required: true
+  subject-commit:
+    description: The subject commit (the producer run's head)
+    required: true
+outputs:
+  artifact-id:
+    description: The uploaded mb-family-handoff artifact id
+    value: ${{ steps.bound.outputs.artifact_id }}
+  artifact-digest:
+    description: The uploaded mb-family-handoff digest (sha256:<hex>)
+    value: ${{ steps.bound.outputs.digest }}
+runs:
+  using: composite
+  steps:
+    - name: Verify the executing kit against the checked-out pin
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        MOD_ROOT: ${{ inputs.mod-root }}
+        FAMILY: ${{ inputs.family }}
+        KEY: ${{ inputs.key }}
+        BUNDLE: ${{ inputs.bundle }}
+        COVERAGE_SHA: ${{ inputs.coverage-sha }}
+        SUBJECT_BRANCH: ${{ inputs.subject-branch }}
+        SUBJECT_COMMIT: ${{ inputs.subject-commit }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+        fail() { printf 'mod-base publish-family: invalid %s\n' "$1" >&2; exit 1; }
+        [[ "$MOD_ROOT" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$MOD_ROOT" != /* && "/$MOD_ROOT/" != */../* ]] || fail mod-root
+        [[ "$FAMILY" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ && ${#FAMILY} -le 32 ]] || fail family
+        [[ "$KEY" =~ ^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$ && "$KEY" != *--* ]] || fail key
+        [[ -n "$BUNDLE" && ${#BUNDLE} -le 4096 && "$BUNDLE" != *[[:cntrl:]]* ]] || fail bundle
+        [[ "$COVERAGE_SHA" =~ ^[0-9a-f]{40}$ && "$SUBJECT_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail commit
+        [[ "$SUBJECT_BRANCH" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$SUBJECT_BRANCH" != /* && "$SUBJECT_BRANCH" != *..* &&
+           "$SUBJECT_BRANCH" != *//* ]] || fail subject-branch
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P "$GITHUB_ACTION_PATH/../../tools/verify_action_tree.py" --mod-root "$MOD_ROOT"
+    - name: Install Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: "3.13"
+    - name: Wrap the family bundle in its envelope
+      id: envelope
+      shell: bash
+      env:
+        MOD_ROOT: ${{ inputs.mod-root }}
+        FAMILY: ${{ inputs.family }}
+        KEY: ${{ inputs.key }}
+        BUNDLE: ${{ inputs.bundle }}
+        COVERAGE_SHA: ${{ inputs.coverage-sha }}
+        SUBJECT_BRANCH: ${{ inputs.subject-branch }}
+        SUBJECT_COMMIT: ${{ inputs.subject-commit }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        work="$(mktemp -d "$RUNNER_TEMP/mod-base-family.XXXXXX")"
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P -m mod_base family envelope --repo "$MOD_ROOT" --config "$MOD_ROOT/site/mod-base.json" \
+          --family "$FAMILY" --key "$KEY" --bundle "$BUNDLE" --coverage-sha "$COVERAGE_SHA" \
+          --subject-branch "$SUBJECT_BRANCH" --subject-commit "$SUBJECT_COMMIT" --output "$work/handoff"
+        retention="$(jq -er --arg family "$FAMILY" '[.families[] | select(.id == $family) | .retention_days]
+          | if length == 1 then .[0] else error("family is not configured exactly once") end' \
+          "$MOD_ROOT/site/mod-base.json")"
+        if ! [[ "$retention" =~ ^[1-7]$ ]]; then
+          printf 'mod-base publish-family: families[].retention_days must be 1..7\n' >&2
+          exit 1
+        fi
+        printf 'handoff=%s\nretention_days=%s\n' "$work/handoff" "$retention" >> "$GITHUB_OUTPUT"
+    - name: Validate the family envelope in a fresh process
+      shell: bash
+      env:
+        MOD_ROOT: ${{ inputs.mod-root }}
+        KEY: ${{ inputs.key }}
+        HANDOFF_DIR: ${{ steps.envelope.outputs.handoff }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P -m mod_base validate --repo "$MOD_ROOT" --config "$MOD_ROOT/site/mod-base.json" --key "$KEY" \
+          --kind family --input "$HANDOFF_DIR"
+    - name: Upload the family handoff
+      id: upload
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: mb-family-handoff--${{ inputs.family }}--${{ inputs.key }}--a${{ github.run_attempt }}
+        path: ${{ steps.envelope.outputs.handoff }}
+        if-no-files-found: error
+        include-hidden-files: true
+        compression-level: 6
+        retention-days: ${{ steps.envelope.outputs.retention_days }}
+    - name: Bind the uploaded family handoff identity
+      id: bound
+      shell: bash
+      env:
+        ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,17}$ ]] || { printf 'The upload reported no artifact id.\n' >&2; exit 1; }
+        if [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+          ARTIFACT_DIGEST="sha256:$ARTIFACT_DIGEST"
+        fi
+        [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'The upload reported no digest.\n' >&2; exit 1; }
+        printf 'artifact_id=%s\ndigest=%s\n' "$ARTIFACT_ID" "$ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"

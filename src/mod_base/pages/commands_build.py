@@ -3,6 +3,9 @@
 ``build --collected DIR --families DIR`` name new work directories that ``build`` downloads this
 run's collected artifacts into; ``refresh --input DIR`` names the new directory ``refresh`` writes
 the exact upload bytes into (see :mod:`mod_base.pages.build` and :mod:`mod_base.pages.refresh`).
+Both handlers first prove the host facts an entry point cannot see in its invocation
+(:func:`mod_base.pages.build.check_checkouts`: no inherited ``GIT_*`` variable, the mod and kit
+checkouts clean at their commits).
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 def run_build(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
+    build.check_checkouts(invocation, kit_root=args.kit_root, environ=cli.environ())
     client = github_api.from_environment(invocation.environ, max_requests=MAX_PAGES_API_READS)
     result = build.build_site(invocation, api=client, kit_root=args.kit_root, collected_dir=args.collected,
                               families_dir=args.families, output=args.output, promotion_dir=args.promotion)
@@ -50,6 +54,7 @@ def run_build(args: argparse.Namespace) -> int:
 
 def run_refresh(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
+    build.check_checkouts(invocation, kit_root=invocation.kit_root, environ=cli.environ())
     client = github_api.from_environment(invocation.environ, max_requests=MAX_PAGES_API_READS)
     result = refresh.refresh_bundle(invocation, api=client, key=args.key, family=args.family, input_dir=args.input)
     outputs: dict[str, str | bool] = {"available": result.available, "cache_name": result.cache_name or ""}

@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    # mod-base is pinned by SHA and bumped only with `scripts/ci/mod_base_kit.py bump --to vX.Y.Z`,
+    # which also re-synchronizes the managed files. A Dependabot bump would fail `template check`.
+    ignore:
+      - dependency-name: "The-Plum-Team/mod-base*"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

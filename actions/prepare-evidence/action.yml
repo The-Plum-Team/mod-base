@@ -1,0 +1,234 @@
+name: mod-base prepare-evidence
+description: >-
+  Produce, validate and upload the single-use mb-handoff evidence of one bundle key from the mod's
+  own packaged E2E output, and cut the durable lossless mb-anchor when the adapter makes it
+  eligible. It needs no API token beyond the one-step kit tree check: the handoff run claim comes
+  from GitHub's environment and the mod adapter runs only in the kit's isolated host.
+inputs:
+  mod-root:
+    description: The mod checkout at the subject commit, relative to the workspace
+    required: false
+    default: "."
+  e2e-root:
+    description: The packaged E2E output directory the adapter's collect hook reads
+    required: true
+  key:
+    description: The bundle key
+    required: true
+  subject-branch:
+    description: The branch whose head the evidence covers
+    required: true
+  subject-commit:
+    description: The exact commit the evidence covers
+    required: true
+  subject-tree:
+    description: The Git tree of that commit
+    required: true
+  tested-run-id:
+    description: The packaged E2E run that tested the subject
+    required: true
+  tested-run-attempt:
+    description: That run's attempt
+    required: true
+  tested-branch:
+    description: The branch that run tested
+    required: true
+  tested-commit:
+    description: The commit that run tested
+    required: true
+  tested-controller-branch:
+    description: The controller branch of that run
+    required: true
+  tested-controller-sha:
+    description: The controller commit of that run
+    required: true
+  extensions:
+    description: Optional extensions.json path (names declared in config.adapter.extensions)
+    required: false
+    default: ""
+  anchor:
+    description: auto (cut the anchor when eligible) or off
+    required: false
+    default: "off"
+outputs:
+  handoff-artifact-id:
+    description: The uploaded mb-handoff artifact id
+    value: ${{ steps.handoff.outputs.artifact_id }}
+  handoff-digest:
+    description: The uploaded mb-handoff digest (sha256:<hex>)
+    value: ${{ steps.handoff.outputs.digest }}
+  anchor-artifact-id:
+    description: The uploaded mb-anchor artifact id (empty when no anchor was cut)
+    value: ${{ steps.anchor-upload.outputs.artifact-id }}
+runs:
+  using: composite
+  steps:
+    - name: Verify the executing kit against the checked-out pin
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        MOD_ROOT: ${{ inputs.mod-root }}
+        E2E_ROOT: ${{ inputs.e2e-root }}
+        KEY: ${{ inputs.key }}
+        SUBJECT_BRANCH: ${{ inputs.subject-branch }}
+        SUBJECT_COMMIT: ${{ inputs.subject-commit }}
+        SUBJECT_TREE: ${{ inputs.subject-tree }}
+        TESTED_RUN_ID: ${{ inputs.tested-run-id }}
+        TESTED_RUN_ATTEMPT: ${{ inputs.tested-run-attempt }}
+        TESTED_BRANCH: ${{ inputs.tested-branch }}
+        TESTED_COMMIT: ${{ inputs.tested-commit }}
+        TESTED_CONTROLLER_BRANCH: ${{ inputs.tested-controller-branch }}
+        TESTED_CONTROLLER_SHA: ${{ inputs.tested-controller-sha }}
+        EXTENSIONS: ${{ inputs.extensions }}
+        ANCHOR: ${{ inputs.anchor }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+        fail() { printf 'mod-base prepare-evidence: invalid %s\n' "$1" >&2; exit 1; }
+        branch_ok() { [[ "$1" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$1" != /* && "$1" != *..* && "$1" != *//* ]]; }
+        [[ "$MOD_ROOT" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$MOD_ROOT" != /* && "/$MOD_ROOT/" != */../* ]] || fail mod-root
+        [[ -n "$E2E_ROOT" && ${#E2E_ROOT} -le 4096 && "$E2E_ROOT" != *[[:cntrl:]]* ]] || fail e2e-root
+        [[ "$KEY" =~ ^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$ && "$KEY" != *--* ]] || fail key
+        branch_ok "$SUBJECT_BRANCH" || fail subject-branch
+        branch_ok "$TESTED_BRANCH" || fail tested-branch
+        branch_ok "$TESTED_CONTROLLER_BRANCH" || fail tested-controller-branch
+        for value in "$SUBJECT_COMMIT" "$SUBJECT_TREE" "$TESTED_COMMIT" "$TESTED_CONTROLLER_SHA"; do
+          [[ "$value" =~ ^[0-9a-f]{40}$ ]] || fail "commit or tree"
+        done
+        [[ "$TESTED_RUN_ID" =~ ^[1-9][0-9]{0,17}$ && "$TESTED_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,5}$ ]] || fail "tested run"
+        [[ ${#EXTENSIONS} -le 4096 && "$EXTENSIONS" != *[[:cntrl:]]* ]] || fail extensions
+        [[ "$ANCHOR" == auto || "$ANCHOR" == off ]] || fail anchor
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P "$GITHUB_ACTION_PATH/../../tools/verify_action_tree.py" --mod-root "$MOD_ROOT"
+    - name: Install Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: "3.13"
+    - name: Install the hash-locked imaging dependency
+      shell: bash
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        python3 -m pip install --only-binary=:all: --require-hashes \
+          --requirement "$GITHUB_ACTION_PATH/../../requirements/pillow.txt"
+    - name: Prepare the SHA-bound evidence handoff
+      id: prepare
+      shell: bash
+      env:
+        MOD_ROOT: ${{ inputs.mod-root }}
+        E2E_ROOT: ${{ inputs.e2e-root }}
+        KEY: ${{ inputs.key }}
+        SUBJECT_BRANCH: ${{ inputs.subject-branch }}
+        SUBJECT_COMMIT: ${{ inputs.subject-commit }}
+        SUBJECT_TREE: ${{ inputs.subject-tree }}
+        TESTED_RUN_ID: ${{ inputs.tested-run-id }}
+        TESTED_RUN_ATTEMPT: ${{ inputs.tested-run-attempt }}
+        TESTED_BRANCH: ${{ inputs.tested-branch }}
+        TESTED_COMMIT: ${{ inputs.tested-commit }}
+        TESTED_CONTROLLER_BRANCH: ${{ inputs.tested-controller-branch }}
+        TESTED_CONTROLLER_SHA: ${{ inputs.tested-controller-sha }}
+        EXTENSIONS: ${{ inputs.extensions }}
+        ANCHOR: ${{ inputs.anchor }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        work="$(mktemp -d "$RUNNER_TEMP/mod-base-prepare.XXXXXX")"
+        arguments=(prepare --repo "$MOD_ROOT" --config "$MOD_ROOT/site/mod-base.json" --e2e-root "$E2E_ROOT"
+          --key "$KEY" --output "$work/handoff"
+          --subject-branch "$SUBJECT_BRANCH" --subject-commit "$SUBJECT_COMMIT" --subject-tree "$SUBJECT_TREE"
+          --tested-run-id "$TESTED_RUN_ID" --tested-run-attempt "$TESTED_RUN_ATTEMPT"
+          --tested-branch "$TESTED_BRANCH" --tested-commit "$TESTED_COMMIT"
+          --tested-controller-branch "$TESTED_CONTROLLER_BRANCH" --tested-controller-sha "$TESTED_CONTROLLER_SHA"
+          --anchor "$ANCHOR")
+        if [[ -n "$EXTENSIONS" ]]; then arguments+=(--extensions "$EXTENSIONS"); fi
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P -m mod_base "${arguments[@]}"
+        printf 'work=%s\nhandoff=%s\n' "$work" "$work/handoff" >> "$GITHUB_OUTPUT"
+    - name: Validate the handoff in a fresh process
+      shell: bash
+      env:
+        MOD_ROOT: ${{ inputs.mod-root }}
+        KEY: ${{ inputs.key }}
+        SUBJECT_COMMIT: ${{ inputs.subject-commit }}
+        HANDOFF_DIR: ${{ steps.prepare.outputs.handoff }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P -m mod_base validate --repo "$MOD_ROOT" --config "$MOD_ROOT/site/mod-base.json" --key "$KEY" \
+          --kind handoff --input "$HANDOFF_DIR" --expected-subject-commit "$SUBJECT_COMMIT"
+    - name: Upload the single-use evidence handoff
+      id: handoff-upload
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: mb-handoff--${{ inputs.key }}--a${{ github.run_attempt }}
+        path: ${{ steps.prepare.outputs.handoff }}
+        if-no-files-found: error
+        include-hidden-files: true
+        compression-level: 6
+        retention-days: 1
+    - name: Bind the uploaded handoff identity
+      id: handoff
+      shell: bash
+      env:
+        ARTIFACT_ID: ${{ steps.handoff-upload.outputs.artifact-id }}
+        ARTIFACT_DIGEST: ${{ steps.handoff-upload.outputs.artifact-digest }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,17}$ ]] || { printf 'The upload reported no artifact id.\n' >&2; exit 1; }
+        if [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+          ARTIFACT_DIGEST="sha256:$ARTIFACT_DIGEST"
+        fi
+        [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'The upload reported no digest.\n' >&2; exit 1; }
+        printf 'artifact_id=%s\ndigest=%s\n' "$ARTIFACT_ID" "$ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+    - name: Cut the lossless anchor from the uploaded handoff
+      id: anchor
+      if: steps.prepare.outputs.anchor_eligible == 'true'
+      shell: bash
+      env:
+        MOD_ROOT: ${{ inputs.mod-root }}
+        KEY: ${{ inputs.key }}
+        SUBJECT_COMMIT: ${{ inputs.subject-commit }}
+        WORK: ${{ steps.prepare.outputs.work }}
+        HANDOFF_DIR: ${{ steps.prepare.outputs.handoff }}
+        HANDOFF_NAME: mb-handoff--${{ inputs.key }}--a${{ github.run_attempt }}
+        HANDOFF_ID: ${{ steps.handoff.outputs.artifact_id }}
+        HANDOFF_DIGEST: ${{ steps.handoff.outputs.digest }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        fail() { printf 'mod-base anchor: %s\n' "$1" >&2; exit 1; }
+        identity="$(env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P -m mod_base anchor identity --repo "$MOD_ROOT" --config "$MOD_ROOT/site/mod-base.json" --key "$KEY" \
+          --handoff "$HANDOFF_DIR")"
+        [[ "$(jq -r '.eligible' <<< "$identity")" == true ]] || fail "the handoff is not an eligible anchor source"
+        name="$(jq -er '.name | strings' <<< "$identity")" || fail "the eligible anchor has no name"
+        identifier="${name#"mb-anchor--$KEY--"}"
+        if [[ ! "$identifier" =~ ^[0-9a-f]{40}--[1-9][0-9]{0,17}--a[1-9][0-9]{0,5}$ || "$name" != "mb-anchor--$KEY--$identifier" ]]; then
+          fail "the anchor name is not an mb-anchor name of this key"
+        fi
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P -m mod_base anchor create --repo "$MOD_ROOT" --config "$MOD_ROOT/site/mod-base.json" --key "$KEY" \
+          --handoff "$HANDOFF_DIR" --raw-artifact-id "$HANDOFF_ID" --raw-artifact-name "$HANDOFF_NAME" \
+          --raw-artifact-digest "$HANDOFF_DIGEST" --output "$WORK/anchor"
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P -m mod_base anchor validate --key "$KEY" --input "$WORK/anchor" \
+          --expected-subject-commit "$SUBJECT_COMMIT" --raw-artifact-id "$HANDOFF_ID" \
+          --raw-artifact-name "$HANDOFF_NAME" --raw-artifact-digest "$HANDOFF_DIGEST"
+        retention="$(jq -er '.anchor.retention_days' "$MOD_ROOT/site/mod-base.json")" || fail "no anchor retention"
+        if ! [[ "$retention" =~ ^[1-9][0-9]?$ ]] || (( retention > 90 )); then
+          fail "anchor.retention_days must be 1..90"
+        fi
+        printf 'name=%s\npath=%s\nretention_days=%s\n' "$name" "$WORK/anchor" "$retention" >> "$GITHUB_OUTPUT"
+    - name: Upload the durable lossless anchor
+      id: anchor-upload
+      if: steps.prepare.outputs.anchor_eligible == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.anchor.outputs.name }}
+        path: ${{ steps.anchor.outputs.path }}
+        if-no-files-found: error
+        include-hidden-files: true
+        compression-level: 0
+        retention-days: ${{ steps.anchor.outputs.retention_days }}

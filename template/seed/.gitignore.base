@@ -1,0 +1,28 @@
+# Gradle and build output
+.gradle/
+build/
+out/
+/.architectury-transformer/
+
+# IDEs and operating systems
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Minecraft runtime directories
+run/
+logs/
+crash-reports/
+
+# Packaged E2E output and locally built public evidence (never committed)
+e2e-out/
+public-evidence/
+_site/
+
+# Python tooling caches
+__pycache__/
+*.py[cod]

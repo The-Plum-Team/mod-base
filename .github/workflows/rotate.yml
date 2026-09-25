@@ -1,0 +1,197 @@
+name: mod-base rotate
+
+# Reusable rotation callee of the managed pages.yml caller (SPEC §5.5). A separate operation=rotate
+# run authenticates its completed successful owner before any checkout, reads the mod config as
+# data through a sparse checkout (no adapter code runs in this writable job) and deletes superseded
+# kit artifacts by exact id.
+on:
+  workflow_call:
+    inputs:
+      kit-sha:
+        description: The mod-base commit the caller's verify-kit job bound to this run
+        required: true
+        type: string
+      pages-run-id:
+        description: The successful Pages run whose generation is rotated
+        required: true
+        type: string
+      pages-run-sha:
+        description: The protected commit that Pages run executed
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  MB_KIT_TREE_DIGEST: "sha256:c9f8d15c5398c63ffc9154cf33c6fae5e7c1d77dc928b959347820f9758b73e5"
+
+jobs:
+  rotate:
+    name: Rotate the authenticated successful generation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          PAGES_RUN_ID: ${{ inputs.pages-run-id }}
+          PAGES_RUN_SHA: ${{ inputs.pages-run-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || fail "rotation runs only as a workflow_dispatch"
+          [[ "$PAGES_RUN_ID" =~ ^[1-9][0-9]{0,17}$ ]] || fail pages-run-id
+          [[ "$PAGES_RUN_SHA" =~ ^[0-9a-f]{40}$ ]] || fail pages-run-sha
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ && "$PAGES_RUN_ID" != "$GITHUB_RUN_ID" ]] ||
+            fail "a rotation run cannot rotate its own generation"
+      - name: Authenticate the completed successful owner before any checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGES_RUN_ID: ${{ inputs.pages-run-id }}
+          PAGES_RUN_SHA: ${{ inputs.pages-run-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Rotation owner: %s\n' "$1" >&2; exit 1; }
+          default_branch="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+          [[ "$GITHUB_REF" == "refs/heads/$default_branch" ]] || fail "rotation runs only on the default branch"
+          owner=''
+          for attempt in {1..30}; do
+            owner="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/actions/runs/$PAGES_RUN_ID")"
+            if [[ "$(jq -r '.status' <<< "$owner")" == completed ]]; then
+              break
+            fi
+            if (( attempt < 30 )); then
+              sleep 2
+            fi
+          done
+          workflow_id="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/actions/workflows/pages.yml" --jq .id)"
+          [[ "$workflow_id" =~ ^[1-9][0-9]{0,17}$ ]] || fail "pages.yml has no workflow id"
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg branch "$default_branch" --arg sha "$PAGES_RUN_SHA" \
+              --argjson run_id "$PAGES_RUN_ID" --argjson workflow_id "$workflow_id" '
+                .id == $run_id and .workflow_id == $workflow_id and .status == "completed" and
+                .conclusion == "success" and .path == ".github/workflows/pages.yml" and
+                (.event == "workflow_dispatch" or .event == "schedule") and .head_branch == $branch and
+                .head_sha == $sha and .head_repository.full_name == $repository' <<< "$owner" > /dev/null ||
+            fail "the owner is not a completed successful default-branch pages.yml run at the given commit"
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+          sparse-checkout: site/mod-base.json
+          sparse-checkout-cone-mode: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/pages.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by the canonical branch's pages.yml"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Retire the superseded generation by exact artifact ID
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGES_RUN_ID: ${{ inputs.pages-run-id }}
+          PAGES_RUN_SHA: ${{ inputs.pages-run-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base rotate --repo mod --config mod/site/mod-base.json --owner-run-id "$PAGES_RUN_ID" \
+            --owner-sha "$PAGES_RUN_SHA" --delete-delay-seconds 1.0

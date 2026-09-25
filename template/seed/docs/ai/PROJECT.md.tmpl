@@ -1,0 +1,46 @@
+# Project and release contract
+
+This file is part of the repository-wide instruction set imported by `AGENTS.md`. Together, the
+documents listed there are the source of truth for coding agents working anywhere below the
+repository root. The two shared documents imported first (`docs/ai/shared/REPOSITORY.md` and
+`docs/ai/shared/PUBLIC-EVIDENCE.md`) are managed by mod-base and hold the rules every mod shares;
+this file and the other local imports hold only what is specific to {{name}}.
+
+## Documentation map
+
+- `AGENTS.md` is the import-only manifest for the complete coding-agent instruction set. Its first
+  two lines are the managed shared documents; the rest are listed in `site/mod-base.json`
+  `template.agents_local`.
+- `CONTRIBUTING.md` is the human-facing path from a fresh fork to a reviewed pull request.
+- `README.md` is for users and builders.
+- `docs/architecture/decisions/` records evidence-backed architectural decisions.
+- `site/mod-base.json` and `scripts/pages/mod_base_adapter.py` connect this repository to the
+  mod-base public-evidence kit; `scripts/ci/mod_base_kit.py` finds the pinned kit.
+
+<!-- Replace the sections below with this project's own contract. -->
+
+## What {{name}} is
+
+Describe the mod, its supported Minecraft versions and loaders, and which file is the single
+authoritative inventory of supported release targets. Never duplicate that inventory elsewhere.
+
+## Task routing
+
+| Change scope | Start from | Expected destination |
+|---|---|---|
+| Shared behavior, security, tests, automation or documentation | `{{canonical_branch}}` | The owning shared source |
+| One Minecraft version or loader | `{{canonical_branch}}` | Its owning version adapter or loader module |
+| Supported version/loader inventory | The release inventory | A validated target built from the same source |
+| Generated output or staged artifacts | Nowhere | Fix the tracked input instead |
+
+## Verification
+
+List the exact commands a change must pass here, from the smallest unit check to the aggregate
+gate, including:
+
+```bash
+git diff --check
+python3 scripts/ci/mod_base_kit.py verify --network
+python3 scripts/ci/mod_base_kit.py run template check --repo .
+{{test_command}}
+```

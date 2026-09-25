@@ -1,0 +1,107 @@
+name: mod-base notify-pages
+description: >-
+  Wake this repository's protected Pages publisher (pages.yml on the default branch) with the exact
+  producer run of a deploy wake or the exact family handoff of a family wake. Pure bash: no
+  checkout, no Python and no identity claim; the woken run re-authenticates everything from
+  scratch. The calling job needs only `actions: write`.
+inputs:
+  operation:
+    description: deploy (ordinary evidence) or family (a family handoff)
+    required: true
+  run-id:
+    description: The exact producer run
+    required: true
+  sha:
+    description: The exact commit of that run
+    required: true
+  family:
+    description: The family id (family wakes only)
+    required: false
+    default: ""
+  bundle-key:
+    description: The family bundle key (family wakes only)
+    required: false
+    default: ""
+  artifact-id:
+    description: The family handoff artifact id (family wakes only)
+    required: false
+    default: ""
+  artifact-digest:
+    description: The family handoff digest, sha256:<hex> (family wakes only)
+    required: false
+    default: ""
+  coverage-sha:
+    description: The family coverage commit (family wakes only)
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Validate the wake inputs
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+        RUN_ID: ${{ inputs.run-id }}
+        SHA: ${{ inputs.sha }}
+        FAMILY: ${{ inputs.family }}
+        BUNDLE_KEY: ${{ inputs.bundle-key }}
+        ARTIFACT_ID: ${{ inputs.artifact-id }}
+        ARTIFACT_DIGEST: ${{ inputs.artifact-digest }}
+        COVERAGE_SHA: ${{ inputs.coverage-sha }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        fail() { printf 'mod-base notify-pages: invalid %s\n' "$1" >&2; exit 1; }
+        [[ "$RUN_ID" =~ ^[1-9][0-9]{0,17}$ ]] || fail run-id
+        [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail sha
+        family_wake="$FAMILY$BUNDLE_KEY$ARTIFACT_ID$ARTIFACT_DIGEST$COVERAGE_SHA"
+        case "$OPERATION" in
+          deploy)
+            [[ -z "$family_wake" ]] || fail "family identifiers on a deploy wake" ;;
+          family)
+            [[ "$FAMILY" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ && ${#FAMILY} -le 32 ]] || fail family
+            [[ "$BUNDLE_KEY" =~ ^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$ && "$BUNDLE_KEY" != *--* ]] || fail bundle-key
+            [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]{0,17}$ ]] || fail artifact-id
+            [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail artifact-digest
+            [[ "$COVERAGE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail coverage-sha ;;
+          *) fail operation ;;
+        esac
+    - name: Dispatch the protected Pages publication
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_API_RETRY_ATTEMPTS: "10"
+        GITHUB_API_RETRY_MAX_DELAY_SECONDS: "60"
+        OPERATION: ${{ inputs.operation }}
+        RUN_ID: ${{ inputs.run-id }}
+        SHA: ${{ inputs.sha }}
+        FAMILY: ${{ inputs.family }}
+        BUNDLE_KEY: ${{ inputs.bundle-key }}
+        ARTIFACT_ID: ${{ inputs.artifact-id }}
+        ARTIFACT_DIGEST: ${{ inputs.artifact-digest }}
+        COVERAGE_SHA: ${{ inputs.coverage-sha }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+        # shellcheck source=/dev/null
+        source "$GITHUB_ACTION_PATH/../../tools/github_api_retry.sh"
+        default_branch="$(github_api_retry "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+        [[ "$default_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$default_branch" != /* && "$default_branch" != *..* &&
+           "$default_branch" != *//* ]]
+        payload="$(mktemp "$RUNNER_TEMP/mod-base-pages-wake.XXXXXX")"
+        case "$OPERATION" in
+          deploy)
+            jq -n --arg ref "$default_branch" --arg run_id "$RUN_ID" --arg sha "$SHA" \
+              '{ref: $ref, inputs: {operation: "deploy", run_id: $run_id, sha: $sha}}' > "$payload" ;;
+          family)
+            jq -n --arg ref "$default_branch" --arg run_id "$RUN_ID" --arg sha "$SHA" --arg family "$FAMILY" \
+              --arg bundle_key "$BUNDLE_KEY" --arg artifact_id "$ARTIFACT_ID" --arg artifact_digest "$ARTIFACT_DIGEST" \
+              --arg coverage_sha "$COVERAGE_SHA" \
+              '{ref: $ref, inputs: {operation: "family", run_id: $run_id, sha: $sha, family: $family,
+                bundle_key: $bundle_key, artifact_id: $artifact_id, artifact_digest: $artifact_digest,
+                coverage_sha: $coverage_sha}}' > "$payload" ;;
+          *) exit 1 ;;
+        esac
+        github_api_retry --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/pages.yml/dispatches" \
+          --input "$payload" > /dev/null
+        printf 'Woke the protected Pages publisher on %s (%s wake).\n' "$default_branch" "$OPERATION"

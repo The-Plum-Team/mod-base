@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="{{mb:theme_color}}">
+  <meta name="description" content="{{mb:meta_description}}">
+  <title>Verified E2E · {{mb:name}}</title>
+  <!-- mb:if icon -->
+  <link rel="icon" href="../assets/icon.png">
+  <!-- mb:endif -->
+  <link rel="stylesheet" href="../assets/theme.css">
+  <link rel="stylesheet" href="../assets/styles.css">
+  <script src="../assets/gallery.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to evidence</a>
+  <header class="site-header">
+    <a class="brand" href="../" aria-label="{{mb:name}} home">
+      <!-- mb:if icon -->
+      <img class="brand-icon" src="../assets/icon.png" width="40" height="40" alt="">
+      <!-- mb:endif -->
+      <span>{{mb:name}}</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a aria-current="page" href="./">E2E gallery</a>
+      <a href="{{mb:actions_url}}">Actions</a>
+    </nav>
+  </header>
+
+  <main id="main" class="gallery-main">
+    <section class="gallery-intro" aria-labelledby="gallery-title">
+      <p class="eyebrow">Packaged-runtime evidence</p>
+      <h1 id="gallery-title">See what passed.</h1>
+      <p id="gallery-lead"></p>
+      <div id="release-summary" class="summary-strip" aria-live="polite"></div>
+    </section>
+
+    <section class="gallery-workspace" aria-labelledby="workspace-title">
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">Visual explorer</p>
+          <h2 id="workspace-title">Validated captures</h2>
+        </div>
+        <div id="view-switch" class="view-switch" role="group" aria-label="Choose gallery view">
+          <button id="gallery-view-button" class="view-button is-active" type="button" aria-pressed="true">Gallery</button>
+          <button id="compare-view-button" class="view-button" type="button" aria-pressed="false">Compare versions</button>
+        </div>
+      </div>
+
+      <div id="gallery-view">
+        <div id="release-tabs" class="version-tabs" role="tablist" aria-label="Release"></div>
+        <form id="gallery-filters" class="filter-bar" aria-label="Filter captures">
+          <label>Minecraft
+            <select id="minecraft-filter"><option value="all">All versions</option></select>
+          </label>
+          <label>Loader
+            <select id="loader-filter"><option value="all">All loaders</option></select>
+          </label>
+          <label>Scenario
+            <select id="scenario-filter"><option value="all">All scenarios</option></select>
+          </label>
+          <label>Client role
+            <select id="role-filter"><option value="all">All clients</option></select>
+          </label>
+          <label class="search-label">Find a checkpoint
+            <input id="capture-search" type="search" autocomplete="off">
+          </label>
+        </form>
+        <div id="release-panels"></div>
+      </div>
+
+      <div id="compare-view" hidden>
+        <div class="compare-controls">
+          <label>Checkpoint to align
+            <select id="capture-compare"></select>
+          </label>
+          <label>Loader
+            <select id="compare-loader"><option value="all">All loaders</option></select>
+          </label>
+        </div>
+        <p class="compare-note">A blank cell is explicit: no validated frame was published for that exact release, Minecraft version and loader checkpoint.</p>
+        <div id="comparison-grid" class="comparison-grid"></div>
+      </div>
+
+      <!-- mb:if families -->
+      <div id="family-views"></div>
+      <!-- mb:endif -->
+
+      <p id="gallery-status" class="status-line" role="status">Loading validated evidence…</p>
+      <noscript><p class="notice">JavaScript is required for filtering and comparison. The evidence inventory remains available as <a href="gallery-data.json">JSON</a>.</p></noscript>
+    </section>
+
+    <dialog id="capture-dialog" class="capture-dialog" aria-labelledby="capture-dialog-title">
+      <form method="dialog" class="dialog-dismiss">
+        <button type="submit" class="dialog-close" value="close" aria-label="Close the validation record">Close</button>
+      </form>
+      <div id="capture-dialog-body" class="dialog-body"></div>
+    </dialog>
+
+    <section class="section methodology" aria-labelledby="method-title">
+      <div>
+        <p class="eyebrow">Evidence contract</p>
+        <h2 id="method-title">What this page does—and does not—claim</h2>
+      </div>
+      <div>
+        <div id="methodology-copy"></div>
+        <p><a href="gallery-data.json">Download the machine-readable gallery inventory</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>{{mb:name}} · packaged E2E evidence</p>
+    <p><a href="../">Back to project home</a></p>
+  </footer>
+</body>
+</html>

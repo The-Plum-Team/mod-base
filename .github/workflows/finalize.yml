@@ -1,0 +1,392 @@
+name: mod-base finalize
+
+# Reusable post-deployment callee of the managed pages.yml caller (SPEC §5.4). It runs only after
+# the caller's deploy job succeeded and rolls every promoted bundle forward as a 90-day cache. No
+# adapter hook runs here: refresh revalidates the promoted bytes with core code only.
+on:
+  workflow_call:
+    inputs:
+      kit-sha:
+        description: The mod-base commit the caller's verify-kit job bound to this run
+        required: true
+        type: string
+      bundle-keys:
+        description: JSON array of the published bundle keys
+        required: true
+        type: string
+      families:
+        description: JSON array of the admitted family legs
+        required: true
+        type: string
+      heads:
+        description: JSON object of every published source branch head
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  MB_KIT_TREE_DIGEST: "sha256:c9f8d15c5398c63ffc9154cf33c6fae5e7c1d77dc928b959347820f9758b73e5"
+
+jobs:
+  refresh:
+    name: Refresh evidence cache for ${{ matrix.key }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        key: ${{ fromJSON(inputs.bundle-keys) }}
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          BUNDLE_KEYS: ${{ inputs.bundle-keys }}
+          FAMILIES: ${{ inputs.families }}
+          HEADS: ${{ inputs.heads }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch || "$GITHUB_EVENT_NAME" == schedule ]] || fail event
+          jq -e 'type == "array" and length >= 1 and length <= 64 and (unique | length) == length and
+            all(.[]; type == "string" and test("^[a-z0-9](?:[a-z0-9._]|-(?!-)){0,62}[a-z0-9]$"))' \
+            <<< "$BUNDLE_KEYS" > /dev/null 2>&1 || fail bundle-keys
+          jq -e --argjson keys "$BUNDLE_KEYS" 'type == "array" and length <= 512 and
+            all(.[]; type == "object" and (keys == ["coverage_sha", "family", "key"]) and
+              (.family | type == "string" and length <= 32 and test("^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")) and
+              (.key as $key | $keys | any(. == $key)) and
+              (.coverage_sha | type == "string" and test("^[0-9a-f]{40}$"))) and
+            (map([.family, .key]) | unique | length) == length' <<< "$FAMILIES" > /dev/null 2>&1 || fail families
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
+          jq -e --arg branch "${GITHUB_REF#refs/heads/}" --arg sha "$GITHUB_SHA" 'type == "object" and length >= 1 and
+            length <= 64 and all(to_entries[];
+              (.key | test("^(?!/)(?!.*(?:\\.\\.|//))[A-Za-z0-9._/-]{1,200}$")) and
+              (.value | type == "string" and test("^[0-9a-f]{40}$"))) and
+            .[$branch] == $sha' <<< "$HEADS" > /dev/null 2>&1 || fail heads
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/pages.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by the canonical branch's pages.yml"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Revalidate the promoted bundle
+        id: refresh
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ matrix.key }}
+          HEADS: ${{ inputs.heads }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Evidence cache refresh: %s\n' "$1" >&2; exit 1; }
+          [[ "$KEY" =~ ^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$ && "$KEY" != *--* ]] || fail "malformed key"
+          mkdir "$RUNNER_TEMP/mb"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base refresh --repo mod --config mod/site/mod-base.json --key "$KEY" \
+            --input "$RUNNER_TEMP/mb/cache" --github-output "$RUNNER_TEMP/mb/refresh.out"
+          # The kit's outputs become artifact names: accept exactly their documented shape.
+          declare -A result=()
+          while IFS= read -r line; do
+            name="${line%%=*}"
+            if [[ "$line" != *=* || ! "$name" =~ ^(available|cache_name|baseline_name)$ || -n "${result[$name]+set}" ]]; then
+              fail "unexpected refresh output"
+            fi
+            result[$name]="${line#*=}"
+          done < "$RUNNER_TEMP/mb/refresh.out"
+          [[ "${result[available]:-}" == true ]] || fail "the promoted bundle for $KEY is not available"
+          cache_name="${result[cache_name]:-}"
+          coverage="${cache_name#"mb-cache--$KEY--"}"
+          [[ "$coverage" =~ ^[0-9a-f]{40}$ && "$cache_name" == "mb-cache--$KEY--$coverage" ]] || fail "malformed cache name"
+          jq -e --arg sha "$coverage" 'any(.[]; . == $sha)' <<< "$HEADS" > /dev/null ||
+            fail "the cache of $KEY covers no published head"
+          baseline_name="${result[baseline_name]:-}"
+          if [[ -z "$baseline_name" ]]; then
+            printf 'cache_name=%s\n' "$cache_name" >> "$GITHUB_OUTPUT"
+          else
+            identity="${baseline_name#"mb-baseline--$KEY--"}"
+            if [[ ! "$identity" =~ ^[0-9a-f]{40}--[1-9][0-9]{0,17}$ || "$baseline_name" != "mb-baseline--$KEY--$identity" ]]; then
+              fail "malformed baseline name"
+            fi
+            [[ "$(jq -r '.baseline_archive.enabled' mod/site/mod-base.json)" == true ]] ||
+              fail "a baseline was named while baseline_archive is disabled"
+            retention="$(jq -er '.baseline_archive.retention_days' mod/site/mod-base.json)" ||
+              fail "baseline_archive.retention_days is missing"
+            if [[ ! "$retention" =~ ^[1-9][0-9]?$ ]] || (( retention > 90 )); then
+              fail "baseline_archive.retention_days must be 1..90"
+            fi
+            printf 'cache_name=%s\nbaseline_name=%s\nbaseline_retention_days=%s\n' "$cache_name" "$baseline_name" \
+              "$retention" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Roll the protected evidence cache forward
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.refresh.outputs.cache_name }}
+          path: ${{ runner.temp }}/mb/cache
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: 90
+      - name: Retain the complete compact generation for feature evidence reuse
+        if: steps.refresh.outputs.baseline_name != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.refresh.outputs.baseline_name }}
+          path: ${{ runner.temp }}/mb/cache
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: ${{ steps.refresh.outputs.baseline_retention_days }}
+
+  refresh-family:
+    name: Refresh ${{ matrix.family }} cache for ${{ matrix.key }}
+    if: inputs.families != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include: ${{ fromJSON(inputs.families) }}
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          BUNDLE_KEYS: ${{ inputs.bundle-keys }}
+          FAMILIES: ${{ inputs.families }}
+          HEADS: ${{ inputs.heads }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch || "$GITHUB_EVENT_NAME" == schedule ]] || fail event
+          jq -e 'type == "array" and length >= 1 and length <= 64 and (unique | length) == length and
+            all(.[]; type == "string" and test("^[a-z0-9](?:[a-z0-9._]|-(?!-)){0,62}[a-z0-9]$"))' \
+            <<< "$BUNDLE_KEYS" > /dev/null 2>&1 || fail bundle-keys
+          jq -e --argjson keys "$BUNDLE_KEYS" 'type == "array" and length <= 512 and
+            all(.[]; type == "object" and (keys == ["coverage_sha", "family", "key"]) and
+              (.family | type == "string" and length <= 32 and test("^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")) and
+              (.key as $key | $keys | any(. == $key)) and
+              (.coverage_sha | type == "string" and test("^[0-9a-f]{40}$"))) and
+            (map([.family, .key]) | unique | length) == length' <<< "$FAMILIES" > /dev/null 2>&1 || fail families
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
+          jq -e --arg branch "${GITHUB_REF#refs/heads/}" --arg sha "$GITHUB_SHA" 'type == "object" and length >= 1 and
+            length <= 64 and all(to_entries[];
+              (.key | test("^(?!/)(?!.*(?:\\.\\.|//))[A-Za-z0-9._/-]{1,200}$")) and
+              (.value | type == "string" and test("^[0-9a-f]{40}$"))) and
+            .[$branch] == $sha' <<< "$HEADS" > /dev/null 2>&1 || fail heads
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/pages.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by the canonical branch's pages.yml"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Revalidate the promoted family bundle
+        id: refresh
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAMILY: ${{ matrix.family }}
+          KEY: ${{ matrix.key }}
+          COVERAGE_SHA: ${{ matrix.coverage_sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Family cache refresh: %s\n' "$1" >&2; exit 1; }
+          [[ "$FAMILY" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ && ${#FAMILY} -le 32 ]] || fail "malformed family"
+          [[ "$KEY" =~ ^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$ && "$KEY" != *--* ]] || fail "malformed key"
+          [[ "$COVERAGE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed coverage commit"
+          mkdir "$RUNNER_TEMP/mb"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base refresh --repo mod --config mod/site/mod-base.json --key "$KEY" --family "$FAMILY" \
+            --input "$RUNNER_TEMP/mb/cache" --github-output "$RUNNER_TEMP/mb/refresh.out"
+          # The kit's outputs become an artifact name: accept exactly their documented shape.
+          declare -A result=()
+          while IFS= read -r line; do
+            name="${line%%=*}"
+            if [[ "$line" != *=* || ! "$name" =~ ^(available|cache_name)$ || -n "${result[$name]+set}" ]]; then
+              fail "unexpected refresh output"
+            fi
+            result[$name]="${line#*=}"
+          done < "$RUNNER_TEMP/mb/refresh.out"
+          case "${result[available]:-}" in
+            true)
+              [[ "${result[cache_name]:-}" == "mb-family-cache--$FAMILY--$KEY--$COVERAGE_SHA" ]] ||
+                fail "the family cache name is not this leg's"
+              printf 'available=true\ncache_name=%s\n' "${result[cache_name]}" >> "$GITHUB_OUTPUT" ;;
+            false)
+              [[ -z "${result[cache_name]:-}" ]] || fail "an unavailable family leg names a cache"
+              printf 'available=false\n' >> "$GITHUB_OUTPUT"
+              printf 'Nothing was collected for %s %s; no family cache is rolled forward.\n' "$FAMILY" "$KEY" ;;
+            *) fail "refresh reported no availability" ;;
+          esac
+      - name: Roll the protected family cache forward
+        if: steps.refresh.outputs.available == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.refresh.outputs.cache_name }}
+          path: ${{ runner.temp }}/mb/cache
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: 90

@@ -1,0 +1,120 @@
+# Contributing to {{name}}
+
+You do not need to know the whole project before contributing. This guide takes you from a fresh
+fork to a pull request and shows how to use a coding assistant without letting it guess the
+project's rules.
+
+Read [LICENSE](LICENSE) before contributing; submitting a pull request accepts its contribution
+terms.
+
+## The instruction documents to know
+
+- [README.md](README.md) explains what the mod does and how to build it.
+- [AGENTS.md](AGENTS.md) is an import-only manifest. Every `@path.md` listed there is part of the
+  authoritative instruction set for coding assistants. Its first two imports,
+  `docs/ai/shared/REPOSITORY.md` and `docs/ai/shared/PUBLIC-EVIDENCE.md`, are managed by mod-base.
+
+The repository deliberately has no `CLAUDE.md`. Claude Code reads `AGENTS.md` directly, including
+its imports, so Claude gets the same modular rules as other agents without a duplicate copy.
+Adding a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` would stop Claude from reading
+`AGENTS.md`. Do not put rules directly in `AGENTS.md`.
+
+## 1. Choose the correct base branch
+
+All new changes target `{{canonical_branch}}`, including a fix for one Minecraft version or loader.
+The release inventory named in `docs/ai/PROJECT.md` decides which versions and loaders are built;
+never infer support from directory or branch names.
+
+## 2. Prepare a checkout
+
+Install Git, a JDK able to launch Gradle, and Python 3.11 or newer for the helper scripts. Fork the
+repository on GitHub, clone your fork, add this repository as `upstream`, and create a topic
+branch from `upstream/{{canonical_branch}}`:
+
+```bash
+git fetch upstream
+git switch --create fix/short-description upstream/{{canonical_branch}}
+```
+
+If another task owns the current checkout, create a separate ephemeral worktree from the fetched
+base instead. Remove it only after `git status --short` inside it is empty and every valuable
+change belongs to a named, pushed branch; never pass `--force` to erase a dirty worktree.
+
+## 3. Give an AI enough context
+
+Coding agents should discover `AGENTS.md` automatically, but import behavior differs between tools.
+Make the requirement explicit:
+
+```text
+Open AGENTS.md and read every @-imported Markdown file completely, then read CONTRIBUTING.md and
+the focused documentation relevant to this task. Inspect git status and the release inventory
+before editing. Explain the intended scope, make the smallest coherent change, preserve unrelated
+work, do not edit generated output or mod-base managed files, and run proportional checks. Do not
+commit, push, open a PR, weaken tests, or change the support inventory unless I ask.
+
+Task: <describe one concrete bug or feature, including how to reproduce it>
+```
+
+AI output is not automatically correct. Read the diff, reject fixes that delete tests, relax
+assertions, remove bounds or hide exceptions, and never paste tokens, credentials or private user
+data into a prompt.
+
+## 4. Know where changes belong
+
+`docs/ai/PROJECT.md` maps each kind of change to its owning source. Generated output, build
+directories, Minecraft runtime directories, screenshots and caches are never edited or committed.
+Files managed by mod-base (the shared `docs/ai/shared/*.md`, `scripts/ci/mod_base_kit.py`,
+`.gitattributes` and the managed region of `.github/workflows/pages.yml`) change only through the
+kit: see step 5.
+
+## 5. Run proportional checks
+
+Run the smallest useful test while developing, then the repository-level checks before handing
+work off:
+
+```bash
+git diff --check
+{{test_command}}
+python3 scripts/ci/mod_base_kit.py verify --network
+python3 scripts/ci/mod_base_kit.py run template check --repo .
+```
+
+The first kit command fetches the pinned mod-base commit into your user cache (outside the
+repository) when it is not there yet. Kit bumps are their own pull requests: run
+`python3 scripts/ci/mod_base_kit.py bump --to vX.Y.Z` on a fresh branch and open it as a draft;
+the bump rewrites every pin and re-synchronizes the managed files, and the complete gates run on
+it like on any other change.
+
+## 6. Review and commit
+
+Keep one logical concern per commit, with a conventional, imperative subject (`feat:`, `fix:`,
+`refactor:`, `test:`, `build:`, `ci:`, `docs:` or `chore:`). Review exactly what will be
+committed:
+
+```bash
+git status --short
+git diff --check
+git add path/to/intended-file
+git diff --cached --check
+git diff --cached
+git commit -m "fix: describe the actual change"
+```
+
+## 7. Update your branch safely
+
+Before the first push, `git rebase upstream/{{canonical_branch}}` is fine; `git rebase --abort`
+returns to the previous state. After a pull request is open, merge the base branch normally
+instead of rewriting published history.
+
+## 8. Open the pull request
+
+Push the topic branch to your fork and open a pull request against `{{canonical_branch}}`. Use the
+pull-request template: a reviewer must be able to see why the change is needed, which versions and
+loaders it affects, which commands you ran and their outcomes, what you did not test, and whether
+AI materially authored or reviewed the change. CI is part of the review: fix the cause of a
+failure instead of weakening a gate.
+
+## Getting help
+
+Open an issue when the correct source owner or expected behavior is unclear. Include the version,
+loader, reproduction steps and relevant logs.

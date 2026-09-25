@@ -1,0 +1,48 @@
+# mod-base adapter of {{name}}: seeded once by `template init --seed`, then owned by this repository.
+"""The mod-base adapter: the only code through which the kit sees this mod's contract and outputs.
+
+Every hook receives ``ctx`` (``mod_base.adapter.api.Context``) and JSON-compatible arguments, and
+returns JSON-compatible data that the kit validates strictly and re-verifies before publishing
+anything. A hook this module does not define is *unsupported*; the kit fails closed wherever an
+unsupported hook would be required. The protocol is documented at
+https://github.com/The-Plum-Team/mod-base/blob/main/docs/ADAPTER.md
+
+The three hooks below are required. Replace each body; until then every publication fails closed.
+Optional hooks (define them only when the configuration needs them):
+
+* ``expected_source_jobs(ctx, expectation, tested_run)`` when ``source.require_job_graph`` is set;
+* ``authenticate_extensions(ctx, manifest, extensions)`` when handoffs carry ``adapter.extensions``;
+* ``compose(ctx, key, selected_compact_dir, output_dir)`` when handoffs can be ``selected``;
+* ``verify_publication(ctx, promotion_draft)`` for a last mod-specific veto before rendering;
+* ``family_validate(ctx, family, key, bundle_dir, expected_coverage_sha, output_dir)`` for every
+  configured family;
+* ``anchor_selection(ctx, expectation)`` when ``anchor.enabled`` is set.
+
+Hooks run in an isolated child process with no GitHub credentials (network hooks get a read-only
+token only in read-only jobs). Keep them pure functions of their inputs: never write outside
+``ctx.tmpdir``/the given output directory, never read other branches except through
+``ctx.read_blob``, and never call the network outside a declared network hook.
+"""
+
+ADAPTER_API = 1
+
+
+def targets(ctx, branches):
+    """Return 1..``targets.max`` ``{key, label, subject: {branch, commit, tree}, matrix_sha256,
+    contract_sha256}``; ``branches`` is ``None`` in ``default-branch`` mode."""
+
+    raise NotImplementedError("mod-base adapter hook 'targets' is not implemented yet")
+
+
+def expectation(ctx, target, tested_run, extensions):
+    """Return the ``mod-base.evidence.expectation`` v1 of ``target``: lanes, captures and
+    comparisons derived from this mod's own contract and release inventory."""
+
+    raise NotImplementedError("mod-base adapter hook 'expectation' is not implemented yet")
+
+
+def collect(ctx, runtime_root, target, expectation):
+    """Read this mod's packaged E2E outputs under ``runtime_root`` and return ``{runtime_files,
+    lanes, frames, comparisons}``; the result must be a pure function of those bytes."""
+
+    raise NotImplementedError("mod-base adapter hook 'collect' is not implemented yet")

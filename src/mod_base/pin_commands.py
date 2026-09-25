@@ -9,7 +9,10 @@ from mod_base import cli
 from mod_base.errors import MbError
 from mod_base.github import api as github_api
 from mod_base.model import grammar
-from mod_base.pin import kit_tree_digest, verify
+from mod_base.pin import KIT_TOKEN, kit_tree_digest, verify
+
+#: ``verify --network`` needs at most 1 compare + 1 ref + 4 tag peels (with retries well inside this).
+VERIFY_MAX_REQUESTS = 32
 
 
 def _literal(value: str) -> str:
@@ -31,7 +34,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run_verify(args: argparse.Namespace) -> int:
-    client = github_api.from_environment(cli.environ()) if args.network else None
+    client = None
+    if args.network:
+        # Only GETs against the public kit repository: a read-only client, anonymous unless a token
+        # is present in the step (the mod's own GITHUB_REPOSITORY is irrelevant here).
+        environ = cli.environ()
+        client = github_api.GitHubApi(repository=KIT_TOKEN, max_requests=VERIFY_MAX_REQUESTS,
+                                      token=environ.get("GH_TOKEN") or environ.get("GITHUB_TOKEN") or None)
     pin = verify(args.repo, network=args.network, api=client)
     sys.stdout.write(f"{pin.sha} {pin.version}\n")
     return 0

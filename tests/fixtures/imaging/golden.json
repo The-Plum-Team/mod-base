@@ -1,0 +1,5037 @@
+{
+ "cases": {
+  "canonical": [
+   {
+    "input": "apng.png"
+   },
+   {
+    "input": "bomb-5000x5000.png"
+   },
+   {
+    "input": "bomb-header.png"
+   },
+   {
+    "input": "colours-3.png"
+   },
+   {
+    "input": "colours-4.png"
+   },
+   {
+    "input": "dark-limit.png"
+   },
+   {
+    "input": "dark-over.png"
+   },
+   {
+    "input": "entropy-above.png"
+   },
+   {
+    "input": "entropy-below.png"
+   },
+   {
+    "input": "equal-luma.png"
+   },
+   {
+    "input": "grey-L.png"
+   },
+   {
+    "input": "grey-LA.png"
+   },
+   {
+    "input": "grey16.png"
+   },
+   {
+    "input": "idat-bad-crc.png"
+   },
+   {
+    "input": "idat-flipped.png"
+   },
+   {
+    "input": "light-limit.png"
+   },
+   {
+    "input": "light-over.png"
+   },
+   {
+    "input": "low-contrast.png"
+   },
+   {
+    "input": "luma-edges.png"
+   },
+   {
+    "input": "metadata.png"
+   },
+   {
+    "input": "mostly-dark.png"
+   },
+   {
+    "input": "mostly-light.png"
+   },
+   {
+    "input": "nearly-dark.png"
+   },
+   {
+    "input": "nearly-light.png"
+   },
+   {
+    "input": "noise.png"
+   },
+   {
+    "input": "palette-P-transparency.png"
+   },
+   {
+    "input": "palette-P.png"
+   },
+   {
+    "input": "pattern-16x9.png"
+   },
+   {
+    "input": "pattern-1920x1080.png"
+   },
+   {
+    "input": "pattern-3200x1800.png"
+   },
+   {
+    "input": "pattern-639x360.png"
+   },
+   {
+    "input": "pattern-640x359.png"
+   },
+   {
+    "input": "pattern-640x360-s6.png"
+   },
+   {
+    "input": "pattern-640x360.png"
+   },
+   {
+    "input": "pattern-edit.png"
+   },
+   {
+    "input": "pattern-s0-rgba.png"
+   },
+   {
+    "input": "pattern-s0.jpg.png"
+   },
+   {
+    "input": "pattern-s0.png"
+   },
+   {
+    "input": "pattern-s3.png"
+   },
+   {
+    "input": "rgb48.png"
+   },
+   {
+    "input": "rgba-alpha.png"
+   },
+   {
+    "input": "scene-interlaced.png"
+   },
+   {
+    "input": "scene-red.png"
+   },
+   {
+    "input": "scene.gif.png"
+   },
+   {
+    "input": "scene.png"
+   },
+   {
+    "input": "solid-black.png"
+   },
+   {
+    "input": "solid-grey.png"
+   },
+   {
+    "input": "solid-white.png"
+   },
+   {
+    "input": "stddev-above.png"
+   },
+   {
+    "input": "stddev-below.png"
+   },
+   {
+    "input": "text.png"
+   },
+   {
+    "input": "three-colour-diagonal.png"
+   },
+   {
+    "input": "trailing-data.png"
+   },
+   {
+    "input": "truncated.png"
+   },
+   {
+    "input": "two-colour-diagonal.png"
+   }
+  ],
+  "compare": [
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.5,
+    "region": null,
+    "second": "pattern-s3.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.9999,
+    "region": null,
+    "second": "pattern-s3.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.0,
+    "region": null,
+    "second": "pattern-s0.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 1e-07,
+    "region": null,
+    "second": "pattern-s0.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.01,
+    "region": null,
+    "second": "pattern-edit.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.5,
+    "region": [
+     0.25,
+     0.25,
+     0.4,
+     0.4
+    ],
+    "second": "pattern-edit.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.5,
+    "region": [
+     0.6,
+     0.6,
+     0.9,
+     0.9
+    ],
+    "second": "pattern-edit.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.0,
+    "region": [
+     0.1,
+     0.2,
+     0.3,
+     0.7
+    ],
+    "second": "pattern-edit.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.0,
+    "region": [
+     0.5,
+     0.5,
+     0.5004,
+     0.6
+    ],
+    "second": "pattern-edit.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0,
+    "region": [
+     0,
+     0,
+     1,
+     1
+    ],
+    "second": "pattern-edit.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.002,
+    "region": [
+     0.0,
+     0.0,
+     1.0,
+     1.0
+    ],
+    "second": "pattern-edit.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.0,
+    "region": null,
+    "second": "pattern-1920x1080.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.0,
+    "region": null,
+    "second": "pattern-s0-rgba.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.1,
+    "region": null,
+    "second": "grey-L.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.0,
+    "region": [
+     0.125,
+     0.125,
+     0.875,
+     0.875
+    ],
+    "second": "palette-P.png"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.0,
+    "region": null,
+    "second": "truncated.png"
+   },
+   {
+    "first": "scene.png",
+    "minimum_changed_fraction": 0.001,
+    "region": null,
+    "second": "scene-red.png"
+   },
+   {
+    "first": "scene.png",
+    "minimum_changed_fraction": 0.5,
+    "region": [
+     0.45,
+     0.25,
+     0.55,
+     0.6
+    ],
+    "second": "scene-red.png"
+   },
+   {
+    "first": "scene.png",
+    "minimum_changed_fraction": 0.0,
+    "region": null,
+    "second": "scene-interlaced.png"
+   },
+   {
+    "first": "pattern-640x360.png",
+    "minimum_changed_fraction": 0.3,
+    "region": null,
+    "second": "pattern-640x360-s6.png"
+   },
+   {
+    "first": "pattern-640x360.png",
+    "minimum_changed_fraction": 0.3,
+    "region": [
+     0.333,
+     0.1,
+     0.667,
+     0.9
+    ],
+    "second": "pattern-640x360-s6.png"
+   },
+   {
+    "first": "qs-pattern-s0.webp",
+    "minimum_changed_fraction": 0.5,
+    "region": null,
+    "second": "qs-pattern-s3.webp"
+   },
+   {
+    "first": "qs-pattern-s0.webp",
+    "minimum_changed_fraction": 0.001,
+    "region": [
+     0.25,
+     0.25,
+     0.4,
+     0.4
+    ],
+    "second": "qs-pattern-edit.webp"
+   },
+   {
+    "first": "qs-pattern-s0.webp",
+    "minimum_changed_fraction": 0.0,
+    "region": null,
+    "second": "qs-pattern-1920x1080.webp"
+   },
+   {
+    "first": "bp-pattern-s0.webp",
+    "minimum_changed_fraction": 0.5,
+    "region": [
+     0.5,
+     0.0,
+     1.0,
+     0.5
+    ],
+    "second": "bp-pattern-s3.webp"
+   },
+   {
+    "first": "pattern-s0.png",
+    "minimum_changed_fraction": 0.0,
+    "region": null,
+    "second": "qs-pattern-s0.webp"
+   }
+  ],
+  "inspect": [
+   {
+    "format": "PNG",
+    "input": "apng.png"
+   },
+   {
+    "format": "PNG",
+    "input": "bomb-5000x5000.png"
+   },
+   {
+    "format": "PNG",
+    "input": "bomb-header.png"
+   },
+   {
+    "format": "PNG",
+    "input": "colours-3.png"
+   },
+   {
+    "format": "PNG",
+    "input": "colours-4.png"
+   },
+   {
+    "format": "PNG",
+    "input": "dark-limit.png"
+   },
+   {
+    "format": "PNG",
+    "input": "dark-over.png"
+   },
+   {
+    "format": "PNG",
+    "input": "entropy-above.png"
+   },
+   {
+    "format": "PNG",
+    "input": "entropy-below.png"
+   },
+   {
+    "format": "PNG",
+    "input": "equal-luma.png"
+   },
+   {
+    "format": "PNG",
+    "input": "grey-L.png"
+   },
+   {
+    "format": "PNG",
+    "input": "grey-LA.png"
+   },
+   {
+    "format": "PNG",
+    "input": "grey16.png"
+   },
+   {
+    "format": "PNG",
+    "input": "idat-bad-crc.png"
+   },
+   {
+    "format": "PNG",
+    "input": "idat-flipped.png"
+   },
+   {
+    "format": "PNG",
+    "input": "light-limit.png"
+   },
+   {
+    "format": "PNG",
+    "input": "light-over.png"
+   },
+   {
+    "format": "PNG",
+    "input": "low-contrast.png"
+   },
+   {
+    "format": "PNG",
+    "input": "luma-edges.png"
+   },
+   {
+    "format": "PNG",
+    "input": "metadata.png"
+   },
+   {
+    "format": "PNG",
+    "input": "mostly-dark.png"
+   },
+   {
+    "format": "PNG",
+    "input": "mostly-light.png"
+   },
+   {
+    "format": "PNG",
+    "input": "nearly-dark.png"
+   },
+   {
+    "format": "PNG",
+    "input": "nearly-light.png"
+   },
+   {
+    "format": "PNG",
+    "input": "noise.png"
+   },
+   {
+    "format": "PNG",
+    "input": "palette-P-transparency.png"
+   },
+   {
+    "format": "PNG",
+    "input": "palette-P.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-16x9.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-1920x1080.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-3200x1800.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-639x360.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-640x359.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-640x360-s6.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-640x360.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-edit.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-s0-rgba.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-s0.jpg.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-s0.png"
+   },
+   {
+    "format": "PNG",
+    "input": "pattern-s3.png"
+   },
+   {
+    "format": "PNG",
+    "input": "rgb48.png"
+   },
+   {
+    "format": "PNG",
+    "input": "rgba-alpha.png"
+   },
+   {
+    "format": "PNG",
+    "input": "scene-interlaced.png"
+   },
+   {
+    "format": "PNG",
+    "input": "scene-red.png"
+   },
+   {
+    "format": "PNG",
+    "input": "scene.gif.png"
+   },
+   {
+    "format": "PNG",
+    "input": "scene.png"
+   },
+   {
+    "format": "PNG",
+    "input": "solid-black.png"
+   },
+   {
+    "format": "PNG",
+    "input": "solid-grey.png"
+   },
+   {
+    "format": "PNG",
+    "input": "solid-white.png"
+   },
+   {
+    "format": "PNG",
+    "input": "stddev-above.png"
+   },
+   {
+    "format": "PNG",
+    "input": "stddev-below.png"
+   },
+   {
+    "format": "PNG",
+    "input": "text.png"
+   },
+   {
+    "format": "PNG",
+    "input": "three-colour-diagonal.png"
+   },
+   {
+    "format": "PNG",
+    "input": "trailing-data.png"
+   },
+   {
+    "format": "PNG",
+    "input": "truncated.png"
+   },
+   {
+    "format": "PNG",
+    "input": "two-colour-diagonal.png"
+   },
+   {
+    "format": "WEBP",
+    "input": "animated.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "bp-pattern-s0.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "bp-pattern-s3.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "bp-scene.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "qs-pattern-1920x1080.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "qs-pattern-edit.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "qs-pattern-s0.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "qs-pattern-s3.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "pattern-s0.png"
+   },
+   {
+    "format": "PNG",
+    "input": "qs-pattern-s0.webp"
+   },
+   {
+    "format": "WEBP",
+    "input": "text.png"
+   }
+  ],
+  "webp": [
+   {
+    "input": "apng.png"
+   },
+   {
+    "input": "bomb-5000x5000.png"
+   },
+   {
+    "input": "bomb-header.png"
+   },
+   {
+    "input": "colours-3.png"
+   },
+   {
+    "input": "colours-4.png"
+   },
+   {
+    "input": "dark-limit.png"
+   },
+   {
+    "input": "dark-over.png"
+   },
+   {
+    "input": "entropy-above.png"
+   },
+   {
+    "input": "entropy-below.png"
+   },
+   {
+    "input": "equal-luma.png"
+   },
+   {
+    "input": "grey-L.png"
+   },
+   {
+    "input": "grey-LA.png"
+   },
+   {
+    "input": "grey16.png"
+   },
+   {
+    "input": "idat-bad-crc.png"
+   },
+   {
+    "input": "idat-flipped.png"
+   },
+   {
+    "input": "light-limit.png"
+   },
+   {
+    "input": "light-over.png"
+   },
+   {
+    "input": "low-contrast.png"
+   },
+   {
+    "input": "luma-edges.png"
+   },
+   {
+    "input": "metadata.png"
+   },
+   {
+    "input": "mostly-dark.png"
+   },
+   {
+    "input": "mostly-light.png"
+   },
+   {
+    "input": "nearly-dark.png"
+   },
+   {
+    "input": "nearly-light.png"
+   },
+   {
+    "input": "noise.png"
+   },
+   {
+    "input": "palette-P-transparency.png"
+   },
+   {
+    "input": "palette-P.png"
+   },
+   {
+    "input": "pattern-16x9.png"
+   },
+   {
+    "input": "pattern-1920x1080.png"
+   },
+   {
+    "input": "pattern-3200x1800.png"
+   },
+   {
+    "input": "pattern-639x360.png"
+   },
+   {
+    "input": "pattern-640x359.png"
+   },
+   {
+    "input": "pattern-640x360-s6.png"
+   },
+   {
+    "input": "pattern-640x360.png"
+   },
+   {
+    "input": "pattern-edit.png"
+   },
+   {
+    "input": "pattern-s0-rgba.png"
+   },
+   {
+    "input": "pattern-s0.jpg.png"
+   },
+   {
+    "input": "pattern-s0.png"
+   },
+   {
+    "input": "pattern-s3.png"
+   },
+   {
+    "input": "rgb48.png"
+   },
+   {
+    "input": "rgba-alpha.png"
+   },
+   {
+    "input": "scene-interlaced.png"
+   },
+   {
+    "input": "scene-red.png"
+   },
+   {
+    "input": "scene.gif.png"
+   },
+   {
+    "input": "scene.png"
+   },
+   {
+    "input": "solid-black.png"
+   },
+   {
+    "input": "solid-grey.png"
+   },
+   {
+    "input": "solid-white.png"
+   },
+   {
+    "input": "stddev-above.png"
+   },
+   {
+    "input": "stddev-below.png"
+   },
+   {
+    "input": "text.png"
+   },
+   {
+    "input": "three-colour-diagonal.png"
+   },
+   {
+    "input": "trailing-data.png"
+   },
+   {
+    "input": "truncated.png"
+   },
+   {
+    "input": "two-colour-diagonal.png"
+   }
+  ]
+ },
+ "inputs": {
+  "animated.webp": {
+   "bytes": 13132,
+   "sha256": "3bf7d16ed9951add0546766519d95f8960da981a08042ef1e8f00563f2e1bc88"
+  },
+  "apng.png": {
+   "bytes": 91021,
+   "sha256": "13b83deee0097fe314578e8fa74f72bbb8e4c7c3c4fd2666606124e4f5b433f3"
+  },
+  "bomb-5000x5000.png": {
+   "bytes": 32680,
+   "sha256": "60c9d526798c126610289af7721571a238b8d828de3b102c7b7e472185d66d7b"
+  },
+  "bomb-header.png": {
+   "bytes": 254,
+   "sha256": "35304b3c4e8400161506cda9028cc77ddb4d65d8c220147b570899386113f2f5"
+  },
+  "bp-pattern-s0.webp": {
+   "bytes": 6012,
+   "sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c"
+  },
+  "bp-pattern-s3.webp": {
+   "bytes": 5784,
+   "sha256": "44f5211af390c9bf76661692a824979cf53f93a6ae36a8d8da53e9f243f7659e"
+  },
+  "bp-scene.webp": {
+   "bytes": 13348,
+   "sha256": "bc604dbd41253c4cbce31fe8cbd8b7c9d331afb15094ff086080592f240210ec"
+  },
+  "colours-3.png": {
+   "bytes": 6413,
+   "sha256": "50424dd72d39593d0200ae4ccec079b1dfd2aee4c66d5936d7daface34de8275"
+  },
+  "colours-4.png": {
+   "bytes": 6413,
+   "sha256": "5ee5181533a169a99edf302276a178d2a8c33b4cff69844ee84e76ce82e52ff0"
+  },
+  "dark-limit.png": {
+   "bytes": 6162,
+   "sha256": "893cf9843328a802b52fa14a033b71457d9841cf0797909d1e8eebaa40a25883"
+  },
+  "dark-over.png": {
+   "bytes": 6161,
+   "sha256": "8705a0421480f04243d7630e219b8b52c21bd642aaa0aa9952572d9e3633eb54"
+  },
+  "entropy-above.png": {
+   "bytes": 6421,
+   "sha256": "adc820b442d87e924fa6bbecaf8449de61b6eb3f7458948ec8ab08e2c119fb12"
+  },
+  "entropy-below.png": {
+   "bytes": 6421,
+   "sha256": "1ec3027e93811af27cf6cb190dd63b49fef913ae40bc307c150f909dd87f9fff"
+  },
+  "equal-luma.png": {
+   "bytes": 6441,
+   "sha256": "5f3b5b0e914550de288fa8e83d3133b093b35cc588d23a2485d8d4775261597f"
+  },
+  "grey-L.png": {
+   "bytes": 18582,
+   "sha256": "41328194d0cb87ed117f90362276b72a0024b86ab472e9e018f19616e2c9256c"
+  },
+  "grey-LA.png": {
+   "bytes": 27331,
+   "sha256": "3de3825450975e558d4e39d53b3d235f318fc4b680ccc198dba2c3ad5cce5a10"
+  },
+  "grey16.png": {
+   "bytes": 12975,
+   "sha256": "3d69db5a4b5761062502a2392115cb6ab1a1639ed50be5afb918f5d00d31833d"
+  },
+  "idat-bad-crc.png": {
+   "bytes": 44469,
+   "sha256": "6abe876b8410c02bdad0a9409ea76b7ad889d1d7e2a264a9ec025d22734db630"
+  },
+  "idat-flipped.png": {
+   "bytes": 44469,
+   "sha256": "5b4d7ab5945043e53faad65a0e1c34e0fce16a1b6963eacb0520aa821539b329"
+  },
+  "light-limit.png": {
+   "bytes": 6427,
+   "sha256": "9c8bfd41d3de1e7e42b9f2f989c380390af9509ef7f6829166d02fc80048b147"
+  },
+  "light-over.png": {
+   "bytes": 6426,
+   "sha256": "94817eee5280d44fd3b2b0480b9285104f9c416b3072c219e95e9c797d595d01"
+  },
+  "low-contrast.png": {
+   "bytes": 6437,
+   "sha256": "e347ff2f2b9e48ceedcb3930ca49d60169f497a8fab93b7ebf4d1de68f494274"
+  },
+  "luma-edges.png": {
+   "bytes": 6404,
+   "sha256": "2b189d3aa3e494230488d9414bb773070da6ec9589126dea65545fa10d040e8b"
+  },
+  "metadata.png": {
+   "bytes": 44686,
+   "sha256": "28d3ff908307dd27a0d79538b40da2a1a9e5320f9bb2fc8874239ac90427c91b"
+  },
+  "mostly-dark.png": {
+   "bytes": 4647,
+   "sha256": "51c946a9ed0899853e285bb52ec58ae787a6bd72b61bf5bb7d174cd5ac2a72fd"
+  },
+  "mostly-light.png": {
+   "bytes": 6445,
+   "sha256": "e5dc70fddd3da5b221f47ee48cf5a3f2fa824320ac4139bf1b0dc24dca20d884"
+  },
+  "nearly-dark.png": {
+   "bytes": 4374,
+   "sha256": "3e945d58f9425bcfb78a4ce049c9fe91c051251bf2deace8831599e3c8cec076"
+  },
+  "nearly-light.png": {
+   "bytes": 6444,
+   "sha256": "ccf33228f487a0aeb3c32a9bab113480aa359162eb516c25a9ddca70a60ddcae"
+  },
+  "noise.png": {
+   "bytes": 109824,
+   "sha256": "0d2c179ab1a1952c27e3b077e560071630e224064540d9b905298b77799b3705"
+  },
+  "palette-P-transparency.png": {
+   "bytes": 19038,
+   "sha256": "6f059c94a73ffbb1813cb2d8389e21cf5670f38103567f405ef71d6253ee3284"
+  },
+  "palette-P.png": {
+   "bytes": 19022,
+   "sha256": "6d9d468fca7c55e027285e22fd51b223f074c4ce9b414febb1a164ac22a0e123"
+  },
+  "pattern-16x9.png": {
+   "bytes": 372,
+   "sha256": "e63bb731105b5fd347f86355f63ee921bb1fca4a585412638b37b38119744da5"
+  },
+  "pattern-1920x1080.png": {
+   "bytes": 52356,
+   "sha256": "a307c6bba139339814b4affeb1ac4977358f925c79f7dde266a27a69f5786d80"
+  },
+  "pattern-3200x1800.png": {
+   "bytes": 101505,
+   "sha256": "cf2809a4599a6fc547c2d27199227b7e33e8c31b10d4457e9c5a2d92df36f761"
+  },
+  "pattern-639x360.png": {
+   "bytes": 16122,
+   "sha256": "9795903046c05dea8352e36d4396c5779c90493d7956c4e7be1b5be053b1d0a8"
+  },
+  "pattern-640x359.png": {
+   "bytes": 15891,
+   "sha256": "cc4cb86db25d48261e3ce5512ee613881662e5f8d3d47eeefc13ec8aee3884b2"
+  },
+  "pattern-640x360-s6.png": {
+   "bytes": 16053,
+   "sha256": "573ad54342c531315db94de013c91eb37e2e8df25133bcb0664eb5ace50a8bee"
+  },
+  "pattern-640x360.png": {
+   "bytes": 15958,
+   "sha256": "583967594d73521dc8ca5d5a3ef63f1309d23cd70f77e2de027dbc9e8cde8337"
+  },
+  "pattern-edit.png": {
+   "bytes": 44599,
+   "sha256": "cc033dda8385027ff65126fd7291c6d200dad2cbbf85ddcf7d06b6ca8ebc0b28"
+  },
+  "pattern-s0-rgba.png": {
+   "bytes": 55480,
+   "sha256": "595637288d678dd5afe9970968a03a0dd450c6981e0a61f8f276f3be306b2804"
+  },
+  "pattern-s0.jpg.png": {
+   "bytes": 54252,
+   "sha256": "9ac04176d2d302a7156a64823e3313937686164346e13b461cb133608ea29cb4"
+  },
+  "pattern-s0.png": {
+   "bytes": 44469,
+   "sha256": "34ac678975408dcdb93656b7311209acf1c12aa379be39959e75c150ef0cd51b"
+  },
+  "pattern-s3.png": {
+   "bytes": 46497,
+   "sha256": "30be1f54d4c5b43a82bcd9c22d960a3385b50c97cdbefdd4ca549a4a51923bed"
+  },
+  "qs-pattern-1920x1080.webp": {
+   "bytes": 8346,
+   "sha256": "8424b2dfe4d949c59e2de14cecc91d6ac0831430e5a119e93ee350bba1aefe2d"
+  },
+  "qs-pattern-edit.webp": {
+   "bytes": 8636,
+   "sha256": "0f9c07e43c4a23c2ad35d69752edecd4433b47935083b4d9553c0b01424395d2"
+  },
+  "qs-pattern-s0.webp": {
+   "bytes": 8520,
+   "sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194"
+  },
+  "qs-pattern-s3.webp": {
+   "bytes": 8026,
+   "sha256": "6f58445998506c3050dc37286730f62e6c6cdfd91baf0d16ef9174fd75a80d74"
+  },
+  "rgb48.png": {
+   "bytes": 37237,
+   "sha256": "5d889198ddad52d1c15c1583f4f8ad4266f01b2d7065a2f4624ba147b5ea5087"
+  },
+  "rgba-alpha.png": {
+   "bytes": 55737,
+   "sha256": "d60696cb966cda87e4feb873969e4d60afa70572df0a787a8691064537d3c2bf"
+  },
+  "scene-interlaced.png": {
+   "bytes": 36014,
+   "sha256": "2906720599f5b033d16cb2c7781c95c2e2616c09d3e3f9379ec293bd182402eb"
+  },
+  "scene-red.png": {
+   "bytes": 9773,
+   "sha256": "1371f3591c331b8577df8767acc3957789ed40e60825f22f70d2f839a04ac35a"
+  },
+  "scene.gif.png": {
+   "bytes": 59350,
+   "sha256": "f1e7a07fcab3a72a9ae5d5cc376c002aedc1e7a632c0c49897a462ed8d912fdc"
+  },
+  "scene.png": {
+   "bytes": 9776,
+   "sha256": "d87143fa4dc8e6adfea05f329a656272efb0bc5cf77c2cabfce6d35a61a92ded"
+  },
+  "solid-black.png": {
+   "bytes": 4267,
+   "sha256": "bddccb691c387e4415f181d7c4f427ab241e956bd669fc8b256dcafd01822c00"
+  },
+  "solid-grey.png": {
+   "bytes": 6387,
+   "sha256": "03a0cc136a24546303c22454aadd689dd04a23787e46bf6f54978fb5f6179774"
+  },
+  "solid-white.png": {
+   "bytes": 6387,
+   "sha256": "bc602947edbcde28017b1f9640ea904ad83ba612b106067a1edd85f3c02a6220"
+  },
+  "stddev-above.png": {
+   "bytes": 6405,
+   "sha256": "5144006ab7bce38cb240715c73fc5fc70f935bf987f5a674987280d4c77fb3d8"
+  },
+  "stddev-below.png": {
+   "bytes": 6405,
+   "sha256": "fe9adb402c0768764a39c1f3bd9ab2686f791d1477f0d6bbcd20861c98d2bc7c"
+  },
+  "text.png": {
+   "bytes": 21,
+   "sha256": "b2d9765207ea5c5c6f953990f7eaacbbd45584a4b81162a4562f50fbf78eda2d"
+  },
+  "three-colour-diagonal.png": {
+   "bytes": 10425,
+   "sha256": "01fa789b27bdb30d4060bea216c0d66f37e4c8a2282307078d3e5f4446e1187c"
+  },
+  "trailing-data.png": {
+   "bytes": 44494,
+   "sha256": "f5929a56f3aa166d7543b2b8a4cb8944c358fd26e07e6fa4b6ff878062c4345c"
+  },
+  "truncated.png": {
+   "bytes": 26681,
+   "sha256": "a503909b88390dbc02141e9a0e76b0ba3ec51aa74ab826d55ebc50dd1274e779"
+  },
+  "two-colour-diagonal.png": {
+   "bytes": 9158,
+   "sha256": "b8eb1c188f0514ee9477cbc5f7d79b07b55a02cf4b177f62fdd6a990203186ac"
+  }
+ },
+ "outcomes": {
+  "block-pops": {
+   "canonical": [
+    {
+     "error": "VisualEvidenceError",
+     "message": "visual screenshot must be one static PNG: <tmp>/apng.png"
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "visual screenshot dimensions must be 5000x5000: <tmp>/bomb-5000x5000.png (5000x5000)"
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "cannot decode visual screenshot <tmp>/bomb-header.png: Image size (3600000000 pixels) exceeds limit of 40000000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "result": {
+      "bytes": 5866,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "50424dd72d39593d0200ae4ccec079b1dfd2aee4c66d5936d7daface34de8275",
+      "pixel_sha256": "f670032b94a71fb910d6f633a153ef679d9e5268f504adbebff37aecfc98bec0",
+      "sha256": "0b0a2adb12105032f460370e218d7640f0bbd55665dd05706605ac906235751a",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5865,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "5ee5181533a169a99edf302276a178d2a8c33b4cff69844ee84e76ce82e52ff0",
+      "pixel_sha256": "086b2794767d20dc00e3279d8256f7497fb646929df5e23132901ad90f9f0c8e",
+      "sha256": "ba499ce6b4acf1b20208f9a8fecdcbcc8d466ac8f3a35f93ee9f95156b79c62b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5685,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "893cf9843328a802b52fa14a033b71457d9841cf0797909d1e8eebaa40a25883",
+      "pixel_sha256": "4fc21220e586a35b0011779e4c97548c988efdab4f7c3047de18f429ad762966",
+      "sha256": "c8cb66eb8d71bf2627ca0af2aed15d5ae9d7134482421dd48ae901ccae524b33",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5686,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "8705a0421480f04243d7630e219b8b52c21bd642aaa0aa9952572d9e3633eb54",
+      "pixel_sha256": "3834e19fb24bd1eaaa0706e5d0da1d3aa53851b80ec4db3e8ffae0812f4a4ec6",
+      "sha256": "e54d7f8f77c29fc9bf53dfe5ec1b81c55e6a5392f34def9299857c881b3cdad3",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5876,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "adc820b442d87e924fa6bbecaf8449de61b6eb3f7458948ec8ab08e2c119fb12",
+      "pixel_sha256": "8a4938cf54aa743b4159df7c081d7c6276ae21bd1ca7938d158beea99278a730",
+      "sha256": "b86bbb9c7b2e79620c01c676ab73afb42e2e5f8cd4cb12d9cb24dc01717494ca",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5876,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "1ec3027e93811af27cf6cb190dd63b49fef913ae40bc307c150f909dd87f9fff",
+      "pixel_sha256": "3fd4bd1cbc3ad7fa3307d312b2d63fa022b857478ba63a3f3c60519662a587af",
+      "sha256": "99ce789db7edcfe6b5262398cf088b111b1b44b3f33a4b0a57624c88c35a6178",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5898,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "5f3b5b0e914550de288fa8e83d3133b093b35cc588d23a2485d8d4775261597f",
+      "pixel_sha256": "f9bde07588c0386074c6c72f83de63160884f7d37e9149e58e0185dd1f30313d",
+      "sha256": "98fea2ba52e48a28f7d5beabbff637b5eb1e0e090a06082e90449f256f6e5f9a",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 27526,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "41328194d0cb87ed117f90362276b72a0024b86ab472e9e018f19616e2c9256c",
+      "pixel_sha256": "e94eaf658da5157d801da5c819e69807f61a9b2d8c1b1e0bf73bac5c61b508fb",
+      "sha256": "de1aa6dcd9658d2c384d5b38af8baabdd11017653cbef21519bef86c93017c8e",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 27526,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "3de3825450975e558d4e39d53b3d235f318fc4b680ccc198dba2c3ad5cce5a10",
+      "pixel_sha256": "e94eaf658da5157d801da5c819e69807f61a9b2d8c1b1e0bf73bac5c61b508fb",
+      "sha256": "de1aa6dcd9658d2c384d5b38af8baabdd11017653cbef21519bef86c93017c8e",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5845,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "3d69db5a4b5761062502a2392115cb6ab1a1639ed50be5afb918f5d00d31833d",
+      "pixel_sha256": "93a030317b56766235603b9fc37e7e26c32741ac502428d4decc4370a961efb8",
+      "sha256": "2b9548350eab2944c7c08eb2846fee6805441106150668bbe0d2753961db7014",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "6abe876b8410c02bdad0a9409ea76b7ad889d1d7e2a264a9ec025d22734db630",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "cannot decode visual screenshot <tmp>/idat-flipped.png: unrecognized data stream contents when reading image file"
+    },
+    {
+     "result": {
+      "bytes": 5880,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "9c8bfd41d3de1e7e42b9f2f989c380390af9509ef7f6829166d02fc80048b147",
+      "pixel_sha256": "0e32bd869d5cf6767801397d4e6c6bc9af50b8311e8106e29a34a945945a0db6",
+      "sha256": "7c07720f0ddb12ddf525f198ad62205fff0b0eb65b2030443b22944e029288df",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5879,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "94817eee5280d44fd3b2b0480b9285104f9c416b3072c219e95e9c797d595d01",
+      "pixel_sha256": "781b927c8c2aa800a74097fcc3f89ffdbf09a386bff0022433c4f0ec8d11ef03",
+      "sha256": "0d4bd8d3a3d3847900ec9a189a9f7ca82c969aa9983d62de07d9e49e7c2bab6c",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5887,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "e347ff2f2b9e48ceedcb3930ca49d60169f497a8fab93b7ebf4d1de68f494274",
+      "pixel_sha256": "3102f37defe8bc953aae02f01bd36d53555b7786b4be1f94155bee7d66324909",
+      "sha256": "e6eda30cb2c1f2e45faa3540720dbd4b49a5f8cbdbac49a98eeeb8a216060b59",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5862,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "2b189d3aa3e494230488d9414bb773070da6ec9589126dea65545fa10d040e8b",
+      "pixel_sha256": "5ac1c17efa47e675b105487a983d05c72a1c6bd3da6b8950964a8f63958f2da8",
+      "sha256": "f5a79b390909681e961499e6f3bf25e4b7bb8ce1d4038cfd98d95f0ca8c40b10",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "28d3ff908307dd27a0d79538b40da2a1a9e5320f9bb2fc8874239ac90427c91b",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4554,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "51c946a9ed0899853e285bb52ec58ae787a6bd72b61bf5bb7d174cd5ac2a72fd",
+      "pixel_sha256": "2b0f5f8b02ba26ebdad6eb697ea0f0063083c2da71efac3c3a624fecb2ffa7a6",
+      "sha256": "395dc1347e8e56fd2925eb3ff1eb232e549c7de552c862d86b6d1fc0335575ba",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5905,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "e5dc70fddd3da5b221f47ee48cf5a3f2fa824320ac4139bf1b0dc24dca20d884",
+      "pixel_sha256": "92f3cb661f0115e175cc15656ab91dd76675b6966d9f4ba962f12f0a7cf556cf",
+      "sha256": "4a82e603d0ddeba9a34bc2c6121144c6bc69387a87d3bb93f01f28a796d0a014",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4356,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "3e945d58f9425bcfb78a4ce049c9fe91c051251bf2deace8831599e3c8cec076",
+      "pixel_sha256": "1868ae16be1c792be5e61c0654706e8ad8b58c26795336a56aa301886ec165ea",
+      "sha256": "1cbd663e7bdce67b5a13d13dc39cb17aa291555cd722087459000a87266b7f15",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5902,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "ccf33228f487a0aeb3c32a9bab113480aa359162eb516c25a9ddca70a60ddcae",
+      "pixel_sha256": "24de1bb3c6b967a696be436f09f34b36fa1576613a802a8a8521807d4c202432",
+      "sha256": "f86eb1876eb8640c6a04818e9d0c09d8ff9049455af57c7cd2954bc4e733ddf3",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 108945,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "0d2c179ab1a1952c27e3b077e560071630e224064540d9b905298b77799b3705",
+      "pixel_sha256": "236f3e8974dfbc061ae3a2afe9c35864eebe3e9f2ca38b18326f4f57e31769ef",
+      "sha256": "c55eb3d4ef12dace81e6e5b96d3bb9fdd2be661ac6651381def4dcc68b0e6d21",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 16480,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "6f059c94a73ffbb1813cb2d8389e21cf5670f38103567f405ef71d6253ee3284",
+      "pixel_sha256": "f59d4c31a0b3c2bfb298b336560889fb44373131557ba6d8ca39e3d5fb63314b",
+      "sha256": "19319cb67b5fa9ca376da825fe632e394086ff0a831fe4f26b1ce8010e0d4e80",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 16480,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "6d9d468fca7c55e027285e22fd51b223f074c4ce9b414febb1a164ac22a0e123",
+      "pixel_sha256": "f59d4c31a0b3c2bfb298b336560889fb44373131557ba6d8ca39e3d5fb63314b",
+      "sha256": "19319cb67b5fa9ca376da825fe632e394086ff0a831fe4f26b1ce8010e0d4e80",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 373,
+      "expected_size": [
+       16,
+       9
+      ],
+      "file_sha256": "e63bb731105b5fd347f86355f63ee921bb1fca4a585412638b37b38119744da5",
+      "pixel_sha256": "8ac17ceb3713b593ecf3da085ec68c36e39e89e934b8dcdc99fc0b4e71291b17",
+      "sha256": "9c810f9a459082c277eb43810020e301c42e6366dc2c3d4c46853b9345ac3ff9",
+      "size": [
+       16,
+       9
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 44030,
+      "expected_size": [
+       1920,
+       1080
+      ],
+      "file_sha256": "a307c6bba139339814b4affeb1ac4977358f925c79f7dde266a27a69f5786d80",
+      "pixel_sha256": "798a48eeb62a05347efaf7643d7fba53c36a7b56cc76055d6fb0ac8c370968fc",
+      "sha256": "5b430e410874d3bbfc3b14bc75c7bf5cd307490691ed2f0c21ded0519c4d3434",
+      "size": [
+       1920,
+       1080
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 87446,
+      "expected_size": [
+       3200,
+       1800
+      ],
+      "file_sha256": "cf2809a4599a6fc547c2d27199227b7e33e8c31b10d4457e9c5a2d92df36f761",
+      "pixel_sha256": "aaf63021a9073b64d97c4eff2e13542aee03b19962f78c64d8f713ea7c7bad71",
+      "sha256": "e7c3e610e49fc92392fd483a71e6418a8e5f80ac516798e2cc15ca310945eddf",
+      "size": [
+       3200,
+       1800
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 13413,
+      "expected_size": [
+       639,
+       360
+      ],
+      "file_sha256": "9795903046c05dea8352e36d4396c5779c90493d7956c4e7be1b5be053b1d0a8",
+      "pixel_sha256": "bc994f36b9969f8311fb46d73440665510bf8ace95037ed0258f6eb8c215beb6",
+      "sha256": "2b0242fa1d2739ed2962ac4ff0f7e47a503a01ca53a8e831967ffbd64acb2fc9",
+      "size": [
+       639,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 12969,
+      "expected_size": [
+       640,
+       359
+      ],
+      "file_sha256": "cc4cb86db25d48261e3ce5512ee613881662e5f8d3d47eeefc13ec8aee3884b2",
+      "pixel_sha256": "5a02aabc8f86f54050377badde9838e57773831a90406326582303806d642b5e",
+      "sha256": "cb3497a65cd13ca043d1cd133031b9c8c9cafa19bf346508faed9dd1437f26d0",
+      "size": [
+       640,
+       359
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 12958,
+      "expected_size": [
+       640,
+       360
+      ],
+      "file_sha256": "573ad54342c531315db94de013c91eb37e2e8df25133bcb0664eb5ace50a8bee",
+      "pixel_sha256": "68edbbb8435a47811f98ddbc9f677dfb9e8c3b80bd2ca3688484f1d81b810532",
+      "sha256": "8a96dc74e18cd69cda9fd337d51ace95d8c555db233c1da1b32cb996a213e3f4",
+      "size": [
+       640,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 12989,
+      "expected_size": [
+       640,
+       360
+      ],
+      "file_sha256": "583967594d73521dc8ca5d5a3ef63f1309d23cd70f77e2de027dbc9e8cde8337",
+      "pixel_sha256": "8fed900acc0c23006faac0d2f7e50c769969f641641c72999085e8999d2b3dc2",
+      "sha256": "386d846049bf5bf19e15f7e1f9b150a23630306d8bb0a0053e3eb288fb183a1d",
+      "size": [
+       640,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38884,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "cc033dda8385027ff65126fd7291c6d200dad2cbbf85ddcf7d06b6ca8ebc0b28",
+      "pixel_sha256": "9620bd6e74625d68c3012cbc3d9577504cfa890d60495f33678ac8ae1f3c5c39",
+      "sha256": "f321026842e488b016f282b57af0dde85e1ca90e57d11a0fa36e23590c4479ca",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "595637288d678dd5afe9970968a03a0dd450c6981e0a61f8f276f3be306b2804",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "visual screenshot must be one static PNG: <tmp>/pattern-s0.jpg.png"
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "34ac678975408dcdb93656b7311209acf1c12aa379be39959e75c150ef0cd51b",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 40178,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "30be1f54d4c5b43a82bcd9c22d960a3385b50c97cdbefdd4ca549a4a51923bed",
+      "pixel_sha256": "ff90dacc34138ec20486c12eb8803c61aced3bb3e4d889bdb7cea921499b6fb4",
+      "sha256": "0e0d5e89d4a175bdf59c4eea4d1e8182f43cc1d784598c4f78272dbdbd7dae77",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 9196,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "5d889198ddad52d1c15c1583f4f8ad4266f01b2d7065a2f4624ba147b5ea5087",
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "sha256": "fb74172f0bea21a733e687d9fbe1f04d50be6532a0893bed12b4e83ab3ee343b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "d60696cb966cda87e4feb873969e4d60afa70572df0a787a8691064537d3c2bf",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 9196,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "2906720599f5b033d16cb2c7781c95c2e2616c09d3e3f9379ec293bd182402eb",
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "sha256": "fb74172f0bea21a733e687d9fbe1f04d50be6532a0893bed12b4e83ab3ee343b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 9194,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "1371f3591c331b8577df8767acc3957789ed40e60825f22f70d2f839a04ac35a",
+      "pixel_sha256": "d635e877984d9ef851481879b812862d1a989d2a0a630b6ade7976570bd06e23",
+      "sha256": "16cedd95e0e69a89ce0cf6881a9958c5cac4edf266c0913bb808614d87944420",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "visual screenshot must be one static PNG: <tmp>/scene.gif.png"
+    },
+    {
+     "result": {
+      "bytes": 9196,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "d87143fa4dc8e6adfea05f329a656272efb0bc5cf77c2cabfce6d35a61a92ded",
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "sha256": "fb74172f0bea21a733e687d9fbe1f04d50be6532a0893bed12b4e83ab3ee343b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4267,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "bddccb691c387e4415f181d7c4f427ab241e956bd669fc8b256dcafd01822c00",
+      "pixel_sha256": "2c4bd5e75b50567dd5a3cb4111a7df207ce8b453d73c916a0ee00c5c88129e5a",
+      "sha256": "d7d4066eb4613870856e9a775072013f627c0ed69a39a3fd94e0572a61ce627d",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5845,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "03a0cc136a24546303c22454aadd689dd04a23787e46bf6f54978fb5f6179774",
+      "pixel_sha256": "bd6e17b29015173201589de2561a46cb16ce7b7fc3d8bbab431b0f14395ed637",
+      "sha256": "121eb89fbd64fb46976fee2b80ac53734c97abaa5ecd4a47953a05f3c07b2392",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5845,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "bc602947edbcde28017b1f9640ea904ad83ba612b106067a1edd85f3c02a6220",
+      "pixel_sha256": "93a030317b56766235603b9fc37e7e26c32741ac502428d4decc4370a961efb8",
+      "sha256": "2b9548350eab2944c7c08eb2846fee6805441106150668bbe0d2753961db7014",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5867,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "5144006ab7bce38cb240715c73fc5fc70f935bf987f5a674987280d4c77fb3d8",
+      "pixel_sha256": "6fa022d0e5c15ea6e1e4393b9fba5d106d665123fb0663273c7189dad2868f62",
+      "sha256": "fc435e60bb2dbd9a94874eb8c7fed12db954fd71b49d95ee9a6f568e6e91c7c5",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5866,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "fe9adb402c0768764a39c1f3bd9ab2686f791d1477f0d6bbcd20861c98d2bc7c",
+      "pixel_sha256": "e88c58b1d4903c680ad5a95e67fb61ca84d2a7463d3a2cec95d70ab49dae0115",
+      "sha256": "16b51d86e1b5c39b3845cd5028b6178439829d834618bb24fd57daa514d45fc6",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "cannot decode visual screenshot <tmp>/text.png: cannot identify image file <_io.BytesIO object at <address>>"
+    },
+    {
+     "result": {
+      "bytes": 8548,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "01fa789b27bdb30d4060bea216c0d66f37e4c8a2282307078d3e5f4446e1187c",
+      "pixel_sha256": "2545671043ff4df322558a3f557bda652952d37063756881413c67a6f15e43f6",
+      "sha256": "7f536e6cc318e762fa95b08c052dd23158804808f36b8a9fdba0650171ef0380",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "f5929a56f3aa166d7543b2b8a4cb8944c358fd26e07e6fa4b6ff878062c4345c",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "cannot decode visual screenshot <tmp>/truncated.png: image file is truncated"
+    },
+    {
+     "result": {
+      "bytes": 7687,
+      "expected_size": [
+       1600,
+       900
+      ],
+      "file_sha256": "b8eb1c188f0514ee9477cbc5f7d79b07b55a02cf4b177f62fdd6a990203186ac",
+      "pixel_sha256": "38bdd7e58a376511f5a10ba6efc8d8f47e9735fa3a2588fbe13f434fff044520",
+      "sha256": "ab9374d715ad9a6c9e55def8c0fdab31b36728bafbc16f13c48037fe771e58c0",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    }
+   ],
+   "compare": [
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "required_changed_fraction": 0.5,
+      "rms_difference": 61.154
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "required_changed_fraction": 0.9999,
+      "rms_difference": 61.154
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 0.0
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshots expected to change did not change enough over the frame: <tmp>/pattern-s0.png -> <tmp>/pattern-s0.png (changed=0.0000000, required=0.0000001)"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0225,
+      "required_changed_fraction": 0.01,
+      "rms_difference": 11.519
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "region": [
+       0.25,
+       0.25,
+       0.4,
+       0.4
+      ],
+      "required_changed_fraction": 0.5,
+      "rms_difference": 76.793
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshots expected to change did not change enough in region (0.6, 0.6, 0.9, 0.9): <tmp>/pattern-s0.png -> <tmp>/pattern-edit.png (changed=0.0000000, required=0.5000000)"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.075,
+      "region": [
+       0.1,
+       0.2,
+       0.3,
+       0.7
+      ],
+      "required_changed_fraction": 0.0,
+      "rms_difference": 21.295
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "comparison region (0.5, 0.5, 0.5004, 0.6) is empty at 1600x900"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0225,
+      "region": [
+       0,
+       0,
+       1,
+       1
+      ],
+      "required_changed_fraction": 0,
+      "rms_difference": 11.519
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0225,
+      "region": [
+       0.0,
+       0.0,
+       1.0,
+       1.0
+      ],
+      "required_changed_fraction": 0.002,
+      "rms_difference": 11.519
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshots changed dimensions unexpectedly: <tmp>/pattern-s0.png (1600, 900), <tmp>/pattern-1920x1080.png (1920, 1080)"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 0.0
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.875,
+      "required_changed_fraction": 0.1,
+      "rms_difference": 32.356
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.002858,
+      "region": [
+       0.125,
+       0.125,
+       0.875,
+       0.875
+      ],
+      "required_changed_fraction": 0.0,
+      "rms_difference": 2.684
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "cannot compare screenshots <tmp>/pattern-s0.png and <tmp>/truncated.png: image file is truncated"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0123889,
+      "required_changed_fraction": 0.001,
+      "rms_difference": 8.014
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshots expected to change did not change enough in region (0.45, 0.25, 0.55, 0.6): <tmp>/scene.png -> <tmp>/scene-red.png (changed=0.3539683, required=0.5000000)"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 0.0
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "required_changed_fraction": 0.3,
+      "rms_difference": 50.46
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "region": [
+       0.333,
+       0.1,
+       0.667,
+       0.9
+      ],
+      "required_changed_fraction": 0.3,
+      "rms_difference": 49.237
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.9999236,
+      "required_changed_fraction": 0.5,
+      "rms_difference": 60.898
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "region": [
+       0.25,
+       0.25,
+       0.4,
+       0.4
+      ],
+      "required_changed_fraction": 0.001,
+      "rms_difference": 75.952
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.9999972,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 72.256
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.9999957,
+      "region": [
+       0.5,
+       0.0,
+       1.0,
+       0.5
+      ],
+      "required_changed_fraction": 0.5,
+      "rms_difference": 58.754
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0162562,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 2.137
+     }
+    }
+   ],
+   "inspect": [
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "13b83deee0097fe314578e8fa74f72bbb8e4c7c3c4fd2666606124e4f5b433f3",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/bomb-5000x5000.png (5000x5000)"
+    },
+    {
+     "error": "DecompressionBombError",
+     "message": "Image size (3600000000 pixels) exceeds limit of 40000000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/colours-3.png (entropy=1.102, colors=3, dark=0.000, light=0.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "5ee5181533a169a99edf302276a178d2a8c33b4cff69844ee84e76ce82e52ff0",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.105,
+      "meaningful_colors": 4,
+      "pixel_sha256": "086b2794767d20dc00e3279d8256f7497fb646929df5e23132901ad90f9f0c8e",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.98,
+      "file_sha256": "893cf9843328a802b52fa14a033b71457d9841cf0797909d1e8eebaa40a25883",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 3.103,
+      "meaningful_colors": 11,
+      "pixel_sha256": "4fc21220e586a35b0011779e4c97548c988efdab4f7c3047de18f429ad762966",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/dark-over.png (entropy=3.103, colors=11, dark=0.980, light=0.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "adc820b442d87e924fa6bbecaf8449de61b6eb3f7458948ec8ab08e2c119fb12",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 0.751,
+      "meaningful_colors": 5,
+      "pixel_sha256": "8a4938cf54aa743b4159df7c081d7c6276ae21bd1ca7938d158beea99278a730",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/entropy-below.png (entropy=0.749, colors=5, dark=0.000, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/equal-luma.png (entropy=0.262, colors=19, dark=0.000, light=0.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "41328194d0cb87ed117f90362276b72a0024b86ab472e9e018f19616e2c9256c",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.51,
+      "meaningful_colors": 32,
+      "pixel_sha256": "e94eaf658da5157d801da5c819e69807f61a9b2d8c1b1e0bf73bac5c61b508fb",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "3de3825450975e558d4e39d53b3d235f318fc4b680ccc198dba2c3ad5cce5a10",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.51,
+      "meaningful_colors": 32,
+      "pixel_sha256": "e94eaf658da5157d801da5c819e69807f61a9b2d8c1b1e0bf73bac5c61b508fb",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/grey16.png (entropy=-0.000, colors=1, dark=0.000, light=1.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6abe876b8410c02bdad0a9409ea76b7ad889d1d7e2a264a9ec025d22734db630",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot cannot be decoded: <tmp>/idat-flipped.png: unrecognized data stream contents when reading image file"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "9c8bfd41d3de1e7e42b9f2f989c380390af9509ef7f6829166d02fc80048b147",
+      "height": 900,
+      "light_fraction": 0.995,
+      "luma_entropy": 3.037,
+      "meaningful_colors": 9,
+      "pixel_sha256": "0e32bd869d5cf6767801397d4e6c6bc9af50b8311e8106e29a34a945945a0db6",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/light-over.png (entropy=3.037, colors=9, dark=0.000, light=0.995)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/low-contrast.png (entropy=1.252, colors=12, dark=0.000, light=0.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.2556,
+      "file_sha256": "2b189d3aa3e494230488d9414bb773070da6ec9589126dea65545fa10d040e8b",
+      "height": 900,
+      "light_fraction": 0.2333,
+      "luma_entropy": 2.065,
+      "meaningful_colors": 5,
+      "pixel_sha256": "5ac1c17efa47e675b105487a983d05c72a1c6bd3da6b8950964a8f63958f2da8",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "28d3ff908307dd27a0d79538b40da2a1a9e5320f9bb2fc8874239ac90427c91b",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.8,
+      "file_sha256": "51c946a9ed0899853e285bb52ec58ae787a6bd72b61bf5bb7d174cd5ac2a72fd",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.618,
+      "meaningful_colors": 20,
+      "pixel_sha256": "2b0f5f8b02ba26ebdad6eb697ea0f0063083c2da71efac3c3a624fecb2ffa7a6",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "e5dc70fddd3da5b221f47ee48cf5a3f2fa824320ac4139bf1b0dc24dca20d884",
+      "height": 900,
+      "light_fraction": 0.7556,
+      "luma_entropy": 1.865,
+      "meaningful_colors": 19,
+      "pixel_sha256": "92f3cb661f0115e175cc15656ab91dd76675b6966d9f4ba962f12f0a7cf556cf",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/nearly-dark.png (entropy=0.613, colors=8, dark=0.922, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/nearly-light.png (entropy=0.439, colors=6, dark=0.000, light=0.956)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "0d2c179ab1a1952c27e3b077e560071630e224064540d9b905298b77799b3705",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.058,
+      "meaningful_colors": 24,
+      "pixel_sha256": "236f3e8974dfbc061ae3a2afe9c35864eebe3e9f2ca38b18326f4f57e31769ef",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6f059c94a73ffbb1813cb2d8389e21cf5670f38103567f405ef71d6253ee3284",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 5.85,
+      "meaningful_colors": 30,
+      "pixel_sha256": "f59d4c31a0b3c2bfb298b336560889fb44373131557ba6d8ca39e3d5fb63314b",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6d9d468fca7c55e027285e22fd51b223f074c4ce9b414febb1a164ac22a0e123",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 5.85,
+      "meaningful_colors": 30,
+      "pixel_sha256": "f59d4c31a0b3c2bfb298b336560889fb44373131557ba6d8ca39e3d5fb63314b",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/pattern-16x9.png (16x9)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/pattern-1920x1080.png (1920x1080)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/pattern-3200x1800.png (3200x1800)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/pattern-639x360.png (639x360)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/pattern-640x359.png (640x359)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/pattern-640x360-s6.png (640x360)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/pattern-640x360.png (640x360)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "cc033dda8385027ff65126fd7291c6d200dad2cbbf85ddcf7d06b6ca8ebc0b28",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.509,
+      "meaningful_colors": 31,
+      "pixel_sha256": "9620bd6e74625d68c3012cbc3d9577504cfa890d60495f33678ac8ae1f3c5c39",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "595637288d678dd5afe9970968a03a0dd450c6981e0a61f8f276f3be306b2804",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is not a PNG image: <tmp>/pattern-s0.jpg.png"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "34ac678975408dcdb93656b7311209acf1c12aa379be39959e75c150ef0cd51b",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "30be1f54d4c5b43a82bcd9c22d960a3385b50c97cdbefdd4ca549a4a51923bed",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.485,
+      "meaningful_colors": 31,
+      "pixel_sha256": "ff90dacc34138ec20486c12eb8803c61aced3bb3e4d889bdb7cea921499b6fb4",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "5d889198ddad52d1c15c1583f4f8ad4266f01b2d7065a2f4624ba147b5ea5087",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.415,
+      "meaningful_colors": 31,
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "d60696cb966cda87e4feb873969e4d60afa70572df0a787a8691064537d3c2bf",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "2906720599f5b033d16cb2c7781c95c2e2616c09d3e3f9379ec293bd182402eb",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.415,
+      "meaningful_colors": 31,
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "1371f3591c331b8577df8767acc3957789ed40e60825f22f70d2f839a04ac35a",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.414,
+      "meaningful_colors": 31,
+      "pixel_sha256": "d635e877984d9ef851481879b812862d1a989d2a0a630b6ade7976570bd06e23",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is not a PNG image: <tmp>/scene.gif.png"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "d87143fa4dc8e6adfea05f329a656272efb0bc5cf77c2cabfce6d35a61a92ded",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.415,
+      "meaningful_colors": 31,
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/solid-black.png (entropy=-0.000, colors=1, dark=1.000, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/solid-grey.png (entropy=-0.000, colors=1, dark=0.000, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/solid-white.png (entropy=-0.000, colors=1, dark=0.000, light=1.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "5144006ab7bce38cb240715c73fc5fc70f935bf987f5a674987280d4c77fb3d8",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.385,
+      "meaningful_colors": 7,
+      "pixel_sha256": "6fa022d0e5c15ea6e1e4393b9fba5d106d665123fb0663273c7189dad2868f62",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/stddev-below.png (entropy=1.374, colors=7, dark=0.000, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot cannot be decoded: <tmp>/text.png: cannot identify image file <_io.BytesIO object at <address>>"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "01fa789b27bdb30d4060bea216c0d66f37e4c8a2282307078d3e5f4446e1187c",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.044,
+      "meaningful_colors": 24,
+      "pixel_sha256": "2545671043ff4df322558a3f557bda652952d37063756881413c67a6f15e43f6",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "f5929a56f3aa166d7543b2b8a4cb8944c358fd26e07e6fa4b6ff878062c4345c",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot cannot be decoded: <tmp>/truncated.png: image file is truncated"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "b8eb1c188f0514ee9477cbc5f7d79b07b55a02cf4b177f62fdd6a990203186ac",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.268,
+      "meaningful_colors": 10,
+      "pixel_sha256": "38bdd7e58a376511f5a10ba6efc8d8f47e9735fa3a2588fbe13f434fff044520",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "3bf7d16ed9951add0546766519d95f8960da981a08042ef1e8f00563f2e1bc88",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.493,
+      "meaningful_colors": 30,
+      "pixel_sha256": "83b05d0e38a522804dad23d7d76530ed7717b329c4a20cdda01532411fd16116",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/bp-pattern-s0.webp (1280x720)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/bp-pattern-s3.webp (1280x720)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions must be the contracted 1600x900: <tmp>/bp-scene.webp (1280x720)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "8424b2dfe4d949c59e2de14cecc91d6ac0831430e5a119e93ee350bba1aefe2d",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.562,
+      "meaningful_colors": 31,
+      "pixel_sha256": "91996565423a682c7912dfb632d3e5f1c7bdc556491e7eac0d9dccaca46ccd69",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "0f9c07e43c4a23c2ad35d69752edecd4433b47935083b4d9553c0b01424395d2",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.478,
+      "meaningful_colors": 31,
+      "pixel_sha256": "b4f081a3b1b0c498cb3eed9f455a5b7fb9b3f7e5bd2f1f9e016197aab3e2ee7a",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.488,
+      "meaningful_colors": 32,
+      "pixel_sha256": "7c0369b62d7bcb999512fa1c037669df61911d7bcab8390f044a5a6a106b6238",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6f58445998506c3050dc37286730f62e6c6cdfd91baf0d16ef9174fd75a80d74",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.443,
+      "meaningful_colors": 31,
+      "pixel_sha256": "d71bea2d0e0c6acdb183c067679a6f3adde8712dacd595f10eda79ec7e673cfc",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is not a WEBP image: <tmp>/pattern-s0.png"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is not a PNG image: <tmp>/qs-pattern-s0.webp"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot cannot be decoded: <tmp>/text.png: cannot identify image file <_io.BytesIO object at <address>>"
+    }
+   ],
+   "webp": [
+    {
+     "result": {
+      "bytes": 6012,
+      "sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "error": "EvidenceError",
+     "message": "cannot create WebP derivative: Image size (25000000 pixels) exceeds limit of 2880000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "error": "EvidenceError",
+     "message": "cannot create WebP derivative: Image size (3600000000 pixels) exceeds limit of 2880000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "result": {
+      "bytes": 2002,
+      "sha256": "bb486f68d3b74604eca4c0ce81a39f44faebabf870429c9caa2f6be0d728fcce",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2006,
+      "sha256": "c33c3b0fa7f6c194425b575454ac4130a55fa0818910052fdd41ba8685a7d0b9",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1776,
+      "sha256": "d391d1f70210c83ec726415d71204a03482fc0e2d99a0be23c19b947a0f35d42",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1792,
+      "sha256": "c8c1024415a1eccd75b598fe3f6a196df942acae9e0d3976300b232105a696a4",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1896,
+      "sha256": "82bf07b4ed558a90efe232e2b5f24c74e92fc20da23953429cb245a367b4206b",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1936,
+      "sha256": "07cf4b2d804660eaa31d032494f9134cc6c0a81a4a443537662ec19ca9d43fa5",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 3212,
+      "sha256": "2f3f5c2e4369206cb63844a1510d4bda1aaf65408100a06445809cc15d3c38f5",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4200,
+      "sha256": "e7ac01d9c3256be910e95c9393bb06becc3ac2999ace6efa9e4e76daaa20667f",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4200,
+      "sha256": "e7ac01d9c3256be910e95c9393bb06becc3ac2999ace6efa9e4e76daaa20667f",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1700,
+      "sha256": "62768229750376bc07e7018ee87f06e6d1675993bb8270d43362a9377b749474",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6012,
+      "sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "error": "EvidenceError",
+     "message": "cannot create WebP derivative: unrecognized data stream contents when reading image file"
+    },
+    {
+     "result": {
+      "bytes": 1810,
+      "sha256": "de1beb7ff993a6e45cdac6fd9c5ae8b77220b395c6f046ec693e60446f5a4559",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1808,
+      "sha256": "dc5f5e42f4b8b398c52c59a443236bdd152ab0cb0db60a2344940ef7c41f1b57",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1886,
+      "sha256": "2a70b7ec7ce60c8f33558b5528cf051a1495dfd45f97b4ff9f21113a4e5b118f",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1820,
+      "sha256": "74063cb728dc2f9217e93bea2c9e6bed2fb28ff7f8aa30ea8d0a9b1ff57a2016",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6012,
+      "sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 3556,
+      "sha256": "cc9bdf1cd314543fc35a1b071928dd69ce677d2a2a05cce7b7bdfac979142754",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 3724,
+      "sha256": "99ce6aa1d2f790203cf378c05bb4139f2dbc9476c0396304c12ff32582faf47b",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2314,
+      "sha256": "cf32981c4b5d6abe3724f2f72394999ccf3787706e26c8ba7449ca034e417191",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2248,
+      "sha256": "dc2e9a43951fabb9173d464e8fc5172f03720515e33a63ebdfe19fcc399ea396",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 14852,
+      "sha256": "e9d469d906c69789cb25af1513d80db7368f8d28a532c89adad7cf3b475a1f35",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6806,
+      "sha256": "73bfc87b4ea03b1e140c4fcc770f4693b3351903f6fab907fec1d2e8b0d7b296",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6806,
+      "sha256": "73bfc87b4ea03b1e140c4fcc770f4693b3351903f6fab907fec1d2e8b0d7b296",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 170,
+      "sha256": "a3812ca0f3f6c4b740f82f70fe6c262b061726c6b018131e78b0be2c7c306b08",
+      "size": [
+       16,
+       9
+      ]
+     }
+    },
+    {
+     "error": "EvidenceError",
+     "message": "cannot create WebP derivative: Image size (2073600 pixels) exceeds limit of 1440000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "error": "EvidenceError",
+     "message": "cannot create WebP derivative: Image size (5760000 pixels) exceeds limit of 2880000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "result": {
+      "bytes": 3298,
+      "sha256": "74c9e2ddc3b904a89fe75b1a03364d75e05847e192bef94fdee45f57b36f2b4d",
+      "size": [
+       639,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2890,
+      "sha256": "654c8b5591394c769ed122e3fa1cc959d8417a85bb465f9e912cf882da131217",
+      "size": [
+       640,
+       359
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2932,
+      "sha256": "53ba56ae339017c19a7568bf69fac718d9ffb24ac5093322f29ce6cad1c67d00",
+      "size": [
+       640,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2926,
+      "sha256": "116417df96c2b0ad011e09ef88455fc0f28bf605fabbc4456ec0048e09aa45bb",
+      "size": [
+       640,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6136,
+      "sha256": "8951132f733e10d7ab7e85a0037f65199a284fb048a9775c50885a79600fbd99",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6012,
+      "sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 7142,
+      "sha256": "627b0c7efcf9d511a81d1c69e12538cc4273839a3747889e0998c971f73989d3",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6012,
+      "sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5784,
+      "sha256": "44f5211af390c9bf76661692a824979cf53f93a6ae36a8d8da53e9f243f7659e",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 13348,
+      "sha256": "bc604dbd41253c4cbce31fe8cbd8b7c9d331afb15094ff086080592f240210ec",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6012,
+      "sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 13348,
+      "sha256": "bc604dbd41253c4cbce31fe8cbd8b7c9d331afb15094ff086080592f240210ec",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 13386,
+      "sha256": "4399eef3c5fe6a4ff54553f4d9a0d4a30f6eddde64182209cfa76c77624cd36f",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 13576,
+      "sha256": "94d2c850c2787c49d2c736342f58c923d3af31006692c55b9dbe36bf2d24db6f",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 13348,
+      "sha256": "bc604dbd41253c4cbce31fe8cbd8b7c9d331afb15094ff086080592f240210ec",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1700,
+      "sha256": "93df28e250c6dd2b9e2519bef491bfc48860438df2f00cde8df5bfda6479dbf4",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1698,
+      "sha256": "1dc60ed70ced6edc2114fdbcd799bcd7b3a27967aa75ed2c4e8df36bf728fb44",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1700,
+      "sha256": "62768229750376bc07e7018ee87f06e6d1675993bb8270d43362a9377b749474",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1814,
+      "sha256": "1ede4cd5e5e2f23a11679e61710cd1626e1359803df029b3cb8942d546bbbac1",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1820,
+      "sha256": "fbaa79572fb6bacfc94ebd467ea58fa30e4b5d61ab0e4d8bdaf5f0998cde6010",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "error": "EvidenceError",
+     "message": "cannot create WebP derivative: cannot identify image file <_io.BytesIO object at <address>>"
+    },
+    {
+     "result": {
+      "bytes": 7912,
+      "sha256": "2a2f6f1a384553fc960553df2db3085d264eaea44e5afe96cfdab4eeb828d442",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6012,
+      "sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    },
+    {
+     "error": "EvidenceError",
+     "message": "cannot create WebP derivative: image file is truncated"
+    },
+    {
+     "result": {
+      "bytes": 7408,
+      "sha256": "07db00a6892bf272114a84dd930eb9443452486992875a3d66557959e711e2d7",
+      "size": [
+       1280,
+       720
+      ]
+     }
+    }
+   ]
+  },
+  "quick-skin": {
+   "canonical": [
+    {
+     "error": "VisualEvidenceError",
+     "message": "screenshot must be a static PNG: <tmp>/apng.png"
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "screenshot dimensions are outside the pixel limit: <tmp>/bomb-5000x5000.png (5000x5000)"
+    },
+    {
+     "error": "DecompressionBombError",
+     "message": "Image size (3600000000 pixels) exceeds limit of 40000000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "result": {
+      "bytes": 5866,
+      "file_sha256": "50424dd72d39593d0200ae4ccec079b1dfd2aee4c66d5936d7daface34de8275",
+      "pixel_sha256": "f670032b94a71fb910d6f633a153ef679d9e5268f504adbebff37aecfc98bec0",
+      "sha256": "0b0a2adb12105032f460370e218d7640f0bbd55665dd05706605ac906235751a",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5865,
+      "file_sha256": "5ee5181533a169a99edf302276a178d2a8c33b4cff69844ee84e76ce82e52ff0",
+      "pixel_sha256": "086b2794767d20dc00e3279d8256f7497fb646929df5e23132901ad90f9f0c8e",
+      "sha256": "ba499ce6b4acf1b20208f9a8fecdcbcc8d466ac8f3a35f93ee9f95156b79c62b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5685,
+      "file_sha256": "893cf9843328a802b52fa14a033b71457d9841cf0797909d1e8eebaa40a25883",
+      "pixel_sha256": "4fc21220e586a35b0011779e4c97548c988efdab4f7c3047de18f429ad762966",
+      "sha256": "c8cb66eb8d71bf2627ca0af2aed15d5ae9d7134482421dd48ae901ccae524b33",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5686,
+      "file_sha256": "8705a0421480f04243d7630e219b8b52c21bd642aaa0aa9952572d9e3633eb54",
+      "pixel_sha256": "3834e19fb24bd1eaaa0706e5d0da1d3aa53851b80ec4db3e8ffae0812f4a4ec6",
+      "sha256": "e54d7f8f77c29fc9bf53dfe5ec1b81c55e6a5392f34def9299857c881b3cdad3",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5876,
+      "file_sha256": "adc820b442d87e924fa6bbecaf8449de61b6eb3f7458948ec8ab08e2c119fb12",
+      "pixel_sha256": "8a4938cf54aa743b4159df7c081d7c6276ae21bd1ca7938d158beea99278a730",
+      "sha256": "b86bbb9c7b2e79620c01c676ab73afb42e2e5f8cd4cb12d9cb24dc01717494ca",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5876,
+      "file_sha256": "1ec3027e93811af27cf6cb190dd63b49fef913ae40bc307c150f909dd87f9fff",
+      "pixel_sha256": "3fd4bd1cbc3ad7fa3307d312b2d63fa022b857478ba63a3f3c60519662a587af",
+      "sha256": "99ce789db7edcfe6b5262398cf088b111b1b44b3f33a4b0a57624c88c35a6178",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5898,
+      "file_sha256": "5f3b5b0e914550de288fa8e83d3133b093b35cc588d23a2485d8d4775261597f",
+      "pixel_sha256": "f9bde07588c0386074c6c72f83de63160884f7d37e9149e58e0185dd1f30313d",
+      "sha256": "98fea2ba52e48a28f7d5beabbff637b5eb1e0e090a06082e90449f256f6e5f9a",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 27526,
+      "file_sha256": "41328194d0cb87ed117f90362276b72a0024b86ab472e9e018f19616e2c9256c",
+      "pixel_sha256": "e94eaf658da5157d801da5c819e69807f61a9b2d8c1b1e0bf73bac5c61b508fb",
+      "sha256": "de1aa6dcd9658d2c384d5b38af8baabdd11017653cbef21519bef86c93017c8e",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 27526,
+      "file_sha256": "3de3825450975e558d4e39d53b3d235f318fc4b680ccc198dba2c3ad5cce5a10",
+      "pixel_sha256": "e94eaf658da5157d801da5c819e69807f61a9b2d8c1b1e0bf73bac5c61b508fb",
+      "sha256": "de1aa6dcd9658d2c384d5b38af8baabdd11017653cbef21519bef86c93017c8e",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5845,
+      "file_sha256": "3d69db5a4b5761062502a2392115cb6ab1a1639ed50be5afb918f5d00d31833d",
+      "pixel_sha256": "93a030317b56766235603b9fc37e7e26c32741ac502428d4decc4370a961efb8",
+      "sha256": "2b9548350eab2944c7c08eb2846fee6805441106150668bbe0d2753961db7014",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "file_sha256": "6abe876b8410c02bdad0a9409ea76b7ad889d1d7e2a264a9ec025d22734db630",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "cannot fully decode screenshot <tmp>/idat-flipped.png: unrecognized data stream contents when reading image file"
+    },
+    {
+     "result": {
+      "bytes": 5880,
+      "file_sha256": "9c8bfd41d3de1e7e42b9f2f989c380390af9509ef7f6829166d02fc80048b147",
+      "pixel_sha256": "0e32bd869d5cf6767801397d4e6c6bc9af50b8311e8106e29a34a945945a0db6",
+      "sha256": "7c07720f0ddb12ddf525f198ad62205fff0b0eb65b2030443b22944e029288df",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5879,
+      "file_sha256": "94817eee5280d44fd3b2b0480b9285104f9c416b3072c219e95e9c797d595d01",
+      "pixel_sha256": "781b927c8c2aa800a74097fcc3f89ffdbf09a386bff0022433c4f0ec8d11ef03",
+      "sha256": "0d4bd8d3a3d3847900ec9a189a9f7ca82c969aa9983d62de07d9e49e7c2bab6c",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5887,
+      "file_sha256": "e347ff2f2b9e48ceedcb3930ca49d60169f497a8fab93b7ebf4d1de68f494274",
+      "pixel_sha256": "3102f37defe8bc953aae02f01bd36d53555b7786b4be1f94155bee7d66324909",
+      "sha256": "e6eda30cb2c1f2e45faa3540720dbd4b49a5f8cbdbac49a98eeeb8a216060b59",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5862,
+      "file_sha256": "2b189d3aa3e494230488d9414bb773070da6ec9589126dea65545fa10d040e8b",
+      "pixel_sha256": "5ac1c17efa47e675b105487a983d05c72a1c6bd3da6b8950964a8f63958f2da8",
+      "sha256": "f5a79b390909681e961499e6f3bf25e4b7bb8ce1d4038cfd98d95f0ca8c40b10",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "file_sha256": "28d3ff908307dd27a0d79538b40da2a1a9e5320f9bb2fc8874239ac90427c91b",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4554,
+      "file_sha256": "51c946a9ed0899853e285bb52ec58ae787a6bd72b61bf5bb7d174cd5ac2a72fd",
+      "pixel_sha256": "2b0f5f8b02ba26ebdad6eb697ea0f0063083c2da71efac3c3a624fecb2ffa7a6",
+      "sha256": "395dc1347e8e56fd2925eb3ff1eb232e549c7de552c862d86b6d1fc0335575ba",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5905,
+      "file_sha256": "e5dc70fddd3da5b221f47ee48cf5a3f2fa824320ac4139bf1b0dc24dca20d884",
+      "pixel_sha256": "92f3cb661f0115e175cc15656ab91dd76675b6966d9f4ba962f12f0a7cf556cf",
+      "sha256": "4a82e603d0ddeba9a34bc2c6121144c6bc69387a87d3bb93f01f28a796d0a014",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4356,
+      "file_sha256": "3e945d58f9425bcfb78a4ce049c9fe91c051251bf2deace8831599e3c8cec076",
+      "pixel_sha256": "1868ae16be1c792be5e61c0654706e8ad8b58c26795336a56aa301886ec165ea",
+      "sha256": "1cbd663e7bdce67b5a13d13dc39cb17aa291555cd722087459000a87266b7f15",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5902,
+      "file_sha256": "ccf33228f487a0aeb3c32a9bab113480aa359162eb516c25a9ddca70a60ddcae",
+      "pixel_sha256": "24de1bb3c6b967a696be436f09f34b36fa1576613a802a8a8521807d4c202432",
+      "sha256": "f86eb1876eb8640c6a04818e9d0c09d8ff9049455af57c7cd2954bc4e733ddf3",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 108945,
+      "file_sha256": "0d2c179ab1a1952c27e3b077e560071630e224064540d9b905298b77799b3705",
+      "pixel_sha256": "236f3e8974dfbc061ae3a2afe9c35864eebe3e9f2ca38b18326f4f57e31769ef",
+      "sha256": "c55eb3d4ef12dace81e6e5b96d3bb9fdd2be661ac6651381def4dcc68b0e6d21",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 16480,
+      "file_sha256": "6f059c94a73ffbb1813cb2d8389e21cf5670f38103567f405ef71d6253ee3284",
+      "pixel_sha256": "f59d4c31a0b3c2bfb298b336560889fb44373131557ba6d8ca39e3d5fb63314b",
+      "sha256": "19319cb67b5fa9ca376da825fe632e394086ff0a831fe4f26b1ce8010e0d4e80",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 16480,
+      "file_sha256": "6d9d468fca7c55e027285e22fd51b223f074c4ce9b414febb1a164ac22a0e123",
+      "pixel_sha256": "f59d4c31a0b3c2bfb298b336560889fb44373131557ba6d8ca39e3d5fb63314b",
+      "sha256": "19319cb67b5fa9ca376da825fe632e394086ff0a831fe4f26b1ce8010e0d4e80",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "review screenshot is smaller than 640x360: <tmp>/pattern-16x9.png (16x9)"
+    },
+    {
+     "result": {
+      "bytes": 44030,
+      "file_sha256": "a307c6bba139339814b4affeb1ac4977358f925c79f7dde266a27a69f5786d80",
+      "pixel_sha256": "798a48eeb62a05347efaf7643d7fba53c36a7b56cc76055d6fb0ac8c370968fc",
+      "sha256": "5b430e410874d3bbfc3b14bc75c7bf5cd307490691ed2f0c21ded0519c4d3434",
+      "size": [
+       1920,
+       1080
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 87446,
+      "file_sha256": "cf2809a4599a6fc547c2d27199227b7e33e8c31b10d4457e9c5a2d92df36f761",
+      "pixel_sha256": "aaf63021a9073b64d97c4eff2e13542aee03b19962f78c64d8f713ea7c7bad71",
+      "sha256": "e7c3e610e49fc92392fd483a71e6418a8e5f80ac516798e2cc15ca310945eddf",
+      "size": [
+       3200,
+       1800
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "review screenshot is smaller than 640x360: <tmp>/pattern-639x360.png (639x360)"
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "review screenshot is smaller than 640x360: <tmp>/pattern-640x359.png (640x359)"
+    },
+    {
+     "result": {
+      "bytes": 12958,
+      "file_sha256": "573ad54342c531315db94de013c91eb37e2e8df25133bcb0664eb5ace50a8bee",
+      "pixel_sha256": "68edbbb8435a47811f98ddbc9f677dfb9e8c3b80bd2ca3688484f1d81b810532",
+      "sha256": "8a96dc74e18cd69cda9fd337d51ace95d8c555db233c1da1b32cb996a213e3f4",
+      "size": [
+       640,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 12989,
+      "file_sha256": "583967594d73521dc8ca5d5a3ef63f1309d23cd70f77e2de027dbc9e8cde8337",
+      "pixel_sha256": "8fed900acc0c23006faac0d2f7e50c769969f641641c72999085e8999d2b3dc2",
+      "sha256": "386d846049bf5bf19e15f7e1f9b150a23630306d8bb0a0053e3eb288fb183a1d",
+      "size": [
+       640,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38884,
+      "file_sha256": "cc033dda8385027ff65126fd7291c6d200dad2cbbf85ddcf7d06b6ca8ebc0b28",
+      "pixel_sha256": "9620bd6e74625d68c3012cbc3d9577504cfa890d60495f33678ac8ae1f3c5c39",
+      "sha256": "f321026842e488b016f282b57af0dde85e1ca90e57d11a0fa36e23590c4479ca",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "file_sha256": "595637288d678dd5afe9970968a03a0dd450c6981e0a61f8f276f3be306b2804",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "screenshot is not a PNG: <tmp>/pattern-s0.jpg.png"
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "file_sha256": "34ac678975408dcdb93656b7311209acf1c12aa379be39959e75c150ef0cd51b",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 40178,
+      "file_sha256": "30be1f54d4c5b43a82bcd9c22d960a3385b50c97cdbefdd4ca549a4a51923bed",
+      "pixel_sha256": "ff90dacc34138ec20486c12eb8803c61aced3bb3e4d889bdb7cea921499b6fb4",
+      "sha256": "0e0d5e89d4a175bdf59c4eea4d1e8182f43cc1d784598c4f78272dbdbd7dae77",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 9196,
+      "file_sha256": "5d889198ddad52d1c15c1583f4f8ad4266f01b2d7065a2f4624ba147b5ea5087",
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "sha256": "fb74172f0bea21a733e687d9fbe1f04d50be6532a0893bed12b4e83ab3ee343b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "file_sha256": "d60696cb966cda87e4feb873969e4d60afa70572df0a787a8691064537d3c2bf",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 9196,
+      "file_sha256": "2906720599f5b033d16cb2c7781c95c2e2616c09d3e3f9379ec293bd182402eb",
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "sha256": "fb74172f0bea21a733e687d9fbe1f04d50be6532a0893bed12b4e83ab3ee343b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 9194,
+      "file_sha256": "1371f3591c331b8577df8767acc3957789ed40e60825f22f70d2f839a04ac35a",
+      "pixel_sha256": "d635e877984d9ef851481879b812862d1a989d2a0a630b6ade7976570bd06e23",
+      "sha256": "16cedd95e0e69a89ce0cf6881a9958c5cac4edf266c0913bb808614d87944420",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "screenshot is not a PNG: <tmp>/scene.gif.png"
+    },
+    {
+     "result": {
+      "bytes": 9196,
+      "file_sha256": "d87143fa4dc8e6adfea05f329a656272efb0bc5cf77c2cabfce6d35a61a92ded",
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "sha256": "fb74172f0bea21a733e687d9fbe1f04d50be6532a0893bed12b4e83ab3ee343b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4267,
+      "file_sha256": "bddccb691c387e4415f181d7c4f427ab241e956bd669fc8b256dcafd01822c00",
+      "pixel_sha256": "2c4bd5e75b50567dd5a3cb4111a7df207ce8b453d73c916a0ee00c5c88129e5a",
+      "sha256": "d7d4066eb4613870856e9a775072013f627c0ed69a39a3fd94e0572a61ce627d",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5845,
+      "file_sha256": "03a0cc136a24546303c22454aadd689dd04a23787e46bf6f54978fb5f6179774",
+      "pixel_sha256": "bd6e17b29015173201589de2561a46cb16ce7b7fc3d8bbab431b0f14395ed637",
+      "sha256": "121eb89fbd64fb46976fee2b80ac53734c97abaa5ecd4a47953a05f3c07b2392",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5845,
+      "file_sha256": "bc602947edbcde28017b1f9640ea904ad83ba612b106067a1edd85f3c02a6220",
+      "pixel_sha256": "93a030317b56766235603b9fc37e7e26c32741ac502428d4decc4370a961efb8",
+      "sha256": "2b9548350eab2944c7c08eb2846fee6805441106150668bbe0d2753961db7014",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5867,
+      "file_sha256": "5144006ab7bce38cb240715c73fc5fc70f935bf987f5a674987280d4c77fb3d8",
+      "pixel_sha256": "6fa022d0e5c15ea6e1e4393b9fba5d106d665123fb0663273c7189dad2868f62",
+      "sha256": "fc435e60bb2dbd9a94874eb8c7fed12db954fd71b49d95ee9a6f568e6e91c7c5",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 5866,
+      "file_sha256": "fe9adb402c0768764a39c1f3bd9ab2686f791d1477f0d6bbcd20861c98d2bc7c",
+      "pixel_sha256": "e88c58b1d4903c680ad5a95e67fb61ca84d2a7463d3a2cec95d70ab49dae0115",
+      "sha256": "16b51d86e1b5c39b3845cd5028b6178439829d834618bb24fd57daa514d45fc6",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "cannot fully decode screenshot <tmp>/text.png: cannot identify image file <_io.BytesIO object at <address>>"
+    },
+    {
+     "result": {
+      "bytes": 8548,
+      "file_sha256": "01fa789b27bdb30d4060bea216c0d66f37e4c8a2282307078d3e5f4446e1187c",
+      "pixel_sha256": "2545671043ff4df322558a3f557bda652952d37063756881413c67a6f15e43f6",
+      "sha256": "7f536e6cc318e762fa95b08c052dd23158804808f36b8a9fdba0650171ef0380",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 38663,
+      "file_sha256": "f5929a56f3aa166d7543b2b8a4cb8944c358fd26e07e6fa4b6ff878062c4345c",
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "sha256": "ff9ca10f67cea4ccb519f3f390ff5cc1eab25cfad1c164264a861dccf7129a83",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "VisualEvidenceError",
+     "message": "cannot fully decode screenshot <tmp>/truncated.png: image file is truncated"
+    },
+    {
+     "result": {
+      "bytes": 7687,
+      "file_sha256": "b8eb1c188f0514ee9477cbc5f7d79b07b55a02cf4b177f62fdd6a990203186ac",
+      "pixel_sha256": "38bdd7e58a376511f5a10ba6efc8d8f47e9735fa3a2588fbe13f434fff044520",
+      "sha256": "ab9374d715ad9a6c9e55def8c0fdab31b36728bafbc16f13c48037fe771e58c0",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    }
+   ],
+   "compare": [
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "required_changed_fraction": 0.5,
+      "rms_difference": 61.154
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "required_changed_fraction": 0.9999,
+      "rms_difference": 61.154
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 0.0
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshots expected to change did not change enough over the frame: <tmp>/pattern-s0.png -> <tmp>/pattern-s0.png (changed=0.0000000, required=0.0000001)"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0225,
+      "required_changed_fraction": 0.01,
+      "rms_difference": 11.519
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "region": [
+       0.25,
+       0.25,
+       0.4,
+       0.4
+      ],
+      "required_changed_fraction": 0.5,
+      "rms_difference": 76.793
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshots expected to change did not change enough in region (0.6, 0.6, 0.9, 0.9): <tmp>/pattern-s0.png -> <tmp>/pattern-edit.png (changed=0.0000000, required=0.5000000)"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.075,
+      "region": [
+       0.1,
+       0.2,
+       0.3,
+       0.7
+      ],
+      "required_changed_fraction": 0.0,
+      "rms_difference": 21.295
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "comparison region (0.5, 0.5, 0.5004, 0.6) is empty at 1600x900"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0225,
+      "region": [
+       0,
+       0,
+       1,
+       1
+      ],
+      "required_changed_fraction": 0,
+      "rms_difference": 11.519
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0225,
+      "region": [
+       0.0,
+       0.0,
+       1.0,
+       1.0
+      ],
+      "required_changed_fraction": 0.002,
+      "rms_difference": 11.519
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshots changed dimensions unexpectedly: <tmp>/pattern-s0.png (1600, 900), <tmp>/pattern-1920x1080.png (1920, 1080)"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 0.0
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.875,
+      "required_changed_fraction": 0.1,
+      "rms_difference": 32.356
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.002858,
+      "region": [
+       0.125,
+       0.125,
+       0.875,
+       0.875
+      ],
+      "required_changed_fraction": 0.0,
+      "rms_difference": 2.684
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "cannot compare screenshots <tmp>/pattern-s0.png and <tmp>/truncated.png: image file is truncated"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0123889,
+      "required_changed_fraction": 0.001,
+      "rms_difference": 8.014
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshots expected to change did not change enough in region (0.45, 0.25, 0.55, 0.6): <tmp>/scene.png -> <tmp>/scene-red.png (changed=0.3539683, required=0.5000000)"
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 0.0
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "required_changed_fraction": 0.3,
+      "rms_difference": 50.46
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "region": [
+       0.333,
+       0.1,
+       0.667,
+       0.9
+      ],
+      "required_changed_fraction": 0.3,
+      "rms_difference": 49.237
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.9999236,
+      "required_changed_fraction": 0.5,
+      "rms_difference": 60.898
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 1.0,
+      "region": [
+       0.25,
+       0.25,
+       0.4,
+       0.4
+      ],
+      "required_changed_fraction": 0.001,
+      "rms_difference": 75.952
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.9999972,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 72.256
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.9999957,
+      "region": [
+       0.5,
+       0.0,
+       1.0,
+       0.5
+      ],
+      "required_changed_fraction": 0.5,
+      "rms_difference": 58.754
+     }
+    },
+    {
+     "result": {
+      "changed_fraction": 0.0162562,
+      "required_changed_fraction": 0.0,
+      "rms_difference": 2.137
+     }
+    }
+   ],
+   "inspect": [
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "13b83deee0097fe314578e8fa74f72bbb8e4c7c3c4fd2666606124e4f5b433f3",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions are implausible: <tmp>/bomb-5000x5000.png (5000x5000)"
+    },
+    {
+     "error": "DecompressionBombError",
+     "message": "Image size (3600000000 pixels) exceeds limit of 40000000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/colours-3.png (entropy=1.102, colors=3, dark=0.000, light=0.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "5ee5181533a169a99edf302276a178d2a8c33b4cff69844ee84e76ce82e52ff0",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.105,
+      "meaningful_colors": 4,
+      "pixel_sha256": "086b2794767d20dc00e3279d8256f7497fb646929df5e23132901ad90f9f0c8e",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.98,
+      "file_sha256": "893cf9843328a802b52fa14a033b71457d9841cf0797909d1e8eebaa40a25883",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 3.103,
+      "meaningful_colors": 11,
+      "pixel_sha256": "4fc21220e586a35b0011779e4c97548c988efdab4f7c3047de18f429ad762966",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/dark-over.png (entropy=3.103, colors=11, dark=0.980, light=0.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "adc820b442d87e924fa6bbecaf8449de61b6eb3f7458948ec8ab08e2c119fb12",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 0.751,
+      "meaningful_colors": 5,
+      "pixel_sha256": "8a4938cf54aa743b4159df7c081d7c6276ae21bd1ca7938d158beea99278a730",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/entropy-below.png (entropy=0.749, colors=5, dark=0.000, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/equal-luma.png (entropy=0.262, colors=19, dark=0.000, light=0.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "41328194d0cb87ed117f90362276b72a0024b86ab472e9e018f19616e2c9256c",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.51,
+      "meaningful_colors": 32,
+      "pixel_sha256": "e94eaf658da5157d801da5c819e69807f61a9b2d8c1b1e0bf73bac5c61b508fb",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "3de3825450975e558d4e39d53b3d235f318fc4b680ccc198dba2c3ad5cce5a10",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.51,
+      "meaningful_colors": 32,
+      "pixel_sha256": "e94eaf658da5157d801da5c819e69807f61a9b2d8c1b1e0bf73bac5c61b508fb",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/grey16.png (entropy=-0.000, colors=1, dark=0.000, light=1.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6abe876b8410c02bdad0a9409ea76b7ad889d1d7e2a264a9ec025d22734db630",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot cannot be decoded: <tmp>/idat-flipped.png: unrecognized data stream contents when reading image file"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "9c8bfd41d3de1e7e42b9f2f989c380390af9509ef7f6829166d02fc80048b147",
+      "height": 900,
+      "light_fraction": 0.995,
+      "luma_entropy": 3.037,
+      "meaningful_colors": 9,
+      "pixel_sha256": "0e32bd869d5cf6767801397d4e6c6bc9af50b8311e8106e29a34a945945a0db6",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/light-over.png (entropy=3.037, colors=9, dark=0.000, light=0.995)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/low-contrast.png (entropy=1.252, colors=12, dark=0.000, light=0.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.2556,
+      "file_sha256": "2b189d3aa3e494230488d9414bb773070da6ec9589126dea65545fa10d040e8b",
+      "height": 900,
+      "light_fraction": 0.2333,
+      "luma_entropy": 2.065,
+      "meaningful_colors": 5,
+      "pixel_sha256": "5ac1c17efa47e675b105487a983d05c72a1c6bd3da6b8950964a8f63958f2da8",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "28d3ff908307dd27a0d79538b40da2a1a9e5320f9bb2fc8874239ac90427c91b",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.8,
+      "file_sha256": "51c946a9ed0899853e285bb52ec58ae787a6bd72b61bf5bb7d174cd5ac2a72fd",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.618,
+      "meaningful_colors": 20,
+      "pixel_sha256": "2b0f5f8b02ba26ebdad6eb697ea0f0063083c2da71efac3c3a624fecb2ffa7a6",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "e5dc70fddd3da5b221f47ee48cf5a3f2fa824320ac4139bf1b0dc24dca20d884",
+      "height": 900,
+      "light_fraction": 0.7556,
+      "luma_entropy": 1.865,
+      "meaningful_colors": 19,
+      "pixel_sha256": "92f3cb661f0115e175cc15656ab91dd76675b6966d9f4ba962f12f0a7cf556cf",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/nearly-dark.png (entropy=0.613, colors=8, dark=0.922, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/nearly-light.png (entropy=0.439, colors=6, dark=0.000, light=0.956)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "0d2c179ab1a1952c27e3b077e560071630e224064540d9b905298b77799b3705",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.058,
+      "meaningful_colors": 24,
+      "pixel_sha256": "236f3e8974dfbc061ae3a2afe9c35864eebe3e9f2ca38b18326f4f57e31769ef",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6f059c94a73ffbb1813cb2d8389e21cf5670f38103567f405ef71d6253ee3284",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 5.85,
+      "meaningful_colors": 30,
+      "pixel_sha256": "f59d4c31a0b3c2bfb298b336560889fb44373131557ba6d8ca39e3d5fb63314b",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6d9d468fca7c55e027285e22fd51b223f074c4ce9b414febb1a164ac22a0e123",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 5.85,
+      "meaningful_colors": 30,
+      "pixel_sha256": "f59d4c31a0b3c2bfb298b336560889fb44373131557ba6d8ca39e3d5fb63314b",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions are implausible: <tmp>/pattern-16x9.png (16x9)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "a307c6bba139339814b4affeb1ac4977358f925c79f7dde266a27a69f5786d80",
+      "height": 1080,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.589,
+      "meaningful_colors": 31,
+      "pixel_sha256": "798a48eeb62a05347efaf7643d7fba53c36a7b56cc76055d6fb0ac8c370968fc",
+      "width": 1920
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "cf2809a4599a6fc547c2d27199227b7e33e8c31b10d4457e9c5a2d92df36f761",
+      "height": 1800,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "aaf63021a9073b64d97c4eff2e13542aee03b19962f78c64d8f713ea7c7bad71",
+      "width": 3200
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions are implausible: <tmp>/pattern-639x360.png (639x360)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot dimensions are implausible: <tmp>/pattern-640x359.png (640x359)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "573ad54342c531315db94de013c91eb37e2e8df25133bcb0664eb5ace50a8bee",
+      "height": 360,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.266,
+      "meaningful_colors": 32,
+      "pixel_sha256": "68edbbb8435a47811f98ddbc9f677dfb9e8c3b80bd2ca3688484f1d81b810532",
+      "width": 640
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "583967594d73521dc8ca5d5a3ef63f1309d23cd70f77e2de027dbc9e8cde8337",
+      "height": 360,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.345,
+      "meaningful_colors": 31,
+      "pixel_sha256": "8fed900acc0c23006faac0d2f7e50c769969f641641c72999085e8999d2b3dc2",
+      "width": 640
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "cc033dda8385027ff65126fd7291c6d200dad2cbbf85ddcf7d06b6ca8ebc0b28",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.509,
+      "meaningful_colors": 31,
+      "pixel_sha256": "9620bd6e74625d68c3012cbc3d9577504cfa890d60495f33678ac8ae1f3c5c39",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "595637288d678dd5afe9970968a03a0dd450c6981e0a61f8f276f3be306b2804",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is not a PNG image: <tmp>/pattern-s0.jpg.png"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "34ac678975408dcdb93656b7311209acf1c12aa379be39959e75c150ef0cd51b",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "30be1f54d4c5b43a82bcd9c22d960a3385b50c97cdbefdd4ca549a4a51923bed",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.485,
+      "meaningful_colors": 31,
+      "pixel_sha256": "ff90dacc34138ec20486c12eb8803c61aced3bb3e4d889bdb7cea921499b6fb4",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "5d889198ddad52d1c15c1583f4f8ad4266f01b2d7065a2f4624ba147b5ea5087",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.415,
+      "meaningful_colors": 31,
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "d60696cb966cda87e4feb873969e4d60afa70572df0a787a8691064537d3c2bf",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "2906720599f5b033d16cb2c7781c95c2e2616c09d3e3f9379ec293bd182402eb",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.415,
+      "meaningful_colors": 31,
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "1371f3591c331b8577df8767acc3957789ed40e60825f22f70d2f839a04ac35a",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.414,
+      "meaningful_colors": 31,
+      "pixel_sha256": "d635e877984d9ef851481879b812862d1a989d2a0a630b6ade7976570bd06e23",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is not a PNG image: <tmp>/scene.gif.png"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "d87143fa4dc8e6adfea05f329a656272efb0bc5cf77c2cabfce6d35a61a92ded",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.415,
+      "meaningful_colors": 31,
+      "pixel_sha256": "10719ed5b40a6a0fda75bea50ba4edf2076cdeb3771ddd5f59fcf395e5dca230",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/solid-black.png (entropy=-0.000, colors=1, dark=1.000, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/solid-grey.png (entropy=-0.000, colors=1, dark=0.000, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/solid-white.png (entropy=-0.000, colors=1, dark=0.000, light=1.000)"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "5144006ab7bce38cb240715c73fc5fc70f935bf987f5a674987280d4c77fb3d8",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.385,
+      "meaningful_colors": 7,
+      "pixel_sha256": "6fa022d0e5c15ea6e1e4393b9fba5d106d665123fb0663273c7189dad2868f62",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is effectively blank: <tmp>/stddev-below.png (entropy=1.374, colors=7, dark=0.000, light=0.000)"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot cannot be decoded: <tmp>/text.png: cannot identify image file '<tmp>/text.png'"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "01fa789b27bdb30d4060bea216c0d66f37e4c8a2282307078d3e5f4446e1187c",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.044,
+      "meaningful_colors": 24,
+      "pixel_sha256": "2545671043ff4df322558a3f557bda652952d37063756881413c67a6f15e43f6",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "f5929a56f3aa166d7543b2b8a4cb8944c358fd26e07e6fa4b6ff878062c4345c",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.514,
+      "meaningful_colors": 32,
+      "pixel_sha256": "2b38ea9ea537d56902426d59a1bda020b7daf7e1cf561c28bfadeb794bc17fc2",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot cannot be decoded: <tmp>/truncated.png: image file is truncated"
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "b8eb1c188f0514ee9477cbc5f7d79b07b55a02cf4b177f62fdd6a990203186ac",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 1.268,
+      "meaningful_colors": 10,
+      "pixel_sha256": "38bdd7e58a376511f5a10ba6efc8d8f47e9735fa3a2588fbe13f434fff044520",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "3bf7d16ed9951add0546766519d95f8960da981a08042ef1e8f00563f2e1bc88",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.493,
+      "meaningful_colors": 30,
+      "pixel_sha256": "83b05d0e38a522804dad23d7d76530ed7717b329c4a20cdda01532411fd16116",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6f733c23e5e81563e5a7ade742ae5725f41d5166312e6de1f7996ef46dcf210c",
+      "height": 720,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.47,
+      "meaningful_colors": 30,
+      "pixel_sha256": "479f687e572f77379dbf7b736d5e82d0e0880f8ec4dfa1037f5d65c6e357f002",
+      "width": 1280
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "44f5211af390c9bf76661692a824979cf53f93a6ae36a8d8da53e9f243f7659e",
+      "height": 720,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.437,
+      "meaningful_colors": 31,
+      "pixel_sha256": "8d8a5605e5d97e03a540fd6efcec0b2799ef6d62080c8a651454aaf89941910d",
+      "width": 1280
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "bc604dbd41253c4cbce31fe8cbd8b7c9d331afb15094ff086080592f240210ec",
+      "height": 720,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.596,
+      "meaningful_colors": 32,
+      "pixel_sha256": "96824227ea66d7b3b94a10167db67d1b922e4f28982a990b63020b113e1afea5",
+      "width": 1280
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "8424b2dfe4d949c59e2de14cecc91d6ac0831430e5a119e93ee350bba1aefe2d",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.562,
+      "meaningful_colors": 31,
+      "pixel_sha256": "91996565423a682c7912dfb632d3e5f1c7bdc556491e7eac0d9dccaca46ccd69",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "0f9c07e43c4a23c2ad35d69752edecd4433b47935083b4d9553c0b01424395d2",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.478,
+      "meaningful_colors": 31,
+      "pixel_sha256": "b4f081a3b1b0c498cb3eed9f455a5b7fb9b3f7e5bd2f1f9e016197aab3e2ee7a",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.488,
+      "meaningful_colors": 32,
+      "pixel_sha256": "7c0369b62d7bcb999512fa1c037669df61911d7bcab8390f044a5a6a106b6238",
+      "width": 1600
+     }
+    },
+    {
+     "result": {
+      "dark_fraction": 0.0,
+      "file_sha256": "6f58445998506c3050dc37286730f62e6c6cdfd91baf0d16ef9174fd75a80d74",
+      "height": 900,
+      "light_fraction": 0.0,
+      "luma_entropy": 6.443,
+      "meaningful_colors": 31,
+      "pixel_sha256": "d71bea2d0e0c6acdb183c067679a6f3adde8712dacd595f10eda79ec7e673cfc",
+      "width": 1600
+     }
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is not a WEBP image: <tmp>/pattern-s0.png"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot is not a PNG image: <tmp>/qs-pattern-s0.webp"
+    },
+    {
+     "error": "RuntimeFailure",
+     "message": "screenshot cannot be decoded: <tmp>/text.png: cannot identify image file '<tmp>/text.png'"
+    }
+   ],
+   "webp": [
+    {
+     "result": {
+      "bytes": 8520,
+      "sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 1540,
+      "sha256": "ba76a17b2c3482da10eaafacb57002403039e697e48469f83c7e685276e83354",
+      "size": [
+       900,
+       900
+      ]
+     }
+    },
+    {
+     "error": "DecompressionBombError",
+     "message": "Image size (3600000000 pixels) exceeds limit of 40000000 pixels, could be decompression bomb DOS attack."
+    },
+    {
+     "result": {
+      "bytes": 2932,
+      "sha256": "805803ee3d9575d87fe3bddf72a189aaeeac835a492c7aeefff3654c8c025861",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2910,
+      "sha256": "018d302398abccca985197a4fb2e8b7da0d2160e944d4adc841c3762a7efea90",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2786,
+      "sha256": "e6d270942b1d765773ab956f9cf0bd498ea2147fa9a45081c1755374dda60389",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2738,
+      "sha256": "16664deb5b97226fcebfccae0ed5135c49a21b9a6b2d6144e7de526ff0909d10",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 3054,
+      "sha256": "cd7e6b97ad24e5e368a1656acd2409249c94cf8dc7633636b209dc1996dc4496",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 3098,
+      "sha256": "af42601d5ed408e316dcbee64e35bd604b4b8a219db3a955a8c979e879f5468c",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4320,
+      "sha256": "d3379425eca761e16e7844487ef4ecd8139d2758c522ac13a996d7b1440d26df",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6230,
+      "sha256": "63625559ff6f430b25205151d6d15556148f088323b2012c20514223a26b6fcb",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 6230,
+      "sha256": "63625559ff6f430b25205151d6d15556148f088323b2012c20514223a26b6fcb",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2656,
+      "sha256": "727b3236b36401a4f973ee7998ae010f827e865bdc78a2e9bb14e69f0fb504ab",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8520,
+      "sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "PublicEvidenceError",
+     "message": "cannot compact public screenshot <tmp>/idat-flipped.png: unrecognized data stream contents when reading image file"
+    },
+    {
+     "result": {
+      "bytes": 2792,
+      "sha256": "ceb55d8eb5ee87d5771edec3aa8a40b682637f628b520428c85ebb65233cd19c",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2798,
+      "sha256": "afff962a113094d936387d4fd0770e83b4b63b0e291c8195b20498eff1be1c45",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2816,
+      "sha256": "164f2d2dfddff942973aa1c1929edf0c02afb8cf8f9c9ecc665be16dce2cf7fd",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2782,
+      "sha256": "422ded50c08855da912b7d8f2a7c39c2741d5248f44179f2b32f300b40add88b",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8520,
+      "sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4876,
+      "sha256": "f28ff45be2201bc41f7c4392ec82f6e436aa44138535724868251284a6f4a52e",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4304,
+      "sha256": "522bfd36f5749a0bcef8c31db106aff0501736330ec292140a18f9e9082f4413",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 4134,
+      "sha256": "0ec4956d2f7febc4f034efc91b287c1b9d89c6243566608d2540c8660e663af7",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 3324,
+      "sha256": "4ff43f24830f5e54647c8e3121fa854d929de0134880d08af1da141968d2a865",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 26006,
+      "sha256": "f7e580f7af2e5643f44ce5a0fd28848f8702b11c45bbbf50b065042e3ce976ec",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 9518,
+      "sha256": "082ffb92dfbefea7418ca17ceb70609336c364cda0ec9d3e8ac4a09e12ca13a1",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 9518,
+      "sha256": "082ffb92dfbefea7418ca17ceb70609336c364cda0ec9d3e8ac4a09e12ca13a1",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 170,
+      "sha256": "a3812ca0f3f6c4b740f82f70fe6c262b061726c6b018131e78b0be2c7c306b08",
+      "size": [
+       16,
+       9
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8346,
+      "sha256": "8424b2dfe4d949c59e2de14cecc91d6ac0831430e5a119e93ee350bba1aefe2d",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8550,
+      "sha256": "2322a105811b07311fdbb35659ea2f9d66acd486971130ed60c875a0801a84e4",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 3298,
+      "sha256": "74c9e2ddc3b904a89fe75b1a03364d75e05847e192bef94fdee45f57b36f2b4d",
+      "size": [
+       639,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2890,
+      "sha256": "654c8b5591394c769ed122e3fa1cc959d8417a85bb465f9e912cf882da131217",
+      "size": [
+       640,
+       359
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2932,
+      "sha256": "53ba56ae339017c19a7568bf69fac718d9ffb24ac5093322f29ce6cad1c67d00",
+      "size": [
+       640,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2926,
+      "sha256": "116417df96c2b0ad011e09ef88455fc0f28bf605fabbc4456ec0048e09aa45bb",
+      "size": [
+       640,
+       360
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8636,
+      "sha256": "0f9c07e43c4a23c2ad35d69752edecd4433b47935083b4d9553c0b01424395d2",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8520,
+      "sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "PublicEvidenceError",
+     "message": "compact source is not a PNG: <tmp>/pattern-s0.jpg.png"
+    },
+    {
+     "result": {
+      "bytes": 8520,
+      "sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8026,
+      "sha256": "6f58445998506c3050dc37286730f62e6c6cdfd91baf0d16ef9174fd75a80d74",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 22688,
+      "sha256": "8e6b34339e80bae0a5ed7ede430b7454ea2a6a0cdcf9dd5a92ec64777966058f",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8520,
+      "sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 22688,
+      "sha256": "8e6b34339e80bae0a5ed7ede430b7454ea2a6a0cdcf9dd5a92ec64777966058f",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 22732,
+      "sha256": "3c3f9a3c6e4e9e5df99cb744a9ceb9d365c9521d6d54634050bf555b862f25dd",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "PublicEvidenceError",
+     "message": "compact source is not a PNG: <tmp>/scene.gif.png"
+    },
+    {
+     "result": {
+      "bytes": 22688,
+      "sha256": "8e6b34339e80bae0a5ed7ede430b7454ea2a6a0cdcf9dd5a92ec64777966058f",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2656,
+      "sha256": "eeeeef2765bb15cf47e5fc45fe58068e26d8926bc764cbe87e5a337a852aa14f",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2654,
+      "sha256": "ca47f70637597cce94f88bfc2d4db7570202209d10c7c40b9e991f502ebf5363",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2656,
+      "sha256": "727b3236b36401a4f973ee7998ae010f827e865bdc78a2e9bb14e69f0fb504ab",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2880,
+      "sha256": "a331fc2538c508d0c2acff9ec75c26b4c44b15a5ca82d5f48b0e30f84f81420f",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 2924,
+      "sha256": "859fd98b0f779053f030202fabb93a9a6c35f981d3803479d706d9a79b4229b0",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "PublicEvidenceError",
+     "message": "cannot compact public screenshot <tmp>/text.png: cannot identify image file '<tmp>/text.png'"
+    },
+    {
+     "result": {
+      "bytes": 10580,
+      "sha256": "74f8a6262647a0b4a5fc9f8676ea0620dfb205f581ad79b35bc446dda3246189",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "result": {
+      "bytes": 8520,
+      "sha256": "73244ba08183f09f87c42f618538db44f2ea8a014f30ae0475d9bd04f8999194",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    },
+    {
+     "error": "PublicEvidenceError",
+     "message": "cannot compact public screenshot <tmp>/truncated.png: image file is truncated"
+    },
+    {
+     "result": {
+      "bytes": 10048,
+      "sha256": "526909a7f0c404cd07d4a2ee5358d5bdd80a3e912af750e3440cdb40799f9c7c",
+      "size": [
+       1600,
+       900
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "provenance": {
+  "platform": {
+   "libwebp": "1.6.0",
+   "machine": "arm64",
+   "pillow": "12.3.0",
+   "python": "3.13.13",
+   "system": "Darwin",
+   "zlib": "1.3.1.zlib-ng"
+  },
+  "sources": {
+   "block-pops": {
+    "commit": "9ba22a2e6204e7c74d7b01dc1166de527db16eea",
+    "compare_screenshots_ast_sha256": "0a175ab6e4edaf71b06096971e9790faa91c03f50c003ab0d386781fb086d19f",
+    "files": {
+     "e2e/packaged_runtime.py": "f54642e10c62b228c140230f0f270a0cbbc8661ccb479948414c8b080155d2d3",
+     "e2e/visual_evidence.py": "c39c629421ce17fccc9ee19334edf8e0794fdc680946926bd769130594392777",
+     "scripts/pages/evidence.py": "ca8c158620be89195b6e9c7746e09874f458dbf9e8eb3f34ef2b3038c1c7d0f4"
+    }
+   },
+   "quick-skin": {
+    "commit": "fd8e7dbf11f98a6f1e2870cb130b03680234d85b",
+    "compare_screenshots_ast_sha256": "0a175ab6e4edaf71b06096971e9790faa91c03f50c003ab0d386781fb086d19f",
+    "files": {
+     "e2e/packaged_runtime.py": "9b905df7b39a80a8ba5c10c88fc6a60641f3d1bdc79c9484e4ff827a20d58bdd",
+     "e2e/visual_evidence.py": "488f721ca628d5ce7880114ee687894036fa9a69e3301b2d9e149547966901e3",
+     "scripts/pages/evidence.py": "54f6f47e1d7e280de5746c64453c0bc432d022d8698723d4151cec294a1ec55b"
+    }
+   }
+  }
+ }
+}

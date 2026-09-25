@@ -1,0 +1,6 @@
+# Synthetic fixture workflow: only its path matters to the kit (config.source.workflow).
+name: Packaged E2E
+on:
+  workflow_dispatch:
+permissions: {}
+jobs: {}

@@ -1,0 +1,124 @@
+{
+  "adapter": {
+    "api": 1,
+    "extensions": [],
+    "network_hooks": [],
+    "path": "scripts/pages/mod_base_adapter.py",
+    "python_path": [
+      "."
+    ],
+    "timeout_seconds": 600
+  },
+  "admission": {
+    "defer_on_active_source_runs": true,
+    "mode": "always"
+  },
+  "anchor": {
+    "enabled": false,
+    "retention_days": 90,
+    "successor_grace_days": 0
+  },
+  "baseline_archive": {
+    "enabled": false
+  },
+  "canonical_branch": "main",
+  "copy": {
+    "evidence_lead": "Every public frame comes from a successful packaged-JAR run and is bound to an exact commit, loader and Actions run.",
+    "family_notes": {},
+    "gallery_lead": "Browse every validated capture of the packaged end-to-end tests by release, loader and checkpoint.",
+    "methodology": [
+      "Each capture is bound to its exact commit, tested run, loader and production JAR digest.",
+      "Publication is advisory; the repository's build and packaged end-to-end gates remain authoritative."
+    ],
+    "principles": [
+      "Every image comes from a real packaged mod JAR.",
+      "Every release is bound to an exact current branch head."
+    ]
+  },
+  "families": [],
+  "images": {
+    "cross_check_runtime_metrics": true,
+    "derivative_box": [
+      1600,
+      900
+    ],
+    "pixel_metrics_version": 1,
+    "source_size": [
+      1920,
+      1080
+    ],
+    "webp_method": 6,
+    "webp_quality": 82
+  },
+  "kind": "mod-base.config",
+  "labels": {
+    "loaders": {
+      "fabric": "Fabric",
+      "forge": "Forge",
+      "neoforge": "NeoForge"
+    },
+    "release_prefix": "Minecraft",
+    "roles": {
+      "client_a": "Client A"
+    },
+    "scenarios": {},
+    "search_placeholder": "Search checkpoints",
+    "tiers": {
+      "all": "Full review",
+      "key": "Key checkpoint"
+    }
+  },
+  "project": {
+    "description": "Replace this description of what the mod does.",
+    "eyebrow": "Minecraft mod",
+    "icon": null,
+    "license_label": "All Rights Reserved",
+    "links": [],
+    "name": "Example Mod",
+    "tagline": "Replace this tagline in site/mod-base.json."
+  },
+  "schema_version": 1,
+  "source": {
+    "attestation_job": null,
+    "delegated_reuse_extension": null,
+    "display_title": null,
+    "events": {
+      "canonical": [
+        "workflow_dispatch"
+      ],
+      "other": []
+    },
+    "handoff_job": "Prepare public evidence for {key}",
+    "handoff_step": "Prepare and hand off public evidence",
+    "require_job_graph": false,
+    "require_newest_run": true,
+    "workflow": ".github/workflows/e2e.yml"
+  },
+  "targets": {
+    "max": 64,
+    "mode": "default-branch"
+  },
+  "template": {
+    "agents_local": [
+      "docs/ai/PROJECT.md"
+    ],
+    "deferred": []
+  },
+  "theme": {
+    "dark": {
+      "accent": "#77e39b",
+      "accent_strong": "#40c973",
+      "bg": "#0d120f",
+      "danger": "#ff9b91",
+      "highlight": "#e6c875",
+      "image_well": "#080b09",
+      "line": "#304137",
+      "muted": "#a9b7ac",
+      "surface": "#141b16",
+      "surface_raised": "#1a241d",
+      "surface_soft": "#202c24",
+      "text": "#f3f7f3"
+    },
+    "light": null
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "files": [
+    {
+      "class": "managed",
+      "path": ".gitattributes",
+      "source": "managed/.gitattributes"
+    },
+    {
+      "class": "managed",
+      "path": ".github/workflows/pages.yml",
+      "source": "managed/.github/workflows/pages.yml"
+    },
+    {
+      "class": "managed",
+      "path": "scripts/ci/mod_base_kit.py",
+      "source": "managed/scripts/ci/mod_base_kit.py"
+    },
+    {
+      "class": "managed",
+      "path": "docs/ai/shared/REPOSITORY.md",
+      "source": "managed/docs/ai/shared/REPOSITORY.md"
+    },
+    {
+      "class": "managed",
+      "path": "docs/ai/shared/PUBLIC-EVIDENCE.md",
+      "source": "managed/docs/ai/shared/PUBLIC-EVIDENCE.md"
+    },
+    {
+      "class": "fragment",
+      "lines": [
+        "e2e-out/",
+        "out/",
+        "_site/",
+        "public-evidence/",
+        "__pycache__/",
+        "*.py[cod]",
+        "/.architectury-transformer/"
+      ],
+      "path": ".gitignore",
+      "source": "seed/.gitignore.base"
+    },
+    {
+      "class": "fragment",
+      "markers": [
+        "/.github/",
+        "/site/",
+        "/scripts/pages/",
+        "/scripts/ci/",
+        "/AGENTS.md",
+        "/docs/ai/"
+      ],
+      "path": ".github/CODEOWNERS",
+      "source": "seed/.github/CODEOWNERS.tmpl"
+    },
+    {
+      "class": "fragment",
+      "path": ".github/dependabot.yml",
+      "source": "seed/.github/dependabot.yml.tmpl"
+    },
+    {
+      "class": "fragment",
+      "markers": [
+        "CONTRIBUTING.md",
+        "AGENTS.md",
+        "## Summary",
+        "## Validation",
+        "## AI assistance"
+      ],
+      "path": ".github/pull_request_template.md",
+      "source": "seed/.github/pull_request_template.md.tmpl"
+    },
+    {
+      "class": "fragment",
+      "path": "AGENTS.md",
+      "source": "seed/AGENTS.md.tmpl"
+    },
+    {
+      "class": "seeded",
+      "path": "CONTRIBUTING.md",
+      "source": "seed/CONTRIBUTING.md.tmpl"
+    },
+    {
+      "class": "seeded",
+      "path": "LICENSE",
+      "source": "seed/LICENSE-ARR.tmpl"
+    },
+    {
+      "class": "seeded",
+      "path": "site/mod-base.json",
+      "source": "seed/site/mod-base.json.tmpl"
+    },
+    {
+      "class": "seeded",
+      "path": "scripts/pages/mod_base_adapter.py",
+      "source": "seed/scripts/pages/mod_base_adapter.py.tmpl"
+    },
+    {
+      "class": "seeded",
+      "path": "docs/ai/PROJECT.md",
+      "source": "seed/docs/ai/PROJECT.md.tmpl"
+    },
+    {
+      "class": "seeded",
+      "path": "docs/architecture/decisions/README.md",
+      "source": "seed/docs/architecture/decisions/README.md.tmpl"
+    }
+  ],
+  "kind": "mod-base.template-manifest",
+  "schema_version": 1
+}

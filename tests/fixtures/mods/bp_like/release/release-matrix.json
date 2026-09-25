@@ -1,0 +1,13 @@
+{
+  "branch": {"canonical": "master", "name": "master", "role": "release"},
+  "migration": {"mode": "full"},
+  "project": {"description": "Collect, display and play with pop figures."},
+  "repository": "The-Plum-Team/bp-like",
+  "runtimes": [
+    {"artifact_node": "neoforge-1.21.1", "java": 21, "loader": "neoforge", "minecraft": "1.21.1"},
+    {"artifact_node": "fabric-1.21.1", "java": 21, "loader": "fabric", "minecraft": "1.21.1"}
+  ],
+  "schema_version": 2,
+  "visual_reference": {"artifact_node": "neoforge-1.21.1", "release_branch": "master",
+                       "scenario_contract": "e2e/scenario-contract.json"}
+}

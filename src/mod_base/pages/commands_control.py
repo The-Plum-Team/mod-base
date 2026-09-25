@@ -8,11 +8,8 @@ the ``Selected`` JSON object that ``authenticate --selected-json`` reads.
 from __future__ import annotations
 
 import argparse
-import os
-from pathlib import Path
 
 from mod_base import cli, runtime
-from mod_base.errors import MbError
 from mod_base.github import api as github_api
 from mod_base.model.canonical import canonical_json
 from mod_base.model.limits import MAX_PAGES_API_READS
@@ -60,18 +57,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     auth.set_defaults(handler=run_authenticate)
 
 
-def _write_new(path: Path, data: bytes) -> None:
-    """Create ``path`` exclusively (never follow or replace an existing file) and write ``data``."""
-
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    try:
-        descriptor = os.open(path, flags, 0o644)
-    except OSError as exc:
-        raise MbError(f"cannot create {path}: {exc.strerror or exc}", reason="output") from exc
-    with os.fdopen(descriptor, "wb") as stream:
-        stream.write(data)
-
-
 def _client(invocation: runtime.Invocation) -> github_api.GitHubApi:
     return github_api.from_environment(invocation.environ, max_requests=MAX_PAGES_API_READS)
 
@@ -98,6 +83,8 @@ def run_select(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
     chosen = select.select_evidence(invocation, api=_client(invocation), key=args.key, family=args.family,
                                     nomination=args.nomination, expected_subject_commit=args.expected_subject_commit)
+    if args.output is not None:
+        authenticate.write_new_file(args.output, canonical_json(chosen.to_json()))
     cli.write_github_output(args.github_output, {
         "kind": chosen.kind,
         "artifact_id": chosen.artifact_id,
@@ -107,8 +94,6 @@ def run_select(args: argparse.Namespace) -> int:
         "run_id": chosen.run_id,
         "run_attempt": chosen.run_attempt,
     })
-    if args.output is not None:
-        _write_new(args.output, canonical_json(chosen.to_json()))
     return 0
 
 

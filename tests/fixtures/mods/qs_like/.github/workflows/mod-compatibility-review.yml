@@ -1,0 +1,6 @@
+# Synthetic fixture workflow: only its path matters to the kit (families[].producer.workflow).
+name: Mod compatibility review
+on:
+  workflow_dispatch:
+permissions: {}
+jobs: {}

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from mod_base import cli, runtime
 from mod_base.errors import MbError, single_line
+from mod_base.model.canonical import read_regular_file
 from mod_base.template import tool
 
 
@@ -37,15 +39,26 @@ def _report(drifts: list[tool.Drift]) -> int:
 
 
 def run_check(args: argparse.Namespace) -> int:
-    return _report(tool.check(args.repo, kit_root=runtime.kit_root()))
+    drifts, pending = tool.evaluate(args.repo, kit_root=runtime.kit_root())
+    for drift in pending:
+        sys.stdout.write(f"pending (template.deferred): {drift.kind}: {drift.path}\n{drift.detail}\n")
+    return _report(drifts)
 
 
 def run_sync(args: argparse.Namespace) -> int:
     drifts = tool.sync(args.repo, kit_root=runtime.kit_root(), write=args.write)
-    return 0 if args.write else _report(drifts)
+    if not args.write:
+        return _report(drifts)
+    for drift in drifts:
+        sys.stdout.write(f"wrote {drift.path}\n")
+    return 0
 
 
 def run_init(args: argparse.Namespace) -> int:
     for path in tool.init(args.repo, kit_root=runtime.kit_root(), seed=args.seed, from_config=args.from_config):
         sys.stdout.write(f"created {path}\n")
+        data = read_regular_file(Path(args.repo) / path, label=path, max_bytes=tool.MAX_FILE_BYTES, allow_empty=True)
+        remaining = tool.unresolved_placeholders(data)
+        if remaining:
+            sys.stdout.write(f"  fill in by hand: {', '.join('{{' + name + '}}' for name in remaining)}\n")
     return 0

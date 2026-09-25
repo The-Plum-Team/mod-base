@@ -16,6 +16,7 @@ from mod_base.errors import MbError
 from mod_base.evidence import anchor, compact, compose, expectation, prepare, validate
 from mod_base.github import api as github_api
 from mod_base.model.canonical import canonical_json
+from mod_base.model.limits import MAX_PAGES_API_READS
 from mod_base.model.documents import run_claim_from_environment
 
 
@@ -151,7 +152,7 @@ def run_compact(args: argparse.Namespace) -> int:
 
 def run_compose(args: argparse.Namespace) -> int:
     invocation = _invocation(args)
-    client = github_api.from_environment(invocation.environ)
+    client = github_api.from_environment(invocation.environ, max_requests=MAX_PAGES_API_READS)
     compose.compose_selected(invocation, api=client, key=args.key, selected_dir=args.selected,
                              selection_path=args.selection, output=args.output)
     return 0

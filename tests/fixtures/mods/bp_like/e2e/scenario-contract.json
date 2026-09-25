@@ -1,0 +1,34 @@
+{
+  "profiles": {"release": ["ui-regression", "in-world"]},
+  "scenarios": [
+    {
+      "id": "ui-regression",
+      "roles": [
+        {
+          "comparisons": [
+            {"first_step": "box_closed", "minimum_changed_fraction": 0.05, "second_step": "box_open"}
+          ],
+          "role": "client_a",
+          "steps": [
+            {"capture": {"capture_id": "ui.box_closed", "expectation": "The closed collector box is centred.",
+                         "review_tier": "key", "title": "Closed box"}, "id": "box_closed"},
+            {"id": "click_open"},
+            {"capture": {"capture_id": "ui.box_open", "expectation": "The opened box shows its figure.",
+                         "review_tier": "all", "title": "Opened box"}, "id": "box_open"}
+          ]
+        }
+      ],
+      "title": "UI regression"
+    },
+    {
+      "id": "in-world",
+      "roles": [
+        {"comparisons": [], "role": "client_a",
+         "steps": [{"capture": {"capture_id": "world.claw_machine", "expectation": "The claw machine renders in world.",
+                                "review_tier": "key", "title": "Claw machine"}, "id": "claw_machine"}]}
+      ],
+      "title": "In world"
+    }
+  ],
+  "schema_version": 1
+}

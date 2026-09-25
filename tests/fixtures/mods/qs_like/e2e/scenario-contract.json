@@ -1,0 +1,38 @@
+{
+  "profiles": {"pr": ["full", "session"]},
+  "scenarios": [
+    {
+      "id": "full",
+      "roles": [
+        {
+          "comparisons": [
+            {"first": "title_screen", "id": "skin_changed", "minimum_changed_fraction": 0.02,
+             "region": [0.25, 0.1, 0.75, 0.9], "second": "skin_apply"}
+          ],
+          "role": "client_a",
+          "steps": [
+            {"capture": {"expectation": "The Quick Skin title-screen button is visible.", "review_tier": "key",
+                         "title": "Title screen"}, "id": "title_screen"},
+            {"id": "open_menu"},
+            {"capture": {"expectation": "The plaid local skin renders on the player model.", "review_tier": "all",
+                         "title": "Applied local skin"}, "id": "skin_apply"}
+          ]
+        }
+      ],
+      "title": "Full suite"
+    },
+    {
+      "id": "session",
+      "roles": [
+        {"comparisons": [], "role": "client_a",
+         "steps": [{"capture": {"expectation": "The pause menu preview shows the saved look.", "review_tier": "key",
+                                "title": "Pause menu"}, "id": "pause_menu"}]},
+        {"comparisons": [], "role": "client_b",
+         "steps": [{"capture": {"expectation": "The player list head shows client A's skin.", "review_tier": "all",
+                                "title": "Player list"}, "id": "player_list"}]}
+      ],
+      "title": "Session"
+    }
+  ],
+  "schema_version": 1
+}

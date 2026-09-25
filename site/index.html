@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="{{mb:theme_color}}">
+  <meta name="description" content="{{mb:meta_description}}">
+  <title>{{mb:name}}</title>
+  <!-- mb:if icon -->
+  <link rel="icon" href="assets/icon.png">
+  <!-- mb:endif -->
+  <link rel="stylesheet" href="assets/theme.css">
+  <link rel="stylesheet" href="assets/styles.css">
+  <script src="assets/site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="{{mb:name}} home">
+      <!-- mb:if icon -->
+      <img class="brand-icon" src="assets/icon.png" width="40" height="40" alt="">
+      <!-- mb:endif -->
+      <span>{{mb:name}}</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="e2e/">E2E gallery</a>
+      <a href="{{mb:repository_url}}">Source</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">{{mb:eyebrow}}</p>
+        <h1 id="hero-title">{{mb:tagline}}</h1>
+        <p id="project-description" class="hero-description">{{mb:description}}</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="e2e/">Explore verified E2E</a>
+          <!-- mb:if primary_link -->
+          <a class="button" href="{{mb:primary_link_url}}" aria-label="Get {{mb:name}} on {{mb:primary_link_title}}">Get {{mb:name}}</a>
+          <!-- mb:endif -->
+        </div>
+      </div>
+      <!-- mb:if icon -->
+      <div class="hero-mark" aria-hidden="true">
+        <img class="brand-icon" src="assets/icon.png" width="220" height="220" alt="">
+      </div>
+      <!-- mb:endif -->
+    </section>
+
+    <section class="section" aria-labelledby="destinations-title">
+      <div class="section-heading">
+        <p class="eyebrow">Official destinations</p>
+        <h2 id="destinations-title">Everything in one place</h2>
+      </div>
+      <div id="destination-grid" class="link-grid" aria-live="polite"></div>
+      <noscript><p class="notice">JavaScript is required to render the verified release inventory. Direct links remain available in the navigation.</p></noscript>
+    </section>
+
+    <section class="section evidence-section" aria-labelledby="evidence-title">
+      <div class="section-heading">
+        <p class="eyebrow">Tested in packaged Minecraft</p>
+        <h2 id="evidence-title">Evidence you can inspect</h2>
+        <p id="evidence-lead"></p>
+      </div>
+      <div id="release-grid" class="release-grid" aria-live="polite"></div>
+      <p id="site-status" class="status-line" role="status">Loading verified versions…</p>
+    </section>
+
+    <section class="section principles" aria-labelledby="principles-title">
+      <div>
+        <p class="eyebrow">What “verified” means</p>
+        <h2 id="principles-title">Real jars, real clients, public proof.</h2>
+      </div>
+      <ul id="principles-list"></ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>{{mb:name}} · {{mb:license}}</p>
+    <p><a href="{{mb:issues_url}}">Report an issue</a></p>
+  </footer>
+</body>
+</html>

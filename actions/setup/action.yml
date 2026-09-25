@@ -1,0 +1,40 @@
+name: mod-base setup
+description: >-
+  Verify that the executing mod-base kit is exactly the tree pinned by the checked-out mod, export
+  MOD_BASE_KIT_PATH, MOD_BASE_KIT_SHA and MOD_BASE_KIT_VERSION, and optionally install the
+  hash-locked imaging dependency into the job's Python.
+inputs:
+  mod-root:
+    description: The mod checkout whose workflows carry the pin, relative to the workspace
+    required: false
+    default: "."
+  install-imaging:
+    description: '"true" installs requirements/pillow.txt with pip (install Python first); "false" skips it'
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Verify the executing kit against the checked-out pin
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        MOD_ROOT: ${{ inputs.mod-root }}
+        INSTALL_IMAGING: ${{ inputs.install-imaging }}
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+        fail() { printf 'mod-base setup: %s\n' "$1" >&2; exit 1; }
+        [[ "$MOD_ROOT" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$MOD_ROOT" != /* && "/$MOD_ROOT/" != */../* ]] ||
+          fail "mod-root must be a relative path inside the workspace"
+        [[ "$INSTALL_IMAGING" == true || "$INSTALL_IMAGING" == false ]] || fail "install-imaging must be true or false"
+        env -u PYTHONPATH PYTHONPATH="$GITHUB_ACTION_PATH/../../src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+          python3 -P "$GITHUB_ACTION_PATH/../../tools/verify_action_tree.py" --mod-root "$MOD_ROOT"
+    - name: Install the hash-locked imaging dependency
+      if: inputs.install-imaging == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+        python3 -m pip install --only-binary=:all: --require-hashes \
+          --requirement "$GITHUB_ACTION_PATH/../../requirements/pillow.txt"
