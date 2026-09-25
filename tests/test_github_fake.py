@@ -11,9 +11,17 @@ import unittest
 
 from mod_base import KIT_REPOSITORY
 from mod_base.errors import MbError
-from mod_base.github import runs
-from mod_base.github.api import ApiError, ApiNotFound, GitHubApi, ReadOnlyViolation, RequestBudgetExhausted
+from mod_base.github import artifacts, runs
+from mod_base.github.api import (
+    ApiError,
+    ApiNotFound,
+    GitHubApi,
+    InconsistentListing,
+    ReadOnlyViolation,
+    RequestBudgetExhausted,
+)
 from mod_base.github.fake import FakeGitHub
+from mod_base.model import limits
 from tests.helpers import COMMIT, CREATED_AT, E2E_WORKFLOW, REPOSITORY, TREE, h
 
 RUNS = f"/repos/{REPOSITORY}/actions/runs"
@@ -156,6 +164,81 @@ class ReadTests(unittest.TestCase):
         snapshot = self.api.rate_limit_snapshot()
         self.assertEqual({"limit", "used", "remaining", "reset"}, set(snapshot))
         self.assertEqual(snapshot["limit"] - snapshot["used"], snapshot["remaining"])
+
+
+class ListingSeamTests(unittest.TestCase):
+    """The seams that reproduce GitHub's eventually consistent listings (the canary's refresh saw
+    ``total_count 6 disagrees with 5 listed rows`` while sibling jobs uploaded caches)."""
+
+    RUN_ARTIFACTS = f"{RUNS}/1/artifacts"
+
+    def setUp(self) -> None:
+        self.api = FakeGitHub(repository=REPOSITORY)
+        for index in range(5):
+            self.api.add_artifact(artifact(100 + index, f"mb-collected--k{index}"), b"x")
+
+    def test_a_skewed_listing_reports_a_total_off_its_rows_for_the_next_responses(self) -> None:
+        self.api.skew_listing(self.RUN_ARTIFACTS, responses=2)
+        totals = [(listed["total_count"], len(listed["artifacts"]))
+                  for listed in (self.api.get_json(self.RUN_ARTIFACTS, params={"name": "mb-collected--k1"}),
+                                 self.api.get_json(self.RUN_ARTIFACTS), self.api.get_json(self.RUN_ARTIFACTS))]
+        self.assertEqual([(2, 1), (6, 5), (5, 5)], totals, "any parameters; two responses, then consistent")
+        self.api.skew_listing(self.RUN_ARTIFACTS, responses=1, offset=-9)
+        self.assertEqual(0, self.api.get_json(self.RUN_ARTIFACTS)["total_count"], "never below zero")
+        self.api.add_run(run(1))
+        self.api.skew_listing(f"{RUNS}/1", responses=1)
+        self.assertNotIn("total_count", self.api.get_json(f"{RUNS}/1"), "only a listing body is skewed")
+        for options in ({"responses": 0}, {"responses": True}, {"responses": 1, "offset": 0},
+                        {"responses": 1, "offset": True}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self.api.skew_listing(self.RUN_ARTIFACTS, **options)  # type: ignore[arg-type]
+        with self.assertRaises(MbError):
+            self.api.skew_listing("../x", responses=1)
+
+    def test_during_listing_changes_the_state_between_two_pages(self) -> None:
+        for index in range(5, 150):
+            self.api.add_artifact(artifact(100 + index, f"mb-collected--k{index}"), b"x")
+        upload = artifact(999, "mb-cache--k0--" + COMMIT, created_at="2026-09-02T00:00:00Z")
+        self.api.during_listing(self.RUN_ARTIFACTS, lambda: self.api.add_artifact(upload, b"x"))
+        first = self.api.get_json(self.RUN_ARTIFACTS, params={"per_page": 100, "page": 1})
+        second = self.api.get_json(self.RUN_ARTIFACTS, params={"per_page": 100, "page": 2})
+        self.assertEqual((150, 151), (first["total_count"], second["total_count"]))
+        self.assertEqual(151, self.api.get_json(self.RUN_ARTIFACTS)["total_count"], "the action ran once")
+        for options in ({"after_pages": 0}, {"action": "not callable"}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self.api.during_listing(self.RUN_ARTIFACTS, **{"action": lambda: None, **options})  # type: ignore[arg-type]
+
+    def test_the_fake_reads_an_inconsistent_listing_again_like_the_client(self) -> None:
+        waited: list[float] = []
+        api = FakeGitHub(repository=REPOSITORY, sleep=waited.append)
+        for index in range(5):
+            api.add_artifact(artifact(100 + index, f"mb-collected--k{index}"), b"x")
+        api.skew_listing(self.RUN_ARTIFACTS, responses=2)
+        self.assertEqual(5, len(artifacts.list_for_run(api, 1)))
+        self.assertEqual(([2.0, 4.0], [2.0, 4.0], 3), (api.sleeps, waited, api.request_count))
+        self.api.skew_listing(self.RUN_ARTIFACTS, responses=limits.LISTING_READ_ATTEMPTS)
+        with self.assertRaisesRegex(InconsistentListing, "total_count 6 disagrees with 5 listed rows"):
+            artifacts.list_for_run(self.api, 1)
+        self.assertEqual(([2.0, 4.0, 8.0], limits.LISTING_READ_ATTEMPTS), (self.api.sleeps, self.api.request_count))
+
+    def test_a_row_added_between_pages_restarts_the_whole_listing(self) -> None:
+        for index in range(5, 150):
+            self.api.add_artifact(artifact(100 + index, f"mb-collected--k{index}"), b"x")
+        upload = artifact(999, "mb-cache--k0--" + COMMIT, created_at="2026-09-02T00:00:00Z")
+        self.api.during_listing(self.RUN_ARTIFACTS, lambda: self.api.add_artifact(upload, b"x"))
+        self.assertEqual(151, len(artifacts.list_for_run(self.api, 1)))
+        self.assertEqual(([2.0], 4), (self.api.sleeps, self.api.request_count))
+
+    def test_read_listing_matches_the_client(self) -> None:
+        skewed = [True, False]
+
+        def read() -> str:
+            if skewed.pop(0):
+                raise InconsistentListing("skewed", status=200, method="GET", path=self.RUN_ARTIFACTS)
+            return "consistent"
+
+        self.assertEqual("consistent", self.api.read_listing(read))
+        self.assertEqual([2.0], self.api.sleeps)
 
 
 class MutationTests(unittest.TestCase):

@@ -51,6 +51,7 @@ names a newer complete ordinary attempt, whose window-checked handoffs replace t
 
 from __future__ import annotations
 
+import functools
 import math
 import time
 from collections.abc import Callable, Mapping
@@ -59,7 +60,7 @@ from typing import Any
 
 from mod_base.errors import MbError
 from mod_base.github import artifacts, contents, jobs, runs
-from mod_base.github.api import GitHubApi
+from mod_base.github.api import GitHubApi, InconsistentListing
 from mod_base.io.bounded_zip import artifact_limit
 from mod_base.model import grammar
 from mod_base.model import limits as lim
@@ -518,24 +519,46 @@ class _Admitter:
                 return False
         return True
 
+    def _active_page(self, path: str, status: str) -> list[dict[str, Any]]:
+        """The one page of ``status`` runs at ``path``; rows that disagree with its ``total_count``
+        (runs start and settle while it is read) are an :class:`InconsistentListing`. A full page is
+        confirmed by an empty second one, so a lagging ``total_count`` hides no run."""
+
+        def read(params: dict[str, str | int]) -> tuple[list[dict[str, Any]], int]:
+            page = self.api.get_json(path, params={"status": status, "per_page": 100, **params})
+            rows = page.get("workflow_runs") if isinstance(page, dict) else None
+            total = page.get("total_count") if isinstance(page, dict) else None
+            if (isinstance(total, bool) or not isinstance(total, int) or not 0 <= total <= 100
+                    or not isinstance(rows, list) or len(rows) > 100
+                    or any(not isinstance(row, dict) for row in rows)):
+                raise _fail("the active source-run inventory is malformed, truncated or oversized")
+            return rows, total
+
+        def inconsistent(listed: int, total: int) -> InconsistentListing:
+            return InconsistentListing(f"the active source-run inventory lists {listed} of its total_count {total} "
+                                       "runs", status=200, method="GET", path=path)
+
+        rows, total = read({})
+        if len(rows) != total:
+            raise inconsistent(len(rows), total)
+        if len(rows) == 100:
+            following, count = read({"page": 2})
+            if following or count != total:
+                raise inconsistent(len(rows) + len(following), count)
+        return rows
+
     def active_source_runs(self) -> int:
-        """Source runs still settling that could hand off evidence for a subject (QS discover)."""
+        """Source runs still settling that could hand off evidence for a subject (QS discover). Each
+        status is one page, read again while it is inconsistent (``api.read_listing``)."""
 
         source = self.config.source
         commits = {commit for commit, _ in self.groups()}
         titles = {display_title(self.invocation, commit) for commit in commits} - {None}
         events = frozenset(source["events"]["canonical"]) | frozenset(source["events"]["other"])
-        filename = source["workflow"].rsplit("/", 1)[1]
+        path = f"/repos/{self.api.repository}/actions/workflows/{source['workflow'].rsplit('/', 1)[1]}/runs"
         count = 0
         for status in _ACTIVE_STATUS_ORDER:
-            page = self.api.get_json(f"/repos/{self.api.repository}/actions/workflows/{filename}/runs",
-                                     params={"status": status, "per_page": 100})
-            rows = page.get("workflow_runs") if isinstance(page, dict) else None
-            total = page.get("total_count") if isinstance(page, dict) else None
-            if (isinstance(total, bool) or not isinstance(total, int) or not 0 <= total <= 100
-                    or not isinstance(rows, list) or len(rows) != total
-                    or any(not isinstance(row, dict) for row in rows)):
-                raise _fail("the active source-run inventory is malformed, truncated or oversized")
+            rows = self.api.read_listing(functools.partial(self._active_page, path, status))
             for run in rows:
                 if run.get("path") != source["workflow"]:
                     raise _fail("the active source-run inventory lists another workflow")

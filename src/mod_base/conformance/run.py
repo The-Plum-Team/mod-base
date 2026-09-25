@@ -50,8 +50,9 @@ serves to the adapter's network hooks.
 The report is canonical JSON on stdout: ``{keys: [...], families: [...], checks: int}`` plus the
 simulated ``repository`` and ``kit``, the ``variants`` outcomes, the ``admission`` reasons observed,
 the ``hooks`` exercised and ``site`` facts (among them ``max_job_reads``, the most API reads one
-simulated Pages job made, and ``generations``: per later generation its head, Pages run, key routes,
-family legs and planned rotation size). Any failed check exits 2.
+simulated Pages job made, ``listing_rereads``, the inconsistent artifact listings the refresh jobs
+read again, and ``generations``: per later generation its head, Pages run, key routes, family legs
+and planned rotation size). Any failed check exits 2.
 """
 
 from __future__ import annotations

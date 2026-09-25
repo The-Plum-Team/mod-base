@@ -146,6 +146,24 @@ def list_for_run(api: GitHubApi, run_id: int, *, max_items: int = limits.MAX_ART
     return _newest_first(artifacts)
 
 
+def list_run_named(api: GitHubApi, run_id: int, name: str, *,
+                   max_items: int = limits.MAX_ARTIFACTS_PER_NAME) -> list[Artifact]:
+    """Artifacts of one run with exactly ``name`` (``/runs/{id}/artifacts?name=``), every row
+    re-checked to carry that name and owner run. A caller that needs only some names of a run that
+    may still be uploading reads them this way: the run's other uploads, such as the caches its
+    sibling finalize jobs upload concurrently, are never part of the listing."""
+
+    _positive(run_id, "run id")
+    if not grammar.is_kit_artifact_name(name):
+        raise _fail(f"refusing to list a name that is not a kit artifact name: {name!r}"[:200])
+    rows = api.paginate(f"/repos/{api.repository}/actions/runs/{run_id}/artifacts", field="artifacts",
+                        params={"name": name}, max_items=max_items)
+    artifacts = [Artifact.parse(row) for row in rows]
+    if any(artifact.name != name or artifact.run_id != run_id for artifact in artifacts):
+        raise _fail(f"artifact listing of run {run_id} for {name!r} returned another name or run")
+    return _newest_first(artifacts)
+
+
 def list_repository(api: GitHubApi, *, max_items: int) -> list[Artifact]:
     """Every repository artifact, newest first, bounded by ``max_items`` (fail closed beyond)."""
 

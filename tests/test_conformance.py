@@ -133,6 +133,12 @@ class CanaryConformanceTest(unittest.TestCase):
         self.assertTrue(all(item["rotation_planned"] > 0 for item in generations.values()))
         self.assertLessEqual(self.report["site"]["max_job_reads"], 160)
 
+    def test_every_refresh_after_a_sibling_upload_reads_its_inconsistent_listing_again(self) -> None:
+        # The canary's own defect (run 36190041285): a refresh failed closed on a run artifact listing
+        # whose total_count counted a sibling's upload before listing it. Each of the four
+        # generations refreshes two keys and two family legs; every job after the first re-reads once.
+        self.assertEqual(self.report["site"]["listing_rereads"], 4 * (2 + 2 - 1))
+
     def test_every_hook_the_canary_defines_ran(self) -> None:
         self.assertEqual(self.report["hooks"],
                          ["anchor_selection", "collect", "expectation", "family_validate", "targets"])

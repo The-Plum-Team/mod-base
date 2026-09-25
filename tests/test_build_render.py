@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import mod_base
 from mod_base.errors import MbError
 from mod_base.imaging.metrics import SizePolicy, inspect_webp
 from mod_base.model import documents, grammar
@@ -263,7 +264,7 @@ class QuickSkinSiteTest(RenderFixture):
         self.assertEqual(self.gallery["project"]["actions_url"],
                          "https://github.com/The-Plum-Team/qs-like/actions/workflows/on-demand-e2e.yml")
         self.assertEqual(self.gallery["build"], {"implementation_sha": self.publication.mod.commit,
-                                                 "kit_sha": bs.support.KIT_SHA, "kit_version": "0.9.0",
+                                                 "kit_sha": bs.support.KIT_SHA, "kit_version": mod_base.__version__,
                                                  "pixel_metrics_version": 1})
         documents.validate_site(self.site_data)
         self.assertEqual(self.site_data["project"]["description"], bs.DESCRIPTION)

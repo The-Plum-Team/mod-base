@@ -233,7 +233,7 @@ the parent refuses a report of any other shape:
 | `variants` | `{attested, delegated, selected, family-outcomes, newest-run, carried}`, each `"passed"` or `"skipped: <reason>"` |
 | `admission` | the admission results observed, in order, as `"<operation>:<reason>"` |
 | `hooks` | the sorted names of every adapter hook that answered |
-| `site` | facts about the first generation's site (`files`, `frames`, `node_check`, `rotation_planned`), `max_job_reads` (the most API reads one simulated Pages job made, at most 160) and `generations`: one entry per later generation, `{generation, head, pages_run, key_routes, family_legs, rotation_planned}` (`key_routes` counts the keys selected as `handoff` or `cache`; `family_legs` counts the legs collected `carried`, `fresh` or `unavailable`) |
+| `site` | facts about the first generation's site (`files`, `frames`, `node_check`, `rotation_planned`), `max_job_reads` (the most API reads one simulated Pages job made, at most 160), `listing_rereads` (the inconsistent artifact listings the refresh jobs read again: every refresh after a sibling's upload sees one `total_count` one row off and must re-read it exactly once) and `generations`: one entry per later generation, `{generation, head, pages_run, key_routes, family_legs, rotation_planned}` (`key_routes` counts the keys selected as `handoff` or `cache`; `family_legs` counts the legs collected `carried`, `fresh` or `unavailable`) |
 
 A mod's own conformance test (Quick Skin's `test_mod_base_conformance.py` runs `conformance --keys
 mc1.20.1,mc26.3 --families`) should assert the variants it expects to pass, since a skipped variant
@@ -250,7 +250,7 @@ does not fail the run.
 | `read_blob(commit, path, max_bytes)` | bounded `git cat-file` of objects already fetched as inert objects; never a checkout |
 | `runtime_tree(root)` | a bounded, regular-file-only, symlink-refusing `RuntimeTree` view |
 | `image_metrics(path, size_policy)` | the kit's PixelMetrics (`imaging.metrics.inspect_png`) |
-| `api` | a read-only `GitHubApi`, present only for a declared network hook in a token job (below); otherwise `None`. It is capped at `limits.MAX_PAGES_API_READS` (160) requests per call, retries included; a further request raises `RequestBudgetExhausted` in the hook |
+| `api` | a read-only `GitHubApi`, present only for a declared network hook in a token job (below); otherwise `None`. It is capped at `limits.MAX_PAGES_API_READS` (160) requests per call, retries included (also the re-reads of a listing GitHub serves inconsistently: `paginate` and `read_listing` read one again from page 1, at most `limits.LISTING_READ_ATTEMPTS` times); a further request raises `RequestBudgetExhausted` in the hook |
 
 ## Where hooks run (SPEC §4.3)
 

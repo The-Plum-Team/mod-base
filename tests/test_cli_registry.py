@@ -11,6 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import mod_base
 from mod_base import cli
 from mod_base.errors import MbError
 
@@ -152,7 +153,7 @@ class SurfaceTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("conformance", stdout)
         code, stdout, _ = run(["--version"])
-        self.assertEqual((code, stdout), (0, "mod-base 0.9.0\n"))
+        self.assertEqual((code, stdout), (0, f"mod-base {mod_base.__version__}\n"))
         code, _, stderr = run([])
         self.assertEqual(code, 2)
         self.assertIn("a command is required", stderr)

@@ -15,6 +15,15 @@ retry budget at once (:class:`ApiRateLimited`) instead of stalling a job. Paths 
 paths of unreserved characters (callers percent-encode free text); query parameters travel
 separately. The bearer token is sent only to the configured API origin: redirects are refused,
 except the single artifact-download redirect, which is followed once without any credential.
+
+A paginated listing is one snapshot or nothing. GitHub's listings are eventually consistent while
+the listed run still uploads artifacts (sibling jobs of one run upload concurrently) or a rotation
+deletes them, so a snapshot whose rows disagree with its ``total_count``, whose ``total_count``
+changes between pages or that repeats a row is an :class:`InconsistentListing`:
+:func:`read_consistently` discards it and reads the whole listing again from page 1, at most
+``limits.LISTING_READ_ATTEMPTS`` times with a bounded backoff, and only the last inconsistent
+snapshot fails closed. Every read spends the request budget; an incomplete listing is never
+returned.
 """
 
 from __future__ import annotations
@@ -28,7 +37,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
@@ -56,6 +65,7 @@ MAX_DOWNLOAD_BYTES = limits.MAX_ARTIFACT_BYTES
 _PATH = re.compile(r"^/(?:[A-Za-z0-9._~@:+,=-]|%[0-9A-Fa-f]{2})+(?:/(?:[A-Za-z0-9._~@:+,=-]|%[0-9A-Fa-f]{2})+)*$")
 _PARAMETER = re.compile(r"^[a-z][a-z_]{0,39}$")
 _READ_CHUNK = 1 << 20
+_T = TypeVar("_T")
 
 
 class ApiError(MbError):
@@ -80,6 +90,12 @@ class ApiRateLimited(ApiError):
     """The retry budget ended on a rate-limit response."""
 
     default_reason = "github-rate-limited"
+
+
+class InconsistentListing(ApiError):
+    """A listing that is not one consistent snapshot: its rows disagree with its ``total_count``, the
+    ``total_count`` changed between pages or a row repeats. :func:`read_consistently` reads such a
+    listing again; it escapes only after ``limits.LISTING_READ_ATTEMPTS`` inconsistent reads."""
 
 
 class ReadOnlyViolation(MbError):
@@ -203,13 +219,44 @@ class _Failure:
     headers: Any = None
 
 
+def listing_retry_delay(attempt: int) -> float:
+    """The wait before re-reading an inconsistent listing after its read ``attempt`` (0-based):
+    ``limits.LISTING_RETRY_DELAY_SECONDS`` doubling per re-read, at most
+    ``limits.MAX_LISTING_RETRY_DELAY_SECONDS``."""
+
+    return min(limits.LISTING_RETRY_DELAY_SECONDS * 2 ** attempt, limits.MAX_LISTING_RETRY_DELAY_SECONDS)
+
+
+def read_consistently(read: Callable[[], _T], *, sleep: Callable[[float], None]) -> _T:
+    """``read()``, one complete listing from its first page, until it returns a consistent snapshot.
+
+    An :class:`InconsistentListing` discards the snapshot and, after :func:`listing_retry_delay`,
+    reads it again, at most ``limits.LISTING_READ_ATTEMPTS`` times in all; the last inconsistent read
+    fails closed. Every other error propagates at once. Each read spends its client's request
+    budget, so :class:`RequestBudgetExhausted` bounds the re-reads too."""
+
+    for attempt in range(limits.LISTING_READ_ATTEMPTS):
+        try:
+            return read()
+        except InconsistentListing as exc:
+            if attempt + 1 == limits.LISTING_READ_ATTEMPTS:
+                raise InconsistentListing(f"{exc} (the last of {limits.LISTING_READ_ATTEMPTS} inconsistent reads)",
+                                          status=exc.status, method=exc.method, path=exc.path) from exc
+            sleep(listing_retry_delay(attempt))
+    raise AssertionError("unreachable: the listing loop returns or raises")  # pragma: no cover
+
+
 def paginate_with(get_json: Callable[..., Any], path: str, *, field: str | None,
-                  params: Mapping[str, str | int] | None, max_items: int) -> list[dict[str, Any]]:
+                  params: Mapping[str, str | int] | None, max_items: int,
+                  sleep: Callable[[float], None]) -> list[dict[str, Any]]:
     """The one pagination loop of :class:`GitHubApi` and the fake (``per_page=100``, ``page=1..``).
 
-    Stops at the first short page or once ``total_count`` rows are listed; more than ``max_items``
-    rows, a non-object row, a page longer than ``per_page`` or a ``total_count`` that changes or
-    disagrees with the rows raises."""
+    Only a short page (an empty one included) ends a listing: a full page that reaches
+    ``total_count`` is confirmed by the next page, since a ``total_count`` lagging behind the rows
+    would otherwise hide the rows past it. More than ``max_items`` rows, a non-object row or a page
+    longer than ``per_page`` raises. A snapshot whose ``total_count`` changes between pages or
+    disagrees with its rows, or whose rows repeat an integer ``id``, is read again from page 1
+    (:func:`read_consistently`, sleeping through ``sleep``)."""
 
     _positive(max_items, "max_items", limits.MAX_RUN_ID)
     if params is not None and ("per_page" in params or "page" in params):
@@ -220,39 +267,52 @@ def paginate_with(get_json: Callable[..., Any], path: str, *, field: str | None,
     def malformed(message: str) -> ApiError:
         return ApiError(f"GitHub API GET {path} listing {message}", status=200, method="GET", path=path)
 
-    rows: list[dict[str, Any]] = []
-    total: int | None = None
-    for page in range(1, max_items // PER_PAGE + 3):
-        payload = get_json(path, params={**(params or {}), "per_page": PER_PAGE, "page": page})
-        if field is None:
-            if not isinstance(payload, list):
-                raise malformed("is not an array")
-            batch = payload
-        else:
-            if not isinstance(payload, dict) or not isinstance(payload.get(field), list):
-                raise malformed(f"has no {field!r} array")
-            batch = payload[field]
-            if "total_count" in payload:
-                count = payload["total_count"]
-                if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-                    raise malformed("has an invalid total_count")
-                if total is not None and count != total:
-                    raise malformed("total_count changed between pages")
-                total = count
-                if total > max_items:
-                    raise malformed(f"reports {total} rows, beyond its bound of {max_items}")
-        if len(batch) > PER_PAGE or any(not isinstance(row, dict) for row in batch):
-            raise malformed("has a malformed page")
-        rows.extend(batch)
-        if len(rows) > max_items:
-            raise malformed(f"exceeds its bound of {max_items} rows")
-        # A short page ends the listing; so does a full page completing ``total_count`` (Quick Skin
-        # ``feature_coverage_github.jobs``), which saves one read of the bounded budget.
-        if len(batch) < PER_PAGE or (total is not None and len(rows) >= total):
-            if total is not None and total != len(rows):
-                raise malformed(f"total_count {total} disagrees with {len(rows)} listed rows")
-            return rows
-    raise malformed("did not end within its page bound")
+    def inconsistent(message: str) -> InconsistentListing:
+        return InconsistentListing(f"GitHub API GET {path} listing {message}", status=200, method="GET", path=path)
+
+    def read() -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        ids: set[int] = set()
+        total: int | None = None
+        for page in range(1, max_items // PER_PAGE + 3):
+            payload = get_json(path, params={**(params or {}), "per_page": PER_PAGE, "page": page})
+            if field is None:
+                if not isinstance(payload, list):
+                    raise malformed("is not an array")
+                batch = payload
+            else:
+                if not isinstance(payload, dict) or not isinstance(payload.get(field), list):
+                    raise malformed(f"has no {field!r} array")
+                batch = payload[field]
+                if "total_count" in payload:
+                    count = payload["total_count"]
+                    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                        raise malformed("has an invalid total_count")
+                    if count > max_items:
+                        raise malformed(f"reports {count} rows, beyond its bound of {max_items}")
+                    if total is not None and count != total:
+                        raise inconsistent("total_count changed between pages")
+                    total = count
+            if len(batch) > PER_PAGE or any(not isinstance(row, dict) for row in batch):
+                raise malformed("has a malformed page")
+            for row in batch:
+                identity = row.get("id")
+                if isinstance(identity, int) and not isinstance(identity, bool):
+                    if identity in ids:
+                        raise inconsistent(f"repeats the row id {identity}")
+                    ids.add(identity)
+            rows.extend(batch)
+            # More rows than ``total_count`` (itself within ``max_items``) is a lagging count, so it is
+            # read again before the row bound can reject it; only a short page ends the listing.
+            if total is not None and (len(rows) > total or len(batch) < PER_PAGE) and len(rows) != total:
+                raise inconsistent(f"total_count {total} disagrees with {len(rows)} listed rows")
+            if len(rows) > max_items:
+                raise malformed(f"exceeds its bound of {max_items} rows")
+            if len(batch) < PER_PAGE:
+                return rows
+        raise malformed("did not end within its page bound")
+
+    return read_consistently(read, sleep=sleep)
 
 
 class GitHubApi:
@@ -433,10 +493,18 @@ class GitHubApi:
     def paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None,
                  max_items: int) -> list[dict[str, Any]]:
         """GET every page (``per_page=100``) and return the concatenated ``field`` arrays (or the
-        top-level arrays when ``field`` is None). More than ``max_items`` rows, a non-object row or
-        a ``total_count`` that disagrees with the rows raises :class:`ApiError`."""
+        top-level arrays when ``field`` is None). More than ``max_items`` rows or a non-object row
+        raises :class:`ApiError`; a snapshot whose ``total_count`` disagrees with the rows (or changes
+        between pages), or whose rows repeat an ``id``, is read again from page 1 and raises
+        :class:`InconsistentListing` only after ``limits.LISTING_READ_ATTEMPTS`` such reads."""
 
-        return paginate_with(self.get_json, path, field=field, params=params, max_items=max_items)
+        return paginate_with(self.get_json, path, field=field, params=params, max_items=max_items, sleep=self._sleep)
+
+    def read_listing(self, read: Callable[[], _T]) -> _T:
+        """``read()`` (one complete listing through this client) re-run by :func:`read_consistently`
+        with this client's ``sleep`` until it raises no :class:`InconsistentListing`."""
+
+        return read_consistently(read, sleep=self._sleep)
 
     def post_json(self, path: str, payload: Mapping[str, Any]) -> Any:
         """POST canonical JSON; requires ``writable``. Returns decoded JSON or None for 204."""

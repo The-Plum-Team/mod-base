@@ -11,9 +11,9 @@ from typing import Any
 from mod_base import KIT_REPOSITORY
 from mod_base.errors import MbError
 from mod_base.github import runs
-from mod_base.github.api import ApiNotFound, RequestBudgetExhausted
+from mod_base.github.api import ApiNotFound, InconsistentListing, RequestBudgetExhausted
 from mod_base.github.fake import FakeGitHub
-from mod_base.model import documents
+from mod_base.model import documents, limits
 from tests.helpers import COMMIT, CREATED_AT, E2E_WORKFLOW, REPOSITORY, h, run_claim
 
 KIT_SHA = h("kit", 40)
@@ -295,6 +295,94 @@ class WorkflowRunsTests(unittest.TestCase):
         self.seed(250, api)
         with self.assertRaises(RequestBudgetExhausted):
             runs.workflow_runs(api, E2E_WORKFLOW)
+
+    def test_a_run_starting_between_pages_restarts_the_listing(self) -> None:
+        self.seed(150)
+        path = f"/repos/{REPOSITORY}/actions/workflows/on-demand-e2e.yml/runs"
+        self.api.during_listing(path, lambda: self.api.add_run(run(9000, created_at="2026-09-30T00:00:00Z")))
+        listed = runs.workflow_runs(self.api, E2E_WORKFLOW)
+        self.assertEqual(151, len(listed))
+        self.assertEqual(9000, listed[0]["id"])
+        self.assertEqual(([2.0], 4), (self.api.sleeps, self.api.request_count), "pages 1, 2 (changed), 1, 2")
+
+    def test_an_inconsistent_snapshot_is_read_again_then_fails_closed(self) -> None:
+        self.seed(3)
+        path = f"/repos/{REPOSITORY}/actions/workflows/on-demand-e2e.yml/runs"
+        self.api.skew_listing(path, responses=1)
+        self.assertEqual(3, len(runs.workflow_runs(self.api, E2E_WORKFLOW, status="success")))
+        self.assertEqual(([2.0], 2), (self.api.sleeps, self.api.request_count))
+        cases = {
+            "total mismatch": {"total_count": 2, "workflow_runs": [run(1)]},
+            "one run twice": {"total_count": 2, "workflow_runs": [run(5, run_attempt=2), run(5, run_attempt=1)]},
+        }
+        for label, payload in cases.items():
+            with self.subTest(label=label):
+                api = FakeGitHub(repository=REPOSITORY)
+                api.add_response(path, payload, params={"branch": "master", "per_page": 100, "page": 1})
+                with self.assertRaises(InconsistentListing) as caught:
+                    runs.workflow_runs(api, E2E_WORKFLOW, branch="master")
+                self.assertIn(f"the last of {limits.LISTING_READ_ATTEMPTS} inconsistent reads", str(caught.exception))
+                self.assertEqual((limits.LISTING_READ_ATTEMPTS, [2.0, 4.0, 8.0]), (api.request_count, api.sleeps))
+        # A malformed or foreign listing is never read again.
+        api = FakeGitHub(repository=REPOSITORY)
+        api.add_response(path, {"total_count": 1, "workflow_runs": [run(1, head_branch="feature")]},
+                         params={"branch": "master", "per_page": 100, "page": 1})
+        with self.assertRaisesRegex(MbError, "outside its filters"):
+            runs.workflow_runs(api, E2E_WORKFLOW, branch="master")
+        self.assertEqual((1, []), (api.request_count, api.sleeps))
+
+    def test_a_short_page_before_a_truncated_read_is_complete_is_read_again(self) -> None:
+        # Beyond max_items only the newest runs are read, but a short page before them is a snapshot
+        # missing runs (a deleted or not yet indexed run), never a complete truncated listing.
+        path = f"/repos/{REPOSITORY}/actions/workflows/on-demand-e2e.yml/runs"
+        for count, offset, max_items, reads in ((99, 2, 100, 1), (110, 50, 120, 2)):
+            with self.subTest(count=count, total=count + offset, max_items=max_items):
+                api = FakeGitHub(repository=REPOSITORY)
+                self.seed(count, api)
+                api.skew_listing(path, responses=reads, offset=offset)
+                self.assertEqual(count, len(runs.workflow_runs(api, E2E_WORKFLOW, max_items=max_items)))
+                self.assertEqual(([2.0], 2 * reads), (api.sleeps, api.request_count))
+                api = FakeGitHub(repository=REPOSITORY)
+                self.seed(count, api)
+                api.skew_listing(path, responses=reads * limits.LISTING_READ_ATTEMPTS, offset=offset)
+                with self.assertRaisesRegex(InconsistentListing, f"total_count {count + offset} disagrees with "
+                                                                 f"{count} listed runs"):
+                    runs.workflow_runs(api, E2E_WORKFLOW, max_items=max_items)
+                self.assertEqual([2.0, 4.0, 8.0], api.sleeps)
+
+    def test_a_total_lagging_at_a_full_page_is_read_again(self) -> None:
+        # 101 runs under a total_count of 100: the full first page reaches the total, and only the
+        # confirming second page shows the run the lagging count hides.
+        self.seed(101)
+        path = f"/repos/{REPOSITORY}/actions/workflows/on-demand-e2e.yml/runs"
+        self.api.skew_listing(path, responses=2, offset=-1)
+        self.assertEqual(101, len(runs.workflow_runs(self.api, E2E_WORKFLOW)))
+        self.assertEqual(([2.0], 4), (self.api.sleeps, self.api.request_count))
+        api = FakeGitHub(repository=REPOSITORY)
+        self.seed(100, api)
+        self.assertEqual(100, len(runs.workflow_runs(api, E2E_WORKFLOW)))
+        self.assertEqual(2, api.request_count, "a full page reaching total_count is confirmed by the next")
+        api = FakeGitHub(repository=REPOSITORY)
+        self.seed(101, api)
+        api.skew_listing(path, responses=2 * limits.LISTING_READ_ATTEMPTS, offset=-1)
+        with self.assertRaisesRegex(InconsistentListing, "total_count 100 disagrees with 101 listed runs"):
+            runs.workflow_runs(api, E2E_WORKFLOW)
+
+    def test_a_filtered_read_lists_at_most_the_newest_runs_github_lists(self) -> None:
+        # A filtered search lists only its 1,000 newest runs, even when total_count and max_items are
+        # larger: exactly those complete the read, and no page beyond them is requested.
+        path = f"/repos/{REPOSITORY}/actions/workflows/on-demand-e2e.yml/runs"
+        pages = limits.MAX_FILTERED_RUNS_LISTED // 100
+        for page in range(1, pages + 1):
+            rows = [run(100_000 - (page - 1) * 100 - index,
+                        created_at=f"2026-0{9 - (page - 1) // 5}-{28 - (page - 1) % 5 * 5:02d}T{index % 24:02d}:00:00Z")
+                    for index in range(100)]
+            self.api.add_response(path, {"total_count": 1500, "workflow_runs": rows},
+                                  params={"status": "success", "per_page": 100, "page": page})
+        listed = runs.workflow_runs(self.api, E2E_WORKFLOW, status="success", max_items=1200)
+        self.assertEqual((limits.MAX_FILTERED_RUNS_LISTED, pages, []),
+                         (len(listed), self.api.request_count, self.api.sleeps))
+        self.assertEqual(1000, limits.MAX_FILTERED_RUNS_LISTED)
 
 
 class RunRecordTests(unittest.TestCase):
