@@ -2,11 +2,16 @@
 
 A fixture mod is materialized as a fresh one-commit Git repository in a temporary directory, so
 adapters read their matrix and contract as inert objects (``ctx.read_blob``) exactly as in a real
-checkout. :func:`environment` builds the GitHub environment of a run, :func:`invocation` the kit
+checkout. Its family producer workflows are materialized pinning the fixture kit
+(:func:`pin_workflow`, :data:`KIT_SHA` at the kit's own version), as a real producer's checkout
+does: ``family collect`` reads that pin at the producer commit (SPEC §1.8). The shipped fixture files
+never reference mod-base themselves (``tests/test_workflow_pins.py``). :func:`environment` builds the GitHub environment of a run, :func:`invocation` the kit
 ``Invocation``, :func:`synthesize` the mod's own packaged output through its fixtures hook, and
 :class:`InProcessHost` replaces ``mod_base.adapter.host.call`` by the in-process dispatch
 (``host_child.run_hook``) with a :class:`mod_base.github.fake.FakeGitHub` as ``ctx.api``: the same
-seam ``conformance`` uses to run network hooks without credentials.
+seam ``conformance`` uses to run network hooks without credentials. An adapter's own exception
+surfaces there as the same ``protocol.HookFailed`` (same message) the isolated host raises, unless
+it is ``HookUnsupported`` or an ``MbError`` that already exits 2 (``host_child.run_hook``).
 
 Other units' tests may import this module (``from tests.fixtures.mods import support``).
 """
@@ -15,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -72,13 +78,35 @@ def git(root: Path, *arguments: str) -> str:
     return completed.stdout.decode("utf-8").strip()
 
 
+def pin_workflow(workflow: str, *, sha: str = KIT_SHA, version: str = mod_base.__version__) -> bytes:
+    """A family producer workflow ``workflow`` whose one mod-base reference pins the kit at ``sha``."""
+
+    return (f"# Materialized by tests/fixtures/mods/support.py: {workflow} pins the fixture kit.\n"
+            f"name: Family producer\non:\n  workflow_dispatch:\npermissions: {{}}\njobs:\n  publish-evidence:\n"
+            f"    runs-on: ubuntu-24.04\n    steps:\n"
+            f"      - uses: The-Plum-Team/mod-base/actions/publish-family@{sha} # v{version}\n").encode("utf-8")
+
+
+def pin_producers(root: Path) -> None:
+    """Write every configured family producer workflow of the mod at ``root`` as :func:`pin_workflow`."""
+
+    config = json.loads((root / "site" / "mod-base.json").read_text(encoding="utf-8"))
+    for family in config.get("families", []):
+        workflow = family["producer"]["workflow"]
+        path = root.joinpath(*workflow.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(pin_workflow(workflow))
+
+
 def materialize(name: str, destination: Path, *, branch: str = "master",
                 mutate: Callable[[Path], None] | None = None) -> FixtureMod:
-    """Copy fixture mod ``name`` into ``destination`` (a new directory) and commit it on ``branch``."""
+    """Copy fixture mod ``name`` into ``destination`` (a new directory), pin its family producers
+    (:func:`pin_producers`, after ``mutate``) and commit it on ``branch``."""
 
     shutil.copytree(MODS / name, destination, ignore=shutil.ignore_patterns("__pycache__"))
     if mutate is not None:
         mutate(destination)
+    pin_producers(destination)
     git(destination, "init", "-q", f"--initial-branch={branch}")
     git(destination, "add", "-A")
     git(destination, "commit", "-q", "-m", f"{name} fixture")
@@ -182,7 +210,8 @@ class InProcessHost:
     """A stand-in for ``mod_base.adapter.host.call`` that dispatches in-process (the conformance
     seam), handing ``api`` to network hooks. It applies the production placement rules first
     (``host.check_placement``: SPEC §4.3 rows, forbidden jobs, network gating), so a test running a
-    hook in the wrong job fails exactly as production would. ``calls`` records ``(hook, network)``."""
+    hook in the wrong job fails exactly as production would, and a hook's own exception is mapped
+    by ``run_hook`` as the module docstring says. ``calls`` records ``(hook, network)``."""
 
     api: Any = None
     calls: list[tuple[str, bool]] = field(default_factory=list)

@@ -21,7 +21,7 @@ This document states what mod-base protects, from whom, and with which mechanism
 | Asset | Who may change it | Protection |
 |---|---|---|
 | mod-base `main` | a pull request that passes `Test`, `Workflow policy` and `Front end` | ruleset "mod-base main": no deletion, no force push, pull request with thread resolution, strict required checks, no bypass actors; CODEOWNERS |
-| mod-base `v*` tags | the maintainer, after `main` is green and the canary passes | ruleset "mod-base immutable tags" (no deletion, no force push, no update) plus immutable releases |
+| mod-base `v*` tags | the maintainer, on a `main` commit whose `mod-base CI` is green; mods pin a tag only after the canary, pinned to it, passes | ruleset "mod-base immutable tags" (no deletion, no force push, no update) plus immutable releases |
 | The pin in a mod | a protected pull request to the mod's default branch | the mod's default-branch ruleset; in Block Pops every pin change is also a controller upgrade |
 | Adapter and config (`scripts/pages/mod_base_adapter.py`, `site/mod-base.json`) | the same | the same; both sit under Block Pops protected roots |
 | Managed files | only `template sync` from the pinned kit | `template check` fails on any byte of drift; `template.deferred` can never name the caller, the bootstrap, the shared documents or `CODEOWNERS` |
@@ -127,8 +127,9 @@ sandbox against a malicious adapter:
   `mod-base-pages-rotation`) owned by the caller; callees declare no concurrency.
 - Rotation starts only after the owning Pages run is authenticated `completed/success`, re-observes
   each artifact immediately before deleting it by exact id, never deletes anything newer than its
-  owner, keeps the newest anchor per key, and stops at a bounded deletion budget. A collector that
-  loses a race with rotation fails closed and the next wake or hourly sweep recovers.
+  owner, keeps the newest anchor per key, and stops at a bounded deletion budget (64 exact-ID
+  deletions per run, `limits.DELETION_BUDGET`). A collector that loses a race with rotation fails
+  closed and the next wake or hourly sweep recovers.
 - Build output is written into a private atomic directory, sealed, and rechecked before upload;
   `deploy` rechecks every source head, and a head that moved keeps the previous site.
 
@@ -192,11 +193,14 @@ text is validated and HTML-escaped at build time.
   reachability checks, two protected merges, secret scanning and push protection limit, but do not
   remove, that risk.
 - **Unverified platform behavior:** the cross-repository shape of `referenced_workflows`, the
-  `Publish / ...` job names of matrix legs, deploying a callee-uploaded artifact from the caller,
-  and `GITHUB_WORKFLOW_REF` in a callee are proven only by the canary
-  ([OPERATIONS.md](OPERATIONS.md#canary-evidence)). Each fails closed while unproven.
+  `Publish / ...` job names of matrix legs (and, for a mod without families, the unexpanded name of
+  its skipped `family` matrix job, which only a Block Pops run can show), deploying a
+  callee-uploaded artifact from the caller, and `GITHUB_WORKFLOW_REF` in a callee are proven only by
+  the canary ([OPERATIONS.md](OPERATIONS.md#canary-evidence)). Each fails closed while unproven.
 - **`job.workflow_sha`** is not used in v1; it becomes a redundant cross-check only after three
-  canary observations equal `referenced_workflows`. `uses: $/...` is never used.
+  values observed inside a kit callee job equal `referenced_workflows` (the canary probe sees only
+  its own caller-side value, the canary head, so that observation is deferred to v1.1).
+  `uses: $/...` is never used.
 - **Dependabot's `ignore` wildcard** for reusable-workflow references is unverified; a stray pull
   request fails `template check` and is closed.
 - **`frame-ancestors`** cannot be set from a meta tag and GitHub Pages sets no response headers, so

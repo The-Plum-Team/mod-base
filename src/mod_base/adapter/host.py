@@ -6,8 +6,9 @@ directory and runs exactly::
     env -i PATH=/usr/bin:/bin:<dirname(python3)> HOME=<tmp>/home TMPDIR=<tmp> LANG=C.UTF-8
            PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
            PYTHONPATH=<kit>/src:<each config.adapter.python_path entry inside the repo>
-           [GH_TOKEN GITHUB_API_URL GITHUB_REPOSITORY  <- only if hook in config.adapter.network_hooks
-                                                         AND $GITHUB_JOB in protocol.TOKEN_JOBS]
+           [GH_TOKEN GITHUB_API_URL GITHUB_REPOSITORY  <- only for a declared network hook called with
+                                                         network, in a Pages callee job (placement
+                                                         below) its HOOK_JOBS row allows]
       python3 -P -m mod_base.adapter.host_child --adapter <repo>/<config.adapter.path> --hook <name>
               --request <tmp>/req.json --response <tmp>/resp.json
 

@@ -361,7 +361,7 @@ class QuickSkinSiteTest(RenderFixture):
         for relative in build.TEMPLATES:
             page = Page((site / relative).read_text(encoding="utf-8"))
             self.assertEqual(page.meta("theme-color"), [QS_THEME_COLOR])
-            self.assertEqual(page.meta("color-scheme"), ["dark light"])
+            self.assertEqual(page.meta("color-scheme"), ["dark"], "Quick Skin is dark-only (no light first paint)")
 
     def test_untrusted_text_is_escaped_or_refused(self) -> None:
         config = json.loads((self.publication.mod.root / "site" / "mod-base.json").read_text(encoding="utf-8"))
@@ -435,6 +435,8 @@ class BlockPopsSiteTest(RenderFixture):
         self.assertIn("@media (prefers-color-scheme: light){:root{color-scheme:light;--bg:#f4f7fd;", theme)
         self.assertNotIn("image-rendering", theme)
         gallery_page = files["e2e/index.html"].decode("utf-8")
+        for page in (gallery_page, files["index.html"].decode("utf-8")):
+            self.assertEqual(Page(page).meta("color-scheme"), ["dark light"], "a light theme admits both schemes")
         self.assertNotIn('id="family-views"', gallery_page)
         self.assertNotIn("icon.png", gallery_page)
         landing = files["index.html"].decode("utf-8")

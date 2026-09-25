@@ -23,13 +23,14 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:c9f8d15c5398c63ffc9154cf33c6fae5e7c1d77dc928b959347820f9758b73e5"
+  MB_KIT_TREE_DIGEST: "sha256:8ef75d98538567f8a28b4a0e18faa20be625ace5e509bc7df3e9a0d5e3a4ff05"
 
 jobs:
   rotate:
     name: Rotate the authenticated successful generation
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The owner poll below may take about 11 minutes; the rotation itself keeps the rest.
+    timeout-minutes: 30
     permissions:
       actions: write
       contents: read
@@ -82,16 +83,23 @@ jobs:
           fail() { printf 'Rotation owner: %s\n' "$1" >&2; exit 1; }
           default_branch="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
           [[ "$GITHUB_REF" == "refs/heads/$default_branch" ]] || fail "rotation runs only on the default branch"
+          # The owner's request-rotation job dispatches this run before the owner completes, and
+          # mod-local ext- jobs that need request-rotation keep it in progress for minutes: 60 reads,
+          # 2 s apart for the first 30 and 20 s apart after that (about 11 minutes of sleep, which
+          # leaves the rotation most of the 30-minute job timeout). An owner still in progress then
+          # fails this run, which an operator can dispatch again once the owner has completed.
           owner=''
-          for attempt in {1..30}; do
+          for attempt in {1..60}; do
             owner="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/actions/runs/$PAGES_RUN_ID")"
             if [[ "$(jq -r '.status' <<< "$owner")" == completed ]]; then
               break
             fi
-            if (( attempt < 30 )); then
-              sleep 2
+            if (( attempt < 60 )); then
+              sleep $(( attempt <= 30 ? 2 : 20 ))
             fi
           done
+          [[ "$(jq -r '.status' <<< "$owner")" == completed ]] ||
+            fail "the owner run is still in progress after the bounded poll"
           workflow_id="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/actions/workflows/pages.yml" --jq .id)"
           [[ "$workflow_id" =~ ^[1-9][0-9]{0,17}$ ]] || fail "pages.yml has no workflow id"
           jq -e --arg repository "$GITHUB_REPOSITORY" --arg branch "$default_branch" --arg sha "$PAGES_RUN_SHA" \
@@ -192,6 +200,17 @@ jobs:
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          # Exit 3 (Unavailable) means the owner holds no unexpired mb-promotion: a retried or
+          # duplicate rotation already retired it last, or the generation expired. Nothing is left
+          # to retire, so that is a reported no-op; every other failure stays red.
+          status=0
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base rotate --repo mod --config mod/site/mod-base.json --owner-run-id "$PAGES_RUN_ID" \
-            --owner-sha "$PAGES_RUN_SHA" --delete-delay-seconds 1.0
+            --owner-sha "$PAGES_RUN_SHA" --delete-delay-seconds 1.0 || status=$?
+          case "$status" in
+            0) ;;
+            3)
+              printf '::notice title=Rotation skipped::Pages run %s holds no unexpired mb-promotion (already rotated or expired); nothing was retired.\n' \
+                "$PAGES_RUN_ID" ;;
+            *) exit "$status" ;;
+          esac

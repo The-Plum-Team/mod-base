@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "profile": "canary",
+  "scenarios": [
+    {
+      "id": "tour",
+      "title": "Synthetic tour",
+      "roles": [
+        {
+          "role": "client_a",
+          "steps": [
+            {"id": "title_screen",
+             "capture": {"title": "Synthetic title screen", "review_tier": "key",
+                         "expectation": "A generated pattern stands in for the title screen. Synthetic demonstration evidence, not a product."}},
+            {"id": "open_menu"},
+            {"id": "menu_open",
+             "capture": {"title": "Synthetic menu", "review_tier": "all",
+                         "expectation": "A second generated pattern stands in for the opened menu and differs from the title screen."}}
+          ],
+          "comparisons": [
+            {"id": "menu_changed", "first": "title_screen", "second": "menu_open", "minimum_changed_fraction": 0.02}
+          ]
+        }
+      ]
+    }
+  ]
+}

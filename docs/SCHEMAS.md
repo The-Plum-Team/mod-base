@@ -20,6 +20,18 @@ identity of an embedded object (for example `scope.detail_sha256`). `canonical_j
 non-`str` object key (instead of silently writing `true`/`1`) and any unencodable value with an
 `MbError`, so every document that strict decoding accepts is always encodable and hashable.
 
+**Canonical bytes.** Every JSON file of a kit bundle or artifact must be exactly the
+`canonical_json` bytes of its value (one document, one byte sequence, one hash): `manifest.json`,
+`expectation.json`, `selection.json` and `extensions.json` of every handoff, compact (including a
+`compose` hook's composed bundle) and anchor bundle, `envelope.json`, `promotion.json` and a collected
+family artifact's `selected.json`. The kit writes nothing else, and every validating reader
+(`validate`, `compact`, `compose`, the `anchor` verbs, `family collect`, `build`, `refresh`, and
+`rotate` for `promotion.json`) refuses any other encoding of the same value. `family collect
+--selected-json F` requires the canonical bytes `select --output F` wrote, since it re-emits them as
+`selected.json`. Documents handed to a command as an argument (a selection draft, `--extensions`,
+`--tested-run-json`), an adapter's `family_validate` projection (which the core re-emits canonically
+as `paired.json`) and the config are strict JSON but need not be canonical.
+
 **Header.** Every document carries `"kind": "mod-base.<...>"` and `"schema_version"`. This kit writes
 the versions in `mod_base.SCHEMA_VERSIONS` (all `1`) and reads N and N-1 (`{1}` today). Within one
 `schema_version` only optional fields may ever be added.
@@ -98,7 +110,88 @@ and 32`.
 
 `parse_artifact_name` returns `None` for every name that is not exactly one of these (including
 every legacy `pages-*` name); a `None` name is never listed, downloaded or deleted by the kit.
+
+**Baselines (amendment to the SPEC §3.0 `mb-baseline` row).** `refresh` retains
+`mb-baseline--<key>--<commit>--<tested_run_id>` once per new complete generation, never again: only
+when `baseline_archive.enabled`, the promoted bundle's scope is `complete`, its embedded selection is
+a `handoff` (a `cache` republishes a generation an earlier publication already promoted, and
+re-retaining it would stretch the baseline's 90 days) and no upload of that exact name already passes
+the consumers' owner check (R3, `compose.authenticate_baseline`: a successful earlier `pages.yml` run
+whose `Finalize / Refresh evidence cache for <key>` job uploaded it in its retention step; at most
+`limits.MAX_CANDIDATES` unexpired default-branch uploads by another run are tried, newest first; one
+that is gone (404) or fails the check is no retained baseline, every other API error stops `refresh`).
+Rotation never retires a baseline.
+
+**Rotation budget (amendment to SPEC §5.5).** One rotation run deletes at most
+`limits.DELETION_BUDGET` = 64 artifacts (the SPEC's 32 could not retire even the ~35 long-lived
+artifacts a Quick Skin generation supersedes). It retires the longest-lived first (the previous
+generation's caches, family caches and anchors, then the leftovers an earlier rotation deferred, then
+family handoffs, handoffs and the owner's transients, the promotion last); every deletion is still an
+exact-ID deletion after the owner and replacement checks and the configured delete delay.
 Every bound in the SPEC §3.0 limit table is a constant in `mod_base.model.limits`.
+
+**Archive cap and expanded totals (amendment to SPEC §3.0).** Every SPEC §3.0 expanded bound keeps its
+value: a raw bundle (`MAX_RAW_BUNDLE_BYTES`), an anchor (`MAX_ANCHOR_BUNDLE_BYTES`) and a collected
+family (`MAX_COLLECTED_FAMILY_BYTES`) are each at most 1 GiB of files. A family handoff or cache is
+smaller (the family byte budget below). An archive is larger than the files it holds (per-entry
+headers, deflate framing; PNG and WebP payloads do not compress), so the one cap on the ZIP bytes a
+consumer admits, selects and downloads into memory is that bound plus a documented overhead margin:
+`MAX_ARTIFACT_BYTES` = `MAX_RAW_BUNDLE_BYTES` + `MAX_ARCHIVE_OVERHEAD_BYTES` (1 GiB + 32 MiB =
+1,107,296,256 bytes). The largest archive each kind accepts, `bounded_zip.archive_limit(kind)`
+(expanded total + 1/512 of it + 1 KiB per entry + 1 MiB), exceeds its expanded total by at most
+`MAX_ARCHIVE_OVERHEAD_BYTES` for every kind (at most 1,093,667,840 bytes, the collected family;
+`tests/test_model_limits.py`). A producer that stays within its expanded bound (`prepare`, `anchor
+create`, `family envelope`, `family collect`) therefore uploads an archive every consumer accepts,
+instead of one refused only at admission or at download. Every consumer that admits, selects or
+authenticates an artifact bounds its size (an archive size) by `bounded_zip.artifact_limit(kind)`,
+the kind's `archive_limit`; a family handoff or cache is narrowed to its family's `handoff_max_bytes`
+plus `envelope.json` (`select.family_archive_limit`) by `admit`, by `select` (an oversized family
+handoff is skipped as unusable, an oversized family cache fails selection as an ordinary cache does)
+and by `build` (either kind in a leg's recorded selection). Rotation, which only reads a family cache
+to plan deletions, downloads it within the `family-cache` kind's limit. This replaces SPEC §5.3.1's
+`0 < size ≤ 1 GiB` (`deploy`) and `size ≤ handoff_max_bytes` (`family`) admission checks, which
+compared an archive with an expanded bound. Recorded artifact sizes (`Selected.size`,
+`selected_artifact.size`, a compact bundle's `source_artifact.size`) are archive sizes, bounded by
+`MAX_ARTIFACT_BYTES`; a `FileRecord` size is bounded by the expanded `MAX_RAW_BUNDLE_BYTES`.
+
+Extraction bounds per downloaded kind (`io.bounded_zip.LIMITS_BY_KIND`, all built from `limits`;
+every archive is also at most `archive_limit(kind)` <= `MAX_ARTIFACT_BYTES` compressed, and at most
+200:1):
+
+| Kind | Entries | Expanded total | Per entry | Suffixes |
+|---|---|---|---|---|
+| handoff | `MAX_HANDOFF_FILES` + 1 (4099) | `MAX_RAW_BUNDLE_BYTES` (1 GiB) | 32 MiB | `.json`, `.png` |
+| anchor | `MAX_ANCHOR_FILES` + 1 (1002) | `MAX_ANCHOR_BUNDLE_BYTES` (1 GiB) | 32 MiB | `.json`, `.png` |
+| cache, collected, baseline | `MAX_COMPACT_FILES` + 1 (1004) | `MAX_COMPACT_BUNDLE_BYTES` (256 MiB) | 16 MiB | `.json`, `.webp` |
+| family-handoff, family-cache | `MAX_FAMILY_FILES` + 1 (8193) | `MAX_FAMILY_BUNDLE_BYTES` (788,463,616) | 32 MiB | any |
+| collected-family | `MAX_COLLECTED_FAMILY_FILES` (16387) | `MAX_COLLECTED_FAMILY_BYTES` (1 GiB) | 32 MiB | any |
+| promotion | 2 | 4 MiB | 4 MiB | `.json` |
+
+**Collected-family limits and the family byte budget (amendment; the SPEC §3.0 table has no row for
+them).** A collected family artifact holds `paired.json`, `selected.json`, at most `MAX_FAMILY_FILES`
+projection images and `source/`, the selected family handoff or cache verbatim (`envelope.json` plus
+at most `MAX_FAMILY_FILES` native files of any suffix): `MAX_COLLECTED_FAMILY_FILES` = 2 x
+`MAX_FAMILY_FILES` + 3 entries. Its expanded bytes are `MAX_COLLECTED_FAMILY_BYTES` =
+`MAX_RAW_BUNDLE_BYTES` (1 GiB), because `build` downloads it as one archive within the cap above. The
+family bounds partition that budget exactly, so every generation a producer's `family envelope`
+accepts is collectable and nothing is refused only at collection (where exit 2 would fail the
+`family` job, skip `build` and block every publication until the generation is superseded):
+
+| Part | Bound | Bytes |
+|---|---|---|
+| projection images (`family_validate`'s `images/`) | `MAX_FAMILY_PROJECTION_BYTES` = `MAX_COMPACT_BUNDLE_BYTES` | 268,435,456 |
+| `paired.json` | `MAX_PAIRED_BYTES` | 16,777,216 |
+| `selected.json` | `MAX_SELECTED_JSON_BYTES` | 65,536 |
+| `source/envelope.json` | `MAX_ENVELOPE_BYTES` | 4,194,304 |
+| `source/` native bundle (`families[].handoff_max_bytes` at most) | `MAX_FAMILY_HANDOFF_BYTES` (the rest) | 784,269,312 |
+
+A family handoff or cache is the native bundle plus its envelope, `MAX_FAMILY_BUNDLE_BYTES` =
+`MAX_FAMILY_HANDOFF_BYTES` + `MAX_ENVELOPE_BYTES` (the `family-handoff`/`family-cache` extraction
+total). Config refuses a `handoff_max_bytes` above `MAX_FAMILY_HANDOFF_BYTES` (before this amendment
+the ceiling was 1 GiB, which left the envelope and the projection no room); `family collect` still
+refuses a larger output before it is uploaded, which the partition makes unreachable.
+`MAX_ZIP_ENTRIES` is the largest entry bound of any kind (16387); `bounded_zip` refuses any
+extraction limits above it.
 
 ## `mod-base.evidence.expectation` (`expectation.json`, <= 16 MiB)
 
@@ -128,7 +221,8 @@ two distinct frames of its own lane and role; anchor nodes are lane nodes.
 ## `mod-base.evidence.handoff` (`manifest.json`, raw, private, 1 day)
 
 Bundle layout: `manifest.json`, `expectation.json`, `extensions.json` (optional), `runtime/**`
-(only `.json` <= 4 MiB and `.png` <= 32 MiB, at most 4096 files, 1 GiB in total).
+(only `.json` <= 4 MiB and `.png` <= 32 MiB, at most 4096 files; the whole bundle at most
+`MAX_RAW_BUNDLE_BYTES`, 1 GiB).
 
 | Field | Type |
 |---|---|
@@ -202,6 +296,19 @@ subject.commit`); with the expectation, the expectation declares an anchor (`anc
 whose `artifact_nodes` equal `reference.artifact_nodes`, and the lanes and frames are exactly the
 expectation's lanes of those nodes and their captures.
 
+**Eligibility** (`evidence.anchor.eligible_nodes`, decided from the validated handoff by `prepare`,
+`anchor identity` and `anchor create`) adds: `config.anchor.enabled`; the handoff run ran on the
+subject branch (`handoff.branch == subject.branch`); its pixels were not re-published by
+attestation (`reuse != "attested"`; `delegated` reuse stays eligible and the anchor records the
+tested run its pixels came from); and the adapter's `anchor_selection` chose nodes (an adapter
+without the hook declines every anchor). `anchor create` refuses an ineligible handoff with reason
+`anchor-ineligible`. **Validation** (`anchor validate`, which reads the anchor alone; its
+provenance records no `reuse`) re-checks the direct-run shape with reason `anchor-source`:
+`handoff.branch == subject.branch`, and a tested run that is the handoff run tested exactly the
+subject; given the raw artifact id, name and digest, the anchor must also name exactly that
+handoff artifact (`anchor-source`). Every image is its own canonical re-encoding (`canonical_png`,
+unchanged pixels) and the anchor records the handoff's `kit`.
+
 ## `mod-base.family.envelope` (`envelope.json`)
 
 `{repository, family, key, kit, subject, coverage_sha, carried_from?, producer: RunClaim,
@@ -209,6 +316,15 @@ native: {manifest_path: "manifest.json", manifest_sha256, kind (<= 80), schema_v
 files: [FileRecord]}` — `files` is the exact inventory of the native bundle (never `envelope.json`),
 at most `families[].handoff_max_bytes`, and includes `manifest.json` hashed as
 `native.manifest_sha256`; the producer is its own controller; `carried_from != coverage_sha`.
+
+`family.envelope` also requires, at creation and at every validation: the family is configured and
+the envelope names this repository; the producer ran the family's `producer.workflow` at exactly
+the subject (`producer.branch`/`commit` equal `subject.branch`/`commit`); the envelope covers
+exactly that checkout (`coverage_sha == subject.commit`); `carried_from` only for a family with
+`carry_forward` (re-proven, R5, up to `coverage_sha` at every collection; `family envelope` never
+writes it); at most `MAX_FAMILY_FILES` non-empty native files of at most 32 MiB each, a root
+`manifest.json` whose `kind`/`schema_version` equal `native`, paths that stay canonical below the
+collected `source/` directory and never collide under case folding; and canonical bytes.
 
 ## `mod-base.family.paired` (the projection `family_validate` writes)
 
@@ -227,6 +343,17 @@ at most `families[].handoff_max_bytes`, and includes `manifest.json` hashed as
 Rules: every pair is publishable (`runtime_passed and semantic_valid and not defect`); lane ids and
 `(artifact_node, variant.id)` unique; pair ids unique per lane; image dimensions equal
 `thumbnail_size(source, derivative_box)`; not-applicable entries repeat neither each other nor a lane.
+
+`family collect` binds the projection to the authenticated envelope (R4): equal `subject`,
+`provenance.producer` carrying exactly the envelope's producer `RunClaim` with an `event` among the
+family's `producer.events`, `coverage_sha == expected_coverage_sha`, image records type-exact with
+the kit's `inspect_webp` metrics, and one identical record per image path. `build` then
+authenticates the producer attempt (a successful `families[].producer.workflow` run of this
+repository on the default branch at `producer.commit`, with an event among `producer.events`),
+requires `provenance.producer` to equal its `github.runs.run_record` (and a `job_graph_sha256`, when
+present, to be that attempt's job graph) and binds the envelope's `kit` to the pin of
+`producer.workflow` at the producer head (SPEC §1.8), for a family handoff and a family cache alike.
+The adapter's obligations are listed under `family_validate` in [ADAPTER.md](ADAPTER.md#hooks).
 
 ## `mod-base.selection` (`selection.json`, embedded in every collected artifact and cache)
 
@@ -275,6 +402,14 @@ identity; `selected_artifact` is the manifest's `source_artifact`; the two run r
 manifest's extension names; `binding` counts match; `composition` exists exactly for a `composed`
 scope and names the same baseline artifact and selected identity as `scope.components`.
 
+So the final selection of a **composed** bundle differs from its draft in two more fields than the
+three completion fields: `expectation_sha256` becomes the hash of the composed bundle's complete
+expectation (the draft named the selected handoff's), and `extensions_verified` becomes the composed
+bundle's extension names (verified again through `authenticate_extensions` when any object differs
+from the selected handoff's, R6). `compact`'s finalization accepts these two changes only when a
+`composition` is recorded; every other field is the draft's, and a reader re-authenticating a
+composed selection (build) must expect exactly these differences.
+
 ## The collect flow (SPEC §5.3 `collect`, frozen by MB0)
 
 1. `admit` outputs `bundle_keys`, `subjects: {key: {branch, commit, tree}}` (the only key to
@@ -287,7 +422,12 @@ scope and names the same baseline artifact and selected identity as `scope.compo
    compacts the handoff itself into an intermediate (`scope.kind: "selected"`, the draft
    embedded), runs the adapter's `compose` hook on it, applies R3, completes the selection
    (`binding`, `composition` with the authenticated baseline `owner_run_id`, `manifest_sha256`) and
-   writes the final composed bundle. Step 5 is skipped for it.
+   writes the final composed bundle. Step 5 is skipped for it. R3 includes the **full-use rule**:
+   the `epoch: selected` frames are exactly the intermediate's frames, every selected lane is
+   present and composed only from selected frames, every selected comparison is present and every
+   other lane equals its baseline lane, so older baseline evidence can never stand in for what the
+   selection re-tested. The hook's output must be canonical bytes and its complete expectation
+   must pass R2 (both run projections) and its extensions R6.
 5. Otherwise `compact --input DIR --selection selection.json --output DIR` re-encodes a `complete`
    handoff (or revalidates and re-emits a cache), completes the selection (`binding`,
    `manifest_sha256`; a composed cache keeps its `composition`) and embeds it. A `selected`
@@ -295,14 +435,72 @@ scope and names the same baseline artifact and selected identity as `scope.compo
 6. `validate --kind compact` in a fresh process (including `check_compact_selection`), the live
    head recheck, then the upload as `mb-collected--<key>`.
 
-Families: `select --family` then `family collect --expected-coverage-sha <families[].coverage_sha>`
-writes, when available, `paired.json`, `images/` and `source/` (the selected family handoff or
-cache verbatim) and is uploaded as `mb-collected-family--<family>--<key>`. `build` downloads every
-collected artifact of its run itself (into its new `--collected`/`--families` directories) and
-passes the adapter's `verify_publication` a promotion **draft** (no `site`). Finalize's `refresh`
-downloads the run's `mb-promotion` (`promotion.json`) and the promoted collected artifact itself
-and writes the exact upload bytes into its new `--input` directory: the compact bundle for a key,
-the `source/` directory for a family leg.
+Families: `select --family --output selected.json` then `family collect --expected-coverage-sha
+<families[].coverage_sha> --selected-json selected.json` writes, when available, `paired.json`,
+`images/`, `source/` (the selected family handoff or cache verbatim) and `selected.json` (the
+recorded selection, the exact canonical bytes `select` wrote) and is uploaded as
+`mb-collected-family--<family>--<key>`. `build` downloads every collected artifact of its run itself
+(into its new `--collected`/`--families` directories) and passes the adapter's `verify_publication` a
+promotion **draft** (no `site`). Finalize's `refresh` downloads the run's `mb-promotion`
+(`promotion.json`) and the promoted collected artifact itself and writes the exact upload bytes into
+its new `--input` directory: the compact bundle for a key, the `source/` directory for a family leg
+(its `selected.json` is checked, never uploaded).
+
+**The family generation chain.** A family leg is `(family, key)` at the leg coverage `C`
+(`admit`'s `families[].coverage_sha`, the key's subject commit):
+
+1. `select --family` takes an `mb-family-handoff--<f>--<key>--a<attempt>` upload of a successful
+   `producer.workflow` run on the default branch at `C`, unless an `mb-family-cache--<f>--<key>--<C>`
+   owned by a successful Pages run **supersedes** it (that owner run was created after the handoff
+   was uploaded, so that publication consumed the handoff and its rotation may retire it), else the
+   newest such family cache. When neither exists and the family sets `carry_forward`, the same
+   probes walk a bounded first-parent history below `C`, newest first (at most
+   `limits.GENERATION_PROBES` commits and cache owners), and the first earlier generation found is
+   selected; a nomination is re-authenticated exactly and never walks. A selected family handoff is
+   then bound to its kit (SPEC §1.8): downloaded by id and digest, its envelope must name exactly the
+   producer attempt that uploaded it and `envelope.kit` must be the pin of `producer.workflow` at that
+   run's head, or the leg fails (reason `kit-binding`, never a fallback to another generation).
+2. `family collect` binds the recorded selection to its input before anything else runs: canonical
+   `Selected` bytes of a `family-handoff` or `family-cache` of this family and key; a handoff is its
+   envelope producer attempt's upload (`run_id`, `run_attempt`); a cache is named by a commit its
+   envelope's coverage precedes and that precedes `C`; and `envelope.kit` is the pin of
+   `producer.workflow` at `producer.commit`, read from the inert object store (reason
+   `family-selection`, `kit-binding` or `git`). Then it decides: the adapter's `family_validate`
+   accepts (returning `carried_from` equal to the envelope's `coverage_sha` when that is not `C`) or
+   refuses (`superseded`/`unavailable`, exit 3, no upload), and the core re-proves R5 (`carried_from`
+   is an ancestor of `C`) plus the envelope's own `carried_from`, if any. Selection never decides
+   that a carry is safe.
+3. `refresh` (`refresh-family`) rolls exactly `source/` forward as
+   `mb-family-cache--<f>--<key>--<C>`: the cache is **named by the leg coverage**, while its
+   `envelope.json` stays byte-identical and keeps the **producer's** `coverage_sha` (an envelope
+   always covers its producer's checkout). Rotation keeps such a carried cache as the leg's
+   replacement even though its envelope coverage differs from its name.
+4. A later Pages run that selects that cache for a newer `C'` collects it again: `family_validate`
+   returns the envelope coverage as `carried_from`, and R5 is proven again up to `C'`. The chain
+   never trusts an earlier collection: R4 and R5 hold at **every** collection.
+5. `build` re-proves R4/R5 for every collected leg and checks the recorded selection by id, with no
+   walk: the promotion's `selected_artifact_id` is the `selected.json` generation, which must be
+   listed unexpired by its recorded owner run with its recorded name, digest and size; a family
+   handoff must be the envelope's producer attempt's own upload, and a family cache must be owned by
+   a successful earlier Pages run and named by a commit of `C`'s bounded first-parent history
+   (`select.FamilyGenerations.history`) at or above the envelope's coverage. The cost is one lookup
+   per leg however far below `C` the generation was produced, and, as for an ordinary bundle, a
+   newer generation appearing after collection never invalidates the one this publication
+   collected (the newest rule is not re-applied). `refresh-family` requires the recorded selection to
+   be the promotion's `selected_artifact_id`.
+
+**Command outputs** (`$GITHUB_OUTPUT` unless noted): `prepare` writes `anchor_eligible`;
+`anchor identity` writes `anchor_eligible` and `anchor_name` (empty when not eligible) and prints
+`canonical_json({"eligible": bool, "name": str | null})` on stdout; `select` writes the
+`SELECTED_KEYS`; `family collect` writes `status` (`available`, `superseded` or `unavailable`) and
+`available` (`true`/`false`) and, for an absence, exits 3 without an output directory; `build` writes
+`heads` (one line of canonical JSON) and `site_sha256` (the published inventory hash); `refresh`
+writes `available`, `cache_name` (empty when not available) and `baseline_name` only when a
+baseline is retained: exactly for a new complete generation whose baseline no earlier successful
+refresh retained ("Baselines" above). `conformance` prints its report on stdout (the nine keys
+`repository`, `kit`, `keys`, `families`, `checks`, `variants`, `admission`, `hooks`, `site`); the
+report, the variants and the optional fixture functions it calls are specified in
+[ADAPTER.md](ADAPTER.md#the-conformance-report).
 
 ## `mod-base.promotion` (`mb-promotion`)
 
@@ -405,7 +603,7 @@ Validated by `mod_base.config.validate_config` (structure) and `load_config` (re
 | `anchor` | `{enabled, retention_days: 1..90, successor_grace_days: 0..retention_days}` |
 | `admission` | `{mode: "progress", coalesce_seconds <= partial_deadline_seconds, recovery_interval_seconds: 60.., max_failed_publications: 1..10, defer_on_active_source_runs}` or `{mode: "always", defer_on_active_source_runs}` |
 | `baseline_archive` | `{enabled: true, retention_days: 1..90}` or `{enabled: false}` |
-| `families` | <= 8 unique `{id: FAMILY, title, description, producer: {workflow != source.workflow, events (1..8), job, step}, handoff_max_bytes: 1..1 GiB, retention_days: 1..7, image_policy, carry_forward}` |
+| `families` | <= 8 unique `{id: FAMILY, title, description, producer: {workflow != source.workflow, events (1..8), job, step}, handoff_max_bytes: 1..MAX_FAMILY_HANDOFF_BYTES (784,269,312), retention_days: 1..7, image_policy, carry_forward}` |
 | `labels` | `{scenarios, roles, tiers, loaders: {id: display <= 80}, release_prefix <= 40, search_placeholder <= 80}` |
 | `copy` | `{gallery_lead <= 1200, evidence_lead <= 1200, methodology: <= 16 x 1500, principles: <= 16 x 400, family_notes: {configured family: <= 500}}` |
 | `theme` | `{dark: Theme, light: Theme\|null}`; a Theme has exactly `bg, surface, surface_raised, surface_soft, text, muted, line, accent, accent_strong, highlight, danger, image_well`, each `^#[0-9a-f]{6}$` |

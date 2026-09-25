@@ -2,9 +2,21 @@
 
 QS ``select_artifact.select_source/resolve_evidence`` + BP ``newest_exact_source``: a nominated
 artifact id is re-authenticated and never replaced by a fallback; otherwise the newest
-``mb-handoff--<key>--a*`` whose owner run is authenticated for the expected subject commit, else
-the newest ``mb-cache--<key>--<subject>`` owned by a successful Pages run. No admissible artifact
-raises :class:`mod_base.errors.Unavailable` (exit 3).
+``mb-handoff--<key>--a*`` whose owner run is authenticated for the expected subject commit, unless
+an ``mb-cache--<key>--<subject>`` owned by a successful Pages run **supersedes** it, else the newest
+such cache. No admissible artifact raises :class:`mod_base.errors.Unavailable` (exit 3).
+
+**Supersession** (:func:`supersedes`, QS "the newest valid source"). A cache supersedes a handoff
+of the same subject when the successful Pages run that owns it was created after the handoff was
+uploaded: that publication selected with the handoff already listed, so its cache carries the
+handoff's evidence or newer, and its rotation may retire the handoff at any time (SPEC §5.5 retires
+exactly the artifacts created before the owner run, the handoff that publication consumed among
+them). A later publication at the same subject therefore takes the cache instead of racing that
+rotation for the handoff (publication and rotation hold separate locks, D11). The owner's creation,
+not the cache's upload, is the bound: a publication that selected before the handoff existed may
+upload its cache afterwards, and that cache may carry older evidence (under
+``source.require_newest_run`` evidence of an older run, which ``authenticate`` would refuse every
+time; for a family, an older carried generation). Such a cache never masks the handoff.
 
 Source runs "for a subject" are the ``config.source.workflow`` runs of this repository, bound to
 that workflow's id, that ran on the **canonical branch** (Block Pops: only the protected
@@ -22,8 +34,26 @@ A handoff is only ever the upload of its run's latest attempt (``mb-handoff--<ke
 With ``source.require_newest_run`` only the newest such run may supply evidence: when it is not
 ``completed/success`` the selection is refused rather than falling back to an older run (Block
 Pops). Families select ``mb-family-handoff--<f>--<key>--a*`` uploads of a successful
-``families[].producer.workflow`` run on the default branch at the expected commit, else the newest
-``mb-family-cache--<f>--<key>--<commit>``.
+``families[].producer.workflow`` run on the default branch at the expected commit, unless an
+``mb-family-cache--<f>--<key>--<commit>`` supersedes it, else the newest such family cache; when
+neither exists and the family's ``carry_forward`` is set, the same probes walk a bounded
+first-parent history below the expected commit, newest first, and the first earlier generation
+found is selected for ``family collect`` (the adapter's carry-forward decision plus R5) to accept
+or refuse (:class:`FamilyGenerations`). ``family collect --selected-json`` records the selection in
+the collected artifact, and ``build`` re-authenticates that record by id, reusing only
+:meth:`FamilyGenerations.history`, never the walk. A nomination is re-authenticated exactly and
+never walks.
+
+A selected **family handoff** (nominated or not) is then bound to its kit before its collection
+(SPEC §1.8, as ``build`` binds every collected leg): it is downloaded by id and digest into a
+temporary directory, its envelope is validated (:func:`mod_base.family.envelope.validate_envelope_dir`)
+and must name exactly the producer run attempt that uploaded it, and ``envelope.kit`` must be the pin
+of ``families[].producer.workflow`` at that run's head (:func:`mod_base.pages.authenticate.kit_binding`).
+A mismatch fails the family leg (reason ``kit-binding``) instead of the whole build, and is never a
+fallback to another generation (an older one would not be the newest admissible generation). A
+family cache needs no second binding here: it exists only because the build of its successful Pages
+owner bound that same envelope, which ``refresh`` then rolled forward byte for byte; ``family
+collect`` re-proves the binding of either kind from inert objects anyway.
 
 Every API failure propagates: an unavailable owner is never mistaken for an invalid one, and no
 older candidate is probed after a request failed (QS ``test_pages_selection_api_budget``).
@@ -31,14 +61,18 @@ older candidate is probed after a request failed (QS ``test_pages_selection_api_
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from mod_base.adapter import host
 from mod_base.errors import MbError, Unavailable
+from mod_base.family.envelope import validate_envelope_dir
 from mod_base.github import artifacts, jobs, runs
 from mod_base.github.api import GitHubApi
+from mod_base.io.bounded_zip import LIMITS_BY_KIND, artifact_limit
 from mod_base.model import grammar
 from mod_base.model import limits as lim
 from mod_base.pages import targets
@@ -53,15 +87,6 @@ SELECTED_KEYS = ("kind", "artifact_id", "name", "digest", "size", "run_id", "run
 #: ``Selected.kind`` values: the ``grammar.parse_artifact_name`` kinds ``select`` may return.
 SELECTED_KINDS = ("handoff", "cache", "family-handoff", "family-cache")
 
-#: At most this many owner runs are authenticated for one exact-name or run inventory
-#: (QS ``publication_progress.MAX_CANDIDATES``).
-MAX_CANDIDATES = 8
-#: Bound of the ``head_sha``-filtered source-run listing (one page).
-MAX_SUBJECT_RUNS = 100
-#: Bound of the canonical-branch listing searched for display-titled runs. The listing is newest
-#: first, so a bound can only hide an older run (fail closed: no evidence), never let an older run
-#: pass as the newest.
-MAX_CANONICAL_RUNS = 300
 SUBJECT_PLACEHOLDER = "{subject_commit}"
 
 
@@ -82,7 +107,7 @@ class Selected:
     JSON form (written by ``select --output F`` as canonical JSON, read by ``authenticate
     --selected-json F``): an object with exactly :data:`SELECTED_KEYS`, the dataclass field names:
     ``kind`` (one of :data:`SELECTED_KINDS`), ``artifact_id``/``size``/``run_id``/``run_attempt``
-    (positive integers, never booleans; ``size`` at most ``limits.MAX_RAW_BUNDLE_BYTES``),
+    (positive integers, never booleans; ``size``, the archive's, at most ``limits.MAX_ARTIFACT_BYTES``),
     ``name`` (an artifact name that ``grammar.parse_artifact_name`` parses as ``kind``, with the
     same attempt for a handoff) and ``digest`` (``sha256:<64 hex>``)."""
 
@@ -104,7 +129,7 @@ class Selected:
         if not isinstance(kind, str) or kind not in SELECTED_KINDS:
             raise _fail("a selected artifact kind must be one of " + ", ".join(SELECTED_KINDS))
         artifact_id = _positive(value["artifact_id"], "selected artifact id")
-        size = _positive(value["size"], "selected artifact size", lim.MAX_RAW_BUNDLE_BYTES)
+        size = _positive(value["size"], "selected artifact size", lim.MAX_ARTIFACT_BYTES)
         run_id = _positive(value["run_id"], "selected run id")
         run_attempt = _positive(value["run_attempt"], "selected run attempt", lim.MAX_RUN_ATTEMPT)
         digest = grammar.require(grammar.DIGEST, value["digest"], "selected artifact digest")
@@ -226,7 +251,7 @@ class SourceRuns:
     """One invocation's bounded, memoized view of ``source.workflow``: its workflow id and pages.yml's
     (read lazily, at most once each), and the runs naming each subject. Without a display title a
     subject's runs are one ``branch=<canonical>&head_sha=<commit>`` listing per commit; with one,
-    a single canonical-branch listing (newest :data:`MAX_CANONICAL_RUNS`) serves every subject."""
+    a single canonical-branch listing (newest ``limits.MAX_CANONICAL_RUNS``) serves every subject."""
 
     def __init__(self, api: GitHubApi, invocation: Invocation) -> None:
         self.api = api
@@ -253,11 +278,11 @@ class SourceRuns:
         if source["display_title"] is None:
             if commit not in self._by_commit:
                 self._by_commit[commit] = runs.workflow_runs(self.api, source["workflow"], branch=canonical,
-                                                             head_sha=commit, max_items=MAX_SUBJECT_RUNS)
+                                                             head_sha=commit, max_items=lim.MAX_SUBJECT_RUNS)
             return self._by_commit[commit]
         if self._canonical is None:
             self._canonical = runs.workflow_runs(self.api, source["workflow"], branch=canonical,
-                                                 max_items=MAX_CANONICAL_RUNS)
+                                                 max_items=lim.MAX_CANONICAL_RUNS)
         return self._canonical
 
     def for_subject(self, commit: str, *, subject_canonical: bool) -> list[dict[str, Any]]:
@@ -286,11 +311,25 @@ class SourceRuns:
         return newest
 
 
+def family_archive_limit(family: Mapping[str, Any]) -> int:
+    """The largest family handoff or cache archive of the configured ``family``: the archive limit
+    of its expanded ``handoff_max_bytes`` plus ``envelope.json`` (:func:`mod_base.io.bounded_zip.artifact_limit`)."""
+
+    return artifact_limit("family-handoff", max_total_bytes=family["handoff_max_bytes"] + lim.MAX_ENVELOPE_BYTES)
+
+
 def run_upload(api: GitHubApi, run: Mapping[str, Any], name: str, *, max_size: int) -> artifacts.Artifact | None:
     """The single usable artifact ``name`` of ``run`` (not expired, ``0 < size <= max_size``), or
     ``None``. Two artifacts of one name, or metadata naming another head, fail closed."""
 
-    matches = [artifact for artifact in artifacts.list_for_run(api, run["id"]) if artifact.name == name]
+    return _single_upload(run, artifacts.list_for_run(api, run["id"]), name, max_size=max_size)
+
+
+def _single_upload(run: Mapping[str, Any], inventory: list[artifacts.Artifact], name: str, *,
+                   max_size: int) -> artifacts.Artifact | None:
+    """:func:`run_upload` over ``run``'s already listed ``inventory``."""
+
+    matches = [artifact for artifact in inventory if artifact.name == name]
     if len(matches) > 1:
         raise _fail(f"run {run['id']} owns {len(matches)} artifacts named {name}")
     if not matches:
@@ -389,7 +428,7 @@ def _nominated(invocation: Invocation, api: GitHubApi, sources: SourceRuns, *, k
     if (parsed is None or parsed.kind != kind or parsed.key != key
             or (family is not None and parsed.family != family["id"])):
         raise _fail(f"nominated artifact {nomination} is not a {kind} of {key}", reason="nomination")
-    maximum = lim.MAX_RAW_BUNDLE_BYTES if family is None else family["handoff_max_bytes"]
+    maximum = artifact_limit("handoff") if family is None else family_archive_limit(family)
     if artifact.expired or artifact.size > maximum:
         raise _fail(f"nominated artifact {nomination} expired or exceeds its size bound", reason="nomination")
     if parsed.attempt is None:
@@ -424,50 +463,222 @@ def _nominated(invocation: Invocation, api: GitHubApi, sources: SourceRuns, *, k
 
 
 def _newest_handoff(invocation: Invocation, api: GitHubApi, sources: SourceRuns, key: str,
-                    commit: str) -> Selected | None:
+                    commit: str) -> tuple[artifacts.Artifact, int] | None:
+    """The handoff of the newest successful source run for ``commit`` that holds one (with
+    ``source.require_newest_run`` only the newest run's), with its run attempt."""
+
     canonical = subject_is_canonical(invocation, api, key=key, commit=commit)
     if invocation.config.source["require_newest_run"]:
         search = [sources.newest(commit, subject_canonical=canonical)]
     else:
         search = [run for run in sources.for_subject(commit, subject_canonical=canonical)
-                  if is_success(run)][:MAX_CANDIDATES]
+                  if is_success(run)][:lim.MAX_CANDIDATES]
     for run in search:
         artifact = run_upload(api, run, grammar.handoff_name(key, run["run_attempt"]),
-                              max_size=lim.MAX_RAW_BUNDLE_BYTES)
+                              max_size=artifact_limit("handoff"))
         if artifact is not None:
-            return _selected("handoff", artifact, run["run_attempt"])
+            return artifact, run["run_attempt"]
     return None
 
 
-def _newest_family_handoff(invocation: Invocation, api: GitHubApi, family: Mapping[str, Any], key: str,
-                           commit: str) -> Selected | None:
-    default = invocation.config.canonical_branch
-    listing = runs.workflow_runs(api, family["producer"]["workflow"], head_sha=commit, status="success",
-                                 max_items=MAX_SUBJECT_RUNS)
-    producers = [run for run in listing
-                 if producer_run_valid(run, invocation, family, default_branch=default, head_sha=commit)]
-    for run in producers[:MAX_CANDIDATES]:
-        name = grammar.family_handoff_name(family["id"], key, run["run_attempt"])
-        artifact = run_upload(api, run, name, max_size=family["handoff_max_bytes"])
-        if artifact is not None:
-            return _selected("family-handoff", artifact, run["run_attempt"])
-    return None
+def supersedes(owner: Mapping[str, Any], handoff: artifacts.Artifact) -> bool:
+    """A cache owned by the successful Pages run ``owner`` supersedes ``handoff`` (of the same
+    subject or family leg and commit): ``owner`` was created strictly after the handoff was uploaded
+    (module docstring), the very bound below which that run's rotation may retire the handoff."""
+
+    return runs.run_order(owner)[0] > handoff.order[0]
 
 
-def _newest_owned_cache(invocation: Invocation, api: GitHubApi, sources: SourceRuns,
-                        name: str) -> tuple[artifacts.Artifact, dict[str, Any]] | None:
+def _newest_owned_cache(invocation: Invocation, api: GitHubApi, sources: SourceRuns, name: str, *,
+                        after: artifacts.Artifact | None = None, owners: dict[int, dict[str, Any]] | None = None,
+                        consulted: set[int] | None = None, budget: int = lim.MAX_CANDIDATES,
+                        max_size: int | None = None) -> tuple[artifacts.Artifact, dict[str, Any]] | None:
     """The newest ``name`` artifact (a cache) owned by a successful Pages run on the default branch,
-    with that owner; at most :data:`MAX_CANDIDATES` owners are read, newest first."""
+    with that owner, newest first; with ``after`` (a handoff) only a cache that :func:`supersedes`
+    it. A cache uploaded no later than ``after`` cannot (its owner was created before its upload), so
+    the newest-first listing is read only down to it. At most ``budget`` distinct owner runs are read,
+    counted in ``consulted`` (shared by a whole walk; a run already in it costs nothing more);
+    ``owners`` memoizes the run reads of one invocation. The chosen cache must fit ``max_size`` (a
+    family cache: :func:`family_archive_limit`), by default its kind's archive limit, or selection
+    fails closed."""
 
     default = invocation.config.canonical_branch
-    candidates = [artifact for artifact in artifacts.list_named(api, name)
-                  if not artifact.expired and artifact.head_branch == default]
-    for artifact in candidates[:MAX_CANDIDATES]:
-        run = runs.get_run(api, artifact.run_id)
-        if pages_owner_valid(run, invocation, default_branch=default, pages_workflow_id=sources.pages_workflow_id,
-                             head_sha=artifact.head_sha):
+    parsed = grammar.parse_artifact_name(name)
+    if parsed is None or parsed.kind not in ("cache", "family-cache"):
+        raise _fail(f"{name} is not a cache name", reason="usage")
+    maximum = artifact_limit(parsed.kind) if max_size is None else min(max_size, artifact_limit(parsed.kind))
+    owners = {} if owners is None else owners
+    consulted = set() if consulted is None else consulted
+    for artifact in artifacts.list_named(api, name):
+        if after is not None and artifact.order[0] <= after.order[0]:
+            return None
+        if artifact.expired or artifact.head_branch != default:
+            continue
+        if artifact.run_id not in consulted:
+            if len(consulted) >= budget:
+                return None
+            consulted.add(artifact.run_id)
+        if artifact.run_id not in owners:
+            owners[artifact.run_id] = runs.get_run(api, artifact.run_id)
+        run = owners[artifact.run_id]
+        if (pages_owner_valid(run, invocation, default_branch=default, pages_workflow_id=sources.pages_workflow_id,
+                              head_sha=artifact.head_sha)
+                and (after is None or supersedes(run, after))):
+            if artifact.size > maximum:
+                raise _fail(f"cache {artifact.id} exceeds its archive bound")
             return artifact, run
     return None
+
+
+def _newest_evidence(handoff: tuple[artifacts.Artifact, int] | None,
+                     owned: tuple[artifacts.Artifact, dict[str, Any]] | None, *, family: bool) -> Selected | None:
+    """The superseding cache when there is one, else the handoff (either may be absent)."""
+
+    if owned is not None:
+        return _selected("family-cache" if family else "cache", owned[0], owned[1]["run_attempt"])
+    if handoff is not None:
+        return _selected("family-handoff" if family else "handoff", *handoff)
+    return None
+
+
+class FamilyGenerations:
+    """The family generation :func:`select_evidence` picks without a nomination (``build`` uses only
+    :meth:`history`; one instance memoizes the reads of every leg of an invocation).
+
+    At the expected commit ``c``: the ``mb-family-handoff--<f>--<key>--a<attempt>`` of the newest
+    successful producer run at ``c`` (:func:`producer_run_valid`; one ``head_sha`` listing, at most
+    ``limits.MAX_CANDIDATES`` run inventories), unless an ``mb-family-cache--<f>--<key>--<c>`` owned by
+    a successful Pages run :func:`supersedes` it, else the newest such family cache (at most
+    ``limits.MAX_CANDIDATES`` owners). When neither exists and the family's ``carry_forward`` is set,
+    the **carry-forward walk** visits the first-parent commits below ``c``, newest first: at most
+    ``limits.GENERATION_PROBES`` of them, read as inert objects from the protected checkout
+    (:func:`targets.first_parent_history`; the family and build jobs check out the full history).
+    At each earlier commit it applies the same rule to
+    the family handoff of a successful producer run at that commit and the family cache named with
+    that commit, and returns the first match as an ordinary ``family-handoff``/``family-cache``
+    selection; ``family collect`` (the adapter's carry-forward decision plus R5) accepts or refuses
+    it. The walk's producer runs come from one listing of the newest ``limits.MAX_SUBJECT_RUNS``
+    successful producer runs of the default branch, of which only the newest
+    ``limits.MAX_CANDIDATES`` at an earlier commit are inventoried, and the walk reads at most
+    ``limits.GENERATION_PROBES`` distinct cache owners. Both bounds count per walk (a memoized
+    read counts too), so ``select`` and ``build`` see the same generation for the same API state.
+    Nominations never walk (:func:`select_evidence`)."""
+
+    def __init__(self, api: GitHubApi, invocation: Invocation, *, sources: SourceRuns | None = None) -> None:
+        self.api = api
+        self.invocation = invocation
+        self.sources = SourceRuns(api, invocation) if sources is None else sources
+        self._at: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._listed: dict[str, list[dict[str, Any]]] = {}
+        self._inventories: dict[int, list[artifacts.Artifact]] = {}
+        self._owners: dict[int, dict[str, Any]] = {}
+        self._histories: dict[str, list[str]] = {}
+
+    def history(self, commit: str) -> list[str]:
+        """``commit`` and at most ``limits.GENERATION_PROBES`` first-parent ancestors, newest first."""
+
+        if commit not in self._histories:
+            self._histories[commit] = targets.first_parent_history(self.invocation.repo_root, commit,
+                                                                   max_commits=lim.GENERATION_PROBES)
+        return self._histories[commit]
+
+    def _valid(self, run: Mapping[str, Any], family: Mapping[str, Any], commit: str) -> bool:
+        return producer_run_valid(run, self.invocation, family, default_branch=self.invocation.config.canonical_branch,
+                                  head_sha=commit)
+
+    def _producers_at(self, family: Mapping[str, Any], commit: str) -> list[dict[str, Any]]:
+        workflow = family["producer"]["workflow"]
+        if (workflow, commit) not in self._at:
+            self._at[workflow, commit] = runs.workflow_runs(self.api, workflow, head_sha=commit, status="success",
+                                                            max_items=lim.MAX_SUBJECT_RUNS)
+        return [run for run in self._at[workflow, commit] if self._valid(run, family, commit)][:lim.MAX_CANDIDATES]
+
+    def _walk_producers(self, family: Mapping[str, Any], earlier: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Earlier commit -> its producer runs, newest first: the newest ``limits.MAX_CANDIDATES``
+        successful default-branch producer runs at any of ``earlier``."""
+
+        workflow = family["producer"]["workflow"]
+        if workflow not in self._listed:
+            self._listed[workflow] = runs.workflow_runs(self.api, workflow,
+                                                        branch=self.invocation.config.canonical_branch,
+                                                        status="success", max_items=lim.MAX_SUBJECT_RUNS)
+        commits = set(earlier)
+        chosen = [run for run in self._listed[workflow]
+                  if run.get("head_sha") in commits and self._valid(run, family, run["head_sha"])][:lim.MAX_CANDIDATES]
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for run in chosen:
+            grouped.setdefault(run["head_sha"], []).append(run)
+        return grouped
+
+    def _handoff(self, family: Mapping[str, Any], key: str,
+                 producers: list[dict[str, Any]]) -> tuple[artifacts.Artifact, int] | None:
+        for run in producers:
+            if run["id"] not in self._inventories:
+                self._inventories[run["id"]] = artifacts.list_for_run(self.api, run["id"])
+            name = grammar.family_handoff_name(family["id"], key, run["run_attempt"])
+            artifact = _single_upload(run, self._inventories[run["id"]], name, max_size=family_archive_limit(family))
+            if artifact is not None:
+                return artifact, run["run_attempt"]
+        return None
+
+    def _generation(self, family: Mapping[str, Any], key: str, commit: str, producers: list[dict[str, Any]], *,
+                    consulted: set[int], budget: int) -> Selected | None:
+        """The generation at one ``commit``: the producers' family handoff unless a family cache named
+        with ``commit`` supersedes it, else the newest such family cache (:func:`_newest_owned_cache`)."""
+
+        handoff = self._handoff(family, key, producers)
+        owned = _newest_owned_cache(self.invocation, self.api, self.sources,
+                                    grammar.family_cache_name(family["id"], key, commit),
+                                    after=None if handoff is None else handoff[0], owners=self._owners,
+                                    consulted=consulted, budget=budget, max_size=family_archive_limit(family))
+        return _newest_evidence(handoff, owned, family=True)
+
+    def newest(self, family: str, key: str, commit: str) -> Selected | None:
+        """The family generation of ``key`` for the expected ``commit`` (see the class docstring),
+        or ``None`` when no admissible generation exists."""
+
+        config = self.invocation.config.family(grammar.require_family(family))
+        key = grammar.require_key(key)
+        commit = grammar.require_sha1(commit, "expected subject commit")
+        found = self._generation(config, key, commit, self._producers_at(config, commit), consulted=set(),
+                                 budget=lim.MAX_CANDIDATES)
+        if found is not None or not config["carry_forward"]:
+            return found
+        earlier = self.history(commit)[1:]
+        producers = self._walk_producers(config, earlier) if earlier else {}
+        consulted: set[int] = set()
+        for candidate in earlier:
+            found = self._generation(config, key, candidate, producers.get(candidate, []), consulted=consulted,
+                                     budget=lim.GENERATION_PROBES)
+            if found is not None:
+                return found
+            if len(consulted) >= lim.GENERATION_PROBES:
+                return None
+        return None
+
+
+def _require_family_kit(invocation: Invocation, api: GitHubApi, family: Mapping[str, Any], key: str,
+                        selected: Selected) -> None:
+    """Bind a selected family handoff to its kit (module docstring; reason ``kit-binding``): its
+    envelope, downloaded by id and digest and validated in a temporary directory, must name exactly
+    the producer run attempt that uploaded it (the attempt endpoint), and ``envelope.kit`` must be
+    the pin of ``families[].producer.workflow`` at that run's head."""
+
+    # ``authenticate`` imports this module's selection records and run predicates.
+    from mod_base.pages.authenticate import kit_binding
+
+    with tempfile.TemporaryDirectory(prefix="mb-select-family-") as directory:
+        root = Path(directory) / "selected"
+        artifacts.download(api, artifact_id=selected.artifact_id, name=selected.name, digest=selected.digest,
+                           size=selected.size, run_id=selected.run_id, output=root,
+                           extraction=LIMITS_BY_KIND["family-handoff"])
+        envelope = validate_envelope_dir(invocation, root, family=family["id"], key=key)
+    producer = runs.get_run_attempt(api, selected.run_id, selected.run_attempt)
+    if not producer_run_valid(producer, invocation, family, default_branch=invocation.config.canonical_branch,
+                              head_sha=envelope["producer"]["commit"]):
+        raise _fail(f"the {family['id']} handoff {selected.artifact_id} of {key} is not owned by a successful "
+                    f"{family['producer']['workflow']} run at its envelope's commit", reason="kit-binding")
+    kit_binding(api, invocation, manifest=envelope, owner_run=producer, selected_kind="family-handoff")
 
 
 def select_evidence(invocation: Invocation, *, api: GitHubApi, key: str, family: str | None = None,
@@ -480,23 +691,23 @@ def select_evidence(invocation: Invocation, *, api: GitHubApi, key: str, family:
     if family is not None:
         family_config = invocation.config.family(grammar.require_family(family))
     sources = SourceRuns(api, invocation)
+    selected: Selected | None
     if nomination is not None:
         grammar.require_positive_int(nomination, "nomination")
-        return _nominated(invocation, api, sources, key=key, family=family_config, nomination=nomination,
-                          commit=commit)
-    if family_config is None:
-        selected = _newest_handoff(invocation, api, sources, key, commit)
-        cache_kind, cache = "cache", grammar.cache_name(key, commit)
+        selected = _nominated(invocation, api, sources, key=key, family=family_config, nomination=nomination,
+                              commit=commit)
+    elif family_config is not None:
+        selected = FamilyGenerations(api, invocation, sources=sources).newest(family_config["id"], key, commit)
+        if selected is None:
+            below = " or on its bounded first-parent history" if family_config["carry_forward"] else ""
+            raise Unavailable(f"no authenticated {family_config['id']} generation exists for {key} at {commit}{below}")
     else:
-        selected = _newest_family_handoff(invocation, api, family_config, key, commit)
-        cache_kind, cache = "family-cache", grammar.family_cache_name(family_config["id"], key, commit)
-    if selected is not None:
-        return selected
-    owned = _newest_owned_cache(invocation, api, sources, cache)
-    if owned is not None:
-        artifact, run = owned
-        if artifact.size > lim.MAX_RAW_BUNDLE_BYTES:
-            raise _fail(f"cache {artifact.id} exceeds the bundle bound")
-        return _selected(cache_kind, artifact, run["run_attempt"])
-    subject = key if family_config is None else f"{family_config['id']} {key}"
-    raise Unavailable(f"no authenticated evidence exists for {subject} at {commit}")
+        handoff = _newest_handoff(invocation, api, sources, key, commit)
+        owned = _newest_owned_cache(invocation, api, sources, grammar.cache_name(key, commit),
+                                    after=None if handoff is None else handoff[0])
+        selected = _newest_evidence(handoff, owned, family=False)
+        if selected is None:
+            raise Unavailable(f"no authenticated evidence exists for {key} at {commit}")
+    if family_config is not None and selected.kind == "family-handoff":
+        _require_family_kit(invocation, api, family_config, key, selected)
+    return selected

@@ -5,9 +5,12 @@ the protected head, one lane per (loader, scenario) of each matrix target, the p
 ``profiles/<node>--<version>--<scenario>/result.json`` format with embedded role reports
 (``steps[].name/message/screenshot`` and ``pixel_validation``), delegated reuse through the
 ``quick-skin.runtime_source`` extension, ``selected`` evidence through
-``quick-skin.feature_selection`` and a ``compose`` hook that completes selected evidence from an
-authenticated ``mb-baseline`` archive. Everything is read from inert Git objects of the subject
-commit (``ctx.read_blob``) or from the runtime tree the kit hands over.
+``quick-skin.feature_selection``, a ``compose`` hook that completes selected evidence from an
+authenticated ``mb-baseline`` archive and a ``family_validate`` hook that projects the
+``mod-compatibility`` family's native bundle (``qs-like.compatibility`` v1, written by the fixtures
+module's ``family_bundle``) onto ``mod-base.family.paired``. Everything is read from inert Git
+objects of the subject commit (``ctx.read_blob``) or from the runtime tree or bundle the kit hands
+over.
 """
 
 from __future__ import annotations
@@ -15,6 +18,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import stat
 import subprocess
 from pathlib import Path
 
@@ -31,6 +36,11 @@ FEATURE_SELECTION = "quick-skin.feature_selection"
 PROFILE = "pr"
 MAX_DOCUMENT = 1 << 20
 MAX_RESULT = 4 << 20
+#: The ``mod-compatibility`` family's native bundle (see :func:`family_validate`).
+FAMILY_KIND = "qs-like.compatibility"
+MAX_NATIVE = 8 << 20
+MAX_IMAGE = 4 << 20
+IMAGE_PATH = re.compile(r"images/[0-9a-f]{64}\.webp")
 
 
 def _sha256(data: bytes) -> str:
@@ -261,6 +271,78 @@ def compose(ctx, key, selected_compact_dir, output_dir):
         (output / path).parent.mkdir(parents=True, exist_ok=True)
         (output / path).write_bytes(data)
     return {"baseline_artifact": {"id": record["id"], "name": record["name"], "digest": record["digest"]}}
+
+
+def _native_file(root: Path, relative: str, limit: int) -> bytes:
+    """One regular file of the family bundle (never a link), at most ``limit`` bytes."""
+
+    path = root.joinpath(*relative.split("/"))
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+        raise ValueError(f"{relative} is not a regular file of at most {limit} bytes")
+    return path.read_bytes()
+
+
+def family_validate(ctx, family, key, bundle_dir, expected_coverage_sha, output_dir):
+    """Project the native ``qs-like.compatibility`` v1 bundle onto ``mod-base.family.paired``.
+
+    As in Quick Skin's compatibility wave, pairs reviewed against another scenario contract than the
+    expected commit's are ``superseded`` (contract drift), and pairs that do not cover the commit
+    their envelope names are ``unavailable`` (a lineage refusal). An envelope of an earlier commit
+    is carried forward to ``expected_coverage_sha`` (``carried_from``, re-proven by the kit, R5)
+    only when the family allows it and the release matrix, the runtime inventory the wave ran on,
+    is unchanged in between (a changed matrix is an impact that needs a new wave: ``unavailable``).
+    Everything else is re-verified by the kit (R4) before it is published."""
+
+    root, output = Path(bundle_dir), Path(output_dir)
+    envelope = json.loads(_native_file(root, "envelope.json", MAX_DOCUMENT))
+    native = json.loads(_native_file(root, "manifest.json", MAX_NATIVE))
+    if native.get("kind") != FAMILY_KIND or native.get("schema_version") != 1:
+        raise ValueError(f"the native bundle is not a {FAMILY_KIND} v1 bundle")
+    if native["family"] != family or native["key"] != key:
+        raise ValueError("the native bundle belongs to another family leg")
+    _, contract_bytes = _document(ctx, expected_coverage_sha, CONTRACT)
+    if native["contract_sha256"] != _sha256(contract_bytes):
+        return {"status": "superseded", "reason": "the pairs were reviewed against another scenario contract"}
+    coverage = envelope["coverage_sha"]
+    if native["coverage_sha"] != coverage:
+        return {"status": "unavailable", "reason": "the pairs do not cover the commit their envelope names"}
+    result = {"status": "available", "reason": "clean compatibility pairs of the expected commit",
+              "projection_path": "paired.json"}
+    if coverage != expected_coverage_sha:
+        if not ctx.config.family(family)["carry_forward"]:
+            return {"status": "unavailable", "reason": "this family never carries a generation forward"}
+        if ctx.read_blob(coverage, MATRIX, MAX_DOCUMENT) != ctx.read_blob(expected_coverage_sha, MATRIX, MAX_DOCUMENT):
+            return {"status": "unavailable", "reason": "the release matrix changed since the covered commit"}
+        result.update(reason="clean compatibility pairs carried forward past an unchanged matrix",
+                      carried_from=coverage)
+    producer = native["producer"]
+    if any(producer.get(field) != value for field, value in envelope["producer"].items()):
+        raise ValueError("the native producer record is not the envelope's producer run")
+    for lane in native["lanes"]:
+        for pair in lane["pairs"]:
+            for side in ("reference", "candidate"):
+                image = pair[side]["image"]
+                if not isinstance(image["path"], str) or not IMAGE_PATH.fullmatch(image["path"]):
+                    raise ValueError("a pair image is not an images/<sha256>.webp path")
+                data = _native_file(root, image["path"], MAX_IMAGE)
+                if _sha256(data) != image["sha256"] or len(data) != image["size"]:
+                    raise ValueError(f"{image['path']} differs from its pair record")
+                target = output.joinpath(*image["path"].split("/"))
+                target.parent.mkdir(exist_ok=True)
+                if not target.exists():
+                    target.write_bytes(data)
+    projection = {
+        "kind": "mod-base.family.paired", "schema_version": 1, "family": family, "key": key,
+        "coverage_sha": expected_coverage_sha, "subject": envelope["subject"], "status": "available",
+        "provenance": {"producer": producer,
+                       "links": [{"label": "Compatibility runtime", "run_id": producer["run_id"]}]},
+        "contracts": {"scenario-contract": native["contract_sha256"]},
+        "image_policy": ctx.config.family(family)["image_policy"],
+        "lanes": native["lanes"], "not_applicable": native["not_applicable"],
+    }
+    (output / "paired.json").write_bytes(canonical_json(projection))
+    return result
 
 
 def anchor_selection(ctx, expectation):

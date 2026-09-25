@@ -3,11 +3,11 @@
 Union of Quick Skin ``scripts/ci/bounded_zip.py`` and Block Pops ``download_artifact`` rules:
 stored or deflate entries only; no encrypted, symlink, special, absolute, ``..``, backslash or
 duplicate entries; no entry outside the archive or sharing bytes with another; directory entries
-only as parents; per-entry and total expanded-size caps and a compression ratio of at most 200, all
-checked from the central directory before any byte is inflated and again while streaming. Whatever
-:mod:`zipfile` raises for a hostile archive surfaces as :class:`ZipRejected`. Extraction
-publishes through :func:`mod_base.io.atomic_directory.atomic_directory`, so ``destination`` must
-not exist.
+only as parents; per-entry and total expanded-size caps, an entry-count cap (never above
+``limits.MAX_ZIP_ENTRIES``) and a compression ratio of at most 200, all checked from the central
+directory before any byte is inflated and again while streaming. Whatever :mod:`zipfile` raises
+for a hostile archive surfaces as :class:`ZipRejected`. Extraction publishes through
+:func:`mod_base.io.atomic_directory.atomic_directory`, so ``destination`` must not exist.
 
 Every file name must also be a canonical bundle path (:func:`mod_base.model.grammar.is_bundle_path`,
 the grammar every manifest inventory uses), NFC-normalized, and unique even under case folding
@@ -27,7 +27,7 @@ import struct
 import unicodedata
 import zipfile
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import BinaryIO
 
@@ -93,13 +93,17 @@ LIMITS_BY_KIND: dict[str, ExtractionLimits] = {
                                   limits.MAX_EXPECTATION_BYTES, suffixes=frozenset({".json", ".webp"})),
     "baseline": ExtractionLimits(limits.MAX_COMPACT_FILES + 1, limits.MAX_COMPACT_BUNDLE_BYTES,
                                  limits.MAX_EXPECTATION_BYTES, suffixes=frozenset({".json", ".webp"})),
-    "family-handoff": ExtractionLimits(limits.MAX_FAMILY_FILES + 1, limits.MAX_FAMILY_HANDOFF_BYTES,
+    # ``envelope.json`` plus a native bundle of at most ``families[].handoff_max_bytes``.
+    "family-handoff": ExtractionLimits(limits.MAX_FAMILY_FILES + 1, limits.MAX_FAMILY_BUNDLE_BYTES,
                                        limits.MAX_SOURCE_PNG_BYTES),
-    "family-cache": ExtractionLimits(limits.MAX_FAMILY_FILES + 1, limits.MAX_FAMILY_HANDOFF_BYTES,
+    "family-cache": ExtractionLimits(limits.MAX_FAMILY_FILES + 1, limits.MAX_FAMILY_BUNDLE_BYTES,
                                      limits.MAX_SOURCE_PNG_BYTES),
-    # ``paired.json`` + ``images/*.webp`` (projected from the native bundle) + ``source/`` (the
-    # family handoff or cache verbatim: ``envelope.json`` plus native files of any suffix).
-    "collected-family": ExtractionLimits(2 * limits.MAX_FAMILY_FILES + 2, 2 * limits.MAX_FAMILY_HANDOFF_BYTES,
+    # ``paired.json`` + ``selected.json`` + ``images/*.webp`` (projected from the native bundle) +
+    # ``source/`` (the family handoff or cache verbatim: ``envelope.json`` plus native files of any
+    # suffix). Its expanded total is one bundle's, which the family bounds partition
+    # (``limits.MAX_FAMILY_HANDOFF_BYTES``), so every family generation a producer created is
+    # collectable into an artifact ``build`` downloads (``artifact_limit``).
+    "collected-family": ExtractionLimits(limits.MAX_COLLECTED_FAMILY_FILES, limits.MAX_COLLECTED_FAMILY_BYTES,
                                          limits.MAX_SOURCE_PNG_BYTES),
     "promotion": ExtractionLimits(2, limits.MAX_PROMOTION_BYTES, limits.MAX_PROMOTION_BYTES,
                                   suffixes=frozenset({".json"})),
@@ -121,6 +125,8 @@ def _check_limits(limits_: ExtractionLimits) -> None:
         raise ZipRejected("extraction limits must be positive integers")
     if limits_.max_ratio > limits.MAX_ZIP_RATIO:
         raise ZipRejected(f"extraction ratio may not exceed {limits.MAX_ZIP_RATIO}")
+    if limits_.max_entries > limits.MAX_ZIP_ENTRIES:
+        raise ZipRejected(f"extraction entries may not exceed {limits.MAX_ZIP_ENTRIES}")
     if limits_.suffixes is not None and (not limits_.suffixes or any(
             not isinstance(suffix, str) or not suffix.startswith(".") for suffix in limits_.suffixes)):
         raise ZipRejected("extraction suffixes must be non-empty '.ext' strings")
@@ -302,6 +308,26 @@ def archive_limit(limits_: ExtractionLimits) -> int:
 
     _check_limits(limits_)
     return limits_.max_total_bytes + limits_.max_total_bytes // 512 + limits_.max_entries * 1024 + _ARCHIVE_SLACK_BYTES
+
+
+def artifact_limit(kind: str, *, max_total_bytes: int | None = None) -> int:
+    """The largest artifact (archive bytes) of ``kind`` that a kit job admits, selects or downloads:
+    :func:`archive_limit` of ``LIMITS_BY_KIND[kind]``, its expanded total narrowed to
+    ``max_total_bytes`` when given (a family's ``handoff_max_bytes`` plus its ``envelope.json``, never
+    above the kind's own).
+    It never exceeds ``limits.MAX_ARTIFACT_BYTES``, so a bundle within its expanded bound is an
+    artifact every consumer accepts (``tests/test_model_limits.py``)."""
+
+    if kind not in LIMITS_BY_KIND:
+        raise ZipRejected(f"no artifact kind {kind!r}")
+    bounds = LIMITS_BY_KIND[kind]
+    if max_total_bytes is not None:
+        if (isinstance(max_total_bytes, bool) or not isinstance(max_total_bytes, int)
+                or not 0 < max_total_bytes <= bounds.max_total_bytes):
+            raise ZipRejected(f"the expanded bound of a {kind} must be a positive integer within "
+                              f"{bounds.max_total_bytes}")
+        bounds = replace(bounds, max_total_bytes=max_total_bytes)
+    return min(archive_limit(bounds), limits.MAX_ARTIFACT_BYTES)
 
 
 def _archive_stream(archive: Path | bytes, limits_: ExtractionLimits) -> BinaryIO:

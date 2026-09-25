@@ -1,10 +1,12 @@
 """kit-digest-v1 and the MB_KIT_TREE_DIGEST literal of the callee workflows (SPEC §1.2 step 4).
 
-Pins five things: the committed literal equals the digest of this kit tree; ``tools/kit_digest.sh``,
+Pins six things: the committed literal equals the digest of this kit tree; ``tools/kit_digest.sh``,
 the function inlined in every callee prologue, ``tools/update_tree_digest.py`` (over the Git index)
 and ``mod_base.pin.kit_tree_digest`` compute the same value and refuse the same trees; the tool
 digests only what a commit records and refuses a working tree that differs from it; the tool's
-``--write``/``--check`` modes; and the executed "Bind the two-part implementation identity" step.
+``--write``/``--check`` modes; the tool's staged-file lock gate (a stale lock fails ``--check`` and
+is regenerated, never digested, by ``--write``); and the executed "Bind the two-part implementation
+identity" step.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +25,7 @@ from unittest import mock
 
 from mod_base import workflow
 from mod_base.errors import MbError
-from mod_base.pin import kit_tree_digest
+from mod_base.pin import STAGED_LOCK, kit_tree_digest, staged_listing
 from tests.test_workflow_policy import (CALLEE_PATHS, PROLOGUE, ROOT, ShellHarness, callee, outputs,
                                         require_tools, step)
 
@@ -94,15 +97,28 @@ def make_kit(root: Path) -> Path:
         "src/mod_base/a.b": b"dot\n",
         "src/mod_base/a/b.py": b"slash\n",
         "src/mod_base/Z.py": b"upper\n",
+        "src/mod_base/template/__init__.py": b"",
         "site/index.html": "<!doctype html><title>é</title>\n".encode(),
         "site/assets/site.js": b"'use strict';\n" * 3000,
         "requirements/pillow.txt": b"Pillow==12.3.0 \\\n    --hash=sha256:00\n",
+        "template/managed/.github/workflows/pages.yml": b"name: Project site\n",
+        "template/manifest.json": b"{}\n",
+        "tools/helper.sh": b"#!/bin/sh\nexit 0\n",
     }
     for relative, data in files.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+    os.chmod(root / "tools/helper.sh", 0o755)  # the staged-file lock addresses content only
+    write_lock(root)
     return root
+
+
+def write_lock(root: Path) -> None:
+    """Write the staged-file lock of ``root``'s current ``template/`` and ``tools/``."""
+
+    (root / STAGED_LOCK).parent.mkdir(parents=True, exist_ok=True)
+    (root / STAGED_LOCK).write_bytes(staged_listing(root))
 
 
 class DigestParityTests(unittest.TestCase):
@@ -288,6 +304,12 @@ class LiteralTests(unittest.TestCase):
         for name in workflow.CALLEE_WORKFLOWS:
             self.assertEqual(callee(name)["env"]["MB_KIT_TREE_DIGEST"], digest)
 
+    def test_committed_staged_lock_describes_the_committed_template_and_tools(self) -> None:
+        require_tools("git")
+        self.assertTrue(update_tree_digest.staged_lock_current(ROOT),
+                        f"{STAGED_LOCK} is stale: run python3 tools/update_tree_digest.py --write, stage the lock "
+                        "and run it again")
+
     def test_write_and_check_modes(self) -> None:
         require_tools("git")
         with tempfile.TemporaryDirectory(prefix="kit literal ") as temporary:
@@ -327,6 +349,113 @@ class LiteralTests(unittest.TestCase):
             self.assertEqual(subprocess.run([*tool, "--check"], capture_output=True, timeout=60).returncode, 2)
             self.assertNotEqual(subprocess.run([sys.executable, str(TOOL)], capture_output=True, timeout=60).returncode,
                                 0, "a mode is required")
+
+
+class StagedLockTests(unittest.TestCase):
+    """The tool refuses to digest an index whose staged-file lock does not list its template/ and tools/."""
+
+    def setUp(self) -> None:
+        require_tools("git")
+        temporary = tempfile.TemporaryDirectory(prefix="kit lock ")
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.root = self.kit("kit")
+
+    def kit(self, name: str) -> Path:
+        """A staged fixture kit ``self.base/name`` carrying copies of the callee workflows."""
+
+        root = stage(make_kit(self.base / name))
+        (root / ".github/workflows").mkdir(parents=True)
+        for path in CALLEE_PATHS.values():
+            shutil.copyfile(path, root / ".github/workflows" / path.name)
+        return root
+
+    def tool(self, mode: str) -> subprocess.CompletedProcess[str]:
+        environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+        return subprocess.run([sys.executable, str(TOOL), "--root", str(self.root), mode], capture_output=True,
+                              text=True, timeout=60, env=environment)
+
+    def snapshot(self) -> dict[str, bytes]:
+        return {path.name: path.read_bytes() for path in (self.root / ".github/workflows").iterdir()}
+
+    def test_the_index_listing_is_the_kits_staged_listing(self) -> None:
+        self.assertEqual(update_tree_digest.indexed_staged_listing(self.root), staged_listing(self.root))
+        self.assertIn(b"  ./tools/helper.sh\n", staged_listing(self.root))
+        self.assertTrue(update_tree_digest.staged_lock_current(self.root))
+        self.assertEqual(self.tool("--write").returncode, 0)
+        self.assertEqual(self.tool("--check").returncode, 0)
+
+    def test_a_stale_lock_fails_the_check_and_write_regenerates_it_before_digesting(self) -> None:
+        self.assertEqual(self.tool("--write").returncode, 0)
+        current = self.snapshot()
+        lock = (self.root / STAGED_LOCK).read_bytes()
+        (self.root / "tools/helper.sh").write_bytes(b"#!/bin/sh\nexit 1\n")
+        stage(self.root)
+        self.assertFalse(update_tree_digest.staged_lock_current(self.root))
+        checked = self.tool("--check")
+        self.assertEqual(checked.returncode, 1)
+        self.assertIn(f"stale {STAGED_LOCK}", checked.stderr)
+        self.assertEqual(((self.root / STAGED_LOCK).read_bytes(), self.snapshot()), (lock, current))
+        written = self.tool("--write")
+        self.assertEqual(written.returncode, 1)
+        self.assertIn(f"regenerated {STAGED_LOCK}; stage it", written.stderr)
+        self.assertEqual(written.stdout, "")
+        self.assertEqual((self.root / STAGED_LOCK).read_bytes(), staged_listing(self.root))
+        self.assertNotEqual((self.root / STAGED_LOCK).read_bytes(), lock)
+        self.assertEqual(self.snapshot(), current, "no literal is written over a stale index")
+        again = self.tool("--write")
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("current but not staged", again.stderr)
+        self.assertEqual(self.snapshot(), current)
+        stage(self.root)
+        written = self.tool("--write")
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(written.stdout, reference_digest(self.root) + "\n")
+        self.assertNotEqual(self.snapshot(), current)
+        self.assertEqual(self.tool("--check").returncode, 0)
+
+    def test_a_missing_lock_is_stale(self) -> None:
+        git(self.root, "rm", "-q", "-f", STAGED_LOCK)
+        self.assertFalse(update_tree_digest.staged_lock_current(self.root))
+        self.assertEqual(self.tool("--check").returncode, 1)
+        self.assertEqual(self.tool("--write").returncode, 1)
+        self.assertEqual((self.root / STAGED_LOCK).read_bytes(), staged_listing(self.root))
+        stage(self.root)
+        self.assertEqual(self.tool("--write").returncode, 0)
+
+    def test_template_and_tools_must_equal_the_index(self) -> None:
+        cases = {
+            "template/manifest.json (not staged)": lambda: (self.root / "template/manifest.json").write_bytes(b"[]\n"),
+            "tools/new.py (untracked or ignored)": lambda: (self.root / "tools/new.py").write_bytes(b"x\n"),
+            "template/managed/.github/workflows/pages.yml (missing from the working tree)":
+                lambda: (self.root / "template/managed/.github/workflows/pages.yml").unlink(),
+        }
+        for index, (label, mutate) in enumerate(cases.items()):
+            with self.subTest(case=label):
+                self.root = self.kit(f"case-{index}")
+                mutate()
+                lock = (self.root / STAGED_LOCK).read_bytes()
+                before = self.snapshot()
+                with self.assertRaisesRegex(update_tree_digest.DigestError, re.escape(label)):
+                    update_tree_digest.staged_lock_current(self.root)
+                for mode in ("--check", "--write"):
+                    refused = self.tool(mode)
+                    self.assertEqual(refused.returncode, 2, mode)
+                    self.assertIn(label, refused.stderr)
+                    self.assertEqual(((self.root / STAGED_LOCK).read_bytes(), self.snapshot()), (lock, before))
+
+    def test_unsafe_template_or_tools_entries_are_refused(self) -> None:
+        (self.root / "tools/link.sh").symlink_to("helper.sh")
+        git(self.root, "add", "tools/link.sh")
+        with self.assertRaisesRegex(update_tree_digest.DigestError, r"tools/link\.sh \(120000"):
+            update_tree_digest.staged_lock_current(self.root)
+        self.assertEqual(self.tool("--write").returncode, 2)
+        git(self.root, "rm", "-q", "--cached", "tools/link.sh")
+        (self.root / "tools/link.sh").unlink()
+        (self.root / "tools/__pycache__").mkdir()
+        (self.root / "tools/__pycache__/helper.cpython-313.pyc").write_bytes(b"\x00")
+        with self.assertRaisesRegex(update_tree_digest.DigestError, r"tools/__pycache__"):
+            update_tree_digest.staged_lock_current(self.root)
 
 
 GIT_STUB = """

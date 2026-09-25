@@ -4,11 +4,19 @@
 Every job of ``publish.yml``, ``finalize.yml`` and ``rotate.yml`` recomputes kit-digest-v1 over its
 kit checkout (``src/``, ``site/`` and ``requirements/``) and requires it to equal the workflow-level
 literal. The callee YAML is not part of the digested tree, so rewriting the literal never changes
-the digest (no fixed point). Stage every change under those directories, then run from the kit
-clone and commit the rewritten workflows with it::
+the digest (no fixed point). Stage every change under those directories and under ``template/`` and
+``tools/``, then run from the kit clone and commit the rewritten workflows with it::
 
     python3 tools/update_tree_digest.py --write    # rewrite every stale literal in place
     python3 tools/update_tree_digest.py --check    # exit 1 and name the stale workflows
+
+The digested ``src/`` carries the staged-file lock ``src/mod_base/template/staged_files.sha256``,
+the listing of every ``template/`` and ``tools/`` file (see ``mod_base.template.lock``), so a change
+there changes the lock and therefore the digest. Both modes first require the lock the index
+records to list exactly the indexed ``template/`` and ``tools/`` (:func:`staged_lock_current`):
+``--check`` exits 1 naming the stale lock; ``--write`` regenerates it through
+``mod_base.template.lock`` and exits 1 without touching a literal, because the regenerated lock
+must be staged before the index can be digested (stage it and run ``--write`` again).
 
 The literal must equal what a fresh ``actions/checkout`` of the commit produces, so
 :func:`tree_digest` hashes the Git index (the content the commit records), never whatever else lies
@@ -22,15 +30,20 @@ in the working tree. It refuses (exit 2, naming the paths):
   a ``.DS_Store``), so the digest always describes exactly the files on disk.
 
 The one tolerated difference is a ``__pycache__`` directory outside the index, which a local
-interpreter writes; once staged, it is refused as the prologue refuses it. ``tools/kit_digest.sh``
-and ``mod_base.pin.kit_tree_digest`` compute the same value over a checkout
-(``tests/test_tree_digest_literal.py`` pins the parity). Stdlib only.
+interpreter writes; once staged, it is refused as the prologue refuses it. The staged-file lock
+check likewise refuses (exit 2) ``template/`` and ``tools/`` whose working tree differs from the
+index, since the lock is regenerated from the working tree. ``tools/kit_digest.sh`` and
+``mod_base.pin.kit_tree_digest`` compute the same value over a checkout
+(``tests/test_tree_digest_literal.py`` pins the parity). Stdlib, plus this script's own kit package
+(``src/mod_base``) for the staged-file lock, imported without writing bytecode into the digested
+tree.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import os
 import re
 import stat
@@ -41,12 +54,18 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 DIGESTED_DIRS = ("src", "site", "requirements")
+#: The ``src/`` of the kit this script belongs to; its ``mod_base`` owns the staged-file lock format.
+KIT_SOURCE = Path(__file__).resolve().parents[1] / "src"
 CALLEES = (".github/workflows/publish.yml", ".github/workflows/finalize.yml", ".github/workflows/rotate.yml")
 LITERAL = re.compile(r'^  MB_KIT_TREE_DIGEST: "(sha256:[0-9a-f]{64})"$', re.MULTILINE)
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 #: One ``git ls-files -z --stage`` record: mode, object id, stage and path.
 INDEX_ENTRY = re.compile(rb"([0-7]{6}) ([0-9a-f]{40}|[0-9a-f]{64}) ([0-3])\t([^\0]+)")
 REGULAR_MODE = b"100644"
+#: The staged-file lock addresses content only, so an executable ``tools/`` script is listed too.
+LOCKED_MODES = (REGULAR_MODE, b"100755")
+#: One staged-file lock line: ``<sha256>  ./<path>``.
+LOCK_LINE = re.compile(r"([0-9a-f]{64})  \./([A-Za-z0-9._/-]+)")
 BYTECODE_DIRECTORY = "__pycache__"
 MAX_FILES = 20000
 MAX_FILE_BYTES = 64 << 20
@@ -88,13 +107,16 @@ def _git(root: Path, arguments: Sequence[str], *, stdin: bytes | None = None) ->
         return output.read()
 
 
-def _index_entries(root: Path) -> list[tuple[str, bytes]]:
-    """The ``(path, object id)`` of every index entry under the digested directories, validated."""
+def _index_entries(root: Path, pathspecs: Sequence[str] = DIGESTED_DIRS, *,
+                   tops: Sequence[str] = DIGESTED_DIRS, modes: Sequence[bytes] = (REGULAR_MODE,)
+                   ) -> list[tuple[str, bytes]]:
+    """The ``(path, object id)`` of every index entry matching ``pathspecs``, validated: each lies
+    below one of ``tops`` and has one of ``modes``."""
 
     toplevel = _git(root, ["rev-parse", "--show-toplevel"]).removesuffix(b"\n")
     if Path(os.fsdecode(toplevel)).resolve() != root.resolve():
         raise DigestError(f"{root} is not the top level of its Git working tree")
-    raw = _git(root, ["ls-files", "-z", "--stage", "--", *DIGESTED_DIRS])
+    raw = _git(root, ["ls-files", "-z", "--stage", "--", *pathspecs])
     if raw and not raw.endswith(b"\0"):
         raise DigestError("git ls-files printed a truncated index listing")
     entries: list[tuple[str, bytes]] = []
@@ -106,8 +128,8 @@ def _index_entries(root: Path) -> list[tuple[str, bytes]]:
         mode, object_id, stage, raw_path = match.groups()
         path = raw_path.decode("ascii", "replace")
         components = path.split("/")
-        if (mode != REGULAR_MODE or stage != b"0" or not raw_path.isascii() or len(components) < 2
-                or components[0] not in DIGESTED_DIRS
+        if (mode not in modes or stage != b"0" or not raw_path.isascii() or len(components) < 2
+                or components[0] not in tops
                 or any(not NAME.fullmatch(part) or part == BYTECODE_DIRECTORY for part in components)):
             refused.append(f"{path} ({mode.decode()}, stage {stage.decode()})")
         else:
@@ -115,18 +137,20 @@ def _index_entries(root: Path) -> list[tuple[str, bytes]]:
         if len(entries) + len(refused) > MAX_FILES:
             raise DigestError(f"the kit index holds more than {MAX_FILES} files")
     if refused:
-        raise DigestError("refusing index entries the callee prologue refuses (a mode other than 100644, "
+        allowed = " or ".join(mode.decode() for mode in modes)
+        raise DigestError(f"refusing index entries the callee prologue refuses (a mode other than {allowed}, "
                           f"an unmerged entry, __pycache__ or an unsafe name): {_named(refused)}")
-    for directory in DIGESTED_DIRS:
-        if not any(path.startswith(f"{directory}/") for path, _ in entries):
-            raise DigestError(f"{directory}/ holds no file in the Git index")
     return entries
 
 
-def _index_digests(root: Path) -> dict[str, str]:
-    """``{path: sha256}`` of the indexed blobs, read through one ``git cat-file --batch``."""
+def _index_digests(root: Path, pathspecs: Sequence[str] = DIGESTED_DIRS, *, tops: Sequence[str] = DIGESTED_DIRS,
+                   modes: Sequence[bytes] = (REGULAR_MODE,)) -> dict[str, str]:
+    """``{path: sha256}`` of the indexed blobs :func:`_index_entries` selects, read through one
+    ``git cat-file --batch``."""
 
-    entries = _index_entries(root)
+    entries = _index_entries(root, pathspecs, tops=tops, modes=modes)
+    if not entries:
+        return {}
     raw = _git(root, ["cat-file", "--batch"], stdin=b"".join(object_id + b"\n" for _, object_id in entries))
     digests: dict[str, str] = {}
     offset = 0
@@ -195,11 +219,23 @@ def _file_sha256(path: Path) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _listing(digests: Mapping[str, str]) -> str:
+    """The ``sha256sum`` listing of ``{path: sha256}``, sorted bytewise (kit-digest-v1 and the lock)."""
+
+    return "".join(f"{digests[path]}  ./{path}\n" for path in sorted(digests, key=lambda value: value.encode()))
+
+
 def _listing_digest(digests: Mapping[str, str]) -> str:
     """kit-digest-v1 of ``{path: sha256}``: the ``sha256sum`` listing sorted bytewise, hashed."""
 
-    listing = "".join(f"{digests[path]}  ./{path}\n" for path in sorted(digests, key=lambda value: value.encode()))
-    return "sha256:" + hashlib.sha256(listing.encode("ascii")).hexdigest()
+    return "sha256:" + hashlib.sha256(_listing(digests).encode("ascii")).hexdigest()
+
+
+def _differences(indexed: Mapping[str, str], on_disk: Mapping[str, str]) -> list[str]:
+    return sorted(
+        [f"{path} (untracked or ignored)" for path in on_disk.keys() - indexed.keys()]
+        + [f"{path} (missing from the working tree)" for path in indexed.keys() - on_disk.keys()]
+        + [f"{path} (not staged)" for path in indexed.keys() & on_disk.keys() if indexed[path] != on_disk[path]])
 
 
 def tree_digest(root: Path) -> str:
@@ -210,14 +246,97 @@ def tree_digest(root: Path) -> str:
     """
 
     indexed = _index_digests(root)
-    on_disk = _worktree_digests(root)
-    differences = sorted(
-        [f"{path} (untracked or ignored)" for path in on_disk.keys() - indexed.keys()]
-        + [f"{path} (missing from the working tree)" for path in indexed.keys() - on_disk.keys()]
-        + [f"{path} (not staged)" for path in indexed.keys() & on_disk.keys() if indexed[path] != on_disk[path]])
+    for directory in DIGESTED_DIRS:
+        if not any(path.startswith(f"{directory}/") for path in indexed):
+            raise DigestError(f"{directory}/ holds no file in the Git index")
+    differences = _differences(indexed, _worktree_digests(root))
     if differences:
         raise DigestError(f"the working tree differs from the Git index; stage or remove: {_named(differences)}")
     return _listing_digest(indexed)
+
+
+def _import_kit() -> None:
+    """Make this script's own kit package (:data:`KIT_SOURCE`) importable, with bytecode writing off
+    so the tool never leaves ``__pycache__`` in the digested ``src/``.
+
+    The staged-file lock helpers import ``mod_base`` inside each function, after this call, so
+    :func:`tree_digest` stays stdlib-only and every kit name they use is visible where it is used
+    (``tests/test_internal_api.py`` requires each to be a documented, frozen name).
+    """
+
+    sys.dont_write_bytecode = True
+    source = str(KIT_SOURCE)
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    try:
+        importlib.import_module("mod_base.template.lock")
+    except ImportError as exc:
+        raise DigestError(f"cannot import the staged-file lock helpers from {KIT_SOURCE}: {exc}") from None
+
+
+def indexed_staged_listing(root: Path) -> bytes:
+    """The staged-file lock the Git index of ``root`` implies: the listing of its indexed
+    ``template/`` and ``tools/`` blobs, in ``mod_base.pin.staged_listing``'s format.
+
+    Raises :class:`DigestError` unless those entries are content-only regular files (mode 100644 or
+    100755) with safe names and the working tree of both directories holds exactly the indexed
+    bytes, as ``mod_base.pin.staged_listing`` lists them, so a lock regenerated from the working
+    tree is the lock the commit needs. An absent directory is simply empty.
+    """
+
+    _import_kit()
+    from mod_base import errors, pin
+
+    indexed = _index_digests(root, pin.LOCKED_DIRS, tops=pin.LOCKED_DIRS, modes=LOCKED_MODES)
+    try:
+        listing = pin.staged_listing(root)
+    except errors.MbError as exc:
+        raise DigestError(f"template/ and tools/ cannot be listed: {errors.describe(exc)}") from None
+    on_disk: dict[str, str] = {}
+    for line in listing.decode("ascii").splitlines():
+        match = LOCK_LINE.fullmatch(line)
+        if match is None:
+            raise DigestError("mod_base.pin.staged_listing printed a malformed line")
+        on_disk[match.group(2)] = match.group(1)
+    differences = _differences(indexed, on_disk)
+    if differences:
+        raise DigestError("template/ or tools/ differs from the Git index, so the staged-file lock cannot "
+                          f"describe the commit; stage or remove: {_named(differences)}")
+    return _listing(indexed).encode("ascii")
+
+
+def staged_lock_current(root: Path) -> bool:
+    """Whether the staged-file lock the Git index of ``root`` records equals
+    :func:`indexed_staged_listing` (``False`` when the index holds no lock)."""
+
+    _import_kit()
+    from mod_base import pin
+
+    expected = hashlib.sha256(indexed_staged_listing(root)).hexdigest()
+    return _index_digests(root, (pin.STAGED_LOCK,)).get(pin.STAGED_LOCK) == expected
+
+
+def _stale_lock(root: Path, *, write: bool) -> int:
+    """Report a stale staged-file lock (exit 1). ``write`` first regenerates the working-tree lock
+    through ``mod_base.template.lock``; no literal is written until the regenerated lock is staged,
+    because only an index that records it can be digested."""
+
+    _import_kit()
+    from mod_base import errors, pin
+    from mod_base.template import lock
+
+    if not write:
+        print(f"update_tree_digest: stale {pin.STAGED_LOCK}: it does not list the staged template/ and tools/; "
+              "run python3 tools/update_tree_digest.py --write, stage the lock and run it again", file=sys.stderr)
+        return 1
+    try:
+        regenerated = lock.write(root)
+    except errors.MbError as exc:
+        raise DigestError(f"cannot regenerate {pin.STAGED_LOCK}: {errors.describe(exc)}") from None
+    state = "regenerated" if regenerated else "the working-tree copy is current but not staged:"
+    print(f"update_tree_digest: {state} {pin.STAGED_LOCK}; stage it and run python3 tools/update_tree_digest.py "
+          "--write again (no literal was written)", file=sys.stderr)
+    return 1
 
 
 def _read_workflow(workflow: Path) -> str:
@@ -263,12 +382,16 @@ def stale_workflows(root: Path, digest: str) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--write", action="store_true", help="rewrite every stale literal")
-    mode.add_argument("--check", action="store_true", help="exit 1 when any literal is stale")
+    mode.add_argument("--write", action="store_true",
+                      help="regenerate a stale staged-file lock (exit 1: stage it and rerun), else rewrite every "
+                           "stale literal")
+    mode.add_argument("--check", action="store_true", help="exit 1 when the staged-file lock or any literal is stale")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1],
                         help="the kit clone (default: this script's kit)")
     args = parser.parse_args(argv)
     try:
+        if not staged_lock_current(args.root):
+            return _stale_lock(args.root, write=args.write)
         digest = tree_digest(args.root)
         stale = stale_workflows(args.root, digest)
         if args.write:

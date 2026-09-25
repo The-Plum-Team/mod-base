@@ -1,0 +1,9 @@
+# Synthetic demonstration evidence — not a product. Every path of the canary is owned by the
+# mod-base maintainer; the protected control-plane and agent-guidance paths are listed explicitly.
+* @AkaNebur
+/.github/ @AkaNebur
+/site/ @AkaNebur
+/scripts/pages/ @AkaNebur
+/scripts/ci/ @AkaNebur
+/AGENTS.md @AkaNebur
+/docs/ai/ @AkaNebur

@@ -2,7 +2,10 @@
 
 Block Pops ``e2e/visual_evidence.canonicalize_png`` + Quick Skin snapshot: decode fully, convert to
 RGB, drop every ancillary chunk and write with fixed encoder settings, so identical pixels always
-give identical bytes. Used for anchors (``images/<sha>.png``) and the project icon.
+give identical bytes. :func:`canonical_png` is the anchor re-encoder (``images/<sha>.png``). The
+project icon is not re-encoded here: ``pages.build._icon_png`` rewrites its chunks itself, keeping
+the palette and transparency this RGB conversion would drop, and calls :func:`canonical_png` only
+as a decode check, discarding its output.
 
 The pixels are re-wrapped with ``Image.frombytes("RGB", size, rgb.tobytes())`` (no ``info``, so
 only ``IHDR``/``IDAT``/``IEND`` are written) and saved with ``optimize=False, compress_level=9``,

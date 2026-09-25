@@ -1,0 +1,20 @@
+mod-base canary — All Rights Reserved
+
+Copyright (c) 2026 AkaNebur / The Plum Team. All rights reserved.
+
+This repository is the synthetic canary of mod-base, the shared public-evidence and project-site
+kit of The Plum Team. It publishes synthetic demonstration evidence only: it is not a product,
+not a Minecraft mod and not a release of anything.
+
+Its files are published for transparency, so that anyone can inspect how The Plum Team verifies
+the kit before its projects use a release. The same terms as mod-base apply: no license to
+redistribute, modify, republish or reuse this repository, in whole or in part, is granted except
+for use by The Plum Team's own projects. Permission for anything else can be requested from the
+copyright holder.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

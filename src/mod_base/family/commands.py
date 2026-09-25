@@ -1,4 +1,7 @@
-"""``family envelope`` and ``family collect`` (MB4). Flags are frozen by SPEC §2.2."""
+"""``family envelope`` and ``family collect`` (MB4). Flags are frozen by SPEC §2.2.
+
+``family collect --selected-json F`` is an MB0 amendment (``docs/INTERNAL-API.md``).
+"""
 
 from __future__ import annotations
 
@@ -31,6 +34,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     collect.add_argument("--key", type=cli.KEY, required=True)
     collect.add_argument("--input", type=cli.PATH, required=True, metavar="DIR")
     collect.add_argument("--expected-coverage-sha", type=cli.SHA1, required=True)
+    collect.add_argument("--selected-json", type=cli.PATH, required=True, metavar="F",
+                         help="the Selected JSON object select --family --output wrote for --input")
     collect.add_argument("--output", type=cli.PATH, required=True, metavar="DIR")
     collect.set_defaults(handler=run_collect)
 
@@ -49,7 +54,8 @@ def run_envelope(args: argparse.Namespace) -> int:
 def run_collect(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
     outcome = paired.collect_family(invocation, family=args.family, key=args.key, input_dir=args.input,
-                                    expected_coverage_sha=args.expected_coverage_sha, output=args.output)
+                                    expected_coverage_sha=args.expected_coverage_sha, output=args.output,
+                                    selected_json=args.selected_json)
     cli.write_github_output(invocation.github_output(), {"status": outcome.status,
                                                          "available": outcome.status == "available"})
     if outcome.status == "superseded":

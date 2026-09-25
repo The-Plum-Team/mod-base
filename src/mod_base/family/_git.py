@@ -25,7 +25,7 @@ from mod_base.model import grammar
 #: that performs the ancestry proof.
 _GIT_SEARCH_PATH = "/usr/bin:/bin:/usr/local/bin"
 _GIT_TIMEOUT_SECONDS = 120
-#: Every query prints at most one object id or type line.
+#: Every query but :func:`read_blob` prints at most one object id, type or size line.
 _MAX_OUTPUT_BYTES = 4096
 
 
@@ -57,9 +57,9 @@ def _environment(repo_root: Path, home: str) -> dict[str, str]:
     }
 
 
-def _run(repo_root: Path, arguments: list[str], *, accepted: tuple[int, ...] = (0,)) -> tuple[int, str]:
-    """Run one read-only query and return ``(exit status, stripped stdout)``; any status outside
-    ``accepted``, a timeout or oversized output raises :class:`MbError`."""
+def _query(repo_root: Path, arguments: list[str], *, accepted: tuple[int, ...], max_output: int) -> tuple[int, bytes]:
+    """Run one read-only query and return ``(exit status, stdout bytes)``; any status outside
+    ``accepted``, a timeout or more than ``max_output`` bytes of output raises :class:`MbError`."""
 
     root = Path(os.path.abspath(repo_root))
     command = [_executable(), "--no-replace-objects", "-c", "core.fsmonitor=false", "-C", str(root), *arguments]
@@ -72,9 +72,16 @@ def _run(repo_root: Path, arguments: list[str], *, accepted: tuple[int, ...] = (
             raise _fail(f"git {arguments[0]} failed: {exc}") from exc
     if completed.returncode not in accepted:
         raise _fail(f"git {arguments[0]} failed with exit status {completed.returncode}")
-    if len(completed.stdout) > _MAX_OUTPUT_BYTES:
-        raise _fail(f"git {arguments[0]} printed more than {_MAX_OUTPUT_BYTES} bytes")
-    return completed.returncode, completed.stdout.decode("ascii", "replace").strip()
+    if len(completed.stdout) > max_output:
+        raise _fail(f"git {arguments[0]} printed more than {max_output} bytes")
+    return completed.returncode, completed.stdout
+
+
+def _run(repo_root: Path, arguments: list[str], *, accepted: tuple[int, ...] = (0,)) -> tuple[int, str]:
+    """One query printing at most one object id or type line: ``(exit status, stripped stdout)``."""
+
+    status, output = _query(repo_root, arguments, accepted=accepted, max_output=_MAX_OUTPUT_BYTES)
+    return status, output.decode("ascii", "replace").strip()
 
 
 def head(repo_root: Path) -> tuple[str, str]:
@@ -103,3 +110,31 @@ def is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
     status, _ = _run(repo_root, ["merge-base", "--is-ancestor", grammar.require_sha1(ancestor, "ancestor"),
                                  grammar.require_sha1(descendant, "descendant")], accepted=(0, 1))
     return status == 0
+
+
+def read_blob(repo_root: Path, commit: str, path: str, max_bytes: int) -> bytes:
+    """The bytes of the regular file ``path`` at the present commit ``commit`` (its tree entry, never
+    a symlink or submodule), at most ``max_bytes``, from the object store: never fetched, never
+    checked out."""
+
+    require_commit(repo_root, commit, "commit")
+    if not grammar.is_repo_path(path):
+        raise _fail(f"not a canonical repository path: {path[:120]!r}")
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise _fail("the blob bound must be a positive integer")
+    _, entry = _run(repo_root, ["ls-tree", "--full-tree", commit, "--", path])
+    fields = entry.split("\t", 1)
+    head = fields[0].split(" ")
+    if len(fields) != 2 or fields[1] != path or len(head) != 3:
+        raise _fail(f"{path} is not a file at {commit}")
+    mode, kind, oid = head
+    if mode not in ("100644", "100755") or kind != "blob" or not (
+            grammar.is_match(grammar.SHA1, oid) or grammar.is_match(grammar.SHA256, oid)):
+        raise _fail(f"{path} at {commit} is not a regular file")
+    _, size = _run(repo_root, ["cat-file", "-s", oid])
+    if not size.isdigit() or int(size) > max_bytes:
+        raise _fail(f"{path} at {commit} is larger than {max_bytes} bytes")
+    _, data = _query(repo_root, ["cat-file", "blob", oid], accepted=(0,), max_output=max_bytes)
+    if len(data) != int(size):
+        raise _fail(f"{path} at {commit} changed while it was read")
+    return data

@@ -2406,6 +2406,64 @@
           }
         ]
       ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "selection",
+      "name": "selected-artifact-at-the-archive-cap",
+      "set": [
+        [
+          "/selected_artifact/size",
+          1107296256
+        ]
+      ]
+    },
+    {
+      "error": "$.selected_artifact.size: must be between 1 and 1107296256",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selected-artifact-over-the-archive-cap",
+      "set": [
+        [
+          "/selected_artifact/size",
+          1107296257
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "compact",
+      "name": "source-artifact-at-the-archive-cap",
+      "set": [
+        [
+          "/source_artifact/size",
+          1107296256
+        ]
+      ]
+    },
+    {
+      "error": "$.source_artifact.size: must be between 1 and 1107296256",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "source-artifact-over-the-archive-cap",
+      "set": [
+        [
+          "/source_artifact/size",
+          1107296257
+        ]
+      ]
+    },
+    {
+      "error": "$.files[0].size: must be between 1 and 1073741824",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "file-over-the-expanded-bundle-bound",
+      "set": [
+        [
+          "/files/0/size",
+          1073741825
+        ]
+      ]
     }
   ]
 }

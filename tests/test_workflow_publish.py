@@ -442,7 +442,7 @@ class PublishShellTests(unittest.TestCase):
         self.assertEqual(self.kit_calls(records), [[
             "family", "collect", "--repo", "mod", "--config", "mod/site/mod-base.json", "--family",
             "mod-compatibility", "--key", "mc1.20.1", "--input", f"{mb}/selected", "--expected-coverage-sha", HEAD,
-            "--output", f"{mb}/collected"]])
+            "--selected-json", f"{mb}/selected.json", "--output", f"{mb}/collected"]])
         self.assertIsNone(records[0]["env"]["GH_TOKEN"], "family_validate is never a network hook")
         result, values, _ = self.invoke("family", "Validate the family through the mod adapter",
                                         {**env, "STUB_EXIT": "3"})

@@ -51,7 +51,8 @@ REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 MAX_TOKEN_CHARS = 4096
 MAX_ERROR_BODY_BYTES = 64 * 1024
 MAX_REDIRECT_URL_CHARS = 8192
-MAX_DOWNLOAD_BYTES = limits.MAX_RAW_BUNDLE_BYTES
+#: The largest body :meth:`GitHubApi.download` reads into memory: one artifact archive.
+MAX_DOWNLOAD_BYTES = limits.MAX_ARTIFACT_BYTES
 _PATH = re.compile(r"^/(?:[A-Za-z0-9._~@:+,=-]|%[0-9A-Fa-f]{2})+(?:/(?:[A-Za-z0-9._~@:+,=-]|%[0-9A-Fa-f]{2})+)*$")
 _PARAMETER = re.compile(r"^[a-z][a-z_]{0,39}$")
 _READ_CHUNK = 1 << 20

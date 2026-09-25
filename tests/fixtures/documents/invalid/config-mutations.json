@@ -669,14 +669,37 @@
       ]
     },
     {
-      "error": "$.families[0].handoff_max_bytes: must be between 1 and",
+      "error": "$.families[0].handoff_max_bytes: must be between 1 and 784269312",
       "expect": "invalid",
       "fixture": "qs",
-      "name": "family-handoff-over-1gib",
+      "name": "family-handoff-over-the-collectable-bound",
       "set": [
         [
           "/families/0/handoff_max_bytes",
-          1073741825
+          784269313
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0].handoff_max_bytes: must be between 1 and 784269312",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "family-handoff-at-a-bundle-leaves-no-room-for-its-projection",
+      "set": [
+        [
+          "/families/0/handoff_max_bytes",
+          1073741824
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "qs",
+      "name": "family-handoff-at-the-collectable-bound",
+      "set": [
+        [
+          "/families/0/handoff_max_bytes",
+          784269312
         ]
       ]
     },

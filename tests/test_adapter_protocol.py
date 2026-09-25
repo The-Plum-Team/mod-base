@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ast
 import copy
+import re
 import unittest
+from pathlib import Path
 
 from mod_base import ADAPTER_API
 from mod_base.adapter import protocol
@@ -274,6 +277,95 @@ class ResultSchemaTest(unittest.TestCase):
             protocol.validate_result("synthesize", None, {})
         with self.assertRaises(MbError):
             protocol.validate_arguments("evil", {})
+
+
+ADAPTER_DOC = Path(__file__).resolve().parents[1] / "docs" / "ADAPTER.md"
+
+
+def doc_section(heading: str) -> str:
+    """The text of the ADAPTER.md section ``heading`` (a ``##``/``###`` line), up to the next heading."""
+
+    text = ADAPTER_DOC.read_text(encoding="utf-8")
+    match = re.search(rf"^#+ {re.escape(heading)}\n(.*?)(?=^#+ |\Z)", text, flags=re.MULTILINE | re.DOTALL)
+    if match is None:
+        raise AssertionError(f"ADAPTER.md has no section {heading!r}")
+    return match.group(1)
+
+
+def table_rows(section: str) -> dict[str, str]:
+    """``{first cell's code name: second cell}`` of every table row of ``section``."""
+
+    return {match.group(1): match.group(2).strip()
+            for match in re.finditer(r"^\| `([\w-]+)` \| (.*?) \|", section, flags=re.MULTILINE)}
+
+
+class ConformanceContractDocumentTest(unittest.TestCase):
+    """ADAPTER.md documents the optional conformance fixtures, the variants and the report exactly as
+    the simulation uses them, so an adapter author (QS1, BP1) can make ``--families``, ``delegated``
+    and ``selected`` run instead of being skipped (review finding: the contract was undocumented)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from mod_base.conformance import _simulation
+
+        cls.simulation = _simulation
+        cls.source = ast.parse(Path(_simulation.__file__).read_text(encoding="utf-8"))
+        cls.fixtures = table_rows(doc_section("Optional conformance fixtures"))
+
+    def keywords_passed(self, constant: str) -> set[tuple[str, ...]]:
+        """The keyword names of every call that passes the fixture name ``constant`` with keywords."""
+
+        calls = set()
+        for node in ast.walk(self.source):
+            if (isinstance(node, ast.Call) and node.keywords
+                    and any(isinstance(argument, ast.Name) and argument.id == constant for argument in node.args)):
+                calls.add(tuple(sorted(keyword.arg for keyword in node.keywords if keyword.arg is not None)))
+        return calls
+
+    def test_every_optional_fixture_is_documented_with_its_arguments(self) -> None:
+        for constant in ("FAMILY_BUNDLE", "DELEGATED_EXTENSIONS", "SELECTED_EXTENSIONS"):
+            name = getattr(self.simulation, constant)
+            with self.subTest(fixture=name):
+                self.assertIn(name, self.fixtures)
+                signature = re.fullmatch(rf"`{name}\(ctx, ([\w, ]+)\)`", self.fixtures[name])
+                self.assertIsNotNone(signature, f"ADAPTER.md must give {name}'s signature")
+                documented = tuple(sorted(signature.group(1).split(", ")))
+                self.assertEqual({documented}, self.keywords_passed(constant))
+
+    def test_family_outcomes_and_the_responses_bound_are_documented(self) -> None:
+        section = doc_section("Optional conformance fixtures")
+        self.assertIn(self.simulation.FAMILY_OUTCOMES, self.fixtures)
+        for outcome in self.simulation.FAMILY_OUTCOME_VALUES:
+            self.assertIn(f"`{outcome}`", self.fixtures[self.simulation.FAMILY_OUTCOMES])
+        self.assertIn(f"(at most {self.simulation.MAX_FIXTURE_RESPONSES})", section)
+        self.assertIn("/repos/<repository>/", section)
+
+    def test_the_variants_are_documented(self) -> None:
+        variants = set()
+        for node in ast.walk(self.source):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "variant"
+                    and node.args and isinstance(node.args[0], ast.Constant)):
+                variants.add(node.args[0].value)
+        self.assertGreaterEqual(len(variants), 5)
+        conformance = doc_section("Conformance (in-process, no `sys.path` edits)")
+        self.assertEqual(variants, set(table_rows(conformance)))
+        report = table_rows(doc_section("The conformance report"))
+        for variant in variants:
+            self.assertIn(variant, report["variants"])
+
+    def test_the_documented_report_keys_are_exactly_what_the_parent_accepts(self) -> None:
+        from mod_base.conformance import run
+
+        keys = set(table_rows(doc_section("The conformance report")))
+        values = {"repository": "o/r", "kit": {}, "keys": [{}], "families": [], "checks": 1, "variants": {},
+                  "admission": [], "hooks": [], "site": {}}
+        self.assertEqual(keys, set(values))
+        self.assertEqual(run._check_report(dict(values)), values)
+        for key in sorted(keys):
+            with self.subTest(missing=key), self.assertRaises(MbError):
+                run._check_report({name: value for name, value in values.items() if name != key})
+        with self.assertRaises(MbError):
+            run._check_report({**values, "extra": 1})
 
 
 if __name__ == "__main__":

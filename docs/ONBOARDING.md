@@ -83,7 +83,12 @@ request. `template check` prints the required lines a present deferred fragment 
 Add `anchor_selection` only when `anchor.enabled` is set, `expected_source_jobs` only with
 `source.require_job_graph`, and the network hooks only when the configuration declares them. Put
 a `synthesize` fixture hook in `adapter.fixtures_path` so `conformance` can exercise the adapter
-without Minecraft.
+without Minecraft. The same fixtures module may define the optional conformance fixtures
+(`family_bundle`, required with `--families` when the mod declares a family, plus
+`FAMILY_OUTCOMES`, `delegated_extensions` and `selected_extensions`); each enables a variant that is
+otherwise reported as skipped ([ADAPTER.md](ADAPTER.md#optional-conformance-fixtures)). A family
+with `carry_forward` must carry across the documentation-only commits the later generations push
+([ADAPTER.md](ADAPTER.md#conformance-in-process-no-syspath-edits)).
 
 ## 4. Producer and wake jobs
 

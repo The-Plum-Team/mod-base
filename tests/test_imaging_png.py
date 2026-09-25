@@ -104,6 +104,26 @@ class CanonicalPngTest(unittest.TestCase):
                 self.assertEqual(chunks(canonical), [b"IHDR", b"IDAT", b"IEND"])
                 self.assertEqual(rgb_pixels(canonical), rgb_pixels(source))
 
+    def test_palette_and_transparency_are_flattened(self) -> None:
+        # Why the project icon keeps its own chunk rewriter (``pages.build._icon_png``) and uses this
+        # re-encoder only as a decode check: the RGB conversion discards PLTE, tRNS and alpha.
+        from PIL import Image
+
+        for name, colour, source_chunks in (("palette-P-transparency.png", 3, [b"PLTE", b"tRNS"]),
+                                            ("palette-P.png", 3, [b"PLTE"]), ("rgba-alpha.png", 6, []),
+                                            ("grey-LA.png", 4, [])):
+            source = (INPUTS / name).read_bytes()
+            with self.subTest(input=name):
+                self.assertEqual(source[25], colour)
+                for kind in source_chunks:
+                    self.assertIn(kind, chunks(source))
+                canonical = canonical_png(source)
+                self.assertEqual(chunks(canonical), [b"IHDR", b"IDAT", b"IEND"])
+                self.assertEqual(canonical[24:26], bytes([8, 2]))
+                with Image.open(io.BytesIO(canonical)) as image:
+                    self.assertEqual(image.mode, "RGB")
+                    self.assertNotIn("transparency", image.info)
+
     def test_the_policy_gates_the_source(self) -> None:
         source = pattern_png(640, 360)
         self.assertEqual(canonical_png(source, policy=SizePolicy.exact(640, 360)), canonical_png(source))

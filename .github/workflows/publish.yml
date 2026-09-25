@@ -68,7 +68,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:c9f8d15c5398c63ffc9154cf33c6fae5e7c1d77dc928b959347820f9758b73e5"
+  MB_KIT_TREE_DIGEST: "sha256:8ef75d98538567f8a28b4a0e18faa20be625ace5e509bc7df3e9a0d5e3a4ff05"
 
 jobs:
   admit:
@@ -779,7 +779,7 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base family collect --repo mod --config mod/site/mod-base.json --family "$FAMILY" --key "$KEY" \
             --input "$RUNNER_TEMP/mb/selected" --expected-coverage-sha "$COVERAGE_SHA" \
-            --output "$RUNNER_TEMP/mb/collected" || status=$?
+            --selected-json "$RUNNER_TEMP/mb/selected.json" --output "$RUNNER_TEMP/mb/collected" || status=$?
           case "$status" in
             0) printf 'collected=true\n' >> "$GITHUB_OUTPUT" ;;
             3)

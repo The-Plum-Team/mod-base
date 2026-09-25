@@ -1,4 +1,5 @@
-"""The kit pin, kit-digest-v1, the stamp, kit resolution and the managed bootstrap (MB9).
+"""The kit pin, kit-digest-v1, the stamp, kit resolution, the managed bootstrap and the release
+order that pin verification imposes on the kit's own documentation (MB9).
 
 ``mod_base.pin`` and the stdlib-only bootstrap ``template/managed/scripts/ci/mod_base_kit.py`` run
 over the same inputs and must agree. Fetches go to a local bare repository (``KIT_REMOTE`` is
@@ -16,6 +17,7 @@ import io
 import json
 import os
 import py_compile
+import re
 import shutil
 import subprocess
 import sys
@@ -500,6 +502,118 @@ class VerifyNetworkTest(TempCase):
         with self.assertRaises(BOOT.KitError):
             BOOT.verify(self.root, network=True)
         self.assertEqual(pin.verify(self.root, network=True, api=FakeApi(released(SHA_A, "v1.2.3"))).version, "v1.2.3")
+
+
+# -- Release procedure -------------------------------------------------------------------------------
+
+DOCS = KIT_ROOT / "docs"
+NUMBERED_STEP = re.compile(r"(\d+)\. ")
+
+
+def markdown_section(path: Path, heading: str) -> str:
+    """The body of the Markdown section ``heading`` (for example ``## Rollout``) of ``path``, up to
+    the next heading of the same or a higher level."""
+
+    text = path.read_text(encoding="utf-8")
+    marker = f"\n{heading}\n"
+    start = text.index(marker) + len(marker)
+    level = len(heading) - len(heading.lstrip("#"))
+    following = re.search(rf"^#{{1,{level}}} ", text[start:], re.MULTILINE)
+    return text[start:start + following.start()] if following else text[start:]
+
+
+def numbered_steps(section: str) -> list[str]:
+    """The top-level ``1.``, ``2.``... items of ``section`` with their indented continuations; the
+    list ends at the first unindented line that is not the next item."""
+
+    steps: list[str] = []
+    for line in section.splitlines():
+        match = NUMBERED_STEP.match(line)
+        if match:
+            if int(match.group(1)) != len(steps) + 1:
+                raise AssertionError(f"step {match.group(1)} follows step {len(steps)}")
+            steps.append(line)
+        elif steps and (not line.strip() or line.startswith("   ")):
+            steps[-1] += "\n" + line
+        elif steps:
+            break
+    return steps
+
+
+def first_step(steps: list[str], pattern: str) -> int:
+    """The index of the first step matching ``pattern``."""
+
+    for index, step in enumerate(steps):
+        if re.search(pattern, step):
+            return index
+    raise AssertionError(f"no step matches {pattern!r}")
+
+
+class ReleaseProcedureTest(unittest.TestCase):
+    """The kit's release order (SPEC §9.3 S1 and S3): merge, green CI, tag, then the canary pinned
+    to the tag, then the GitHub Release.
+
+    The canary cannot run before its tag exists: the canary procedure checks out the tag, and its
+    ``verify --network`` (like ``bump`` and ``stage``) refuses a pin whose tag is missing or peels
+    elsewhere (``VerifyNetworkTest``, "tag missing"). Every tag also needs its own commit, because
+    a handoff records the executing ``__version__`` and authentication requires it to equal the
+    pin's ``# vX.Y.Z``."""
+
+    def test_operations_tags_before_the_canary_and_publishes_the_release_after_it(self) -> None:
+        steps = numbered_steps(markdown_section(DOCS / "OPERATIONS.md", "## Releasing mod-base"))
+        green = first_step(steps, r"`mod-base CI`")
+        tag = first_step(steps, r"git tag -a vX\.Y\.Z")
+        canary = first_step(steps, r"\[Canary procedure\]\(#canary-procedure\)")
+        release = first_step(steps, r"gh release create vX\.Y\.Z")
+        self.assertLess(green, tag)
+        self.assertLess(tag, canary)
+        self.assertLess(canary, release)
+        self.assertEqual([step for step in steps[:tag] if re.search(r"(?i)canary", step)], [])
+
+    def test_the_canary_procedure_starts_from_the_pushed_tag(self) -> None:
+        steps = numbered_steps(markdown_section(DOCS / "OPERATIONS.md", "## Canary procedure"))
+        self.assertIn("(#releasing-mod-base) step 3", steps[0])
+        self.assertIn('switch --detach "$TAG"', steps[0])
+        self.assertIn('must print "$PIN $TAG"', steps[2])
+        self.assertIn("mod_base_kit.py verify --network", steps[2])
+
+    def test_the_agent_guide_tags_before_the_canary(self) -> None:
+        steps = numbered_steps(markdown_section(DOCS / "ai" / "KIT.md", "## Releases"))
+        green = first_step(steps, r"`mod-base CI`")
+        tag = first_step(steps, r"tag `vX\.Y\.Z`")
+        canary = first_step(steps, r"(?i)canary")
+        release = first_step(steps, r"GitHub Release")
+        self.assertLess(green, tag)
+        self.assertLess(tag, canary)
+        self.assertLess(canary, release)
+
+    def test_the_readme_release_line_tags_before_the_canary(self) -> None:
+        section = markdown_section(KIT_ROOT / "README.md", "## Pins and bumps")
+        releases = [item for item in section.split("\n- ") if item.lstrip("- ").startswith("Release:")]
+        self.assertEqual(len(releases), 1)
+        line = releases[0]
+        self.assertLess(line.index("tag"), line.index("canary"))
+        self.assertLess(line.index("canary"), line.index("GitHub Release"))
+        self.assertIn("#releasing-mod-base", line)
+
+    def test_mods_pin_a_tag_only_after_its_canary(self) -> None:
+        roots = markdown_section(DOCS / "SECURITY-MODEL.md", "## Trust roots")
+        rows = [row for row in roots.splitlines() if row.startswith("| mod-base `v*` tags |")]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("mods pin a tag only after the canary, pinned to it, passes", rows[0])
+
+    def test_every_tag_names_a_commit_whose_version_is_the_tag(self) -> None:
+        steps = numbered_steps(markdown_section(DOCS / "OPERATIONS.md", "## Releasing mod-base"))
+        tag = steps[first_step(steps, r"git tag -a vX\.Y\.Z")]
+        self.assertIn('__version__ = "X.Y.Z"', tag)
+        self.assertLess(tag.index('__version__ = "X.Y.Z"'), tag.index("git tag -a"))
+        rollout = markdown_section(DOCS / "OPERATIONS.md", "## Rollout")
+        stage = [row for row in rollout.splitlines() if row.startswith("| S3 |")]
+        self.assertEqual(len(stage), 1)
+        self.assertIn("own release commit", stage[0])
+        for path in (DOCS / "OPERATIONS.md", DOCS / "ai" / "KIT.md", KIT_ROOT / "README.md"):
+            with self.subTest(path.name):
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?i)v1\.0\.0[^\n]*same commit")
 
 
 # -- Kit resolution ----------------------------------------------------------------------------------

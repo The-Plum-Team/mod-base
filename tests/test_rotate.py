@@ -61,13 +61,30 @@ OWNER_CREATED = "2026-09-25T10:30:00Z"
 NOW = datetime(2026, 9, 25, 11, 0, tzinfo=timezone.utc).timestamp()
 
 #: What the default world retires, per summary section, in deletion order.
-KEY_DELETIONS = [6001, 8801, SELECTED, 5090]
+KEY_DELETIONS = [6001, 5090, 8801, SELECTED]
 FAMILY_DELETIONS = [6002, 9100, FAMILY_SELECTED]
 TRANSIENT_DELETIONS = [7001, 7002, 7300, 7100]
-ALL_DELETIONS = KEY_DELETIONS + FAMILY_DELETIONS + TRANSIENT_DELETIONS
+#: The global deletion order, longest-lived first: the key's cache, its family leg's cache and its
+#: anchor (90 days), the family handoffs (7 days), the handoffs, then R's transients (1 day).
+ALL_DELETIONS = [6001, 6002, 5090, 9100, FAMILY_SELECTED, 8801, SELECTED, *TRANSIENT_DELETIONS]
 #: Never retired by the default world: replacements, baselines, a non-kit name, the previous
 #: generation's own transient, artifacts newer than R and the newest anchor.
 RETAINED = [7200, 7400, 7500, 7600, 6003, 6004, 8802, 5101, 5120]
+#: A Quick Skin-sized generation: seventeen keys, each with a family leg.
+QS_KEYS = (KEY, *(f"mc1.21.{minor}" for minor in range(16)))
+#: Offset of the artifact ids of a generation published after R (``World.publish_later``).
+LATER = 1_000_000
+
+
+def long_lived_order(keys: tuple[str, ...]) -> list[int]:
+    """The 90-day artifacts a world of ``keys`` (each with a family leg) supersedes, in retirement
+    order: one key at a time, its cache then its family cache, the first key's anchor after them."""
+
+    order = [6001, 6002, 5090]
+    for key in sorted(keys[1:]):
+        base = 10000 * keys.index(key)
+        order += [6001 + base, 6002 + base]
+    return order
 
 
 def sha(data: bytes) -> str:
@@ -127,13 +144,13 @@ def compact_files(key: str = KEY, *, selected_id: int = SELECTED, anchored: bool
     return files
 
 
-def family_files(key: str = KEY, **envelope_fields: Any) -> dict[str, bytes]:
-    """A structurally valid family cache: ``envelope.json`` (with ``envelope_fields`` overriding)
-    beside a small native bundle."""
+def family_files(key: str = KEY, *, commit: str = COMMIT, **envelope_fields: Any) -> dict[str, bytes]:
+    """A structurally valid family cache: ``envelope.json`` produced at ``commit`` (with
+    ``envelope_fields`` overriding) beside a small native bundle."""
 
     native = {"manifest.json": b'{"kind":"quick-skin-public-mod-compatibility","schema_version":6}\n',
               "images/pair.webp": b"native pair image"}
-    envelope = {**rekey(helpers.family_envelope(), key), **envelope_fields}
+    envelope = {**rekey(helpers.family_envelope(), key, commit), **envelope_fields}
     envelope["native"]["manifest_sha256"] = sha(native["manifest.json"])
     envelope["files"] = sorted((file_record(path, data) for path, data in native.items()),
                                key=lambda record: record["path"])
@@ -177,7 +194,8 @@ class World:
     """The default generation (see the module docstring), adjustable before :meth:`rotate`."""
 
     def __init__(self, test: unittest.TestCase, *, keys: tuple[str, ...] = (KEY,), family: bool = True,
-                 grace: int = 0, display_title: str | None = None, writable: bool = True) -> None:
+                 family_keys: tuple[str, ...] = (KEY,), grace: int = 0, display_title: str | None = None,
+                 writable: bool = True) -> None:
         self.api = FakeGitHub(repository=REPOSITORY, writable=writable)
         temporary = tempfile.TemporaryDirectory(prefix="rotate test ")
         test.addCleanup(temporary.cleanup)
@@ -195,7 +213,8 @@ class World:
         self.family = family
         self._seed_runs()
         bundles = [self._seed_key(position, key) for position, key in enumerate(keys)]
-        self._seed_owner(bundles)
+        legs = [self._seed_leg(keys.index(key), key) for key in family_keys] if family else []
+        self._seed_owner(bundles, legs)
 
     # -- seeding ---------------------------------------------------------------------------------
 
@@ -217,6 +236,12 @@ class World:
         self.api.add_artifact(record, zipped(files))
         self.replace_promotion(lambda promotion: promotion["bundles"][0].update(
             manifest_sha256=sha(files["manifest.json"])))
+
+    def replace_family_cache(self, files: dict[str, bytes], position: int = 0) -> None:
+        """Replace the bytes of R's family cache of the leg seeded at ``position`` by ``files``."""
+
+        record, _ = self.seeded[7400 + 10000 * position]
+        self.api.add_artifact(record, zipped(files))
 
     def add(self, artifact_id: int, name: str, created: str, *, run_id: int, head_sha: str, branch: str = "master",
             files: dict[str, bytes] | None = None, expired: bool = False, **explicit: Any) -> dict[str, Any]:
@@ -270,25 +295,31 @@ class World:
                 "manifest_sha256": sha(files["manifest.json"]), "coverage_sha": COMMIT,
                 "selected_artifact_id": selected}
 
-    def _seed_owner(self, bundles: list[dict[str, Any]]) -> None:
+    def _seed_leg(self, position: int, key: str) -> dict[str, Any]:
+        """The ``FAMILY`` leg of ``key``: R's family cache (7400) and collected artifact (7002), the
+        previous generation's family cache (6002) and the family handoffs of producer runs 202 (the
+        one R consumed) and 190, each id offset by ``10000 * position``."""
+
+        base = 10000 * position
+        files = family_files(key)
+        self.add(7400 + base, grammar.family_cache_name(FAMILY, key, COMMIT), "2026-09-25T10:56:00Z", run_id=OWNER,
+                 head_sha=COMMIT, files=files)
+        collected = self.add(7002 + base, grammar.collected_family_name(FAMILY, key), "2026-09-25T10:41:00Z",
+                             run_id=OWNER, head_sha=COMMIT)
+        self.add(6002 + base, grammar.family_cache_name(FAMILY, key, OLD), "2026-09-24T10:56:00Z", run_id=PREVIOUS,
+                 head_sha=OLD, files=files)
+        name = grammar.family_handoff_name(FAMILY, key, 1)
+        self.add(FAMILY_SELECTED + base, name, "2026-09-25T09:45:00Z", run_id=202, head_sha=COMMIT)
+        self.add(9100 + base, name, "2026-09-24T09:45:00Z", run_id=190, head_sha=OLD)
+        return {"family": FAMILY, "key": key, "available": True, "status": "available",
+                "collected_artifact_id": collected["id"],
+                "collected_digest": "sha256:" + sha(self.seeded[collected["id"]][1]),
+                "coverage_sha": COMMIT, "selected_artifact_id": FAMILY_SELECTED + base}
+
+    def _seed_owner(self, bundles: list[dict[str, Any]], legs: list[dict[str, Any]]) -> None:
         promotion = helpers.promotion()
         promotion["bundles"] = bundles
-        promotion["families"] = []
-        if self.family:
-            files = family_files()
-            self.add(7400, grammar.family_cache_name(FAMILY, KEY, COMMIT), "2026-09-25T10:56:00Z", run_id=OWNER,
-                     head_sha=COMMIT, files=files)
-            collected = self.add(7002, grammar.collected_family_name(FAMILY, KEY), "2026-09-25T10:41:00Z",
-                                 run_id=OWNER, head_sha=COMMIT)
-            self.add(6002, grammar.family_cache_name(FAMILY, KEY, OLD), "2026-09-24T10:56:00Z", run_id=PREVIOUS,
-                     head_sha=OLD, files=files)
-            name = grammar.family_handoff_name(FAMILY, KEY, 1)
-            self.add(FAMILY_SELECTED, name, "2026-09-25T09:45:00Z", run_id=202, head_sha=COMMIT)
-            self.add(9100, name, "2026-09-24T09:45:00Z", run_id=190, head_sha=OLD)
-            promotion["families"] = [{"family": FAMILY, "key": KEY, "available": True, "status": "available",
-                                      "collected_artifact_id": collected["id"],
-                                      "collected_digest": "sha256:" + sha(self.seeded[collected["id"]][1]),
-                                      "coverage_sha": COMMIT, "selected_artifact_id": FAMILY_SELECTED}]
+        promotion["families"] = legs
         self.promotion = promotion
         self.add(7100, grammar.PROMOTION_NAME, "2026-09-25T10:50:00Z", run_id=OWNER, head_sha=COMMIT,
                  files={"promotion.json": canonical_json(promotion)})
@@ -312,8 +343,46 @@ class World:
         values = {"GITHUB_REPOSITORY": REPOSITORY, "GITHUB_RUN_ID": str(ROTATION_RUN), **environ}
         return runtime.build_invocation(self.repo, None, values, check_repository=False)
 
-    def rotate(self, *, dry_run: bool = False, now: float = NOW, delay: float = 0.0, **environ: str) -> dict[str, Any]:
-        return rotation.rotate_generation(self.invocation(**environ), api=self.api, owner_run_id=OWNER,
+    def publish_later(self, run_id: int, created: str, *, legs: tuple[str, ...]) -> None:
+        """Seed a later successful Pages generation ``run_id`` at R's head (a later publication of
+        the same head, such as a compatibility milestone) whose run starts at ``created`` (an hour
+        of ``2026-09-25``, ``HH:00``). It promotes every key, consuming the handoffs R consumed, and
+        the ``FAMILY`` legs of ``legs`` only; its artifact ids are R's plus ``LATER``."""
+
+        stamp = created[:14]
+        self.api.add_run(owner_run(id=run_id, created_at=created))
+        bundles, families = [], []
+        for position, key in enumerate(self.keys):
+            base = LATER + 10000 * position
+            files = compact_files(key, selected_id=SELECTED + base - LATER, anchored=position == 0, collector=run_id)
+            self.add(7200 + base, grammar.cache_name(key, COMMIT), f"{stamp}25:00Z", run_id=run_id, head_sha=COMMIT,
+                     files=files)
+            collected = self.add(7001 + base, grammar.collected_name(key), f"{stamp}10:00Z", run_id=run_id,
+                                 head_sha=COMMIT)
+            bundles.append({"key": key, "collected_artifact_id": collected["id"],
+                            "collected_digest": "sha256:" + sha(self.seeded[collected["id"]][1]),
+                            "manifest_sha256": sha(files["manifest.json"]), "coverage_sha": COMMIT,
+                            "selected_artifact_id": SELECTED + base - LATER})
+        for key in legs:
+            base = LATER + 10000 * self.keys.index(key)
+            self.add(7400 + base, grammar.family_cache_name(FAMILY, key, COMMIT), f"{stamp}26:00Z", run_id=run_id,
+                     head_sha=COMMIT, files=family_files(key))
+            collected = self.add(7002 + base, grammar.collected_family_name(FAMILY, key), f"{stamp}11:00Z",
+                                 run_id=run_id, head_sha=COMMIT)
+            families.append({"family": FAMILY, "key": key, "available": True, "status": "available",
+                             "collected_artifact_id": collected["id"],
+                             "collected_digest": "sha256:" + sha(self.seeded[collected["id"]][1]),
+                             "coverage_sha": COMMIT, "selected_artifact_id": FAMILY_SELECTED + base - LATER})
+        promotion = helpers.promotion()
+        promotion["implementation"]["run_id"] = run_id
+        promotion.update(bundles=bundles, families=families)
+        self.add(7100 + LATER, grammar.PROMOTION_NAME, f"{stamp}20:00Z", run_id=run_id, head_sha=COMMIT,
+                 files={"promotion.json": canonical_json(promotion)})
+        self.add(7300 + LATER, grammar.PAGES_ARTIFACT_NAME, f"{stamp}20:00Z", run_id=run_id, head_sha=COMMIT)
+
+    def rotate(self, *, dry_run: bool = False, now: float = NOW, delay: float = 0.0, owner: int = OWNER,
+               **environ: str) -> dict[str, Any]:
+        return rotation.rotate_generation(self.invocation(**environ), api=self.api, owner_run_id=owner,
                                           owner_sha=COMMIT, delete_delay_seconds=delay, dry_run=dry_run, now=now,
                                           sleep=self.sleeps.append)
 
@@ -491,6 +560,16 @@ class OwnerAndReplacementTests(unittest.TestCase):
                 world.replace_promotion(change)
                 self.assert_nothing_deleted(world)
 
+    def test_the_promotion_must_be_canonical_json(self) -> None:
+        # The same document written by another serializer (as build never writes it) is refused
+        # before any deletion, like every other validating reader of the promotion.
+        world = World(self)
+        record, _ = world.seeded[7100]
+        pretty = json.dumps(world.promotion, indent=2, sort_keys=True).encode("utf-8")
+        world.api.add_artifact({key: value for key, value in record.items() if key not in {"size_in_bytes", "digest"}},
+                               zipped({"promotion.json": pretty}))
+        self.assert_nothing_deleted(world, pattern="canonical")
+
     def test_a_fallback_is_retained_until_every_replacement_is_verified(self) -> None:
         other_kit = helpers.h("other-kit", 40)
 
@@ -504,12 +583,8 @@ class OwnerAndReplacementTests(unittest.TestCase):
             # Evidence of another subject commit, still collected by R at R's head.
             selection["implementation"] = helpers.embedded_selection()["implementation"]
 
-        def family_cache(**fields: Any) -> Callable[[World], None]:
-            return lambda world: world.api.add_artifact(world.seeded[7400][0], zipped(family_files(**fields)))
-
         cases: dict[str, Callable[[World], None]] = {
             "missing cache": lambda world: world.change(7200, expired=True),
-            "missing family cache": lambda world: world.change(7400, expired=True),
             "duplicate cache": lambda world: world.add(7201, grammar.cache_name(KEY, COMMIT), "2026-09-25T10:58:00Z",
                                                        run_id=OWNER, head_sha=COMMIT, files=compact_files()),
             "unrecorded manifest": lambda world: world.replace_promotion(
@@ -521,9 +596,6 @@ class OwnerAndReplacementTests(unittest.TestCase):
                 compact_files(commit=OLD, adjust=owner_implementation)),
             "other key": lambda world: world.replace_cache(compact_files(SECOND_KEY)),
             "selection of a later attempt": lambda world: world.replace_cache(compact_files(adjust=rerun_selection)),
-            "other envelope family": family_cache(family="other-family"),
-            "other envelope key": family_cache(key=SECOND_KEY),
-            "other envelope coverage": family_cache(coverage_sha=OLD, carried_from=COMMIT),
         }
         for label, damage in cases.items():
             with self.subTest(label=label):
@@ -583,16 +655,10 @@ class OwnerAndReplacementTests(unittest.TestCase):
         tampered = dict(compact)
         image = next(path for path in compact if path.startswith("images/"))
         tampered[image] = b"tampered image"
-        envelope_extra = {**family_files(), "images/unlisted.webp": b"unlisted"}
-        for label, artifact_id, files in (("extra", 7200, extra), ("tampered", 7200, tampered),
-                                          ("family", 7400, envelope_extra)):
+        for label, files in (("extra", extra), ("tampered", tampered)):
             with self.subTest(label=label):
                 world = World(self)
-                record, _ = world.seeded[artifact_id]
-                world.api.add_artifact(record, zipped(files))
-                if artifact_id == 7200:
-                    world.replace_promotion(lambda promotion: promotion["bundles"][0].update(
-                        manifest_sha256=sha(files["manifest.json"])))
+                world.replace_cache(files)
                 self.assert_nothing_deleted(world)
 
     def test_replacement_must_be_collected_by_the_owner(self) -> None:
@@ -609,6 +675,119 @@ class OwnerAndReplacementTests(unittest.TestCase):
         world.api.add_run(owner_run(run_attempt=2))
         summary = world.rotate()
         self.assertEqual(ALL_DELETIONS, summary["planned_artifact_ids"])
+
+
+class FamilyLegTests(unittest.TestCase):
+    """A carried family leg is a verified replacement; a family replacement that cannot be verified
+    rejects only its own leg (with its collected artifact, github-pages and the promotion)."""
+
+    #: What a carried world retires, in order: run 202's family handoff is newer than the bound.
+    CARRIED = [6001, 6002, 5090, 9100, 8801, SELECTED, *TRANSIENT_DELETIONS]
+
+    @staticmethod
+    def carry(world: World, **envelope_fields: Any) -> None:
+        """R found no family evidence at ``COMMIT`` and carried the previous generation's family cache
+        (6002, produced at ``OLD`` by run 190) forward: refresh named R's copy by R's coverage but the
+        envelope it copied verbatim still covers ``OLD``."""
+
+        producer = helpers.run_claim(190, workflow_path=FAMILY_WORKFLOW, commit=OLD)
+        world.replace_family_cache(family_files(commit=OLD, producer=producer, **envelope_fields))
+        world.replace_promotion(lambda promotion: promotion["families"][0].update(selected_artifact_id=6002))
+
+    def test_a_carried_leg_retires_the_generation_it_was_carried_from(self) -> None:
+        for envelope_fields in ({}, {"carried_from": OLDER}):
+            with self.subTest(envelope_fields=envelope_fields):
+                world = World(self)
+                self.carry(world, **envelope_fields)
+                summary = world.rotate()
+                self.assertEqual({}, summary["deferral_reasons"])
+                self.assertEqual(self.CARRIED, world.api.deleted_artifact_ids)
+                self.assertEqual({SCOPE: [6002, 9100]}, summary["deleted_compatibility_artifact_ids"])
+                self.assertEqual({KEY: KEY_DELETIONS}, summary["deleted_artifact_ids"])
+                self.assertEqual(TRANSIENT_DELETIONS, summary["deleted_pages_run_artifact_ids"])
+                # The selected cache's owner (400) bounds the family handoffs even though the 90-day phase
+                # retired that cache first: run 202's newer handoff is kept.
+                self.assertTrue({7400, FAMILY_SELECTED} <= world.remaining())
+
+    def test_a_dry_run_plans_a_carried_leg_like_the_deleting_run(self) -> None:
+        world = World(self, writable=False)
+        self.carry(world)
+        summary = world.rotate(dry_run=True)
+        self.assertEqual(self.CARRIED, summary["planned_artifact_ids"])
+        self.assertEqual([], world.api.deleted_artifact_ids)
+
+    def test_a_family_leg_mismatch_rejects_only_that_leg(self) -> None:
+        tampered = family_files()
+        tampered["images/pair.webp"] = b"tampered pair image"
+        cases: dict[str, Callable[[World], None]] = {
+            "missing family cache": lambda world: world.change(7400, expired=True),
+            "duplicate family cache": lambda world: world.add(
+                7401, grammar.family_cache_name(FAMILY, KEY, COMMIT), "2026-09-25T10:58:00Z", run_id=OWNER,
+                head_sha=COMMIT, files=family_files()),
+            "other envelope family": lambda world: world.replace_family_cache(family_files(family="other-family")),
+            "other envelope key": lambda world: world.replace_family_cache(family_files(key=SECOND_KEY)),
+            "other envelope repository": lambda world: world.replace_family_cache(
+                family_files(repository="The-Plum-Team/Other")),
+            "unlisted file": lambda world: world.replace_family_cache(
+                {**family_files(), "images/unlisted.webp": b"unlisted"}),
+            # A carried envelope is accepted for its coverage only: its inventory still binds.
+            "unlisted file of a carried leg": lambda world: world.replace_family_cache(
+                {**family_files(commit=OLD), "images/unlisted.webp": b"unlisted"}),
+            "tampered file": lambda world: world.replace_family_cache(tampered),
+            "invalid envelope": lambda world: world.replace_family_cache(family_files(schema_version=2)),
+        }
+        for label, damage in cases.items():
+            with self.subTest(label=label):
+                world = World(self)
+                damage(world)
+                summary = world.rotate()
+                self.assertEqual({KEY: KEY_DELETIONS}, summary["deleted_artifact_ids"])
+                self.assertEqual([], summary["deferred_branches"])
+                self.assertEqual({SCOPE: []}, summary["deleted_compatibility_artifact_ids"])
+                self.assertEqual([SCOPE], summary["compatibility_deferred_branches"])
+                self.assertIn("replacement cannot be verified", summary["deferral_reasons"][SCOPE])
+                # Only the key's collected artifact retires: the leg's collected artifact, github-pages and
+                # the promotion yield to the unverified replacement, so a retry can re-plan.
+                self.assertEqual([7001], summary["deleted_pages_run_artifact_ids"])
+                self.assertTrue(summary["pages_run_deferred"])
+                self.assertIn(f"{SCOPE}, github-pages and mb-promotion", summary["pages_run_deferral_reason"])
+                self.assertTrue({6002, 9100, FAMILY_SELECTED, 7002, 7300, 7100} <= world.remaining())
+                self.assertEqual([*KEY_DELETIONS, 7001], world.api.deleted_artifact_ids)
+
+    def test_one_rejected_leg_leaves_the_other_legs_to_rotate(self) -> None:
+        world = World(self, keys=(KEY, SECOND_KEY), family_keys=(KEY, SECOND_KEY))
+        world.replace_family_cache(family_files(SECOND_KEY, family="other-family"), position=1)
+        summary = world.rotate()
+        second = f"{FAMILY}--{SECOND_KEY}"
+        self.assertEqual({SCOPE: FAMILY_DELETIONS, second: []}, summary["deleted_compatibility_artifact_ids"])
+        self.assertEqual([second], summary["compatibility_deferred_branches"])
+        self.assertEqual({KEY: KEY_DELETIONS, SECOND_KEY: [16001, 18801, SELECTED + 10000]},
+                         summary["deleted_artifact_ids"])
+        self.assertEqual([7001, 17001, 7002], summary["deleted_pages_run_artifact_ids"])
+        self.assertTrue({16002, 19100, FAMILY_SELECTED + 10000, 17002, 17400, 7300, 7100} <= world.remaining())
+
+    def test_an_unverified_leg_keeps_its_caches_protected(self) -> None:
+        world = World(self)
+        world.add(7401, grammar.family_cache_name(FAMILY, KEY, COMMIT), "2026-09-25T10:58:00Z", run_id=OWNER,
+                  head_sha=COMMIT, files=family_files())
+        with tempfile.TemporaryDirectory() as scratch:
+            plan = rotation._Rotation(world.invocation(), world.api, owner_run_id=OWNER, owner_sha=COMMIT,
+                                      delete_delay_seconds=0.0, dry_run=True, now=datetime.now(timezone.utc),
+                                      sleep=world.sleeps.append, workdir=Path(scratch))
+            plan.authenticate_owner()
+            plan.load_promotion()
+            plan.load_replacements()
+        self.assertEqual([(FAMILY, KEY)], list(plan.rejected_legs))
+        self.assertEqual([], plan.family_keeps)
+        self.assertTrue({7400, 7401} <= plan.protected)
+
+    def test_an_unverifiable_key_replacement_still_stops_everything(self) -> None:
+        world = World(self)
+        world.replace_family_cache(family_files(key=SECOND_KEY))
+        world.change(7200, expired=True)
+        with self.assertRaisesRegex(MbError, "exactly one unexpired mb-cache"):
+            world.rotate()
+        self.assertEqual([], world.api.deleted_artifact_ids)
 
 
 class RetirementRuleTests(unittest.TestCase):
@@ -632,14 +811,14 @@ class RetirementRuleTests(unittest.TestCase):
         world.api.add_run(pages_run(450, COMMIT, "2026-09-25T09:55:00Z"))
         world.add(6020, grammar.cache_name(KEY, COMMIT), "2026-09-25T09:58:00Z", run_id=450, head_sha=COMMIT)
         summary = world.rotate()
-        self.assertEqual([6001, 6020, 8801, SELECTED, 5090], summary["deleted_artifact_ids"][KEY])
+        self.assertEqual([6001, 6020, 5090, 8801, SELECTED], summary["deleted_artifact_ids"][KEY])
 
     def test_another_owner_workflow_rejects_its_family_and_keeps_the_others(self) -> None:
         world = World(self)
         world.api.add_run(run(420, path=".github/workflows/build-gate.yml", sha=OLD, created="2026-09-24T08:00:00Z"))
         world.add(6030, grammar.cache_name(KEY, OLD), "2026-09-24T08:10:00Z", run_id=420, head_sha=OLD)
         summary = world.rotate()
-        self.assertEqual([8801, SELECTED, 5090], summary["deleted_artifact_ids"][KEY])
+        self.assertEqual([5090, 8801, SELECTED], summary["deleted_artifact_ids"][KEY])
         self.assertEqual([KEY], summary["deferred_branches"])
         self.assertIn("cache retirement", summary["deferral_reasons"][KEY])
         self.assertTrue({6001, 6030} <= world.remaining())
@@ -793,7 +972,7 @@ class AnchorTests(unittest.TestCase):
 
         with mock.patch.object(world.api, "get_json", side_effect=recording):
             summary = world.rotate()
-        self.assertEqual([6001, 8801, SELECTED, 5070], summary["deleted_artifact_ids"][KEY])
+        self.assertEqual([6001, 5070, 8801, SELECTED], summary["deleted_artifact_ids"][KEY])
         self.assertTrue({5080, 5090, 5101, *range(5300, 5324)} <= world.remaining())
         # Only runs created at or before the boundary (2026-09-17T11:00) are named.
         self.assertEqual({grammar.anchor_name(KEY, OLDER, 80, 1), grammar.anchor_name(KEY, OLDEST, 70, 1)}, set(named))
@@ -806,12 +985,12 @@ class AnchorTests(unittest.TestCase):
         world.api.add_run(run(85, path=E2E, sha=NEWER, created="2026-09-17T10:00:00Z"))
         world.add(5085, grammar.anchor_name(KEY, NEWER, 85, 1), "2026-09-17T12:00:00Z", run_id=85, head_sha=NEWER)
         summary = world.rotate()
-        self.assertEqual([6001, 8801, SELECTED, 5070], summary["deleted_artifact_ids"][KEY])
+        self.assertEqual([6001, 5070, 8801, SELECTED], summary["deleted_artifact_ids"][KEY])
         self.assertTrue({5080, 5085, 5090, 5101} <= world.remaining())
 
     def test_anchor_reads_are_bounded_per_key(self) -> None:
         world = World(self)
-        for offset in range(rotation.ANCHOR_PROBES + 4):
+        for offset in range(limits.ANCHOR_PROBES + 4):
             run_id = 300 + offset
             commit = helpers.h(f"older-commit-{offset}", 40)
             created = f"2026-09-{2 + offset:02d}T09:00:00Z"
@@ -876,29 +1055,102 @@ class BudgetAndDeferralTests(unittest.TestCase):
         world = World(self)
         with budget_of(2):
             summary = world.rotate()
-        self.assertEqual([6001, 8801], world.api.deleted_artifact_ids)
-        self.assertEqual({KEY: [6001, 8801]}, summary["deleted_artifact_ids"])
+        # The key's cache and its family leg's cache (90 days) come before everything else.
+        self.assertEqual([6001, 6002], world.api.deleted_artifact_ids)
+        self.assertEqual({KEY: [6001]}, summary["deleted_artifact_ids"])
+        self.assertEqual({SCOPE: [6002]}, summary["deleted_compatibility_artifact_ids"])
         self.assertEqual([KEY], summary["deferred_branches"])
         self.assertEqual([SCOPE], summary["compatibility_deferred_branches"])
-        self.assertEqual({SCOPE: []}, summary["deleted_compatibility_artifact_ids"])
         self.assertTrue(summary["pages_run_deferred"])
         self.assertIn("budget", summary["pages_run_deferral_reason"])
         self.assertEqual(0, summary["remaining_rotation_deletions"])
-        self.assertIn("budget", summary["deferral_reasons"][KEY])
-        self.assertIn("budget", summary["deferral_reasons"][SCOPE])
+        self.assertIn("exhausted", summary["deferral_reasons"][KEY])
+        self.assertIn("exhausted", summary["deferral_reasons"][SCOPE])
+        self.assertTrue({5090, 8801, SELECTED, 9100, FAMILY_SELECTED, 7100} <= world.remaining())
 
     def test_caches_take_priority_within_one_shared_budget(self) -> None:
+        budget = limits.DELETION_BUDGET
+        for extra, family_retired in ((budget - 2, True), (budget, False)):
+            with self.subTest(extra=extra):
+                world = World(self)
+                for offset in range(extra):
+                    world.add(6100 + offset, grammar.cache_name(KEY, OLD),
+                              f"2026-09-24T10:{offset // 2:02d}:{15 + 30 * (offset % 2):02d}Z", run_id=PREVIOUS,
+                              head_sha=OLD)
+                summary = world.rotate()
+                caches = [*range(6100, 6100 + extra), 6001][:budget]
+                self.assertEqual(caches, summary["deleted_artifact_ids"][KEY])
+                self.assertEqual({SCOPE: [6002] if family_retired else []},
+                                 summary["deleted_compatibility_artifact_ids"])
+                self.assertEqual([KEY], summary["deferred_branches"])
+                reason = summary["deferral_reasons"][KEY]
+                self.assertIn("exhausted", reason)
+                # budget + 1 superseded caches: the group is cut to the budget and its oldest are retired first.
+                self.assertEqual(not family_retired, "left 1 artifact(s)" in reason)
+                self.assertTrue({5090, 8801, SELECTED} <= world.remaining())
+
+    def test_the_budget_retires_a_whole_quick_skin_generation_long_lived_first(self) -> None:
+        # Seventeen keys, each with a family leg, a superseded cache and family cache, two handoffs and
+        # two family handoffs: 35 superseded 90-day artifacts, which the SPEC's original budget of 32
+        # could never retire. They all go first, one key at a time (its cache, its family cache, its
+        # anchor); the family handoffs (7 days) take the rest of the budget, and the last family
+        # handoffs, every 1-day handoff and R's transients (the promotion among them) are deferred.
+        keys = QS_KEYS
+        world = World(self, keys=keys, family_keys=keys)
+        summary = world.rotate()
+        order = long_lived_order(keys)
+        self.assertEqual(35, len(order))
+        self.assertLess(len(order), limits.DELETION_BUDGET)
+        family_handoffs = [identifier + 10000 * keys.index(key) for key in sorted(keys)
+                           for identifier in (9100, FAMILY_SELECTED)]
+        expected = [*order, *family_handoffs][:limits.DELETION_BUDGET]
+        self.assertEqual(expected, world.api.deleted_artifact_ids)
+        self.assertEqual(0, summary["remaining_rotation_deletions"])
+        self.assertFalse(set(order) & world.remaining(), "no superseded 90-day artifact is left to retention")
+        self.assertEqual(sorted(keys), summary["deferred_branches"])
+        legs = [f"{FAMILY}--{key}" for key in sorted(keys)]
+        self.assertEqual(legs, list(summary["deleted_compatibility_artifact_ids"]))
+        self.assertTrue(summary["pages_run_deferred"])
+        self.assertEqual([], summary["deleted_pages_run_artifact_ids"])
+        short_lived = {7300, 7100, *family_handoffs[limits.DELETION_BUDGET - len(order):]}
+        for position in range(len(keys)):
+            base = 10000 * position
+            short_lived |= {8801 + base, SELECTED + base, 7001 + base, 7002 + base}
+        self.assertEqual(short_lived, short_lived & world.remaining())
+        last = sorted(keys)[-1]
+        self.assertEqual([6001 + 10000 * keys.index(last)], summary["deleted_artifact_ids"][last])
+        self.assertIn("exhausted", summary["deferral_reasons"][f"{FAMILY}--{last}"])
+
+    def test_a_rejected_group_reports_its_rejection_not_a_budget_cut(self) -> None:
+        # Four superseded caches meet a budget of two, then their owner changes before the first
+        # deletion: the group is rejected whole, so its reason must not claim the budget cut its tail.
         world = World(self)
-        for offset in range(30):
+        for offset in range(3):
             world.add(6100 + offset, grammar.cache_name(KEY, OLD), f"2026-09-24T10:{offset:02d}:30Z",
                       run_id=PREVIOUS, head_sha=OLD)
-        summary = world.rotate()
-        deleted = summary["deleted_artifact_ids"][KEY]
-        self.assertEqual(32, len(deleted))
-        self.assertEqual([*range(6100, 6130), 6001, 8801], deleted)
-        self.assertEqual([KEY], summary["deferred_branches"])
-        self.assertIn("left 2 artifact(s)", summary["deferral_reasons"][KEY])
-        self.assertIn(SELECTED, world.remaining())
+        get_json = world.api.get_json
+        observed = {"count": 0}
+
+        def reads(path: str, *, params: Any = None) -> Any:
+            value = get_json(path, params=params)
+            if path == f"/repos/{REPOSITORY}/actions/runs/{PREVIOUS}":
+                observed["count"] += 1
+                if observed["count"] > 1:
+                    return {**value, "conclusion": "failure"}
+            return value
+
+        with budget_of(2), mock.patch.object(world.api, "get_json", side_effect=reads):
+            summary = world.rotate()
+        self.assertEqual([5090, 9100], world.api.deleted_artifact_ids)
+        reason = summary["deferral_reasons"][KEY]
+        self.assertIn("cache retirement", reason)
+        self.assertIn("changed before its retirement", reason)
+        self.assertIn("exhausted", reason)
+        self.assertNotIn("left", reason)
+        # The leg's family cache group is rejected the same way; its family handoff group completed
+        # with its tail cut by the budget, and says so.
+        self.assertIn("family cache retirement", summary["deferral_reasons"][SCOPE])
+        self.assertIn("left 1 artifact(s)", summary["deferral_reasons"][SCOPE])
 
     def test_404_and_failed_deletions_still_spend_their_attempt(self) -> None:
         for status in (404, 500):
@@ -927,24 +1179,6 @@ class BudgetAndDeferralTests(unittest.TestCase):
                 expected = ALL_DELETIONS if status == 404 else [6001, *FAMILY_DELETIONS, *TRANSIENT_DELETIONS]
                 self.assertEqual(expected, summary["planned_artifact_ids"])
 
-    def test_a_quick_skin_sized_generation_defers_its_family_legs_to_retention(self) -> None:
-        # Seventeen keys, each with a superseded cache and two handoffs, spend the whole budget in
-        # the key scopes: the family leg and R's transients are deferred without being planned, and
-        # (see the module docstring) a later generation's rotation does not name them again.
-        keys = (KEY, *(f"mc1.21.{minor}" for minor in range(16)))
-        world = World(self, keys=keys)
-        summary = world.rotate()
-        self.assertEqual(0, summary["remaining_rotation_deletions"])
-        self.assertEqual(limits.DELETION_BUDGET, len(world.api.deleted_artifact_ids))
-        self.assertEqual({SCOPE: []}, summary["deleted_compatibility_artifact_ids"])
-        self.assertEqual([SCOPE], summary["compatibility_deferred_branches"])
-        self.assertIn("budget", summary["deferral_reasons"][SCOPE])
-        self.assertTrue(summary["pages_run_deferred"])
-        self.assertTrue({6002, 9100, FAMILY_SELECTED, 7001, 7300, 7100} <= world.remaining())
-        last = sorted(keys)[-1]
-        self.assertEqual([], summary["deleted_artifact_ids"][last])
-        self.assertIn(last, summary["deferred_branches"])
-
     def test_a_rejected_family_spends_no_budget(self) -> None:
         world = World(self)
         world.api.add_run(run(190, path=".github/workflows/build-gate.yml", sha=OLD, created="2026-09-24T09:40:00Z",
@@ -955,6 +1189,169 @@ class BudgetAndDeferralTests(unittest.TestCase):
         self.assertEqual([6002], summary["deleted_compatibility_artifact_ids"][SCOPE])
         self.assertTrue({9100, FAMILY_SELECTED} <= world.remaining())
         self.assertEqual(limits.DELETION_BUDGET - len(ALL_DELETIONS) + 2, summary["remaining_rotation_deletions"])
+
+
+class LeftoverTests(unittest.TestCase):
+    """The long-lived artifacts a spent budget deferred stay discoverable through the last promoted
+    key's names in the window, and a later rotation with budget left retires them after its own
+    previous generation's long-lived artifacts and before every shorter-lived kind. The deferral
+    mechanics are shown at SPEC §5.5's original budget of 32 (:data:`SMALL_BUDGET`), which a Quick
+    Skin generation's 35 long-lived artifacts exceed; any budget smaller than a generation behaves
+    alike."""
+
+    SMALL_BUDGET = 32
+
+    @staticmethod
+    def base(key: str) -> int:
+        return 10000 * QS_KEYS.index(key)
+
+    def test_a_spent_budget_reads_no_leftover_name(self) -> None:
+        world = World(self, keys=QS_KEYS, family_keys=QS_KEYS)
+        names: list[str] = []
+        get_json = world.api.get_json
+
+        def recording(path: str, *, params: Any = None) -> Any:
+            name = (params or {}).get("name")
+            if isinstance(name, str) and name.startswith(("mb-cache--", "mb-family-cache--")):
+                names.append(name)
+            return get_json(path, params=params)
+
+        with mock.patch.object(world.api, "get_json", side_effect=recording), \
+                budget_of(len(long_lived_order(QS_KEYS))):
+            summary = world.rotate()
+        self.assertEqual(0, summary["remaining_rotation_deletions"])
+        # The previous generation spent the budget exactly: the leftover phase was never planned, so
+        # only the probe key's window was read.
+        self.assertEqual({grammar.cache_name(KEY, COMMIT), grammar.cache_name(KEY, OLD)}, set(names))
+
+    def test_retries_of_the_same_owner_retire_its_leftovers_and_finish_the_generation(self) -> None:
+        # The operator recovery (the rotation dispatched again for the same owner) continues where
+        # the budget stopped, although the first rotation already retired the probe key's
+        # predecessor through which the previous generation was found.
+        budget = self.SMALL_BUDGET
+        world = World(self, keys=QS_KEYS, family_keys=QS_KEYS)
+        order = long_lived_order(QS_KEYS)
+        leftovers = order[budget:]
+        *_, penultimate, last = sorted(QS_KEYS)
+        self.assertEqual([6002 + self.base(penultimate), 6001 + self.base(last), 6002 + self.base(last)], leftovers)
+        with budget_of(budget):
+            world.rotate()
+            self.assertTrue(set(leftovers) <= world.remaining())
+            summary = world.rotate()
+        self.assertEqual(order, world.api.deleted_artifact_ids[:len(order)])
+        second = world.api.deleted_artifact_ids[budget:]
+        self.assertEqual(budget, len(second))
+        family_handoffs = {identifier + 10000 * position for position in range(len(QS_KEYS))
+                           for identifier in (9100, FAMILY_SELECTED)}
+        self.assertTrue(set(second[len(leftovers):]) <= family_handoffs)
+        self.assertEqual([6001 + self.base(last)], summary["deleted_artifact_ids"][last])
+        self.assertEqual(6002 + self.base(last), summary["deleted_compatibility_artifact_ids"][f"{FAMILY}--{last}"][0])
+        rotations = 2
+        while True:
+            try:
+                with budget_of(budget):
+                    world.rotate()
+            except Unavailable:
+                break
+            rotations += 1
+            self.assertLess(rotations, 10)
+        # 139 superseded artifacts: five rotations of 32 attempts, the promotion retired last.
+        self.assertEqual(5, rotations)
+        self.assertEqual(7100, world.api.deleted_artifact_ids[-1])
+        retained = {7500, 7600, 6003, 6004, 5101, 5120}
+        for position in range(len(QS_KEYS)):
+            retained |= {identifier + 10000 * position for identifier in (7200, 7400, 8802)}
+        self.assertEqual(retained, world.remaining())
+
+    def test_the_following_rotation_retires_the_leftovers_its_budget_reaches(self) -> None:
+        # Two generations of seventeen keys. R's rotation defers the previous generation's last three
+        # long-lived artifacts. A later publication of the same head (run 800) promotes every key but
+        # only the last two keys' family legs, so it supersedes 20 long-lived artifacts of R: its
+        # rotation retires those, then the leftovers, before any shorter-lived artifact.
+        budget = self.SMALL_BUDGET
+        world = World(self, keys=QS_KEYS, family_keys=QS_KEYS)
+        order = long_lived_order(QS_KEYS)
+        leftovers = order[budget:]
+        *_, penultimate, last = sorted(QS_KEYS)
+        with budget_of(budget):
+            world.rotate()
+        self.assertTrue(set(leftovers) <= world.remaining())
+        world.publish_later(800, "2026-09-25T12:00:00Z", legs=(penultimate, last))
+        before = len(world.api.deleted_artifact_ids)
+        with budget_of(budget):
+            summary = world.rotate(owner=800, now=datetime(2026, 9, 25, 13, 0, tzinfo=timezone.utc).timestamp())
+        deleted = world.api.deleted_artifact_ids[before:]
+        previous = []
+        for key in sorted(QS_KEYS):
+            previous.append(7200 + self.base(key))
+            if key in (penultimate, last):
+                previous.append(7400 + self.base(key))
+            if key == KEY:
+                previous.append(5101)
+        self.assertEqual(20, len(previous))
+        self.assertEqual([*previous, *leftovers], deleted[:len(previous) + len(leftovers)])
+        # Then the promoted legs' family handoffs (7 days) and the first 1-day handoffs.
+        legs = {identifier + self.base(key) for key in (penultimate, last) for identifier in (9100, FAMILY_SELECTED)}
+        self.assertEqual(legs, set(deleted[23:27]))
+        self.assertEqual([8801, SELECTED], deleted[27:29])
+        self.assertEqual(budget, len(deleted))
+        self.assertEqual([7200 + self.base(last), 6001 + self.base(last)], summary["deleted_artifact_ids"][last])
+        self.assertEqual([7400 + self.base(penultimate), 6002 + self.base(penultimate)],
+                         summary["deleted_compatibility_artifact_ids"][f"{FAMILY}--{penultimate}"][:2])
+        self.assertFalse(set(leftovers) & world.remaining())
+        # R's family caches of the legs run 800 did not promote are not superseded by it.
+        unpromoted = {7400 + self.base(key) for key in QS_KEYS if key not in (penultimate, last)}
+        self.assertTrue(unpromoted <= world.remaining())
+
+    def test_earlier_generations_follow_the_previous_one_and_precede_the_handoffs(self) -> None:
+        world = World(self)
+        world.api.add_run(run(80, path=E2E, sha=OLDER, created="2026-09-23T09:00:00Z"))
+        world.api.add_run(pages_run(300, OLDER, "2026-09-23T10:30:00Z"))
+        world.add(6201, grammar.cache_name(KEY, OLDER), "2026-09-23T10:55:00Z", run_id=300, head_sha=OLDER)
+        world.add(6202, grammar.family_cache_name(FAMILY, KEY, OLDER), "2026-09-23T10:56:00Z", run_id=300,
+                  head_sha=OLDER)
+        # Never candidates: a failed Pages run's cache, a name a fork planted and a generation whose
+        # head is outside the window (no source run of the history names it).
+        world.api.add_run(pages_run(310, OLDER, "2026-09-23T11:30:00Z", conclusion="failure"))
+        world.add(6203, grammar.cache_name(KEY, OLDER), "2026-09-23T11:55:00Z", run_id=310, head_sha=OLDER)
+        world.api.add_run(run(320, path=".github/workflows/evil.yml", sha=OLDER, created="2026-09-23T12:00:00Z",
+                              event="pull_request", head_repository={"full_name": "attacker/Quick-Skin-Mod"}))
+        world.add(6204, grammar.family_cache_name(FAMILY, KEY, OLDER), "2026-09-23T12:10:00Z", run_id=320,
+                  head_sha=OLDER)
+        world.api.add_run(pages_run(290, OLDEST, "2026-09-22T10:30:00Z"))
+        world.add(6205, grammar.cache_name(KEY, OLDEST), "2026-09-22T10:55:00Z", run_id=290, head_sha=OLDEST)
+        summary = world.rotate()
+        self.assertEqual([6001, 6002, 5090, 6201, 6202, 9100, FAMILY_SELECTED, 8801, SELECTED, *TRANSIENT_DELETIONS],
+                         world.api.deleted_artifact_ids)
+        self.assertEqual([6001, 5090, 6201, 8801, SELECTED], summary["deleted_artifact_ids"][KEY])
+        self.assertEqual([6002, 6202, 9100, FAMILY_SELECTED], summary["deleted_compatibility_artifact_ids"][SCOPE])
+        self.assertEqual({}, summary["deferral_reasons"])
+        self.assertTrue({6203, 6204, 6205} <= world.remaining())
+
+    def test_a_new_first_key_leaves_the_previous_generation_to_the_leftover_phase(self) -> None:
+        # R added mc1.19.4, which sorts first and so becomes the probe key, but the previous generation
+        # never published it: the probe finds nothing and the last key's names find that generation.
+        new = "mc1.19.4"
+        world = World(self, keys=(KEY, new))
+        world.change(16001, expired=True)
+        summary = world.rotate()
+        self.assertEqual([5090, 6001, 6002, 9100, FAMILY_SELECTED, 18801, SELECTED + 10000, 8801, SELECTED,
+                          17001, 7001, 7002, 7300, 7100], world.api.deleted_artifact_ids)
+        self.assertEqual({KEY: [5090, 6001, 8801, SELECTED], new: [18801, SELECTED + 10000]},
+                         summary["deleted_artifact_ids"])
+        self.assertEqual({}, summary["deferral_reasons"])
+
+    def test_a_foreign_owner_of_a_leftover_name_rejects_only_the_leftover_group(self) -> None:
+        world = World(self)
+        world.api.add_run(run(80, path=E2E, sha=OLDER, created="2026-09-23T09:00:00Z"))
+        world.api.add_run(run(420, path=".github/workflows/build-gate.yml", sha=OLDER, created="2026-09-23T08:00:00Z"))
+        world.add(6030, grammar.cache_name(KEY, OLDER), "2026-09-23T08:10:00Z", run_id=420, head_sha=OLDER)
+        summary = world.rotate()
+        self.assertEqual(ALL_DELETIONS, world.api.deleted_artifact_ids)
+        self.assertEqual([KEY], summary["deferred_branches"])
+        self.assertIn("leftover cache retirement", summary["deferral_reasons"][KEY])
+        self.assertIn(6030, world.remaining())
+        self.assertEqual(limits.DELETION_BUDGET - len(ALL_DELETIONS), summary["remaining_rotation_deletions"])
 
 
 class ReobservationTests(unittest.TestCase):
@@ -1015,10 +1412,14 @@ class ReobservationTests(unittest.TestCase):
 
     def test_a_changed_candidate_is_charged_and_never_deleted(self) -> None:
         world = World(self)
-        summary = self.rotate_changing_after_first_delete(world, lambda: world.change(8801, size_in_bytes=99))
-        self.assertEqual({KEY: [6001]}, summary["deleted_artifact_ids"])
-        self.assertIn(8801, world.remaining())
-        self.assertEqual(limits.DELETION_BUDGET - 2 - 3 - 4, summary["remaining_rotation_deletions"])
+        # The handoff group is planned (8801 and SELECTED pinned) before 8801's deletion changes SELECTED.
+        summary = self.rotate_changing_after_first_delete(
+            world, lambda: world.change(SELECTED, size_in_bytes=99), after=8801)
+        self.assertEqual({KEY: [6001, 5090, 8801]}, summary["deleted_artifact_ids"])
+        self.assertIn(SELECTED, world.remaining())
+        self.assertIn("handoff retirement", summary["deferral_reasons"][KEY])
+        self.assertIn("changed before its retirement", summary["deferral_reasons"][KEY])
+        self.assertEqual(limits.DELETION_BUDGET - len(ALL_DELETIONS), summary["remaining_rotation_deletions"])
 
     def test_an_owner_rerun_stops_every_later_retirement(self) -> None:
         world = World(self)
@@ -1059,7 +1460,7 @@ class ReobservationTests(unittest.TestCase):
 
         with mock.patch.object(world.api, "get_json", side_effect=reads):
             summary = world.rotate()
-        self.assertEqual([6001, SELECTED, 5090], summary["deleted_artifact_ids"][KEY])
+        self.assertEqual([6001, 5090, SELECTED], summary["deleted_artifact_ids"][KEY])
         self.assertNotIn(8801, summary["planned_artifact_ids"])
         self.assertEqual(limits.DELETION_BUDGET - len(ALL_DELETIONS), summary["remaining_rotation_deletions"])
 

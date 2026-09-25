@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # The kit's own nested action pins (workflows and composites). Every pin stays a full commit SHA
+  # with its version comment; tests/test_workflow_pins.py requires the reviewed pins
+  # (tests/test_workflow_policy.py PINNED_ACTIONS) to be updated together in every place they appear.
+  #
+  # Two places are deliberately not scanned: for a directory other than "/" Dependabot reads every
+  # workflow file directly in it, and both hold kit references whose "@{{PIN}} # {{VERSION}}"
+  # placeholders are not refs it can resolve. Their pins are bumped by hand in the same pull
+  # request as PINNED_ACTIONS, and CI fails until they are:
+  #   - template/managed/.github/workflows/pages.yml, the only user of actions/deploy-pages
+  #     (tests/test_workflow_pins.py), together with its byte-identical copy
+  #     canary/.github/workflows/pages.yml (tests/test_conformance.py);
+  #   - canary/.github/workflows/canary-*.yml, whose actions/checkout and actions/setup-python pins
+  #     must equal PINNED_ACTIONS (tests/test_conformance.py).
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /actions/setup
+      - /actions/prepare-evidence
+      - /actions/publish-family
+      - /actions/notify-pages
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"

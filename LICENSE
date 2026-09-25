@@ -1,0 +1,67 @@
+mod-base — All Rights Reserved
+
+Copyright (c) 2026 AkaNebur / The Plum Team. All rights reserved.
+
+The source code of mod-base is published for transparency and for use by
+The Plum Team's projects: anyone can read how The Plum Team's public evidence
+and project sites are produced, validated and published. This is NOT open
+source software, and no redistribution rights are granted.
+
+The only official source of mod-base is this GitHub repository, at its
+immutable release tags.
+
+
+YOU MAY:
+
+  - View, read and study this source code.
+  - Fork this repository on GitHub, as permitted by the GitHub Terms of
+    Service, for the purpose of submitting pull requests back to it.
+  - Open issues and submit pull requests.
+  - Run a pinned release of mod-base in a project of The Plum Team that the
+    copyright holder maintains, and keep in that project the files the kit
+    manages there (the managed region of .github/workflows/pages.yml,
+    scripts/ci/mod_base_kit.py, docs/ai/shared/*.md and .gitattributes)
+    and the files it seeds once.
+
+
+YOU MAY NOT, without prior written permission from the copyright holder:
+
+  - Redistribute, mirror, reupload or republish mod-base, in whole or in
+    part, on any website, platform or repository other than this one and
+    the projects named under "YOU MAY".
+  - Publish modified or derivative versions of mod-base.
+  - Use mod-base, or copy its files, in a project that is not a project of
+    The Plum Team maintained by the copyright holder. This includes a
+    project published under an open-source license: the terms for the
+    files mod-base would copy into it must be settled first.
+  - Reuse this code, in whole or in part, in another project.
+  - Sell mod-base or any derivative of it.
+
+Permission for anything not listed under "YOU MAY" can be requested from the
+copyright holder. Reasonable requests are usually granted.
+
+
+CONTRIBUTIONS
+
+By submitting a pull request you agree that your contribution is licensed to
+the copyright holder under these same terms.
+
+
+THIRD-PARTY CONTENT
+
+mod-base depends on Pillow at run time and on GitHub Actions published by
+GitHub; they are not part of mod-base, are not covered by this license and
+remain under their own licenses.
+
+
+DISCLAIMER
+
+mod-base is not an official Minecraft or GitHub product. It is not approved
+by or associated with Mojang Studios, Microsoft or GitHub.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

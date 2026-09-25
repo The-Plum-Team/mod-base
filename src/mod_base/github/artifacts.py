@@ -29,8 +29,9 @@ from mod_base.model import grammar, limits
 OWNER = "MB1"
 
 MAX_HEAD_BRANCH_CHARS = 255
-#: The largest compressed artifact the kit downloads (the raw-bundle bound).
-MAX_ARCHIVE_BYTES = limits.MAX_RAW_BUNDLE_BYTES
+#: The largest compressed artifact the kit downloads: ``limits.MAX_ARTIFACT_BYTES`` (the largest
+#: expanded bundle plus its archive overhead).
+MAX_ARCHIVE_BYTES = limits.MAX_ARTIFACT_BYTES
 
 
 def _fail(message: str) -> MbError:

@@ -8,7 +8,8 @@ that renders. ``collected_dir`` and ``families_dir`` are therefore **new** work 
 each ``mb-collected--<key>`` exactly once inside its ``Publish / Collect <key>`` job window and
 downloads it by id with its digest, size and owner run into ``collected_dir/<key>/``; each
 ``mb-collected-family--<family>--<key>`` (present exactly for an available leg) likewise into
-``families_dir/<family>/<key>/`` (layout: ``mod_base.family.paired``).
+``families_dir/<family>/<key>/`` (layout: ``mod_base.family.paired`` and its selection record,
+:func:`collected_family_selection`).
 
 Steps: invocation checks (``GITHUB_*`` set, workflow ref is ``pages.yml`` on the default branch, no
 ``GIT_*``, clean checkouts); this run and exact attempt are ``in_progress``; the attempt's jobs by
@@ -34,7 +35,10 @@ Details of this port:
 * **Expected legs.** The keys are re-derived with the adapter's ``targets`` (as ``admit`` did) and
   the family legs are every configured family for every key; each needs exactly one successful job
   of its exact name, and a ``Publish / Collect ...`` job or collected artifact naming anything else
-  fails closed.
+  fails closed. The one exception is a publication without family legs, whose ``family`` matrix job
+  its job-level ``if`` skips before the matrix expands: the jobs API may report it once under its
+  unexpanded name (:func:`mod_base.workflow.unexpanded_api_job_name`), and then only
+  ``completed/skipped``.
 * **Heads.** A branch head is re-read with its tree; the tree binds every blob, the matrix
   included, so no matrix path has to be known by the kit.
 * **Selections.** The embedded selection is recomputed without the selected artifact's bytes: the
@@ -54,17 +58,51 @@ Details of this port:
   evidence already selected for this publication.
 * **Families.** An absent collected artifact means the leg was ``superseded`` or ``unavailable``
   (the collect job's exit 3); the build cannot tell which and records ``unavailable``, which the
-  front end renders identically. An available leg's ``selected_artifact_id`` (used only by
-  rotation) is re-identified from its envelope: the producer attempt's family handoff when the
-  envelope covers the key's subject, else the newest successful Pages run's family cache of that
-  coverage (the rule ``select`` applies).
+  front end renders identically. An available leg is re-run through R4 (and R5 when carried), then
+  its generation is authenticated (SPEC §1.8, §5.3.2 step 6; ``family_validate`` has no network):
+  the envelope's producer attempt (attempt endpoint) must be a successful
+  ``families[].producer.workflow`` run (path and workflow id) of this repository on the default
+  branch at ``producer.commit``, started by one of ``producer.events``; the projection's
+  ``provenance.producer`` must equal ``runs.run_record`` of that attempt exactly, so its
+  ``created_at``, ``display_title`` and ``event`` are the API's (its ``job_graph_sha256``, when
+  present, the graph of that attempt's jobs); and ``envelope.kit`` must be the pin of
+  ``producer.workflow`` at the producer run's head (``authenticate.kit_binding`` as a
+  ``family-handoff`` owned by the producer run, also for a family cache, which is a verbatim copy of
+  the producer's bundle). The leg's ``selected_artifact_id`` (used only by rotation) is the
+  generation the family job's ``select`` chose, recorded by ``family collect`` as the collected
+  artifact's :data:`FAMILY_SELECTED_NAME` (the exact ``Selected`` object of ``select --output``, a
+  ``family-handoff`` or ``family-cache`` of this leg) and re-authenticated by id, as a compact
+  bundle's embedded selection is: the artifact must be listed, unexpired, by its recorded owner run
+  (that run's inventory, read once for every leg it owns) with the recorded name, digest and size,
+  within the family's archive limit (``select.family_archive_limit``, as ``select`` bounds both
+  kinds). A ``family-handoff`` must be the envelope's producer attempt's own upload, usable as
+  ``select`` takes it (at most one upload of that name at the producer's head, else fail closed;
+  unexpired and within its archive limit). A ``family-cache`` must be owned by a successful earlier Pages run
+  on the default branch at the recorded attempt and named with a commit of the key coverage's
+  bounded first-parent history (``select.FamilyGenerations.history``, the only commits ``select``'s
+  carry-forward walk probes) at or above the envelope's coverage (R5 again from the envelope's
+  coverage to the cache's, which a later publication may have carried it to: ``refresh`` names a
+  cache by the promoted coverage while its envelope keeps the producer's). Anything else fails
+  closed. The walk itself is never repeated: its cost grows with the commits it probes (one
+  exact-name listing per leg and commit), and, like the newest-run rule of ordinary bundles, a newer
+  generation appearing after collection never invalidates the authenticated one this publication
+  collected.
+* **API budget** (``limits.MAX_PAGES_API_READS`` per job): every run, attempt, job list, artifact
+  inventory, pin, workflow id and family kit binding is read (and every R5 proof run) at most once
+  per invocation (the final recheck re-reads steps 2-5 by design); a selected artifact, ordinary or
+  family, is looked up in its owner run's inventory; a collected artifact is downloaded by id from
+  the metadata of this attempt's observed inventory (the final recheck observes it again) instead
+  of re-reading it per artifact. What remains per leg is its download, however far below the
+  coverage its family generation was produced (Quick Skin's 17 keys and family legs, carried up to
+  three commits: ``tests/test_build_current_attempt.py`` ``ScaleBudgetTest``).
 * **Project text.** ``project.description`` ``{"from_matrix": "a.b"}`` reads
   ``release/release-matrix.json`` (both mods' matrix) at the protected checkout and must be display
   text. The icon keeps its pixels and transparency and is re-encoded without metadata
   (:func:`_icon_png`: ``IHDR``, an indexed icon's ``PLTE``, ``tRNS`` and one ``IDAT`` deflated
   again from exactly the scanlines ``IHDR`` implies); ``pixelated`` rendering is a rule of the
   generated ``theme.css``. The ``theme-color`` meta is the midpoint of ``theme.dark.bg`` and
-  ``theme.dark.surface`` (Quick Skin's hand-written ``#111713``).
+  ``theme.dark.surface`` (Quick Skin's hand-written ``#111713``); the ``color-scheme`` meta is
+  ``dark``, or ``dark light`` when ``theme.light`` is set (``templating.color_scheme``).
 * **Bounds.** Before any image is read, the distinct published images named by the validated
   manifests and projections, plus the kit files, must fit the site bounds (``MAX_SITE_FILES``,
   ``MAX_SITE_BYTES``); the seal enforces the final totals.
@@ -76,6 +114,7 @@ Details of this port:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import posixpath
 import shutil
@@ -98,6 +137,7 @@ from mod_base.family.envelope import validate_envelope_dir
 from mod_base.family.paired import (
     IMAGES_DIRECTORY,
     PROJECTION_NAME,
+    SELECTED_NAME,
     SOURCE_DIRECTORY,
     validate_projection,
     verify_carry_forward,
@@ -107,19 +147,27 @@ from mod_base.github.api import GitHubApi
 from mod_base.imaging.metrics import ImageError
 from mod_base.imaging.png import canonical_png
 from mod_base.io.atomic_directory import atomic_directory, write_new
-from mod_base.io.bounded_zip import LIMITS_BY_KIND
+from mod_base.io.bounded_zip import LIMITS_BY_KIND, archive_limit, extract
 from mod_base.io.seal import seal_output
 from mod_base.io.tree import read_child_file
 from mod_base.model import documents, grammar
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json, sha256_hex, strict_loads
-from mod_base.model.documents import RUN_CLAIM_FIELDS
 from mod_base.model.validators import is_display_text
 from mod_base.pages import templating
+from mod_base.pages.authenticate import kit_binding
+from mod_base.pages.select import FamilyGenerations, Selected, SourceRuns, family_archive_limit
 from mod_base.pages.targets import discover_targets
 from mod_base.pin import parse_pin_files
 from mod_base.runtime import Invocation
-from mod_base.workflow import PAGES_EVENTS, PAGES_WORKFLOW_PATH, api_job_name, caller_job_name, find_job
+from mod_base.workflow import (
+    PAGES_EVENTS,
+    PAGES_WORKFLOW_PATH,
+    api_job_name,
+    caller_job_name,
+    find_job,
+    unexpanded_api_job_name,
+)
 
 OWNER = "MB6"
 #: The promotion's file name inside ``--promotion DIR`` and inside the ``mb-promotion`` artifact.
@@ -139,8 +187,6 @@ MAX_SITE_SOURCE_BYTES = 1 * lim.MIB
 #: The matrix a ``{"from_matrix": ...}`` description is read from (Quick Skin and Block Pops).
 MATRIX_PATH = "release/release-matrix.json"
 MAX_MATRIX_BYTES = 4 * lim.MIB
-#: Bound of ``source.workflow`` read at a handoff run's head (kit binding).
-MAX_WORKFLOW_FILE_BYTES = 1 * lim.MIB
 MAX_ALT_CHARS = 400
 #: The build job's id (``$GITHUB_JOB``), where ``targets``, ``expectation`` and the build hooks run.
 BUILD_JOB = "build"
@@ -158,9 +204,17 @@ _PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 _PNG_DEPTHS = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
 #: The Adam7 passes ``(x0, y0, dx, dy)``.
 _ADAM7 = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
-_FAMILY_ROOT = frozenset({PROJECTION_NAME, IMAGES_DIRECTORY, SOURCE_DIRECTORY})
-#: At most this many owners of one family cache name are read (``select``'s bound).
-MAX_CACHE_OWNERS = 8
+#: The ``Selected`` record (``select --output``) of the family generation a leg was collected from,
+#: written by ``family collect --selected-json`` at the root of ``mb-collected-family--<family>--<key>``
+#: beside ``paired.json``, ``images/`` and ``source/`` (``family.paired.SELECTED_NAME``;
+#: re-authenticated by ``build``, bound by ``refresh``).
+FAMILY_SELECTED_NAME = SELECTED_NAME
+#: The entries a collected family artifact's root must hold, and may hold.
+_FAMILY_REQUIRED = frozenset({PROJECTION_NAME, SOURCE_DIRECTORY, FAMILY_SELECTED_NAME})
+_FAMILY_ROOT = _FAMILY_REQUIRED | {IMAGES_DIRECTORY}
+_FAMILY_KINDS = ("family-handoff", "family-cache")
+#: The ``family`` job of a publication without family legs (:meth:`_Builder._check_jobs`).
+_UNEXPANDED_FAMILY_JOB = unexpanded_api_job_name("publish", "family")
 
 
 @dataclass(frozen=True)
@@ -319,6 +373,32 @@ def require_current_run(api: GitHubApi, invocation: Invocation, implementation: 
 # -- Build -------------------------------------------------------------------------------------------
 
 
+def collected_family_selection(root: Path, *, family: str, key: str, reason: str) -> Selected:
+    """The layout of a downloaded ``mb-collected-family--<family>--<key>`` (exactly
+    ``paired.json``, ``source/`` and :data:`FAMILY_SELECTED_NAME`, plus ``images/`` when the
+    projection has images) and its selection record: the canonical JSON (read without following a
+    symlink, at most ``limits.MAX_SELECTED_JSON_BYTES``) of the exact ``Selected`` object of a
+    ``family-handoff`` or ``family-cache`` of ``family`` and ``key``. Only the record's form is
+    checked here; ``build`` re-authenticates the artifact it names. Failures carry ``reason``."""
+
+    entries = set(os.listdir(root))
+    if not _FAMILY_REQUIRED <= entries <= _FAMILY_ROOT:
+        raise _fail(f"the collected {family} artifact of {key} holds {sorted(entries)[:5]}", reason=reason)
+    try:
+        raw = read_child_file(root, FAMILY_SELECTED_NAME, max_bytes=lim.MAX_SELECTED_JSON_BYTES)
+        value = strict_loads(raw, label=FAMILY_SELECTED_NAME, max_bytes=lim.MAX_SELECTED_JSON_BYTES)
+        selected = Selected.parse(value)
+    except MbError as exc:
+        raise _fail(f"the collected {family} selection of {key} is malformed: {exc}", reason=reason) from exc
+    if canonical_json(value) != raw:
+        raise _fail(f"the collected {family} selection of {key} is not canonical JSON", reason=reason)
+    parsed = grammar.parse_artifact_name(selected.name)
+    if selected.kind not in _FAMILY_KINDS or parsed is None or (parsed.family, parsed.key) != (family, key):
+        raise _fail(f"the collected {family} selection of {key} names {selected.name}, not a generation of this leg",
+                    reason=reason)
+    return selected
+
+
 @dataclass
 class _Leg:
     """One key (``family is None``) or family leg of this publication."""
@@ -345,13 +425,26 @@ class _Builder:
         self.implementation = current_implementation(invocation, jobs_allowed=(BUILD_JOB,))
         self.targets: list[dict[str, Any]] = []
         self.legs: list[_Leg] = []
+        self.sources = SourceRuns(api, invocation)
+        #: Only its memoized ``history`` (the commits ``select``'s walk may probe, read locally) is used:
+        #: a collected generation is re-authenticated by id, never found again by walking.
+        self.generations = FamilyGenerations(api, invocation, sources=self.sources)
+        self._runs: dict[int, dict[str, Any]] = {}
         self._attempts: dict[tuple[int, int], dict[str, Any]] = {}
         self._attempt_jobs: dict[tuple[int, int], list[dict[str, Any]]] = {}
         self._run_artifacts: dict[int, list[artifacts.Artifact]] = {}
         self._pins: dict[tuple[str, str], str] = {}
-        self._workflow_ids: dict[str, int] = {}
+        self._family_kits: set[tuple[str, str, str, str]] = set()
+        self._carries: set[tuple[str, str]] = set()
 
     # -- memoized reads (the Pages API budget is 160 reads per job) ------------------------------
+
+    def run(self, run_id: int) -> dict[str, Any]:
+        """The run ``run_id`` at its latest attempt (a cache owner)."""
+
+        if run_id not in self._runs:
+            self._runs[run_id] = runs.get_run(self.api, run_id)
+        return self._runs[run_id]
 
     def attempt(self, run_id: int, run_attempt: int) -> dict[str, Any]:
         if (run_id, run_attempt) not in self._attempts:
@@ -368,22 +461,32 @@ class _Builder:
             self._run_artifacts[run_id] = artifacts.list_for_run(self.api, run_id)
         return self._run_artifacts[run_id]
 
+    def listed(self, run_id: int, artifact_id: int) -> artifacts.Artifact | None:
+        """Artifact ``artifact_id`` as the inventory of its owner ``run_id`` lists it (one read for
+        every artifact a run owns), or ``None``."""
+
+        found = [artifact for artifact in self.artifacts_of(run_id) if artifact.id == artifact_id]
+        return found[0] if len(found) == 1 else None
+
     def pin_at(self, workflow: str, head: str) -> str:
         if (workflow, head) not in self._pins:
-            data = contents.file_at(self.api, workflow, head, max_bytes=MAX_WORKFLOW_FILE_BYTES)
+            data = contents.file_at(self.api, workflow, head, max_bytes=lim.MAX_WORKFLOW_FILE_BYTES)
             self._pins[(workflow, head)] = parse_pin_files({workflow: data}).sha
         return self._pins[(workflow, head)]
 
-    def workflow_id(self, path: str) -> int:
-        """The id of this repository's workflow ``path`` (``GET /actions/workflows/<file>``)."""
+    def carry_forward(self, carried_from: str, coverage_sha: str) -> None:
+        """R5 (:func:`mod_base.family.paired.verify_carry_forward` on the inert objects of the
+        protected checkout), proven once per commit pair: every leg carried alike shares it."""
 
-        if path not in self._workflow_ids:
-            grammar.require(grammar.WORKFLOW_PATH, path, "workflow path")
-            value = self.api.get_json(f"/repos/{self.repository}/actions/workflows/{posixpath.basename(path)}")
-            if not isinstance(value, dict) or value.get("path") != path:
-                raise _fail(f"the workflow record of {path} is malformed", reason="workflow")
-            self._workflow_ids[path] = grammar.require_positive_int(value.get("id"), "workflow id")
-        return self._workflow_ids[path]
+        if (carried_from, coverage_sha) not in self._carries:
+            verify_carry_forward(self.invocation.repo_root, carried_from, coverage_sha)
+            self._carries.add((carried_from, coverage_sha))
+
+    def workflow_id(self, path: str) -> int:
+        """The id of this repository's workflow ``path`` (``GET /actions/workflows/<file>``), read
+        once per build."""
+
+        return self.sources.workflow_id(path)
 
     def of_workflow(self, run: Mapping[str, Any], path: str) -> bool:
         """``run`` belongs to this repository's workflow ``path`` by path and workflow id."""
@@ -454,6 +557,17 @@ class _Builder:
                 name = api_job_name("publish", "family", family=leg.family, key=leg.key)
             expected.add(name)
             leg.job = successful(name)
+        if (not any(leg.family is not None for leg in self.legs)
+                and any(job.get("name") == _UNEXPANDED_FAMILY_JOB for job in attempt_jobs)):
+            # Without a family leg the ``family`` matrix job is skipped by its job-level ``if`` before
+            # its matrix expands: the jobs API reports it once, under its unexpanded template name, as a
+            # completed/skipped job of this attempt. Anything else under that name is a stray (with a
+            # family leg, the name itself is one).
+            skipped = find_job(attempt_jobs, _UNEXPANDED_FAMILY_JOB, run_attempt=attempt)
+            if skipped.get("status") != "completed" or skipped.get("conclusion") != "skipped":
+                raise _fail("the family job of a publication without family legs was not skipped", reason="job-graph")
+            expected.add(_UNEXPANDED_FAMILY_JOB)
+            observed.append([_UNEXPANDED_FAMILY_JOB, skipped.get("id"), "skipped"])
         collect_prefix = api_job_name("publish", "collect", key="k0").removesuffix("k0")
         strays = sorted(str(job.get("name")) for job in attempt_jobs
                         if str(job.get("name")).startswith(collect_prefix) and job.get("name") not in expected)
@@ -493,6 +607,14 @@ class _Builder:
     # -- step 6: ordinary bundles -------------------------------------------------------------------
 
     def download(self, leg: _Leg, collected_dir: Path, families_dir: Path) -> None:
+        """Download ``leg``'s collected artifact by immutable id into its new work directory.
+
+        The metadata is this attempt's observed inventory (:meth:`observe`: this run, this head,
+        inside the leg's job window, not expired), which the final recheck observes again, so it is
+        not re-read per artifact as :func:`mod_base.github.artifacts.download` does; the size must
+        fit the extraction bound before a byte is fetched, and the bytes must be exactly that size
+        and hash to that digest before the bounded extraction."""
+
         artifact = leg.artifact
         assert artifact is not None
         if leg.family is None:
@@ -502,9 +624,14 @@ class _Builder:
             if not family_root.exists():
                 _new_directory(family_root, "family work directory")
             output, kind = family_root / leg.key, "collected-family"
-        artifacts.download(self.api, artifact_id=artifact.id, name=artifact.name, digest=artifact.digest,
-                           size=artifact.size, run_id=self.implementation["run_id"], output=output,
-                           extraction=LIMITS_BY_KIND[kind])
+        extraction = LIMITS_BY_KIND[kind]
+        if not 0 < artifact.size <= min(artifacts.MAX_ARCHIVE_BYTES, archive_limit(extraction)):
+            raise _fail(f"{artifact.name} exceeds its extraction bound", reason="artifact")
+        data = self.api.download(f"/repos/{self.repository}/actions/artifacts/{artifact.id}/zip",
+                                 max_bytes=artifact.size)
+        if len(data) != artifact.size or "sha256:" + hashlib.sha256(data).hexdigest() != artifact.digest:
+            raise _fail(f"{artifact.name} does not match its size and digest", reason="artifact")
+        extract(data, output, extraction)
         leg.root = output
 
     def bundle(self, target: Mapping[str, Any], root: Path) -> dict[str, Any]:
@@ -538,8 +665,8 @@ class _Builder:
         handoff, tested, reuse = provenance["handoff"], provenance["tested"], provenance["reuse"]
         source = self.config.source
         recorded = selection["selected_artifact"]
-        artifact = artifacts.get_artifact(self.api, recorded["id"])
-        if artifact.expired or (artifact.name, artifact.digest, artifact.size) != (
+        artifact = self.listed(recorded["run_id"], recorded["id"])
+        if artifact is None or artifact.expired or (artifact.name, artifact.digest, artifact.size) != (
                 recorded["name"], recorded["digest"], recorded["size"]):
             raise _fail(f"the selected artifact {recorded['id']} of {key} changed or expired", reason="artifact")
         kind = recorded["kind"]
@@ -663,50 +790,133 @@ class _Builder:
     # -- step 7: families -----------------------------------------------------------------------------
 
     def family(self, leg: _Leg, coverage_sha: str) -> dict[str, Any]:
-        """R4 (and R5 for a carried generation) on one downloaded family leg."""
+        """R4 (and R5 for a carried generation) on one downloaded family leg, then its generation's
+        producer run, run record and kit, and the artifact it was collected from (module docstring)."""
 
         assert leg.family is not None and leg.root is not None
         root = leg.root
-        entries = set(os.listdir(root))
-        if not {PROJECTION_NAME, SOURCE_DIRECTORY} <= entries <= _FAMILY_ROOT:
-            raise _fail(f"the collected {leg.family} artifact of {leg.key} holds {sorted(entries)[:5]}",
-                        reason="family-projection")
+        selected = collected_family_selection(root, family=leg.family, key=leg.key, reason="family-projection")
         envelope = validate_envelope_dir(self.invocation, root / SOURCE_DIRECTORY, family=leg.family, key=leg.key)
         projection = validate_projection(self.invocation, root / PROJECTION_NAME, images_root=root,
                                          family=leg.family, key=leg.key, expected_coverage_sha=coverage_sha)
         config = self.config.family(leg.family)
-        producer = projection["provenance"]["producer"]
-        if (projection["subject"] != envelope["subject"]
-                or {field: producer[field] for field in RUN_CLAIM_FIELDS} != envelope["producer"]
-                or producer["event"] not in config["producer"]["events"]):
+        if projection["subject"] != envelope["subject"]:
             raise _fail(f"the {leg.family} projection of {leg.key} is not its envelope's generation",
                         reason="family-projection")
         if "carried_from" in envelope:
-            verify_carry_forward(self.invocation.repo_root, envelope["carried_from"], envelope["coverage_sha"])
+            self.carry_forward(envelope["carried_from"], envelope["coverage_sha"])
         if envelope["coverage_sha"] != coverage_sha:
             if not config["carry_forward"]:
                 raise _fail(f"family {leg.family} does not allow carry-forward", reason="carry-forward")
-            verify_carry_forward(self.invocation.repo_root, envelope["coverage_sha"], coverage_sha)
-        return {"projection": projection, "selected_artifact_id": self.family_selection(leg, envelope, coverage_sha)}
+            self.carry_forward(envelope["coverage_sha"], coverage_sha)
+        producer = self.producer_run(leg, config, envelope)
+        self.require_producer_record(leg, envelope, projection, producer)
+        self.bind_family_kit(envelope, producer)
+        return {"projection": projection,
+                "selected_artifact_id": self.family_selection(leg, config, envelope, coverage_sha, selected)}
 
-    def family_selection(self, leg: _Leg, envelope: Mapping[str, Any], coverage_sha: str) -> int:
-        """The id of the family handoff or cache the collect job selected (see module docstring)."""
+    def producer_run(self, leg: _Leg, family: Mapping[str, Any], envelope: Mapping[str, Any]) -> dict[str, Any]:
+        """The envelope's producer attempt (attempt endpoint, read once): a successful
+        ``families[].producer.workflow`` run (path and workflow id) of this repository on the default
+        branch at ``producer.commit``, started by one of ``producer.events`` (SPEC §1.8: the owner a
+        family generation's kit is bound to)."""
+
+        claim, producer = envelope["producer"], family["producer"]
+        run = self.attempt(claim["run_id"], claim["run_attempt"])
+        head, event = run.get("head_repository"), run.get("event")
+        if not (self.of_workflow(run, producer["workflow"]) and claim["workflow_path"] == producer["workflow"]
+                and _is_success(run) and isinstance(event, str) and event in producer["events"]
+                and run.get("id") == claim["run_id"] and run.get("head_branch") == self.default
+                and run.get("head_sha") == claim["commit"]
+                and isinstance(head, Mapping) and head.get("full_name") == self.repository):
+            raise _fail(f"the {leg.family} producer run {claim['run_id']} attempt {claim['run_attempt']} of {leg.key} "
+                        "failed provenance", reason="family-provenance")
+        return run
+
+    def require_producer_record(self, leg: _Leg, envelope: Mapping[str, Any], projection: Mapping[str, Any],
+                                run: Mapping[str, Any]) -> None:
+        """The projection's ``provenance.producer`` is exactly the producer attempt's run record, so
+        its ``created_at``, ``display_title`` and ``event`` are the API's, never adapter claims; a
+        ``job_graph_sha256``, when present, must be the graph of that attempt's jobs."""
+
+        claim = envelope["producer"]
+        recorded = projection["provenance"]["producer"]
+        expected = runs.run_record(run, claim)
+        if "job_graph_sha256" in recorded:
+            observed = self.jobs_of(claim["run_id"], claim["run_attempt"])
+            expected["job_graph_sha256"] = jobs.job_graph_sha256(jobs.job_graph(observed))
+        if expected != recorded:
+            raise _fail(f"the {leg.family} projection of {leg.key} does not carry its producer run's record",
+                        reason="family-provenance")
+
+    def bind_family_kit(self, envelope: Mapping[str, Any], producer: Mapping[str, Any]) -> None:
+        """``envelope.kit`` is the pin of ``families[].producer.workflow`` at the producer run's head
+        (SPEC §1.8), for a family handoff and a family cache alike, since ``refresh`` copies the
+        producer's bundle verbatim into the cache: :func:`mod_base.pages.authenticate.kit_binding` as
+        a ``family-handoff`` owned by the producer run, read once per workflow, head and kit."""
+
+        kit = envelope["kit"]
+        memo = (producer["path"], producer["head_sha"], kit["sha"], kit["version"])
+        if memo not in self._family_kits:
+            kit_binding(self.api, self.invocation, manifest=envelope, owner_run=producer,
+                        selected_kind="family-handoff")
+            self._family_kits.add(memo)
+
+    def producer_handoff(self, leg: _Leg, family: Mapping[str, Any],
+                         claim: Mapping[str, Any]) -> artifacts.Artifact | None:
+        """The family handoff of the envelope's producer attempt, as ``select`` takes it: the
+        producer run's inventory (read once) must hold at most one upload of that name, at the
+        producer's head on the default branch (anything else fails closed); it is usable when
+        unexpired and within the family's archive limit (``select.family_archive_limit``), else
+        ``None``."""
 
         assert leg.family is not None
+        name = grammar.family_handoff_name(leg.family, leg.key, claim["run_attempt"])
+        uploads = [artifact for artifact in self.artifacts_of(claim["run_id"]) if artifact.name == name]
+        if len(uploads) > 1 or any((artifact.head_sha, artifact.head_branch) != (claim["commit"], self.default)
+                                   for artifact in uploads):
+            raise _fail(f"the {leg.family} producer run {claim['run_id']} does not own exactly one {name} of its head",
+                        reason="family-projection")
+        if not uploads or uploads[0].expired or uploads[0].size > family_archive_limit(family):
+            return None
+        return uploads[0]
+
+    def family_selection(self, leg: _Leg, family: Mapping[str, Any], envelope: Mapping[str, Any],
+                         coverage_sha: str, selected: Selected) -> int:
+        """The id of the family generation the family job collected (its :data:`FAMILY_SELECTED_NAME`
+        record), re-authenticated by id at a cost independent of how far ``select`` walked (module
+        docstring); anything that is not an admissible generation of this envelope fails closed."""
+
+        assert leg.family is not None
+        label = f"the {leg.family} generation {selected.artifact_id} collected for {leg.key}"
+        artifact = self.listed(selected.run_id, selected.artifact_id)
+        if (artifact is None or artifact.expired or artifact.run_id != selected.run_id
+                or (artifact.name, artifact.digest, artifact.size) != (selected.name, selected.digest, selected.size)):
+            raise _fail(f"{label} is not listed unexpired, with its recorded name, digest and size, by its owner run "
+                        f"{selected.run_id}", reason="family-selection")
+        if artifact.size > family_archive_limit(family):
+            raise _fail(f"{label} exceeds the family's archive bound", reason="family-selection")
         producer = envelope["producer"]
-        if envelope["coverage_sha"] == coverage_sha:
-            name = grammar.family_handoff_name(leg.family, leg.key, producer["run_attempt"])
-            uploads = [artifact for artifact in self.artifacts_of(producer["run_id"])
-                       if artifact.name == name and not artifact.expired]
-            if len(uploads) == 1:
-                return uploads[0].id
-        caches = [artifact for artifact in artifacts.list_named(
-            self.api, grammar.family_cache_name(leg.family, leg.key, coverage_sha))
-                  if not artifact.expired and artifact.head_branch == self.default]
-        for artifact in caches[:MAX_CACHE_OWNERS]:
-            if self.pages_owner(runs.get_run(self.api, artifact.run_id), artifact):
-                return artifact.id
-        raise _fail(f"cannot identify the {leg.family} generation collected for {leg.key}", reason="family-projection")
+        if selected.kind == "family-handoff":
+            if ((selected.run_id, selected.run_attempt) != (producer["run_id"], producer["run_attempt"])
+                    or self.producer_handoff(leg, family, producer) != artifact):
+                raise _fail(f"{label} is not the usable family handoff of its envelope's producer attempt",
+                            reason="family-selection")
+            return artifact.id
+        owner = self.run(artifact.run_id)
+        if (artifact.head_branch != self.default or not self.pages_owner(owner, artifact)
+                or owner.get("run_attempt") != selected.run_attempt):
+            raise _fail(f"{label} is not a family cache owned by a successful earlier Pages run attempt",
+                        reason="family-selection")
+        parsed = grammar.parse_artifact_name(selected.name)
+        named = None if parsed is None else parsed.coverage_sha
+        if named is None or named not in self.generations.history(coverage_sha):
+            raise _fail(f"{label} is named with {named}, outside the bounded first-parent history of {coverage_sha}",
+                        reason="family-selection")
+        if named != envelope["coverage_sha"]:
+            # The cache's own publication carried this envelope forward to the cache's coverage (R5).
+            self.carry_forward(envelope["coverage_sha"], named)
+        return artifact.id
 
 
 def _heads(builder: _Builder) -> dict[str, str]:
@@ -1223,6 +1433,7 @@ def _pages(invocation: Invocation, project: Mapping[str, Any], sources: Mapping[
         "actions_url": _actions_url(invocation),
         "primary_link_url": primary["url"], "primary_link_title": primary["title"],
         "theme_color": templating.theme_color(config.theme),
+        "color_scheme": templating.color_scheme(config.theme),
     }
     conditions = {"icon": project["icon"] is not None, "primary_link": bool(links), "families": bool(config.families)}
     landing = (f"{project['name']} downloads, source and verified packaged-Minecraft visual evidence." if links

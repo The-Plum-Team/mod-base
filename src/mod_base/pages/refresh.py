@@ -9,11 +9,12 @@ requires the live head to equal its ``coverage_sha`` and writes **exactly the by
 into ``input_dir``, a new directory (the frozen ``--input`` flag names this upload directory):
 
 * ordinary key: the compact bundle (``mb-collected--<key>`` verbatim), rolled forward as
-  ``mb-cache--<key>--<coverage_sha>`` and, when ``baseline_archive.enabled`` and the scope is
-  ``complete``, also retained as ``mb-baseline--<key>--<commit>--<tested_run_id>``;
+  ``mb-cache--<key>--<coverage_sha>`` and, for a new complete generation (see ``baseline_name``
+  below), also retained as ``mb-baseline--<key>--<commit>--<tested_run_id>``;
 * family leg: the collected family artifact's ``source/`` directory (the envelope and native
   bundle, re-collectable by ``family collect``), rolled forward as
-  ``mb-family-cache--<family>--<key>--<coverage_sha>``. A leg the promotion records as not
+  ``mb-family-cache--<family>--<key>--<coverage_sha>``; its selection record
+  (``build.FAMILY_SELECTED_NAME``) is checked but never uploaded. A leg the promotion records as not
   available ("nothing collected") returns ``available=False`` with no cache name, writes nothing
   and exits 0.
 
@@ -28,11 +29,25 @@ Details of this port:
 * The promotion must be exactly ``promotion.json``, canonical, final, and name this run as its
   implementation and the executing kit; the collected artifact must be the one it recorded (id,
   digest, name, this run), its ``manifest.json`` hash, coverage and selected artifact must equal the
-  promotion's entry, and its embedded selection must name this Pages attempt.
+  promotion's entry, and its embedded selection must name this Pages attempt. A collected family
+  artifact must have the layout ``build`` accepted (:func:`mod_base.pages.build.collected_family_selection`)
+  and its selection record must name the promotion's ``selected_artifact_id``.
 * The live head: an ordinary bundle's subject branch must still point at its coverage and subject
   tree; a family leg's coverage must still be the head of every branch the promotion published at
   that commit.
-* ``baseline_name`` uses the subject commit and the tested run id of the manifest's provenance.
+* ``baseline_name`` uses the subject commit and the tested run id of the manifest's provenance. It
+  is named only for a **new complete generation**, retained once and never extended (Quick Skin:
+  once per complete generation): ``baseline_archive.enabled``, the scope is ``complete``, the
+  embedded selection's artifact is a ``handoff`` (a ``cache`` republishes a generation an earlier
+  publication already promoted, and re-retaining it would also stretch an expired baseline's 90
+  days), and no authenticated baseline of that exact name exists yet (the same handoff is selected
+  again until rotation retires it, for example by a family wake): at most
+  ``limits.MAX_CANDIDATES`` unexpired default-branch uploads of that name owned by another run,
+  newest first, go through the consumers' own owner check
+  (:func:`mod_base.evidence.compose.authenticate_baseline`, R3: a successful earlier ``pages.yml``
+  run whose ``Finalize / Refresh evidence cache for <key>`` job uploaded it in its retention step).
+  One that fails that check, or is gone (404), is no retained baseline; every other API failure
+  propagates.
 * **Post-validation recheck** (BP ``refresh_cache`` ``context["recheck"]`` then the cache seal
   recheck): after the upload bytes are written and sealed, and before the upload directory is
   published, this run, its exact attempt, the ``Deploy``/``Build`` jobs (same ids, still
@@ -52,10 +67,11 @@ from typing import Any
 
 from mod_base.errors import MbError
 from mod_base.evidence import validate
+from mod_base.evidence.compose import authenticate_baseline
 from mod_base.family.envelope import ENVELOPE_NAME, MAX_NATIVE_FILE_BYTES, validate_envelope_dir
-from mod_base.family.paired import IMAGES_DIRECTORY, PROJECTION_NAME, SOURCE_DIRECTORY, validate_projection
+from mod_base.family.paired import PROJECTION_NAME, SOURCE_DIRECTORY, validate_projection
 from mod_base.github import artifacts, contents, jobs, runs
-from mod_base.github.api import GitHubApi
+from mod_base.github.api import ApiError, ApiNotFound, GitHubApi, RequestBudgetExhausted
 from mod_base.io.atomic_directory import atomic_directory, write_new
 from mod_base.io.bounded_zip import LIMITS_BY_KIND
 from mod_base.io.seal import seal_output
@@ -63,14 +79,13 @@ from mod_base.io.tree import read_child_file
 from mod_base.model import documents, grammar
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json, sha256_hex, strict_loads
-from mod_base.pages.build import PROMOTION_FILE, current_implementation, require_current_run
+from mod_base.pages.build import PROMOTION_FILE, collected_family_selection, current_implementation, require_current_run
 from mod_base.runtime import Invocation
 from mod_base.workflow import api_job_name, caller_job_name, find_job
 
 OWNER = "MB6"
 REFRESH_JOB = "refresh"
 REFRESH_FAMILY_JOB = "refresh-family"
-_FAMILY_ROOT = frozenset({PROJECTION_NAME, IMAGES_DIRECTORY, SOURCE_DIRECTORY})
 
 
 @dataclass(frozen=True)
@@ -197,6 +212,30 @@ def _collected_bytes(root: Path, records: list[Mapping[str, Any]], maximum: int)
     return files
 
 
+def _baseline_retained(api: GitHubApi, invocation: Invocation, *, key: str, name: str,
+                       implementation: Mapping[str, Any]) -> bool:
+    """An earlier Pages run already retains the baseline ``name`` of ``key`` (module docstring):
+    one of its newest ``limits.MAX_CANDIDATES`` unexpired default-branch uploads by another run
+    passes :func:`mod_base.evidence.compose.authenticate_baseline`."""
+
+    default = invocation.config.canonical_branch
+    candidates = [artifact for artifact in artifacts.list_named(api, name)
+                  if not artifact.expired and artifact.head_branch == default
+                  and artifact.run_id != implementation["run_id"]]
+    for artifact in candidates[:lim.MAX_CANDIDATES]:
+        try:
+            authenticate_baseline(invocation, api, key=key,
+                                  baseline={"name": artifact.name, "id": artifact.id, "digest": artifact.digest})
+        except ApiNotFound:
+            continue
+        except (ApiError, RequestBudgetExhausted):
+            raise
+        except MbError:
+            continue
+        return True
+    return False
+
+
 def _refresh_key(api: GitHubApi, invocation: Invocation, *, key: str, entry: Mapping[str, Any],
                  promotion: Mapping[str, Any], artifact: artifacts.Artifact, work: Path,
                  implementation: Mapping[str, Any]) -> _Upload:
@@ -227,8 +266,11 @@ def _refresh_key(api: GitHubApi, invocation: Invocation, *, key: str, entry: Map
     files = _collected_bytes(root, manifest["files"], max(lim.MAX_EXPECTATION_BYTES, lim.MAX_DERIVATIVE_BYTES))
     files["manifest.json"] = bundle.manifest_raw
     baseline = None
-    if invocation.config.baseline_archive["enabled"] and manifest["scope"]["kind"] == "complete":
-        baseline = grammar.baseline_name(key, subject["commit"], manifest["provenance"]["tested"]["run_id"])
+    if (invocation.config.baseline_archive["enabled"] and manifest["scope"]["kind"] == "complete"
+            and selection["selected_artifact"]["kind"] == "handoff"):
+        name = grammar.baseline_name(key, subject["commit"], manifest["provenance"]["tested"]["run_id"])
+        if not _baseline_retained(api, invocation, key=key, name=name, implementation=implementation):
+            baseline = name
     return _Upload(files=files, kind="cache", heads=heads, result=RefreshResult(
         available=True, cache_name=grammar.cache_name(key, entry["coverage_sha"]), baseline_name=baseline))
 
@@ -241,9 +283,10 @@ def _refresh_family(api: GitHubApi, invocation: Invocation, *, family: str, key:
     root = work / "collected-family"
     artifacts.download(api, artifact_id=artifact.id, name=artifact.name, digest=artifact.digest, size=artifact.size,
                        run_id=implementation["run_id"], output=root, extraction=LIMITS_BY_KIND["collected-family"])
-    entries = set(os.listdir(root))
-    if not {PROJECTION_NAME, SOURCE_DIRECTORY} <= entries <= _FAMILY_ROOT:
-        raise _fail(f"the collected {family} artifact of {key} holds {sorted(entries)[:5]}", reason="artifact")
+    selected = collected_family_selection(root, family=family, key=key, reason="artifact")
+    if selected.artifact_id != entry["selected_artifact_id"]:
+        raise _fail(f"the collected {family} artifact of {key} selected another generation than the promotion "
+                    "published", reason="artifact")
     coverage = entry["coverage_sha"]
     source = root / SOURCE_DIRECTORY
     envelope = validate_envelope_dir(invocation, source, family=family, key=key)

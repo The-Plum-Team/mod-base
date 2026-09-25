@@ -38,9 +38,11 @@ Details of this port of Block Pops ``authenticate_source`` and the Quick Skin co
   run), and again the handoff and tested runs its manifest names; its embedded selection is never
   trusted as authentication.
 
-:func:`kit_binding` also binds family generations (SPEC §1.8): a family handoff to the pin of
-``families[].producer.workflow`` at its producer run's head, a family cache to its Pages owner's
-``referenced_workflows``; this module never authenticates a family generation itself.
+:func:`kit_binding` also binds family generations (SPEC §1.8): a family handoff and a family cache
+alike to the pin of ``families[].producer.workflow`` at the head of their envelope's producer run,
+whose exact attempt the caller passes as ``owner_run`` (a family cache is that producer's bundle
+copied verbatim by ``refresh``, also when a later publication carried it forward, so its kit is the
+producer's, never its Pages owner's); this module never authenticates a family generation itself.
 """
 
 from __future__ import annotations
@@ -75,11 +77,6 @@ from mod_base.runtime import Invocation
 from mod_base.workflow import PAGES_WORKFLOW_PATH, find_job
 
 OWNER = "MB5"
-
-#: Bound of the source workflow file read at the handoff run's head (kit binding).
-MAX_WORKFLOW_FILE_BYTES = 1024 * 1024
-#: Bound of the ``--selected-json`` document (a handful of scalars).
-MAX_SELECTED_JSON_BYTES = 64 * 1024
 
 
 def _fail(message: str, reason: str = "source-authentication") -> MbError:
@@ -166,25 +163,55 @@ def _created_at(artifact: artifacts.Artifact) -> str:
     return artifact.order[0].astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _is_producer_attempt(run: Mapping[str, Any], producer: Any, workflow: str) -> bool:
+    """``run`` is exactly the attempt the envelope's ``producer`` claim names: same run id and
+    attempt (integers, never booleans), the configured producer workflow, head ``producer.commit``."""
+
+    if not isinstance(producer, Mapping):
+        return False
+    fields = [(run.get("id"), producer.get("run_id")), (run.get("run_attempt"), producer.get("run_attempt"))]
+    if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0
+           for pair in fields for value in pair):
+        return False
+    return (all(observed == claimed for observed, claimed in fields)
+            and producer.get("workflow_path") == workflow
+            and grammar.is_match(grammar.SHA1, producer.get("commit"))
+            and run.get("head_sha") == producer.get("commit"))
+
+
 def kit_binding(api: GitHubApi, invocation: Invocation, *, manifest: Mapping[str, Any],
                 owner_run: Mapping[str, Any], selected_kind: str) -> dict[str, str]:
-    """``{source, sha}``: prove ``manifest.kit.sha`` belongs to the authenticated owner run."""
+    """``{source, sha}``: prove ``manifest.kit.sha`` belongs to the authenticated owner run (SPEC §1.8).
+
+    * ``handoff``: ``owner_run`` is the handoff run; the kit is the pin of ``source.workflow`` at
+      that run's head (``workflow_file``).
+    * ``family-handoff`` and ``family-cache``: ``manifest`` is the family ``envelope.json`` and
+      ``owner_run`` is always its producer run attempt (``producer.run_id``/``run_attempt``, whose
+      head is ``producer.commit``), never the Pages run that owns a cache: ``refresh`` copies the
+      producer's bundle verbatim into the cache, so a family cache carries the producer's kit. The
+      kit is the pin of ``families[].producer.workflow`` at that run's head (``workflow_file``).
+      The caller authenticates that run (status, event, branch, repository) first.
+    * ``cache``: ``owner_run`` is the owning Pages run; the kit is the one its
+      ``referenced_workflows`` resolved (``referenced_workflows``)."""
 
     kit = manifest["kit"]
-    if selected_kind in ("handoff", "family-handoff"):
+    if selected_kind in ("handoff", "family-handoff", "family-cache"):
         if selected_kind == "handoff":
             workflow = invocation.config.source["workflow"]
         else:
             workflow = invocation.config.family(grammar.require_family(manifest.get("family")))["producer"]["workflow"]
+            if not _is_producer_attempt(owner_run, manifest.get("producer"), workflow):
+                raise _fail(f"the {selected_kind}'s owner run is not its envelope's producer run attempt",
+                            reason="kit-binding")
         if owner_run.get("path") != workflow:
             raise _fail(f"the {selected_kind}'s owner run is not a {workflow} run", reason="kit-binding")
         head = grammar.require_sha1(owner_run.get("head_sha"), f"{selected_kind} run head")
-        pin = parse_pin_files({workflow: contents.file_at(api, workflow, head, max_bytes=MAX_WORKFLOW_FILE_BYTES)})
+        pin = parse_pin_files({workflow: contents.file_at(api, workflow, head, max_bytes=lim.MAX_WORKFLOW_FILE_BYTES)})
         if pin.sha != kit["sha"] or pin.version != "v" + kit["version"]:
             raise _fail(f"the {selected_kind}'s kit {kit['sha']} is not the pin of {workflow} at its run's head "
                         f"{head}", reason="kit-binding")
         return {"source": "workflow_file", "sha": pin.sha}
-    if selected_kind in ("cache", "family-cache"):
+    if selected_kind == "cache":
         if owner_run.get("path") != PAGES_WORKFLOW_PATH:
             raise _fail(f"the {selected_kind}'s owner run is not a Pages run", reason="kit-binding")
         sha = runs.referenced_kit_sha(owner_run)
@@ -369,7 +396,7 @@ def run_authenticate(invocation: Invocation, *, api: GitHubApi, key: str, select
     ``output`` (canonical JSON, new file)."""
 
     value, _ = read_json_file(Path(os.path.abspath(selected_json)), label="selected artifact",
-                              max_bytes=MAX_SELECTED_JSON_BYTES)
+                              max_bytes=lim.MAX_SELECTED_JSON_BYTES)
     draft = authenticate_selection(invocation, api=api, key=key, selected_dir=selected_dir,
                                    selected=Selected.parse(value))
     data = canonical_json(draft)

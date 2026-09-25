@@ -1,0 +1,703 @@
+"""``conformance`` (MB10, SPEC §9.1), the canary (§9.2) and the kit's own CI workflow (§5.10).
+
+The simulation runs for real, in its credential-free child process, against the canary and the
+kit's fixture mods: the canary with its synthetic family (every family outcome, carried across three
+heads), the Block Pops-like fixture (job graph, display title, attested reuse, anchor successor
+grace) and the unmodified Quick Skin-like fixture with its own optional conformance fixtures
+(delegated reuse, selected evidence composed with the published baseline, family outcomes,
+carry-forward). A
+lying adapter and an unknown key fail closed, and the mod's own checkout is never modified. Injected
+kit defects (a same-head publication racing the rotation, a rotation missing the parent commit's
+generation or ignoring the anchor grace) fail the in-process simulation. The canary's files are
+checked as the canary procedure uses them: its caller is the managed template, every kit reference
+is a placeholder pin that fills to one pin and every other action is a reviewed pin, ``template
+init`` plus ``template check`` leave no drift, and its workflows keep least privilege; its adapter
+carries a family generation forward only across an unchanged release matrix. Dependabot covers
+every reviewed pin or names it as bumped by hand.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Any
+from unittest import mock
+
+import mod_base
+from mod_base.config import load_config
+from mod_base.adapter import host_child
+from mod_base.adapter.api import Context
+from mod_base.conformance import _generations, _rotation, _simulation, _world
+from mod_base.conformance._snapshot import commit_file, make_snapshot, require_snapshot
+from mod_base.conformance.run import _child_environment, run_conformance
+from mod_base.errors import MbError
+from mod_base.github.fake import FakeGitHub
+from mod_base.model import grammar
+from mod_base.pages import rotate, select
+from mod_base.pin import parse_pin_files
+from mod_base.template import tool
+from tests.fixtures.mods import support
+from tests.test_workflow_policy import (CHECKOUT, COMPOSITES, DEPLOY_PAGES, PINNED_ACTIONS, SETUP_PYTHON, parse_yaml,
+                                        require_tools)
+
+ROOT = Path(__file__).resolve().parents[1]
+CANARY = ROOT / "canary"
+CANARY_WORKFLOWS = CANARY / ".github" / "workflows"
+BANNER = "Synthetic demonstration evidence — not a product"
+PLACEHOLDER_PIN = re.compile(r"^\s*(?:-\s+)?uses: The-Plum-Team/mod-base/(\S+)@\{\{PIN\}\} # \{\{VERSION\}\}$")
+USES = re.compile(r"^\s*(?:-\s+)?uses:\s*(.*?)\s*$")
+PIN = "0123456789abcdef0123456789abcdef01234567"
+VERSION = "v0.9.0"
+#: A module-level guard: the adapter refuses to load in a process that holds a GitHub credential.
+CREDENTIAL_GUARD = '''
+
+import os as _credential_os
+
+if any(_credential_os.environ.get(_name) for _name in ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN")):
+    raise RuntimeError("the conformance child holds a GitHub credential")
+'''
+
+
+def credential_guarded(root: Path) -> None:
+    """The unmodified Quick Skin-like fixture (its adapter, family hook and optional conformance
+    fixtures as shipped), whose adapter refuses to load in a process holding a credential."""
+
+    adapter = root / "scripts" / "pages" / "mod_base_adapter.py"
+    adapter.write_text(adapter.read_text(encoding="utf-8") + CREDENTIAL_GUARD, encoding="utf-8")
+
+
+def conformance(repo: Path, *, keys: tuple[str, ...] | None = None, families: bool = False) -> dict[str, Any]:
+    return run_conformance(repo=repo, keys=keys, all_keys=keys is None, kit_root=ROOT, families=families)
+
+
+def canary_copy(destination: Path) -> Path:
+    """The canary as the canary procedure copies it (step 1), with its pins filled in (step 2)."""
+
+    shutil.copytree(CANARY, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for path in sorted((destination / ".github" / "workflows").glob("*.yml")):
+        path.write_text(path.read_text(encoding="utf-8").replace("{{PIN}}", PIN).replace("{{VERSION}}", VERSION),
+                        encoding="utf-8")
+    return destination
+
+
+class CanaryConformanceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.report = conformance(CANARY, families=True)
+
+    def test_the_whole_generation_passes_with_every_family_outcome(self) -> None:
+        report = self.report
+        self.assertEqual(report["repository"], "The-Plum-Team/mod-base-canary")
+        self.assertEqual([item["key"] for item in report["keys"]], ["mc1.20.1", "mc1.21.1"])
+        self.assertEqual([item["anchor"] for item in report["keys"]], [True, False])
+        self.assertTrue(all(item["scope"] == "complete" and item["frames"] > 0 for item in report["keys"]))
+        self.assertEqual([(item["family"], item["status"]) for item in report["families"]],
+                         [("demo-pairs", "available"), ("demo-pairs", "available")])
+        self.assertEqual(report["variants"]["family-outcomes"], "passed")
+        self.assertEqual(report["variants"]["newest-run"], "passed")
+        self.assertEqual(report["variants"]["carried"], "passed")
+        for skipped in ("attested", "delegated", "selected"):
+            self.assertTrue(report["variants"][skipped].startswith("skipped: "), skipped)
+        self.assertGreater(report["checks"], 50)
+
+    def test_every_operation_is_admitted_as_configured(self) -> None:
+        self.assertEqual(self.report["admission"], [
+            "recovery:awaiting-complete-v1-evidence", "recovery:stale-implementation",
+            "recovery:deferred-active-source", "manual:awaiting-complete-v1-evidence", "deploy:initial-ordinary",
+            "recovery:initial-ordinary", "manual:manual", "family:initial-ordinary", "recovery:current",
+            # the first generation's real rotation, the second head, the same-head family wake, the third head
+            "recovery:current", "deploy:initial-ordinary", "recovery:current", "family:final-complete",
+            "recovery:current", "deploy:initial-ordinary", "recovery:current"])
+
+    def test_later_generations_carry_the_family_forward_and_rotate_for_real(self) -> None:
+        generations = {item["generation"]: item for item in self.report["site"]["generations"]}
+        self.assertEqual(sorted(generations), [2, 3, 4])
+        # a new head: fresh handoffs, every family leg carried from the parent commit's cache
+        self.assertEqual((generations[2]["head"], generations[2]["key_routes"], generations[2]["family_legs"]),
+                         (2, {"handoff": 2}, {"carried": 2}))
+        # the same head again (a family wake): the caches supersede the consumed handoffs, which the
+        # interleaved rotation of generation 2 retires before this publication builds
+        self.assertEqual((generations[3]["head"], generations[3]["key_routes"], generations[3]["family_legs"]),
+                         (2, {"cache": 2}, {"carried": 1, "fresh": 1}))
+        # a third head: both legs walk back to the second head's family caches
+        self.assertEqual((generations[4]["head"], generations[4]["key_routes"], generations[4]["family_legs"]),
+                         (3, {"handoff": 2}, {"carried": 2}))
+        self.assertTrue(all(item["rotation_planned"] > 0 for item in generations.values()))
+        self.assertLessEqual(self.report["site"]["max_job_reads"], 160)
+
+    def test_every_hook_the_canary_defines_ran(self) -> None:
+        self.assertEqual(self.report["hooks"],
+                         ["anchor_selection", "collect", "expectation", "family_validate", "targets"])
+        self.assertEqual(self.report["kit"]["version"], mod_base.__version__)
+        self.assertEqual(self.report["site"]["frames"], sum(item["frames"] for item in self.report["keys"]))
+        self.assertGreater(self.report["site"]["rotation_planned"], 0)
+
+
+class FixtureModConformanceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="mb-conformance-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, True)
+
+    def test_block_pops_like_authenticates_its_job_graph_and_attestation(self) -> None:
+        report = conformance(support.MODS / "bp_like")
+        self.assertEqual(report["variants"]["attested"], "passed")
+        self.assertIn("expected_source_jobs", report["hooks"])
+        self.assertEqual(report["families"], [])
+        self.assertTrue(report["variants"]["carried"].startswith("skipped: "))
+        # a second head is published and rotated; a family-less mod never republishes a current head
+        self.assertEqual(report["admission"][-3:], ["deploy:always", "recovery:current", "manual:current"])
+        self.assertEqual([(item["generation"], item["key_routes"]) for item in report["site"]["generations"]],
+                         [(2, {"handoff": 1})])
+        self.assertTrue(all(reason.split(":")[1] != "initial-ordinary" for reason in report["admission"]),
+                        "admission mode 'always' never runs the progress policy")
+
+    def test_quick_skin_like_passes_every_variant_without_credentials(self) -> None:
+        mod = support.materialize("qs_like", self.work / "qs", mutate=credential_guarded)
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "parent-token", "GITHUB_TOKEN": "parent-token"}):
+            report = conformance(mod.root, families=True)
+        self.assertEqual({name: report["variants"][name] for name in ("delegated", "selected", "family-outcomes",
+                                                                        "carried")},
+                         {"delegated": "passed", "selected": "passed", "family-outcomes": "passed", "carried": "passed"})
+        self.assertEqual([(item["generation"], item["family_legs"]) for item in report["site"]["generations"]],
+                         [(2, {"carried": 2}), (3, {"carried": 1, "fresh": 1}), (4, {"carried": 2})])
+        self.assertEqual([(item["key"], item["status"]) for item in report["families"]],
+                         [("mc1.20.1", "available"), ("mc26.3", "available")])
+        self.assertIn("compose", report["hooks"])
+        self.assertIn("authenticate_extensions", report["hooks"])
+        self.assertEqual(support.git(mod.root, "status", "--porcelain", "--untracked-files=all"), "",
+                         "conformance never modifies the mod's checkout")
+        self.assertEqual(support.git(mod.root, "rev-parse", "HEAD"), mod.commit)
+
+    def test_selected_keys_project_the_whole_generation(self) -> None:
+        mod = support.materialize("qs_like", self.work / "qs")
+        report = conformance(mod.root, keys=("mc26.3",))
+        self.assertEqual([item["key"] for item in report["keys"]], ["mc26.3"])
+        self.assertEqual([item["key"] for item in report["families"]], ["mc26.3"])
+        with self.assertRaises(MbError) as caught:
+            conformance(mod.root, keys=("mc9.9",))
+        self.assertIn("declares no key mc9.9", str(caught.exception))
+
+    def test_a_lying_collect_fails_closed(self) -> None:
+        root = canary_copy(self.work / "canary")
+        adapter = root / "scripts" / "pages" / "mod_base_adapter.py"
+        text = adapter.read_text(encoding="utf-8")
+        lie = '"reported_pixel": role["metrics"][sorted(role["metrics"])[0]]'
+        adapter.write_text(text.replace('"reported_pixel": role["metrics"][capture["step"]]', lie), encoding="utf-8")
+        with self.assertRaises(MbError) as caught:
+            conformance(root)
+        self.assertIn("PixelMetrics", str(caught.exception))
+
+    def test_arguments_are_checked_before_anything_runs(self) -> None:
+        with self.assertRaises(MbError):
+            run_conformance(repo=CANARY, keys=("mc1.20.1",), all_keys=True, kit_root=ROOT, families=False)
+        with self.assertRaises(MbError):
+            run_conformance(repo=CANARY, keys=None, all_keys=True, kit_root=self.work, families=False)
+        with self.assertRaises(MbError):
+            run_conformance(repo=self.work / "absent", keys=None, all_keys=True, kit_root=ROOT, families=False)
+
+    def test_the_child_environment_holds_no_credential(self) -> None:
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "x", "GITHUB_TOKEN": "y", "ACTIONS_RUNTIME_TOKEN": "z"}):
+            environment = _child_environment("/kit/src", self.work)
+        self.assertEqual(set(environment), {"PATH", "HOME", "TMPDIR", "LANG", "PYTHONHASHSEED", "PYTHONSAFEPATH",
+                                            "PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE", "PYTHONPATH"})
+        self.assertEqual(environment["PYTHONPATH"], "/kit/src")
+        self.assertTrue(Path(environment["HOME"]).is_relative_to(self.work))
+
+
+def simulate_in_process(source: Path, work: Path, *, families: bool) -> dict[str, Any]:
+    """The simulation in this process (so a test can alter the kit under it) over a snapshot of
+    ``source``."""
+
+    snapshot = work / "repo"
+    config = load_config(source)
+    make_snapshot(source, snapshot, branch=config.canonical_branch, replace=_world.pinned_workflows(config))
+    scratch = work / "simulation"
+    scratch.mkdir()
+    return _simulation.simulate(_simulation.Settings(repo=snapshot, kit_root=ROOT, keys=None, families=families,
+                                                     work=scratch))
+
+
+class ConformanceSensitivityTest(unittest.TestCase):
+    """The later generations catch the cross-unit defects a single generation cannot: each kit
+    defect below, injected in-process, fails the simulation at the stage that proves it."""
+
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="mb-conformance-sensitivity-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, True)
+
+    def test_a_same_head_publication_that_races_the_rotation_fails(self) -> None:
+        # Without supersession a same-head publication selects the handoff the previous generation
+        # consumed; that generation's interleaved rotation retires it before this build.
+        built = []
+        original = _simulation.Simulation.build
+
+        def build(simulation: Any, generation: Any, **arguments: Any) -> None:
+            built.append(generation.number)
+            original(simulation, generation, **arguments)
+
+        with mock.patch.object(select, "supersedes", lambda owner, handoff: False), \
+                mock.patch.object(_simulation.Simulation, "build", build):
+            with self.assertRaises(MbError):
+                simulate_in_process(CANARY, self.work, families=True)
+        self.assertEqual(built, [1, 2, 3], "the same-head publication's build is the one that fails")
+
+    def test_a_rotation_that_misses_the_parent_commits_generation_fails(self) -> None:
+        with mock.patch.object(rotate._Rotation, "_window", lambda rotation, branch, coverage: [coverage]):
+            with self.assertRaises(MbError) as caught:
+                simulate_in_process(CANARY, self.work, families=True)
+        self.assertIn("the second generation's dry-run rotation: rotation does not retire", str(caught.exception))
+
+    def test_a_rotation_that_ignores_the_anchor_successor_grace_fails(self) -> None:
+        original = rotate._Rotation._anchor_candidates
+
+        def early(rotation: Any, keep: Any) -> Any:
+            now = rotation.now
+            rotation.now = now + rotate.timedelta(days=365)
+            try:
+                return original(rotation, keep)
+            finally:
+                rotation.now = now
+
+        with mock.patch.object(rotate._Rotation, "_anchor_candidates", early):
+            with self.assertRaises(MbError) as caught:
+                simulate_in_process(support.MODS / "bp_like", self.work, families=False)
+        self.assertIn("the second generation's dry-run rotation: rotation plans to retire", str(caught.exception))
+
+
+class SimulationPartsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="mb-conformance-parts-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, True)
+
+    def test_a_job_over_its_read_budget_or_changing_anything_fails(self) -> None:
+        stub = mock.Mock(spec=["check", "report", "api"])
+        stub.report = _simulation.Report()
+        stub.check = lambda condition, message: _simulation.Simulation.check(stub, condition, message)
+        api = FakeGitHub(repository="The-Plum-Team/example", default_branch="main", writable=True)
+        with _simulation.Simulation.budget(stub, "within", api):
+            for _ in range(160):
+                api.get_json("/rate_limit")
+        with self.assertRaises(MbError) as caught:
+            with _simulation.Simulation.budget(stub, "over", api):
+                for _ in range(161):
+                    api.get_json("/rate_limit")
+        self.assertIn("over made 161 API requests", str(caught.exception))
+        api.add_artifact({"id": 7, "name": "mb-promotion", "created_at": "2026-09-01T12:00:00Z",
+                          "workflow_run": {"id": 1, "head_branch": "main", "head_sha": "a" * 40}}, b"zip")
+        with self.assertRaises(MbError) as caught:
+            with _simulation.Simulation.budget(stub, "deleting", api):
+                api.delete("/repos/The-Plum-Team/example/actions/artifacts/7")
+        self.assertIn("changed the repository", str(caught.exception))
+
+    def test_the_snapshot_commits_the_synthetic_pinned_workflows(self) -> None:
+        # The simulated GitHub serves a pinned source and producer workflow at every head, and family
+        # collect reads the producer's pin from the snapshot's own objects: both must agree.
+        config = load_config(CANARY)
+        replace = _world.pinned_workflows(config)
+        self.assertEqual(set(replace), {config.source["workflow"],
+                                        *(family["producer"]["workflow"] for family in config.families)})
+        before = {path: (CANARY / path).read_bytes() for path in replace}
+        snapshot = self.work / "repo"
+        make_snapshot(CANARY, snapshot, branch=config.canonical_branch, replace=replace)
+        for path, data in replace.items():
+            with self.subTest(path=path):
+                self.assertEqual(support.git(snapshot, "show", f"HEAD:{path}") + "\n", data.decode("utf-8"))
+                pin = parse_pin_files({path: data})
+                self.assertEqual((pin.sha, pin.version), (_world.KIT_SHA, "v" + mod_base.__version__))
+        self.assertEqual({path: (CANARY / path).read_bytes() for path in replace}, before,
+                         "the canary's own workflows are never modified")
+        for label, bad in (("a traversal", {"../outside.yml": b"x"}), ("not bytes", {"a.yml": "x"}),
+                           ("a directory", {"scripts": b"x"})):
+            with self.subTest(label=label), self.assertRaises(MbError):
+                make_snapshot(CANARY, self.work / f"bad-{label.replace(' ', '-')}", branch=config.canonical_branch,
+                              replace=bad)  # type: ignore[arg-type]
+
+    def test_a_later_head_is_one_documentation_commit_on_top(self) -> None:
+        source = self.work / "mod"
+        (source / "docs").mkdir(parents=True)
+        (source / "docs" / "README.md").write_text("mod\n", encoding="utf-8")
+        snapshot = self.work / "repo"
+        first, _ = make_snapshot(source, snapshot, branch="main")
+        head, tree = commit_file(snapshot, _generations.CONFORMANCE_DOCUMENT.format(number=2), b"two\n", branch="main")
+        self.assertEqual(require_snapshot(snapshot, branch="main"), (head, tree))
+        self.assertEqual(support.git(snapshot, "rev-parse", f"{head}^"), first)
+        self.assertEqual(support.git(snapshot, "show", f"{head}:docs/mod-base-conformance/head-2.md"), "two")
+        for relative in ("docs/mod-base-conformance/head-2.md", "../outside.md", "docs/../x.md"):
+            with self.subTest(path=relative), self.assertRaises(MbError):
+                commit_file(snapshot, relative, b"x", branch="main")
+        (snapshot / "linked").symlink_to(self.work, target_is_directory=True)
+        with self.assertRaises(MbError):  # the snapshot is no longer clean
+            commit_file(snapshot, "linked/x.md", b"x", branch="main")
+        self.assertFalse((self.work / "x.md").exists())
+
+
+class RotationOracleTest(unittest.TestCase):
+    """The conformance oracle (``_rotation.expected_retirements``) on a small hand-built world."""
+
+    HEAD, TREE = "a" * 40, "b" * 40
+
+    def test_superseded_caches_consumed_handoffs_settled_anchors_and_transients(self) -> None:
+        config = load_config(CANARY)
+        world = _world.World(repository="The-Plum-Team/mod-base-canary", config=config, head=self.HEAD, tree=self.TREE)
+        source, pages = config.source["workflow"], _simulation.PAGES_WORKFLOW_PATH
+        first = world.run(1, path=source, event="workflow_dispatch", created=0)
+        second = world.run(2, path=source, event="workflow_dispatch", created=800)
+        earlier = world.run(10, path=pages, event="schedule", created=500, pages=True)
+        failed = world.run(11, path=pages, event="schedule", created=600, conclusion="failure", pages=True)
+        owner = world.run(12, path=pages, event="workflow_dispatch", created=1000, pages=True)
+        key = "mc1.20.1"
+        zipped = _world.zip_files({"x": b"x"})
+
+        def upload(name: str, run: dict[str, Any], created: float) -> int:
+            return world.artifact(name, run, created=created, archive=zipped)["id"]
+
+        consumed = upload(grammar.handoff_name(key, 1), second, 1100 - 200)
+        older_handoff = upload(grammar.handoff_name(key, 1), first, 300)
+        superseded = upload(grammar.cache_name(key, self.HEAD), earlier, 550)
+        upload(grammar.cache_name(key, self.HEAD), failed, 650)  # not a successful owner
+        upload(grammar.cache_name(key, self.HEAD), owner, 1100)  # the replacement
+        upload(grammar.baseline_name(key, self.HEAD, 1), earlier, 560)  # never retired
+        upload("conformance-foreign-artifact", earlier, 570)  # never retired
+        old_anchor = upload(grammar.anchor_name(key, self.HEAD, 1, 1), first, 310)
+        upload(grammar.anchor_name(key, self.HEAD, 2, 1), second, 810)
+        transients = {upload(grammar.collected_name(key), owner, 1050),
+                      upload(grammar.PROMOTION_NAME, owner, 1150),
+                      upload(grammar.PAGES_ARTIFACT_NAME, owner, 1150)}
+        promotion = {"bundles": [{"key": key, "selected_artifact_id": consumed}], "families": []}
+
+        def expected(now: float, alive: dict[int, Any] | None = None) -> set[int]:
+            return _rotation.expected_retirements(runs=world.runs, alive=world.alive() if alive is None else alive,
+                                                  records=world.records, config=config, owner_run_id=owner["id"],
+                                                  promotion=promotion, anchored={key}, family_producers={},
+                                                  now=_world.timestamp(now))
+
+        common = {consumed, older_handoff, superseded} | transients
+        # the second anchor settles only once its run and upload lie before now - grace (0 days here)
+        self.assertEqual(expected(2000), common | {old_anchor})
+        self.assertEqual(expected(700), common)
+        # a handoff not older than the selected artifact's run is kept, the consumed one never is
+        newer = upload(grammar.handoff_name(key, 1), world.run(3, path=source, event="workflow_dispatch",
+                                                                        created=900), 950)
+        self.assertNotIn(newer, expected(2000))
+
+
+class CanaryCarryForwardTest(unittest.TestCase):
+    """The canary adapter's carry-forward decision (``family_validate``) on real commits: the
+    envelope's generation is carried to a descendant with an unchanged release matrix, refused after
+    a matrix change and without ``carry_forward``. The kit's own R4/R5 are covered by conformance."""
+
+    FAMILY, KEY = "demo-pairs", "mc1.20.1"
+
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="mb-canary-carry-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, True)
+        self.root = canary_copy(self.work / "canary")
+        support.git(self.root, "init", "-q", "--initial-branch=main")
+        self.first = self.commit({})
+        self.docs = self.commit({"docs/note.md": "documentation only\n"})
+        matrix = (self.root / "release" / "release-matrix.json").read_text(encoding="utf-8")
+        self.matrix = self.commit({"release/release-matrix.json": matrix + "\n"})
+        self.adapter = host_child.load_adapter(self.root / "scripts" / "pages" / "mod_base_adapter.py")
+        self.bundle = self.work / "bundle"
+        self.bundle.mkdir()
+        contract = (self.root / "e2e" / "scenario-contract.json").read_bytes()  # unchanged by every commit
+        producer = {"run_id": 88, "run_attempt": 1, "commit": self.first}
+        (self.bundle / "envelope.json").write_text(json.dumps(
+            {"coverage_sha": self.first, "subject": {"branch": "main", "commit": self.first}, "producer": producer}),
+            encoding="utf-8")
+        (self.bundle / "manifest.json").write_text(json.dumps(
+            {"kind": "mod-base-canary.pairs", "schema_version": 1, "family": self.FAMILY, "key": self.KEY,
+             "coverage_sha": self.first, "contract_sha256": hashlib.sha256(contract).hexdigest(),
+             "producer": producer, "lanes": [], "not_applicable": []}), encoding="utf-8")
+
+    def commit(self, files: dict[str, str]) -> str:
+        for relative, text in files.items():
+            (self.root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / relative).write_text(text, encoding="utf-8")
+        support.git(self.root, "add", "-A")
+        support.git(self.root, "commit", "-q", "-m", "canary")
+        return support.git(self.root, "rev-parse", "HEAD")
+
+    def validate(self, expected: str) -> dict[str, Any]:
+        output = Path(tempfile.mkdtemp(dir=self.work))
+        context = Context(repo_root=self.root, config=load_config(self.root), tmpdir=Path(tempfile.mkdtemp(dir=self.work)),
+                          implementation_sha=expected)
+        return self.adapter.family_validate(context, self.FAMILY, self.KEY, str(self.bundle), expected, str(output))
+
+    def test_an_unchanged_matrix_carries_the_generation_forward(self) -> None:
+        self.assertNotIn("carried_from", self.validate(self.first))
+        result = self.validate(self.docs)
+        self.assertEqual((result["status"], result["carried_from"]), ("available", self.first))
+
+    def test_a_matrix_change_or_a_family_without_carry_forward_refuses(self) -> None:
+        self.assertEqual(self.validate(self.matrix)["status"], "unavailable")
+        path = self.root / "site" / "mod-base.json"
+        path.write_text(path.read_text(encoding="utf-8").replace('"carry_forward": true', '"carry_forward": false'),
+                        encoding="utf-8")
+        result = self.validate(self.docs)
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIn("no carry-forward", result["reason"])
+
+
+class CanaryFilesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="mb-canary-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, True)
+
+    def test_the_canary_caller_is_the_managed_template(self) -> None:
+        self.assertEqual((CANARY_WORKFLOWS / "pages.yml").read_bytes(),
+                         (ROOT / "template" / "managed" / ".github" / "workflows" / "pages.yml").read_bytes())
+
+    def test_every_kit_reference_is_a_placeholder_pin(self) -> None:
+        files = {}
+        for path in sorted(CANARY_WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), start=1):
+                if "uses:" in line and "mod-base" in line.lower():
+                    with self.subTest(file=path.name, line=number):
+                        self.assertRegex(line, PLACEHOLDER_PIN)
+            files[f".github/workflows/{path.name}"] = text.replace("{{PIN}}", PIN).replace("{{VERSION}}",
+                                                                                          VERSION).encode("utf-8")
+        pin = parse_pin_files(files)
+        self.assertEqual((pin.sha, pin.version), (PIN, VERSION))
+        used = {reference.split("@")[0] for reference in pin.references}
+        self.assertEqual(used, {f".github/workflows/{name}.yml" for name in ("pages", "canary-producer", "canary-family")},
+                         "the probe observes only; every other canary workflow pins the kit")
+
+    def test_every_other_action_is_a_reviewed_pin(self) -> None:
+        # Dependabot never scans canary/ (.github/dependabot.yml): a reviewed pin bump must reach it.
+        seen = set()
+        for path in sorted(CANARY_WORKFLOWS.glob("*.yml")):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                match = USES.match(line)
+                if match is None or PLACEHOLDER_PIN.match(line):
+                    continue
+                action, _, comment = match.group(1).partition(" # ")
+                with self.subTest(file=path.name, line=number):
+                    self.assertIn(action, PINNED_ACTIONS)
+                    self.assertEqual(comment, PINNED_ACTIONS[action])
+                seen.add(action)
+        self.assertEqual(seen, {CHECKOUT, SETUP_PYTHON, DEPLOY_PAGES})
+
+    def test_the_canary_procedure_seeds_a_repository_without_drift(self) -> None:
+        root = canary_copy(self.work / "mod-base-canary")
+        created = tool.init(root, kit_root=ROOT, seed=True, from_config=root / "site" / "mod-base.json")
+        self.assertIn("scripts/ci/mod_base_kit.py", created)
+        self.assertNotIn("LICENSE", created, "the canary carries its own license")
+        self.assertEqual(tool.check(root, kit_root=ROOT), [])
+        load_config(root)
+
+    def test_every_published_text_says_synthetic(self) -> None:
+        config = load_config(CANARY)
+        self.assertIn("synthetic", config.project["name"], "the name is on every page, the gallery's included")
+        for text in (config.project["tagline"], config.copy["gallery_lead"], config.copy["evidence_lead"],
+                     config.copy["principles"][0], config.copy["methodology"][0]):
+            self.assertIn(BANNER, text)
+        self.assertIn(BANNER, (CANARY / "release" / "release-matrix.json").read_text(encoding="utf-8"))
+        for path in [CANARY / "README.md", *sorted(CANARY_WORKFLOWS.glob("canary-*.yml"))]:
+            with self.subTest(file=path.name):
+                self.assertIn(BANNER, path.read_text(encoding="utf-8"))
+
+    def test_the_canary_workflows_keep_least_privilege(self) -> None:
+        for path in sorted(CANARY_WORKFLOWS.glob("canary-*.yml")):
+            document = parse_yaml(path.read_text(encoding="utf-8"), path.name)
+            self.assertEqual(document["permissions"], {}, path.name)
+            for job_id, job in document["jobs"].items():
+                with self.subTest(file=path.name, job=job_id):
+                    permissions = job["permissions"]
+                    steps = job["steps"]
+                    if job_id.startswith("notify"):
+                        self.assertEqual(permissions, {"actions": "write"})
+                        self.assertFalse(any(str(item.get("uses", "")).startswith("actions/checkout@")
+                                             for item in steps))
+                    else:
+                        self.assertTrue(set(permissions.values()) <= {"read"}, permissions)
+                    for item in steps:
+                        if str(item.get("uses", "")).startswith("actions/checkout@"):
+                            self.assertEqual(item["with"]["persist-credentials"], "false")
+                        self.assertNotIn("${{", item.get("run", ""))
+
+    def test_the_canary_workflows_pass_actionlint(self) -> None:
+        require_tools("actionlint", "shellcheck")
+        workflows = self.work / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        for path in sorted(CANARY_WORKFLOWS.glob("*.yml")):
+            (workflows / path.name).write_text(path.read_text(encoding="utf-8").replace("{{PIN}}", PIN)
+                                               .replace("{{VERSION}}", VERSION), encoding="utf-8")
+        files = sorted(str(path.relative_to(self.work)) for path in workflows.iterdir())
+        completed = subprocess.run([shutil.which("actionlint") or "actionlint", "-no-color", *files], cwd=self.work,
+                                   capture_output=True, text=True, timeout=300, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+
+class CanaryProducerTest(unittest.TestCase):
+    """``scripts/canary/produce.py`` as the canary's producer workflows run it, handed to the kit's
+    own ``prepare``, ``validate`` and ``family envelope`` commands (the isolated adapter host)."""
+
+    REPOSITORY = "The-Plum-Team/mod-base-canary"
+
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="mb-canary-producer-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, True)
+        self.root = canary_copy(self.work / "canary")
+        support.git(self.root, "init", "-q", "--initial-branch=main")
+        support.git(self.root, "add", "-A")
+        support.git(self.root, "commit", "-q", "-m", "canary")
+        self.head = support.git(self.root, "rev-parse", "HEAD")
+        self.tree = support.git(self.root, "rev-parse", "HEAD^{tree}")
+
+    def environment(self, workflow: str, run_id: int) -> dict[str, str]:
+        return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.work), "LANG": "C.UTF-8",
+                "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONSAFEPATH": "1",
+                "GITHUB_REPOSITORY": self.REPOSITORY, "GITHUB_SHA": self.head, "GITHUB_RUN_ID": str(run_id),
+                "GITHUB_RUN_ATTEMPT": "1", "GITHUB_REF": "refs/heads/main", "GITHUB_REF_NAME": "main",
+                "GITHUB_WORKFLOW_REF": f"{self.REPOSITORY}/.github/workflows/{workflow}@refs/heads/main",
+                "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_JOB": "evidence", "MOD_BASE_KIT_SHA": PIN}
+
+    def run_tool(self, environment: dict[str, str], *arguments: str) -> str:
+        completed = subprocess.run([sys.executable, "-P", *arguments], cwd=self.root, env=environment,
+                                   capture_output=True, text=True, timeout=300, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+        return completed.stdout
+
+    def test_the_producer_hands_off_valid_evidence_through_the_kit(self) -> None:
+        environment = self.environment("canary-producer.yml", 77)
+        keys = json.loads(self.run_tool(environment, "scripts/canary/produce.py", "keys"))
+        self.assertEqual(keys, ["mc1.20.1", "mc1.21.1"])
+        e2e = self.work / "e2e"
+        self.run_tool(environment, "scripts/canary/produce.py", "synthesize", "--key", keys[0], "--output", str(e2e))
+        output = self.work / "github-output"
+        output.touch()
+        handoff = self.work / "handoff"
+        self.run_tool({**environment, "GITHUB_OUTPUT": str(output)}, "-m", "mod_base", "prepare", "--repo", ".",
+                      "--e2e-root", str(e2e), "--key", keys[0], "--output", str(handoff),
+                      "--subject-branch", "main", "--subject-commit", self.head, "--subject-tree", self.tree,
+                      "--tested-run-id", "77", "--tested-run-attempt", "1", "--tested-branch", "main",
+                      "--tested-commit", self.head, "--tested-controller-branch", "main",
+                      "--tested-controller-sha", self.head, "--anchor", "auto")
+        self.assertIn("anchor_eligible=true", output.read_text(encoding="utf-8"))
+        self.run_tool(environment, "-m", "mod_base", "validate", "--repo", ".", "--key", keys[0], "--kind", "handoff",
+                      "--input", str(handoff), "--expected-subject-commit", self.head)
+        manifest = json.loads((handoff / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["repository"], self.REPOSITORY)
+        self.assertEqual(manifest["provenance"]["reuse"], "none")
+        self.assertTrue(manifest["frames"])
+        self.assertTrue(all(frame["runtime_evidence"].endswith("(not a product)") for frame in manifest["frames"]))
+
+    def test_the_family_producer_writes_an_envelope_the_kit_accepts(self) -> None:
+        environment = self.environment("canary-family.yml", 88)
+        run = {"id": 88, "run_attempt": 1, "head_sha": self.head, "event": "workflow_dispatch",
+               "created_at": "2026-09-01T12:00:00Z", "display_title": "Canary family", "status": "in_progress"}
+        run_json = self.work / "run.json"
+        run_json.write_text(json.dumps(run), encoding="utf-8")
+        native = self.work / "native"
+        self.run_tool(environment, "scripts/canary/produce.py", "family", "--key", "mc1.20.1", "--run-json",
+                      str(run_json), "--output", str(native))
+        envelope = self.work / "envelope"
+        self.run_tool(environment, "-m", "mod_base", "family", "envelope", "--repo", ".", "--family", "demo-pairs",
+                      "--key", "mc1.20.1", "--bundle", str(native), "--coverage-sha", self.head,
+                      "--subject-branch", "main", "--subject-commit", self.head, "--output", str(envelope))
+        self.run_tool(environment, "-m", "mod_base", "validate", "--repo", ".", "--key", "mc1.20.1",
+                      "--kind", "family", "--input", str(envelope))
+        written = json.loads((native / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(written["producer"]["event"], "workflow_dispatch")
+        self.assertEqual(written["producer"]["run_id"], 88)
+        self.assertEqual(written["coverage_sha"], self.head)
+
+
+class DependabotTest(unittest.TestCase):
+    """``.github/dependabot.yml``: every reviewed pin is either proposed by Dependabot or named as
+    bumped by hand (with ``PINNED_ACTIONS``, in the same pull request)."""
+
+    def test_every_reviewed_pin_is_scanned_or_bumped_by_hand(self) -> None:
+        text = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+        (update,) = parse_yaml(text, "dependabot.yml")["updates"]
+        self.assertEqual(update["package-ecosystem"], "github-actions")
+        directories = update["directories"]
+        self.assertEqual(directories, ["/", *(f"/actions/{name}" for name in COMPOSITES)])
+        scanned = set()
+        for directory in directories:
+            # "/" means .github/workflows plus a root action.yml; any other directory, its own YAML files.
+            root = ROOT / ".github" / "workflows" if directory == "/" else ROOT / directory.lstrip("/")
+            paths = sorted(root.glob("*.yml")) + ([ROOT / "action.yml"] if directory == "/" else [])
+            for path in paths:
+                if path.is_file():
+                    scanned |= {match.group(1).partition(" # ")[0]
+                                for match in map(USES.match, path.read_text(encoding="utf-8").splitlines()) if match}
+        by_hand = sorted(action.split("@")[0] for action in set(PINNED_ACTIONS) - scanned)
+        self.assertEqual(by_hand, ["actions/deploy-pages"])
+        for action in by_hand:
+            self.assertIn(f"only user of {action}", text)
+        self.assertIn("template/managed/.github/workflows/pages.yml", text)
+        self.assertIn("canary/.github/workflows/canary-*.yml", text)
+
+
+class KitCiWorkflowTest(unittest.TestCase):
+    """``.github/workflows/ci.yml`` (SPEC §5.10): the required contexts, least privilege and pins."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        cls.document = parse_yaml(cls.text, "ci.yml")
+
+    def test_the_required_contexts_and_triggers(self) -> None:
+        document = self.document
+        self.assertEqual(document["name"], "mod-base CI")
+        self.assertEqual(document["on"], {"pull_request": {}, "push": {"branches": ["main"]}})
+        names = {job["name"] for job in document["jobs"].values()}
+        self.assertTrue({"Test", "Workflow policy", "Front end", "Conformance (informational)"} <= names)
+        self.assertEqual(document["jobs"]["test"]["strategy"]["matrix"]["python"], ["3.11", "3.12", "3.13"])
+        self.assertEqual(document["jobs"]["test-gate"]["needs"], "test")
+        self.assertEqual(document["jobs"]["conformance"]["continue-on-error"], "true")
+
+    def test_every_job_reads_only_and_every_action_is_pinned(self) -> None:
+        self.assertEqual(self.document["permissions"], {})
+        for job_id, job in self.document["jobs"].items():
+            with self.subTest(job=job_id):
+                self.assertIn(job["permissions"], ({"contents": "read"}, {}))
+                for item in job["steps"]:
+                    self.assertNotIn("${{", item.get("run", ""))
+                    if "uses" not in item:
+                        continue
+                    self.assertIn(item["uses"], (CHECKOUT, SETUP_PYTHON))
+                    if item["uses"] == CHECKOUT:
+                        self.assertEqual(item["with"]["persist-credentials"], "false")
+        for line in self.text.splitlines():
+            if line.strip().startswith(("uses:", "- uses:")):
+                action, _, comment = line.split("uses:", 1)[1].strip().partition(" # ")
+                with self.subTest(uses=action):
+                    self.assertEqual(comment, PINNED_ACTIONS[action])
+
+    def test_actionlint_is_the_pinned_release(self) -> None:
+        digest = (ROOT / "tools" / "actionlint.sha256").read_text(encoding="utf-8")
+        self.assertRegex(digest, r"^[0-9a-f]{64}  actionlint_\d+\.\d+\.\d+_linux_amd64\.tar\.gz\n$")
+        installs = [item["run"] for job in self.document["jobs"].values() for item in job["steps"]
+                    if item.get("name") == "Install the pinned actionlint and check the shell tools"]
+        self.assertEqual(len(installs), 2, "the Test matrix and Workflow policy both install actionlint")
+        for script in installs:
+            self.assertIn('sha256sum --check --strict "$GITHUB_WORKSPACE/tools/actionlint.sha256"', script)
+            self.assertIn("--proto '=https'", script)
+
+    def test_conformance_reads_both_mods_without_credentials(self) -> None:
+        steps = self.document["jobs"]["conformance"]["steps"]
+        checkouts = {item["with"].get("repository"): item["with"] for item in steps
+                     if str(item.get("uses", "")).startswith("actions/checkout@") and "with" in item}
+        for repository in ("The-Plum-Team/Quick-Skin-Mod", "The-Plum-Team/Block-Pops-Minecraft-Mod"):
+            with self.subTest(repository=repository):
+                self.assertEqual(checkouts[repository]["ref"], "master")
+                self.assertEqual(checkouts[repository]["persist-credentials"], "false")
+        script = steps[-1]["run"]
+        self.assertIn('if [[ ! -f "$mod/site/mod-base.json" ]]', script)
+        self.assertIn("python3 -P -m mod_base conformance --repo \"$mod\" --kit-root . --all --families", script)
+
+
+if __name__ == "__main__":
+    unittest.main()

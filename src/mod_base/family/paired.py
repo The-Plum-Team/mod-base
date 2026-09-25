@@ -5,29 +5,54 @@ R4: the envelope inventory is validated first, then the projection returned by t
 policy); every image is re-inspected (WebP decode, dimensions equal to
 ``thumbnail(recorded source, derivative_box)``, recorded pixel metrics equal to the kit's); every
 unclean pair is rejected; ``projection.coverage_sha`` must equal ``expected_coverage_sha``.
-R5: when ``carried_from`` is set the core fetches both commits as inert objects and requires
-``git merge-base --is-ancestor carried_from expected_coverage_sha``.
+R5: when ``carried_from`` is set the core requires ``git merge-base --is-ancestor carried_from
+expected_coverage_sha`` over the inert objects already present: the ``family`` job fetches both
+commits anonymously before ``family collect`` runs (``build`` reads the default branch's history of
+its ``fetch-depth: 0`` checkout); the core itself never fetches (:mod:`mod_base.family._git`).
 
 Layout of an available ``family collect`` output, uploaded as ``mb-collected-family--<family>--<key>``:
 
 * ``paired.json`` (:data:`PROJECTION_NAME`): the validated ``mod-base.family.paired`` projection;
 * ``images/<sha256>.webp`` (:data:`IMAGES_DIRECTORY`): its images;
 * ``source/`` (:data:`SOURCE_DIRECTORY`): the selected family handoff or cache copied verbatim
-  (``envelope.json`` plus the native bundle, exactly its envelope inventory).
+  (``envelope.json`` plus the native bundle, exactly its envelope inventory);
+* ``selected.json`` (:data:`SELECTED_NAME`): the canonical ``Selected`` object of that generation,
+  exactly the bytes ``select --family --output F`` wrote and ``family collect --selected-json F``
+  bound to its input (below).
 
-``build`` renders ``paired.json`` and ``images/``; finalize's ``refresh-family`` re-validates the
-whole artifact and rolls exactly ``source/`` forward as ``mb-family-cache--<family>--<key>--<coverage_sha>``,
+``build`` renders ``paired.json`` and ``images/`` and re-authenticates the recorded selection by id
+(no walk: its cost never grows with how far below the coverage the generation was produced);
+finalize's ``refresh-family`` re-validates the whole artifact, binds the recorded selection to the
+promotion and rolls exactly ``source/`` forward as ``mb-family-cache--<family>--<key>--<coverage_sha>``,
 so every family cache stays re-collectable by ``family collect`` (carry-forward is re-proven, R5,
 at every collection).
+
+The recorded selection is bound to the generation being collected before the adapter runs (reason
+``family-selection``, exit 2): it is the canonical JSON (at most ``limits.MAX_SELECTED_JSON_BYTES``,
+never a symlink) of a ``Selected`` object whose ``kind`` is ``family-handoff`` or ``family-cache``
+and whose name parses to this family and key. A family handoff must be the upload of the envelope's
+producer run attempt (``run_id`` and ``run_attempt``, the name's attempt included). A family cache
+must be named by a commit present as an inert object that the envelope's coverage precedes (equal
+or an ancestor: ``refresh`` names a carried cache by the coverage it was promoted at) and that
+precedes the expected coverage (the first-parent walk of ``select`` only probes ancestors). Its id,
+digest and size are the ones ``download`` already verified the archive against, from the same
+``select`` outputs; ``build`` re-reads that id from the API. The kit binding (SPEC §1.8, reason
+``kit-binding``) is re-proven locally for both kinds: ``envelope.kit`` must be the pin of the
+family's ``producer.workflow`` in the producer's own checkout (``producer.commit``, which the
+family job fetches as the envelope coverage), a regular file read from the inert object store (an
+object that is absent or not a regular file fails with reason ``git``).
 
 Details the core enforces (all fail closed with exit 2; only the hook's own ``superseded`` and
 ``unavailable`` statuses are the exit-3 absences):
 
 * The projection is strict JSON of at most ``limits.MAX_PAIRED_BYTES``; ``images/`` beside it holds
   exactly the referenced images (at most ``limits.MAX_FAMILY_FILES``, together at most
-  ``limits.MAX_FAMILY_HANDOFF_BYTES``), each read without following any symlink, equal to its
+  ``limits.MAX_FAMILY_PROJECTION_BYTES``), each read without following any symlink, equal to its
   recorded size and SHA-256 and re-inspected with the kit's ``inspect_webp`` at exactly its recorded
-  (thumbnail) dimensions; a path shared by several pairs must carry one identical record.
+  (thumbnail) dimensions; a path shared by several pairs must carry one identical record. Those
+  bounds and the family's ``handoff_max_bytes`` (at most ``limits.MAX_FAMILY_HANDOFF_BYTES``)
+  partition ``limits.MAX_COLLECTED_FAMILY_BYTES``, so a generation within them always fits the
+  collected artifact: the output check below guards the arithmetic, never a producer's choice.
 * ``family_validate`` writes into a fresh private ``output_dir`` exactly its projection
   (``projection_path``) and the referenced ``images/`` beside it, nothing else.
 * The projection is bound to the authenticated envelope: equal ``subject``, its producer
@@ -43,7 +68,8 @@ Details the core enforces (all fail closed with exit 2; only the hook's own ``su
   envelope's ``coverage_sha`` at every collection.
 * The collected output is written through ``atomic_directory``: every byte copied into ``source/``
   and ``images/`` is re-checked against its envelope or projection record, ``paired.json`` is the
-  canonical JSON of the validated projection, and the whole written tree (walked within the
+  canonical JSON of the validated projection, ``selected.json`` the bound selection's canonical
+  bytes, and the whole written tree (walked within the
   ``collected-family`` extraction bounds, directories included) must equal that inventory and fit
   those bounds.
 """
@@ -70,14 +96,20 @@ from mod_base.model import grammar
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json, read_json_file, sha256_hex
 from mod_base.model.documents import RUN_CLAIM_FIELDS, validate_family_paired
+from mod_base.pages.select import Selected
+from mod_base.pin import parse_pin_files
 from mod_base.runtime import Invocation
 
 OWNER = "MB4"
 PROJECTION_NAME = "paired.json"
 IMAGES_DIRECTORY = "images"
+#: The selection record at the root of a collected family artifact (module docstring).
+SELECTED_NAME = "selected.json"
 HOOK = "family_validate"
 REASON = "family-projection"
 CARRY_REASON = "carry-forward"
+SELECTION_REASON = "family-selection"
+_FAMILY_KINDS = ("family-handoff", "family-cache")
 
 
 @dataclass(frozen=True)
@@ -108,8 +140,8 @@ def _image_records(projection: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                     raise _fail(f"image {image['path']} is recorded with different facts by two pairs")
     if len(images) > lim.MAX_FAMILY_FILES:
         raise _fail(f"the projection references more than {lim.MAX_FAMILY_FILES} images")
-    if sum(image["size"] for image in images.values()) > lim.MAX_FAMILY_HANDOFF_BYTES:
-        raise _fail(f"the projection images exceed {lim.MAX_FAMILY_HANDOFF_BYTES} bytes")
+    if sum(image["size"] for image in images.values()) > lim.MAX_FAMILY_PROJECTION_BYTES:
+        raise _fail(f"the projection images exceed {lim.MAX_FAMILY_PROJECTION_BYTES} bytes")
     return dict(sorted(images.items()))
 
 
@@ -191,12 +223,62 @@ def verify_carry_forward(repo_root: Path, carried_from: str, coverage_sha: str) 
                     "across non-ancestors", CARRY_REASON)
 
 
+def _read_selection(path: Path) -> tuple[Selected, bytes]:
+    """The ``Selected`` record at ``path`` and its canonical bytes (module docstring)."""
+
+    try:
+        value, raw = read_json_file(Path(os.path.abspath(path)), label="the selected family generation",
+                                    max_bytes=lim.MAX_SELECTED_JSON_BYTES)
+        selected = Selected.parse(value)
+    except MbError as exc:
+        raise _fail(f"the selected family generation is malformed: {exc}", SELECTION_REASON) from exc
+    if canonical_json(value) != raw:
+        raise _fail("the selected family generation is not the canonical JSON select --output writes",
+                    SELECTION_REASON)
+    return selected, raw
+
+
+def _bind_selection(invocation: Invocation, selected: Selected, envelope: Mapping[str, Any],
+                    config: Mapping[str, Any], *, family: str, key: str, expected_coverage_sha: str) -> None:
+    """The recorded selection names the generation being collected, and that generation's kit is
+    the pin of its producer workflow at the producer's checkout (module docstring)."""
+
+    parsed = grammar.parse_artifact_name(selected.name)
+    if selected.kind not in _FAMILY_KINDS or parsed is None or (parsed.family, parsed.key) != (family, key):
+        raise _fail(f"the selection names {selected.name}, not a generation of {family}/{key}", SELECTION_REASON)
+    producer, repo = envelope["producer"], invocation.repo_root
+    if selected.kind == "family-handoff":
+        if (selected.run_id, selected.run_attempt) != (producer["run_id"], producer["run_attempt"]):
+            raise _fail(f"the selected family handoff {selected.name} of run {selected.run_id} is not the upload of "
+                        f"its envelope's producer run {producer['run_id']} attempt {producer['run_attempt']}",
+                        SELECTION_REASON)
+    else:
+        named, covered = parsed.coverage_sha, envelope["coverage_sha"]
+        _git.require_commit(repo, named, "family cache commit")
+        if named != covered and not _git.is_ancestor(repo, covered, named):
+            raise _fail(f"the selected family cache {selected.name} is named by a commit its envelope coverage "
+                        f"{covered} does not precede", SELECTION_REASON)
+        if named != expected_coverage_sha and not _git.is_ancestor(repo, named, expected_coverage_sha):
+            raise _fail(f"the selected family cache {selected.name} is not named by an ancestor of the coverage "
+                        f"{expected_coverage_sha}", SELECTION_REASON)
+    workflow, commit, kit = config["producer"]["workflow"], producer["commit"], envelope["kit"]
+    data = _git.read_blob(repo, commit, workflow, lim.MAX_WORKFLOW_FILE_BYTES)
+    try:
+        pin = parse_pin_files({workflow: data})
+    except MbError as exc:
+        raise _fail(f"cannot read the kit pin of {workflow} at the producer commit {commit}: {exc}",
+                    "kit-binding") from exc
+    if pin.sha != kit["sha"] or pin.version != "v" + kit["version"]:
+        raise _fail(f"the family generation's kit {kit['sha']} ({kit['version']}) is not the pin of {workflow} at its "
+                    f"producer commit {commit}", "kit-binding")
+
+
 def _hook_projection(invocation: Invocation, hook_output: Path, relative: str, *, family: str, key: str,
                      expected_coverage_sha: str) -> tuple[dict[str, Any], Path, dict[str, dict[str, Any]]]:
     """Validate what ``family_validate`` wrote: exactly its projection and the images beside it."""
 
     listed = regular_files(hook_output, max_files=lim.MAX_FAMILY_FILES + 1,
-                           max_total_bytes=lim.MAX_PAIRED_BYTES + lim.MAX_FAMILY_HANDOFF_BYTES,
+                           max_total_bytes=lim.MAX_PAIRED_BYTES + lim.MAX_FAMILY_PROJECTION_BYTES,
                            max_file_bytes=lim.MAX_PAIRED_BYTES)
     if relative not in listed:
         raise _fail(f"{HOOK} reported {relative!r} but wrote no such projection")
@@ -240,13 +322,13 @@ def _bind(invocation: Invocation, envelope: Mapping[str, Any], projection: Mappi
 
 
 def _write_collected(output: Path, *, source: Path, envelope: Mapping[str, Any], projection: Mapping[str, Any],
-                     images_root: Path, images: Mapping[str, Mapping[str, Any]]) -> None:
+                     images_root: Path, images: Mapping[str, Mapping[str, Any]], selection: bytes) -> None:
     envelope_bytes = canonical_json(envelope)
     projection_bytes = canonical_json(projection)
     bound = LIMITS_BY_KIND["collected-family"]
-    count = len(envelope["files"]) + len(images) + 2
+    count = len(envelope["files"]) + len(images) + 3
     total = (sum(record["size"] for record in envelope["files"]) + len(envelope_bytes) + len(projection_bytes)
-             + sum(image["size"] for image in images.values()))
+             + sum(image["size"] for image in images.values()) + len(selection))
     if count > bound.max_entries or total > bound.max_total_bytes:
         raise _fail("the collected family artifact would exceed its extraction bounds")
 
@@ -265,6 +347,7 @@ def _write_collected(output: Path, *, source: Path, envelope: Mapping[str, Any],
             _require_bytes(data, record, f"native file {record['path']}")
             put(f"{SOURCE_DIRECTORY}/{record['path']}", data)
         put(PROJECTION_NAME, projection_bytes)
+        put(SELECTED_NAME, selection)
         for path, image in images.items():
             data = read_child_file(images_root, path, max_bytes=lim.MAX_DERIVATIVE_BYTES)
             _require_bytes(data, image, path)
@@ -280,8 +363,9 @@ def _write_collected(output: Path, *, source: Path, envelope: Mapping[str, Any],
 
 
 def collect_family(invocation: Invocation, *, family: str, key: str, input_dir: Path, expected_coverage_sha: str,
-                   output: Path) -> FamilyOutcome:
-    """The ``family collect`` command: validate the envelope, run ``family_validate``, apply R4/R5
+                   output: Path, selected_json: Path) -> FamilyOutcome:
+    """The ``family collect`` command: validate the envelope, bind the recorded selection
+    ``selected_json`` (``select --family --output F``) to it, run ``family_validate``, apply R4/R5
     and, when available, write the collected layout (module docstring) into the new ``output``.
     ``superseded`` and ``unavailable`` are returned (the command exits 3 without writing an
     upload)."""
@@ -293,7 +377,10 @@ def collect_family(invocation: Invocation, *, family: str, key: str, input_dir: 
     target = Path(os.path.abspath(output))
     if target == source or source in target.parents:
         raise _fail("the collected output must lie outside the selected family generation")
+    selected, selection = _read_selection(selected_json)
     envelope = validate_envelope_dir(invocation, source, family=family, key=key)
+    _bind_selection(invocation, selected, envelope, config, family=family, key=key,
+                    expected_coverage_sha=expected_coverage_sha)
     if "carried_from" in envelope:
         verify_carry_forward(invocation.repo_root, envelope["carried_from"], envelope["coverage_sha"])
     with tempfile.TemporaryDirectory(prefix="mb-family-") as work:
@@ -309,6 +396,6 @@ def collect_family(invocation: Invocation, *, family: str, key: str, input_dir: 
                                                            expected_coverage_sha=expected_coverage_sha)
         carried_from = _bind(invocation, envelope, projection, result, config, expected_coverage_sha)
         _write_collected(target, source=source, envelope=envelope, projection=projection, images_root=images_root,
-                         images=images)
+                         images=images, selection=selection)
     return FamilyOutcome(status="available", reason=result["reason"], projection=projection,
                          carried_from=carried_from)

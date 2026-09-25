@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mod_base.errors import MbError
+from mod_base.github import artifacts
 from mod_base.io import bounded_zip
 from mod_base.io.bounded_zip import LIMITS_BY_KIND, ExtractionLimits, ZipRejected, extract
 from mod_base.model import grammar, limits
@@ -230,12 +231,25 @@ class ExtractTests(BoundedZipTestCase):
     def test_invalid_limits_are_rejected(self) -> None:
         data = archive({"a.txt": b"a"})
         for bad in (ExtractionLimits(0, 1, 1), ExtractionLimits(1, True, 1), ExtractionLimits(1, 1, -1),
+                    ExtractionLimits(limits.MAX_ZIP_ENTRIES + 1, 1, 1),
                     ExtractionLimits(1, 1, 1, suffixes=frozenset({"json"})),
                     ExtractionLimits(1, 1, 1, suffixes=frozenset()), None, {"max_entries": 1}):
             with self.subTest(limits=bad):
                 self.assert_rejected(data, "extraction", bad)  # type: ignore[arg-type]
                 with self.assertRaisesRegex(ZipRejected, "extraction"):
                     bounded_zip.archive_limit(bad)  # type: ignore[arg-type]
+
+    def test_the_entry_count_may_not_exceed_the_global_zip_bound(self) -> None:
+        data = archive({"a.txt": b"a"})
+        widest = ExtractionLimits(limits.MAX_ZIP_ENTRIES, 1 << 20, 1 << 19)
+        self.assertGreater(bounded_zip.archive_limit(widest), 0)
+        self.assertEqual(["a.txt"], extract(data, self.destination(), widest))
+        beyond = ExtractionLimits(limits.MAX_ZIP_ENTRIES + 1, 1 << 20, 1 << 19)
+        with patch.object(bounded_zip.zipfile, "ZipFile") as parser:
+            self.assert_rejected(data, f"entries may not exceed {limits.MAX_ZIP_ENTRIES}", beyond)
+            with self.assertRaisesRegex(ZipRejected, "entries may not exceed"):
+                bounded_zip.archive_limit(beyond)
+        parser.assert_not_called()
 
     def test_rejects_data_that_disagrees_with_the_central_directory(self) -> None:
         stored = archive({"value.txt": b"0123456789" * 10}, compression=zipfile.ZIP_STORED)
@@ -428,9 +442,23 @@ class KindLimitsTests(unittest.TestCase):
                 bounded_zip._check_limits(value)
                 self.assertEqual(limits.MAX_ZIP_RATIO, value.max_ratio)
                 self.assertLessEqual(value.max_entry_bytes, value.max_total_bytes)
+                self.assertLessEqual(value.max_entries, limits.MAX_ZIP_ENTRIES)
+                # Every kind expands to no more than the download cap, so a producer checking its
+                # output against its kind refuses, before upload, files no download could accept.
+                self.assertLessEqual(value.max_total_bytes, artifacts.MAX_ARCHIVE_BYTES)
         self.assertEqual(frozenset({".json", ".png"}), LIMITS_BY_KIND["handoff"].suffixes)
         self.assertEqual(frozenset({".json", ".webp"}), LIMITS_BY_KIND["cache"].suffixes)
         self.assertIsNone(LIMITS_BY_KIND["collected-family"].suffixes)  # source/ carries native files
+
+    def test_the_collected_family_bounds_come_from_the_global_limits(self) -> None:
+        bound = LIMITS_BY_KIND["collected-family"]
+        self.assertEqual((limits.MAX_COLLECTED_FAMILY_FILES, limits.MAX_COLLECTED_FAMILY_BYTES),
+                         (bound.max_entries, bound.max_total_bytes))
+        # The widest kind: the verbatim family bundle plus its projection images and two documents.
+        self.assertEqual(limits.MAX_ZIP_ENTRIES, max(value.max_entries for value in LIMITS_BY_KIND.values()))
+        self.assertGreaterEqual(bound.max_entries, LIMITS_BY_KIND["family-handoff"].max_entries
+                                + limits.MAX_FAMILY_FILES + 1)
+        self.assertLessEqual(bound.max_total_bytes, artifacts.MAX_ARCHIVE_BYTES)
 
     def test_a_collected_family_artifact_with_native_source_files_extracts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -438,6 +466,36 @@ class KindLimitsTests(unittest.TestCase):
             data = archive({"paired.json": b"{}", "images/" + "a" * 64 + ".webp": b"RIFF",
                             "source/envelope.json": b"{}", "source/native/report.txt": b"native"})
             self.assertIn("source/native/report.txt", extract(data, destination, LIMITS_BY_KIND["collected-family"]))
+
+
+class CollectedFamilyTotalTests(BoundedZipTestCase):
+    """The ``collected-family`` expanded total fits the download cap. Its former 2 GiB bound let a leg
+    between 1 and 2 GiB pass ``family collect`` and be uploaded, to be refused only by ``build``'s
+    download; such a directory is now refused before any byte is inflated."""
+
+    BOUND = LIMITS_BY_KIND["collected-family"]
+
+    def declaring(self, count: int) -> bytes:
+        """``count`` deflate entries each declaring the per-entry maximum over the fewest data bytes
+        the ratio admits (zeros, which are not a valid deflate stream)."""
+
+        stored = -(-self.BOUND.max_entry_bytes // self.BOUND.max_ratio)
+        data = archive_with([(entry(f"source/native/{index:03d}.bin"), b"\0" * stored) for index in range(count)])
+        for index in range(count):
+            data = patch_central(data, index, method=zipfile.ZIP_DEFLATED, size=self.BOUND.max_entry_bytes)
+        return data
+
+    def test_a_directory_declaring_more_than_the_download_cap_is_refused_before_inflating(self) -> None:
+        beyond_download = artifacts.MAX_ARCHIVE_BYTES // self.BOUND.max_entry_bytes + 1
+        self.assertGreater(beyond_download * self.BOUND.max_entry_bytes, artifacts.MAX_ARCHIVE_BYTES)
+        with patch.object(bounded_zip, "_extract_entry") as inflate:
+            self.assert_rejected(self.declaring(beyond_download), "total byte bound", self.BOUND)
+        inflate.assert_not_called()
+
+    def test_a_directory_within_the_total_passes_to_extraction(self) -> None:
+        fitting = self.BOUND.max_total_bytes // self.BOUND.max_entry_bytes
+        # The directory checks pass; the declared bytes then fail to inflate, leaving no output.
+        self.assert_rejected(self.declaring(fitting), "cannot extract", self.BOUND)
 
 
 if __name__ == "__main__":

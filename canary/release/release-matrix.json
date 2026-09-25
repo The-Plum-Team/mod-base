@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "repository": "The-Plum-Team/mod-base-canary",
+  "project": {
+    "description": "Synthetic demonstration evidence — not a product. The mod-base canary publishes generated images through the same pinned kit, workflows and checks the Plum Team mods use, so every cross-repository behaviour is proven before a kit release."
+  },
+  "anchor_minecraft": "1.20.1",
+  "targets": [
+    {"java": 17, "loaders": ["fabric"], "minecraft": "1.20.1"},
+    {"java": 21, "loaders": ["fabric", "neoforge"], "minecraft": "1.21.1"}
+  ]
+}

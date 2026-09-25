@@ -4,7 +4,8 @@ exact bytes of its rolling cache (and baseline), or of a family cache.
 Ports Block Pops ``test_pages_refresh_cache`` (the exact successful build and deploy are required
 before any download; unknown or cross-branch requests never emit a result; post-validation drift of
 jobs, source or bytes fails) and the Quick Skin refresh-cache step (the live head must still be the
-coverage; the complete generation is retained as the feature baseline) onto the v1 promotion.
+coverage; the complete generation is retained as the feature baseline, once: a republication from
+its cache or from the same handoff retains no second copy) onto the v1 promotion.
 """
 
 from __future__ import annotations
@@ -22,12 +23,16 @@ from unittest import mock
 from mod_base import cli
 from mod_base.adapter import host
 from mod_base.errors import MbError
+from mod_base.evidence import compact as compact_module
+from mod_base.github import artifacts as github_artifacts
+from mod_base.github.api import ApiError, ApiNotFound
 from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json
-from mod_base.pages import commands_build
+from mod_base.pages import authenticate, commands_build
 from mod_base.pages.build import PROMOTION_FILE, build_site
 from mod_base.pages.refresh import RefreshResult, refresh_bundle
-from mod_base.workflow import api_job_name, caller_job_name
+from mod_base.pages.select import Selected
+from mod_base.workflow import PAGES_WORKFLOW_PATH, api_job_name, caller_job_name, step_name
 from tests import test_build_support as bs
 from tests.fixtures.mods import support
 from tests.test_select import World
@@ -118,6 +123,127 @@ class RefreshTest(RefreshFlow):
         result = self.refresh(invocation=self.pub.invocation("refresh", config=path))
         self.assertIsNone(result.baseline_name)
         self.assertTrue(result.available)
+
+
+class BaselineTest(RefreshFlow):
+    """A complete generation is retained as its feature baseline once: when it is first published
+    from its handoff. A republication, from its cache or from the same handoff before rotation
+    retires it (a family wake), rolls the cache forward but names no second 90-day baseline."""
+
+    KEY = "mc1.20.1"
+    OWNER = 8800
+    BASELINE_ID = 7401
+
+    def baseline(self) -> str:
+        return grammar.baseline_name(self.KEY, self.pub.mod.commit, bs.E2E_RUN)
+
+    def retained(self, *, created: float = 565, expired: bool = False, job_conclusion: str = "success",
+                 **run_changes: Any) -> dict[str, Any]:
+        """The baseline an earlier Pages run retained in its refresh job's retention step (560-570)."""
+
+        options = {"path": PAGES_WORKFLOW_PATH, "head_sha": self.pub.mod.commit, "created": 500,
+                   "kit_sha": support.KIT_SHA, "title": "Project site", **run_changes}
+        owner = self.world.run(self.OWNER, **options)
+        self.world.jobs(owner, [self.world.job(api_job_name("finalize", "refresh", key=self.KEY), started=540,
+                                               completed=600, conclusion=job_conclusion,
+                                               steps=((step_name("baseline_upload"), 560, 570),))])
+        return self.world.artifact(self.baseline(), owner, created=created, expired=expired,
+                                   archive=self.pub.archives[f"collected:{self.KEY}"], artifact_id=self.BASELINE_ID)
+
+    def baseline_listings(self) -> int:
+        return len([call for call in self.world.api.calls if call[1].get("name") == self.baseline()])
+
+    def test_the_first_publication_from_its_handoff_names_the_baseline(self) -> None:
+        self.assertEqual(self.refresh(self.KEY).baseline_name, self.baseline())
+        self.assertEqual(self.baseline_listings(), 1, "one exact-name listing looks for a retained baseline")
+
+    def test_a_baseline_an_earlier_pages_run_retained_is_not_retained_again(self) -> None:
+        self.retained()
+        result = self.refresh(self.KEY)
+        self.assertEqual(result, RefreshResult(available=True, baseline_name=None,
+                                               cache_name=grammar.cache_name(self.KEY, self.pub.mod.commit)))
+        self.assertEqual(listing(self.work / "cache"), listing(self.pub.collected[self.KEY]), "the cache still rolls")
+
+    def test_an_upload_the_consumers_would_not_authenticate_is_no_retained_baseline(self) -> None:
+        cases: dict[str, dict[str, Any]] = {
+            "expired": {"expired": True},
+            "fork": {"repository": "Someone/fork"},
+            "failed owner": {"conclusion": "failure"},
+            "running owner": {"status": "in_progress", "conclusion": None},
+            "another workflow": {"path": ".github/workflows/other.yml"},
+            "another branch": {"head_branch": "topic"},
+            "outside the retention step": {"created": 580},
+            "failed refresh job": {"job_conclusion": "failure"},
+        }
+        for label, changes in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                self.retained(**changes)
+                self.assertEqual(self.refresh(self.KEY).baseline_name, self.baseline())
+        with self.subTest("this run's own upload"):
+            self.setUp()
+            pages = {"id": bs.PAGES_RUN, "head_sha": self.pub.mod.commit, "head_branch": "master"}
+            self.world.artifact(self.baseline(), pages, created=1150, archive=self.pub.archives[f"collected:{self.KEY}"],
+                                artifact_id=self.BASELINE_ID)
+            self.assertEqual(self.refresh(self.KEY).baseline_name, self.baseline())
+
+    def test_a_vanished_upload_is_skipped_and_other_api_failures_propagate(self) -> None:
+        self.retained()
+        path = f"/repos/{self.pub.mod.repository}/actions/artifacts/{self.BASELINE_ID}"
+        original = github_artifacts.get_artifact
+
+        def failing(error: ApiError) -> Any:
+            def lookup(api: Any, artifact_id: int) -> Any:
+                if artifact_id == self.BASELINE_ID:
+                    raise error
+                return original(api, artifact_id)
+            return lookup
+
+        with mock.patch.object(github_artifacts, "get_artifact",
+                               failing(ApiNotFound("HTTP 404", status=404, method="GET", path=path))):
+            self.assertEqual(self.refresh(self.KEY).baseline_name, self.baseline())
+        self.setUp()
+        self.retained()
+        with mock.patch.object(github_artifacts, "get_artifact",
+                               failing(ApiError("HTTP 502", status=502, method="GET", path=path))):
+            self.rejected("HTTP 502", reason="github-api", key=self.KEY)
+
+    def test_a_republication_from_its_cache_names_no_baseline(self) -> None:
+        # The collect job re-authenticated the cache an earlier Pages run rolled forward; no
+        # baseline of this generation exists any more (expired), and none is retained again.
+        source = self.pub.world()
+        owner = source.run(self.OWNER, path=PAGES_WORKFLOW_PATH, head_sha=self.pub.mod.commit, created=800,
+                           kit_sha=support.KIT_SHA, title="Project site")
+        cache = source.artifact(grammar.cache_name(self.KEY, self.pub.mod.commit), owner, created=900,
+                                archive=self.pub.archives[f"collected:{self.KEY}"], artifact_id=7301)
+        selected = Selected(kind="cache", artifact_id=cache["id"], name=cache["name"], digest=cache["digest"],
+                            size=cache["size_in_bytes"], run_id=self.OWNER, run_attempt=1)
+        collect = self.pub.invocation("collect")
+        draft_path, collected = self.work / "draft.json", self.work / "collected-cache"
+        with mock.patch.object(host, "call", support.InProcessHost(api=source.api)):
+            draft = authenticate.authenticate_selection(collect, api=source.api, key=self.KEY,
+                                                        selected_dir=self.pub.collected[self.KEY], selected=selected)
+            draft_path.write_bytes(canonical_json(draft))
+            compact_module.compact_bundle(collect, key=self.KEY, input_dir=self.pub.collected[self.KEY],
+                                          selection_path=draft_path, output=collected)
+        self.assertEqual(json.loads((collected / "selection.json").read_bytes())["selected_artifact"]["kind"], "cache")
+        archive = support.zip_directory(collected)
+        document = json.loads(json.dumps(self.promotion))
+        entry = next(bundle for bundle in document["bundles"] if bundle["key"] == self.KEY)
+        entry.update(collected_digest="sha256:" + bs.sha256(archive), selected_artifact_id=cache["id"],
+                     manifest_sha256=bs.sha256((collected / "manifest.json").read_bytes()))
+        promotion = self.work / "promotion"
+        promotion.mkdir()
+        (promotion / PROMOTION_FILE).write_bytes(canonical_json(document))
+        self.world = self.finalize_world(promotion=support.zip_directory(promotion))
+        self.world.artifact(grammar.collected_name(self.KEY),
+                            {"id": bs.PAGES_RUN, "head_sha": self.pub.mod.commit, "head_branch": "master"},
+                            created=1050, archive=archive, artifact_id=entry["collected_artifact_id"])
+        result = self.refresh(self.KEY)
+        self.assertEqual(result, RefreshResult(available=True, baseline_name=None,
+                                               cache_name=grammar.cache_name(self.KEY, self.pub.mod.commit)))
+        self.assertEqual(listing(self.work / "cache"), listing(collected))
+        self.assertEqual(self.baseline_listings(), 0, "a cache route never looks for a baseline")
 
 
 class PrerequisiteTest(RefreshFlow):
@@ -218,6 +344,35 @@ class CollectedTest(RefreshFlow):
         self.world.artifact(grammar.collected_family_name(bs.FAMILY, bs.FAMILY_KEY), run, created=1060,
                             archive=self.pub.archives["collected:mc26.3"], artifact_id=bs.COLLECTED_FAMILY_ID)
         self.rejected(key=bs.FAMILY_KEY, family=bs.FAMILY)
+
+    def test_the_collected_family_selection_is_the_promoted_generation(self) -> None:
+        """A collected family artifact whose ``selected.json`` is missing or names another generation
+        than the promotion's ``selected_artifact_id`` is refused, even under the promoted digest."""
+
+        recorded = json.loads((self.pub.collected_family / "selected.json").read_bytes())
+        self.assertEqual(recorded["artifact_id"], self.promotion["families"][0]["selected_artifact_id"])
+        cases = {
+            "another generation": ("selected another generation", lambda directory: (
+                directory / "selected.json").write_bytes(canonical_json({**recorded, "artifact_id": 5301}))),
+            "missing": ("holds", lambda directory: (directory / "selected.json").unlink()),
+        }
+        for label, (fragment, change) in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                variant = self.work / "variant"
+                shutil.copytree(self.pub.collected_family, variant)
+                change(variant)
+                archive = support.zip_directory(variant)
+                document = json.loads(json.dumps(self.promotion))
+                document["families"][0]["collected_digest"] = "sha256:" + bs.sha256(archive)
+                promotion = self.work / "promotion"
+                promotion.mkdir()
+                (promotion / PROMOTION_FILE).write_bytes(canonical_json(document))
+                self.world = self.finalize_world(promotion=support.zip_directory(promotion))
+                self.world.artifact(grammar.collected_family_name(bs.FAMILY, bs.FAMILY_KEY),
+                                    {"id": bs.PAGES_RUN, "head_sha": self.pub.mod.commit, "head_branch": "master"},
+                                    created=1060, archive=archive, artifact_id=bs.COLLECTED_FAMILY_ID)
+                self.rejected(fragment, reason="artifact", key=bs.FAMILY_KEY, family=bs.FAMILY)
 
     def test_a_moved_head_keeps_the_cache_from_rolling_forward(self) -> None:
         self.world.api.set_branch("master", "7" * 40, "8" * 40)
@@ -324,6 +479,18 @@ class CommandTest(RefreshFlow):
         commit = self.pub.mod.commit
         self.assertEqual(lines, ["available=true", f"cache_name={grammar.cache_name('mc1.20.1', commit)}",
                                  f"baseline_name={grammar.baseline_name('mc1.20.1', commit, bs.E2E_RUN)}"])
+
+    def test_the_refresh_command_omits_a_baseline_an_earlier_run_retained(self) -> None:
+        commit = self.pub.mod.commit
+        owner = self.world.run(8800, path=PAGES_WORKFLOW_PATH, head_sha=commit, created=500, kit_sha=support.KIT_SHA,
+                               title="Project site")
+        self.world.jobs(owner, [self.world.job(api_job_name("finalize", "refresh", key="mc1.20.1"), started=540,
+                                               completed=600, steps=((step_name("baseline_upload"), 560, 570),))])
+        self.world.artifact(grammar.baseline_name("mc1.20.1", commit, bs.E2E_RUN), owner, created=565,
+                            archive=self.pub.archives["collected:mc1.20.1"])
+        code, stderr, lines = self.run_command("--key", "mc1.20.1")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(lines, ["available=true", f"cache_name={grammar.cache_name('mc1.20.1', commit)}"])
 
     def test_an_unavailable_family_leg_exits_zero_without_a_cache(self) -> None:
         code, stderr, lines = self.run_command("--key", "mc26.3", "--family", bs.FAMILY)

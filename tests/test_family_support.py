@@ -23,6 +23,7 @@ from typing import Any
 from mod_base.imaging.metrics import SizePolicy, inspect_png, inspect_webp
 from mod_base.imaging.png import pattern_png
 from mod_base.imaging.webp import derive_webp
+from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json, sha256_hex
 from mod_base.model.documents import run_claim_from_environment, thumbnail_size
 from mod_base.runtime import Invocation
@@ -92,9 +93,15 @@ def _configure(root: Path, *, carry_forward: bool, handoff_max_bytes: int, hook:
         family.update(image_policy=dict(IMAGE_POLICY), carry_forward=carry_forward,
                       handoff_max_bytes=handoff_max_bytes)
     config_path.write_bytes(canonical_json(config))
+    adapter = root / "scripts" / "pages" / "mod_base_adapter.py"
+    text = adapter.read_text(encoding="utf-8")
     if hook:
-        adapter = root / "scripts" / "pages" / "mod_base_adapter.py"
-        adapter.write_text(adapter.read_text(encoding="utf-8") + FAMILY_HOOK, encoding="utf-8")
+        adapter.write_text(text + FAMILY_HOOK, encoding="utf-8")
+        return
+    # The shipped fixture defines its own family_validate; a hookless adapter drops that definition.
+    start = text.index("\ndef family_validate(")
+    end = text.index("\ndef ", start + 1)
+    adapter.write_text(text[:start] + text[end:], encoding="utf-8")
 
 
 def family_mod(destination: Path, *, carry_forward: bool = True, handoff_max_bytes: int = 64 * 1024 * 1024,
@@ -259,6 +266,35 @@ def rewrite_envelope(root: Path, change: Callable[[dict[str, Any]], None]) -> di
     os.chmod(path, 0o644)
     path.write_bytes(canonical_json(envelope))
     return envelope
+
+
+def selection(generation: Path, *, artifact_id: int = 9001, kind: str = "family-handoff",
+              coverage_sha: str | None = None) -> dict[str, Any]:
+    """The ``Selected`` object ``select --family --output`` writes for the family generation
+    directory ``generation``: by default the family handoff its envelope's producer attempt uploaded;
+    ``kind="family-cache"`` names a family cache at ``coverage_sha`` (default: the envelope's) owned by
+    a Pages run. An unreadable envelope falls back to this module's producer (its test fails first)."""
+
+    try:
+        envelope = json.loads((generation / "envelope.json").read_text(encoding="utf-8"))
+        family, key, producer = envelope["family"], envelope["key"], envelope["producer"]
+        covered = envelope["coverage_sha"]
+        run_id, attempt = producer["run_id"], producer["run_attempt"]
+    except (OSError, ValueError, KeyError, TypeError):
+        family, key, covered, run_id, attempt = FAMILY, KEY, "0" * 40, PRODUCER_RUN_ID, 1
+    if kind == "family-handoff":
+        name = grammar.family_handoff_name(family, key, attempt)
+    else:
+        name, run_id, attempt = grammar.family_cache_name(family, key, coverage_sha or covered), 9000, 1
+    return {"kind": kind, "artifact_id": artifact_id, "name": name, "digest": "sha256:" + "5" * 64,
+            "size": 4096, "run_id": run_id, "run_attempt": attempt}
+
+
+def write_selection(path: Path, value: Mapping[str, Any]) -> Path:
+    """Write ``value`` as ``select --output`` does (canonical JSON) into the new file ``path``."""
+
+    path.write_bytes(canonical_json(dict(value)))
+    return path
 
 
 def copy_tree(source: Path, destination: Path) -> Path:

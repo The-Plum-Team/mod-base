@@ -1,8 +1,9 @@
 """``rotate.yml`` (SPEC §5.5): the writable rotation job and its executed shell.
 
-The owner run is authenticated before any checkout (polled until completed, then exactly a
-successful default-branch ``pages.yml`` run at the given commit); the mod is checked out sparse
-(config data only, no adapter code); the kit runs ``rotate`` alone.
+The owner run is authenticated before any checkout (polled until completed within a bounded
+schedule, then exactly a successful default-branch ``pages.yml`` run at the given commit); the mod
+is checked out sparse (config data only, no adapter code); the kit runs ``rotate`` alone, and its
+exit 3 (the owner's promotion is already retired or expired) is a reported no-op.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from mod_base import errors
 from tests.test_workflow_policy import (PROLOGUE, ROTATE_OWNER_STEP, TOKEN_VALUE, ShellHarness, callee,
                                         mod_base_commands, parse_kit_argv, require_tools, step)
 
@@ -35,6 +37,7 @@ class RotateStructureTests(unittest.TestCase):
         self.assertEqual(list(jobs), ["rotate"])
         job = jobs["rotate"]
         self.assertEqual(job["permissions"], {"actions": "write", "contents": "read"})
+        self.assertEqual(job["timeout-minutes"], "30", "the owner poll leaves the rotation about 19 minutes")
         names = [item["name"] for item in job["steps"]]
         self.assertEqual(names, [PROLOGUE[0], ROTATE_OWNER_STEP, *PROLOGUE[1:],
                                  "Retire the superseded generation by exact artifact ID"])
@@ -106,7 +109,17 @@ class RotateShellTests(unittest.TestCase):
         self.assertEqual((reads, sleeps), (3, [["2"], ["2"]]))
         result, reads, sleeps = self.authenticate(running)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual((reads, len(sleeps)), (30, 29))
+        self.assertIn("Rotation owner: the owner run is still in progress after the bounded poll", result.stderr)
+        self.assertEqual(reads, 60)
+        self.assertEqual(sleeps, [["2"]] * 30 + [["20"]] * 29, "30 reads 2 s apart, then 30 more 20 s apart")
+        self.assertLessEqual(sum(int(argv[0]) for argv in sleeps), 11 * 60)
+
+    def test_a_long_running_owner_within_the_poll_is_accepted(self) -> None:
+        # A mod-local ext- job that needs request-rotation keeps the owner in progress for minutes.
+        running = {"body": owner(status="in_progress", conclusion=None)}
+        result, reads, sleeps = self.authenticate([running] * 32 + [{"body": owner()}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((reads, sleeps), (33, [["2"]] * 30 + [["20"]] * 2))
 
     def test_every_other_owner_is_refused(self) -> None:
         cases = {
@@ -138,9 +151,25 @@ class RotateShellTests(unittest.TestCase):
             OWNER_ID, "--owner-sha", OWNER_SHA, "--delete-delay-seconds", "1.0"]])
         self.assertEqual(calls[0]["env"]["GH_TOKEN"], "t")
         parse_kit_argv(calls[0]["argv"][3:])
-        result = self.harness.run(step(self.steps, "Retire the superseded generation by exact artifact ID")["run"],
-                                  {**env, "STUB_EXIT": "2"})
-        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("::notice", result.stdout)
+
+    def test_only_an_already_retired_promotion_is_a_green_no_op(self) -> None:
+        # Exit 3 is the kit's Unavailable, which rotate raises only when the owner holds no promotion.
+        self.assertEqual((errors.EXIT_UNAVAILABLE, errors.Unavailable.exit_code), (3, 3))
+        script = step(self.steps, "Retire the superseded generation by exact artifact ID")["run"]
+        self.assertIn('\n  3)\n', script)
+        env = {"GH_TOKEN": "t", "PAGES_RUN_ID": OWNER_ID, "PAGES_RUN_SHA": OWNER_SHA,
+               "STUB_PYTHON3_SCRIPT": PYTHON_STUB, "GITHUB_WORKSPACE": str(self.root / "workspace")}
+        result = self.harness.run(script, {**env, "STUB_EXIT": "3"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, f"::notice title=Rotation skipped::Pages run {OWNER_ID} holds no unexpired "
+                                        "mb-promotion (already rotated or expired); nothing was retired.\n")
+        self.assertEqual(len([record for record in self.harness.records() if record["tool"] == "python3"]), 1)
+        for code in ("1", "2", "4", "78", "130"):
+            with self.subTest(exit=code):
+                result = self.harness.run(script, {**env, "STUB_EXIT": code})
+                self.assertEqual(result.returncode, int(code))
+                self.assertNotIn("::notice", result.stdout)
 
 
 if __name__ == "__main__":

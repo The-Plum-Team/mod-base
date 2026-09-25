@@ -232,6 +232,15 @@ class ProjectionTest(unittest.TestCase):
         with mock.patch("mod_base.model.limits.MAX_PAIRED_BYTES", 64):
             self.assertRaises(MbError, self.validate, directory)
 
+    def test_the_images_fit_the_family_projection_budget(self) -> None:
+        # The images' share of a collected family (limits.MAX_FAMILY_PROJECTION_BYTES), not a handoff's.
+        directory = self.write(self.document)
+        total = sum(len(data) for data in self.images.values())
+        with mock.patch("mod_base.model.limits.MAX_FAMILY_PROJECTION_BYTES", total):
+            self.validate(directory)
+        with mock.patch("mod_base.model.limits.MAX_FAMILY_PROJECTION_BYTES", total - 1):
+            self.assert_rejected(directory, f"the projection images exceed {total - 1} bytes")
+
     def test_a_projection_without_lanes_needs_no_images(self) -> None:
         document = self.mutated(lambda item: item.update(lanes=[]))
         directory = self.write(document, {})

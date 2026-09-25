@@ -16,6 +16,7 @@ from typing import Any
 from unittest import mock
 
 from mod_base.adapter import host
+from mod_base.adapter.protocol import HookFailed
 from mod_base.errors import MbError, Unavailable
 from mod_base.evidence import compact as compact_module
 from mod_base.evidence import expectation as expectation_module
@@ -300,7 +301,9 @@ class PrepareTest(Flow):
             'def anchor_selection(ctx, expectation):\n    return expectation["anchor"]',
             'def anchor_selection(ctx, expectation):\n    raise ValueError("no anchor decision")'))
         producer = support.invocation(failing, self.env, implementation_sha=self.mod.commit)
-        with self.assertRaisesRegex(ValueError, "no anchor decision"):
+        # The in-process host reports the adapter's refusal as the isolated host does.
+        refusal = "^adapter hook 'anchor_selection' failed: ValueError: no anchor decision$"
+        with self.assertRaisesRegex(HookFailed, refusal):
             prepare.prepare_handoff(producer, e2e_root=self.e2e, key=KEY, output=self.work / "handoff",
                                     subject=self.mod.subject, tested=self.tested_claim, handoff=self.handoff_claim)
         self.assertFalse((self.work / "handoff").exists())

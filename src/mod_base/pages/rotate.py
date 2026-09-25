@@ -1,6 +1,6 @@
 """Exact-ID rotation of superseded evidence after an authenticated successful Pages run (MB7).
 
-Quick Skin ``rotate_artifacts`` engine (retirement families, ``DeletionBudget(32)``, deferral,
+Quick Skin ``rotate_artifacts`` engine (retirement families, ``DeletionBudget``, deferral,
 delete delay) + Block Pops ``_RotationReads`` (pinned reads, per-delete re-observation). Rotation
 reads config **data** only: no adapter hook runs and no repository fact is checked.
 
@@ -14,21 +14,32 @@ is observed once and every later observation of it, from any listing or single r
 identical (BP "rotation policy input changed"). A pinned replacement must never disappear; a
 candidate that vanished concurrently is simply not deleted.
 
-**Replacements first.** R's single ``mb-promotion`` is downloaded by id and validated (a final
-``documents.validate_promotion`` bound to R: implementation branch/SHA/run, attempt at most R's,
-kit SHA equal to R's ``referenced_workflows``). Then every promoted key's ``mb-cache--<key>--
+**Replacements first.** R's single ``mb-promotion`` is downloaded by id and validated (canonical
+bytes, as ``build`` wrote it and ``refresh`` requires; a final ``documents.validate_promotion``
+bound to R: implementation branch/SHA/run, attempt at most R's, kit SHA equal to R's
+``referenced_workflows``). Then every promoted key's ``mb-cache--<key>--
 <coverage>`` and every available family's ``mb-family-cache--<family>--<key>--<coverage>``, each
 owned by R exactly once, is downloaded by id and validated structurally: strict documents, the
 exact file inventory, the manifest hash the promotion recorded and the selection R wrote (compact),
-or the envelope and its native inventory (family). This is R's own evidence, so it is checked
-against R's promotion and R's embedded expectation, never against the live config's image policy,
-extension list or family list (the rotation run reads the config at a possibly newer head). R's
-inventory must be exactly that generation (QS "cache inventory disagrees", BP one fan-in bundle,
-one ``github-pages``): every unexpired artifact of R carries R's head, its caches are exactly the
-promoted replacements, each ``mb-collected*`` is the collected artifact the promotion recorded (id
-and digest; a retry may find some already retired) and it holds at most one ``github-pages``. Any
-inconsistency stops the whole rotation before a single deletion, so a predecessor is never retired
-without a verified replacement.
+or the envelope's repository, family and key and its native inventory (family). This is R's own
+evidence, so it is checked against R's promotion and R's embedded expectation, never against the
+live config's image policy, extension list or family list (the rotation run reads the config at a
+possibly newer head). A family cache holds its producer's envelope verbatim (``refresh`` rolls the
+collected ``source/`` forward), so the envelope's ``coverage_sha`` is the producer's commit: equal to
+the promoted coverage, or an ancestor of it for a **carried** leg, whose ancestry (SPEC §4.4 R5) R's
+``build`` proved against inert Git objects rotation does not have; the cache's name and owner, not
+the envelope, bind it to the promoted coverage.
+
+R's inventory must be exactly that generation (QS "cache inventory disagrees", BP one fan-in
+bundle, one ``github-pages``): every unexpired artifact of R carries R's head, its caches are
+exactly the promoted replacements, each ``mb-collected*`` is the collected artifact the promotion
+recorded (id and digest; a retry may find some already retired) and it holds at most one
+``github-pages``. An owner, promotion, key replacement or inventory that cannot be authenticated
+stops the whole rotation before a single deletion, so a predecessor is never retired without a
+verified replacement. A **family leg** whose replacement cannot be verified rejects only that leg:
+its predecessors, its collected artifact, ``github-pages`` and the ``mb-promotion`` (which yield to
+every replacement, so a retry can re-plan) are retained and reported, and every other scope
+proceeds.
 
 **Discovery by exact names.** GitHub filters artifacts only by exact name, and a repository-wide
 listing grows with every unrelated artifact (Quick Skin holds tens of thousands), so rotation never
@@ -37,40 +48,51 @@ runs on it (GitHub lists at most 1,000 filtered runs, read in pages of 100) crea
 Rotation names what it may retire:
 
 * R's own artifacts (``list_for_run(R)``);
-* older caches: the Pages runs owning ``mb-cache--<probe key>--<commit>`` for R's coverage and then
-  for each older head of the history of the probe key's subject branch (at most
-  :data:`GENERATION_PROBES` commits), stopping at the first older commit published by a superseding
-  Pages run; every cache and family cache those owners hold is a candidate;
+* the previous generation's caches: the Pages runs owning ``mb-cache--<probe key>--<commit>``, the
+  probe key being the first promoted key of a subject branch, for each commit of that branch's
+  *window* (R's coverage, then the older heads of its history; at most ``limits.GENERATION_PROBES``
+  commits), stopping at the first older commit published by a superseding Pages run; every cache
+  and family cache those owners hold is a candidate;
+* **leftovers** of earlier generations: the Pages runs owning the *last* promoted key's
+  ``mb-cache--<key>--<commit>`` or ``mb-family-cache--<family>--<key>--<commit>`` (its verified
+  legs) at any commit of the same window, besides the previous generation's owners; every cache and
+  family cache they still hold is a candidate. Read only when the executor reaches the leftover
+  phase with budget left (see below), at most one read per name and commit. A budget spent in any
+  earlier rotation stops in the order below, so what it leaves of a generation is always a suffix
+  of that order: the last key's cache and family caches are the last to go, and one of them is
+  present while anything of that generation is (a retry of the same owner, whose probe-key
+  predecessor is already retired, finds its previous generation this way too);
 * handoffs ``mb-handoff--<key>--a1`` plus the attempt of the handoff R consumed; family handoffs
   alike (attempt 1 plus the attempt of the family handoff R consumed);
-* anchors ``mb-anchor--<key>--<head>--<run>--a<attempt>`` named from the :data:`ANCHOR_PROBES`
+* anchors ``mb-anchor--<key>--<head>--<run>--a<attempt>`` named from the ``limits.ANCHOR_PROBES``
   newest anchor-eligible runs of the history created at or before the grace boundary
   ``now - anchor.successor_grace_days``: an artifact is created after its run, so a newer run cannot
   own an anchor whose successor grace has passed.
 
 Anything rotation cannot name is left to its own retention, in particular:
 
-* the previous generation when more than ``GENERATION_PROBES - 1`` heads without a Pages generation
-  separate it from R's coverage, or when a newly added key sorts first and becomes the probe;
-* every candidate an earlier rotation deferred (budget, rejection): the next rotation finds only
-  its own previous generation, never an older one whose probe-key cache is already retired;
-* anchors of runs further behind the boundary than ``ANCHOR_PROBES`` eligible runs (each rotation
-  moves the boundary forward only by the time since the previous one) or uploaded by an attempt
-  other than the run's latest; handoffs of attempts other than 1 and the consumed one's.
-
-:class:`DeletionBudget` (32) is smaller than a whole Quick Skin generation (17 keys, each with a
-superseded cache and a consumed handoff, then 17 family legs and R's transients): there the key
-scopes spend the budget, and every family leg and R's transients are deferred to retention.
+* generations whose coverage is outside the window (a newly added key that sorts first leaves the
+  probe nothing to find: the previous generation is then retired as a leftover);
+* leftovers of a generation that holds none of the last key's names any more: its promotion lacked
+  that key or leg (a newly added key sorting last), an earlier rotation retired those names but not
+  the rest (its owner promoted only some family legs), or they remain from a rejected or stopped
+  group rather than from the budget;
+* anchors of runs further behind the boundary than ``limits.ANCHOR_PROBES`` eligible runs (each
+  rotation moves the boundary forward only by the time since the previous one) or uploaded by an
+  attempt other than the run's latest; handoffs of attempts other than 1 and the consumed one's.
 
 **Retirement rules** (SPEC §5.5; "superseded" = owned by a completed successful ``pages.yml`` run of
 the default branch created before ``T_R``; every candidate except R's transients was created before
 ``T_R``, is unexpired and belongs to a key or family leg R promoted):
 
-* ``mb-cache--k--*`` / ``mb-family-cache--f--k--*``: superseded and not R's own;
+* ``mb-cache--k--*`` / ``mb-family-cache--f--k--*``: superseded and not R's own (a previous or an
+  earlier generation alike);
 * ``mb-handoff--k--*``: the handoff R consumed (``bundles[k].selected_artifact_id``, identical to
   the selection R authenticated), or one whose producer run is older than the selected artifact's
-  run with the same producer branch; ``mb-family-handoff--f--k--*`` alike, per family (when the
-  selected family artifact is gone, its envelope producer run is the conservative bound);
+  run with the same producer branch; ``mb-family-handoff--f--k--*`` alike, per family, bounded by
+  the selected family artifact as read with its replacement, before any deletion (a carried leg
+  selected a family cache, whose owner is the bound; when it was already gone, the envelope's
+  producer run is the conservative bound);
 * ``mb-anchor--k--*``: older than ``B``, the newest authenticated anchor of ``k`` created at or
   before the grace boundary (and before ``T_R``). Every such anchor's first successor is at or
   before ``B``, so ``now - first_successor.created_at >= anchor.successor_grace_days``; ``B`` and
@@ -84,18 +106,45 @@ head) rejects its whole retirement family, which is then retained and reported (
 authentic owner that did not succeed, is still running or is not older than R only make their
 artifact a non-candidate.
 
-**Execution.** Scopes run in order: each promoted key (caches, handoffs, anchors), each available
-family leg (caches, handoffs), then R's transients. :class:`DeletionBudget` bounds the deletion
-*attempts* of the whole invocation (32): a family's candidates are cut to the remaining budget and
-the rest deferred to retention. Before its family's first deletion every authorizing owner run is
-read again and must be unchanged. Before each deletion R and the replacements that authorize it are
-read again and must be unchanged (its scope's replacement; for R's ``github-pages`` and
-``mb-promotion`` every replacement, since the promotion is what lets a retry re-plan) and, after
-the budget is charged, the candidate itself is re-observed by id; it must still equal its pinned
-metadata, and the final guard re-proves the rules above. A concurrent 404 counts as an attempt but
-not as a deletion. A failed check stops that scope with the deletions it already made
-(:class:`RotationDeferred`) while later scopes continue. ``dry_run`` plans and re-observes exactly
-the same way but never sends a ``DELETE`` (and never sleeps).
+**Execution, longest-lived first.** :class:`DeletionBudget` bounds the deletion *attempts* of the
+whole invocation (``limits.DELETION_BUDGET``, 64), so the order of the retirement groups decides
+what a spent budget leaves to retention. Groups run in phases of decreasing retention (SPEC §3.0):
+
+1. the 90-day kinds of the previous generation, one promoted key at a time: its superseded caches,
+   then each of its family legs' superseded family caches (family order), then its anchors;
+2. the leftovers of earlier generations (90-day kinds), in the same key and family order: the key's
+   caches, then its legs' family caches;
+3. every family leg's family handoffs (``families[].retention_days``, at most 7 days);
+4. every key's 1-day handoffs;
+5. R's 1-day transients, the promotion last.
+
+Deciding: a Quick Skin generation (17 keys, one family) supersedes about 35 long-lived artifacts
+(17 caches, 17 family caches of up to ``handoff_max_bytes`` each, and its anchor) besides its
+handoffs, family handoffs and R's 36 transients, about 105 in all. SPEC §5.5's original budget of 32
+could not retire even the long-lived ones, so about three superseded 90-day artifacts accumulated
+per publication; the budget is therefore 64 (an MB0 amendment, ``docs/INTERNAL-API.md``). Retiring
+one key scope after another (caches, handoffs, anchors) would spend it before the last family legs,
+so the phases go longest-lived first: a whole generation's long-lived artifacts always fit, the
+rest of the budget drains the leftovers an earlier rotation deferred, and what a spent budget still
+defers is short-lived (it expires within a day, or a week for a family handoff). Deferred
+long-lived artifacts stay discoverable as leftovers: the next rotation, or a retry of this owner,
+retires them. The previous generation's artifacts come before the leftovers because they live
+longest. A group reached with an empty budget is deferred without being planned (so the
+leftover discovery reads nothing); a group's candidates are cut to the remaining budget and the
+rest deferred. A budget spent before the promotion's attempt therefore retains it, so a rotation
+retried for the same owner re-plans and continues where this one stopped.
+
+Before its group's first deletion every authorizing owner run is read again and must be unchanged.
+Before each deletion R and the replacements that authorize it are read again and must be unchanged
+(its scope's replacement; for R's ``github-pages`` and ``mb-promotion`` every replacement, since the
+promotion is what lets a retry re-plan) and, after the budget is charged, the candidate itself is
+re-observed by id; it must still equal its pinned metadata, and the final guard re-proves the rules
+above. A concurrent 404 counts as an attempt but not as a deletion. A rejected group (its plan
+failed, or an owner run changed before its first deletion) is retained and reported while the
+scope's other groups proceed; a failed deletion check stops that key, leg or R's transients, with
+the deletions it already made (:class:`RotationDeferred`), in every later phase, while the other
+scopes continue. ``dry_run`` plans and re-observes exactly the same way but never sends a
+``DELETE`` (and never sleeps).
 """
 
 from __future__ import annotations
@@ -103,7 +152,7 @@ from __future__ import annotations
 import math
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -117,18 +166,13 @@ from mod_base.github.artifacts import Artifact
 from mod_base.io import tree
 from mod_base.io.bounded_zip import LIMITS_BY_KIND, ExtractionLimits
 from mod_base.model import documents, grammar, limits
-from mod_base.model.canonical import sha256_hex, strict_loads
+from mod_base.model.canonical import canonical_json, sha256_hex, strict_loads
 from mod_base.pages.build import PROMOTION_FILE
 from mod_base.runtime import Invocation
 from mod_base.workflow import PAGES_EVENTS, PAGES_WORKFLOW_PATH
 
 OWNER = "MB7"
 
-#: Commits of a subject branch's history probed (one exact-name read each) for the previous cache
-#: generation; the probe stops at the first older commit a superseding Pages run published.
-GENERATION_PROBES = 32
-#: Anchor-eligible runs at or before the grace boundary named (one exact-name read each) per key.
-ANCHOR_PROBES = 16
 #: Scope label of R's own transient artifacts (never a key: it contains a ``/``).
 PAGES_RUN_SCOPE = "owner-run/transients"
 
@@ -327,6 +371,41 @@ class _Group:
     rejection: str | None = None
 
 
+@dataclass(frozen=True)
+class _Step:
+    """One retirement group of one summary scope, planned only when the executor reaches it."""
+
+    section: str
+    label: str
+    group: str
+    plan: Callable[[], list[_Candidate]] | None = None
+    #: A group rejected before planning (an unverified family replacement), reported at no cost.
+    rejection: str | None = None
+
+
+@dataclass
+class _Outcome:
+    """What the groups of one summary scope did."""
+
+    deleted: list[int] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+    budget_deferred: int = 0
+    unplanned: bool = False
+    stopped: bool = False
+
+    def reason(self) -> str | None:
+        parts = list(self.reasons)
+        if self.budget_deferred:
+            parts.append(f"the global deletion budget left {self.budget_deferred} artifact(s) to retention")
+        if self.unplanned:
+            parts.append("the global deletion budget is exhausted; retention will retire the rest")
+        return single_line("; ".join(parts), limit=1000) if parts else None
+
+
+def _leg_label(family: str, key: str) -> str:
+    return f"{family}--{key}"
+
+
 def _oldest_first(pool: Iterable[Artifact]) -> list[Artifact]:
     unique = {artifact.id: artifact for artifact in pool}
     return sorted(unique.values(), key=lambda artifact: artifact.order)
@@ -348,8 +427,8 @@ def _require(condition: bool, message: str) -> None:
 
 
 class _Rotation:
-    """One rotation invocation: authenticate R, load its replacements, then plan and retire scope
-    by scope (see the module docstring)."""
+    """One rotation invocation: authenticate R, load its replacements, then plan and retire group
+    by group, longest-lived first (see the module docstring)."""
 
     def __init__(self, invocation: Invocation, api: GitHubApi, *, owner_run_id: int, owner_sha: str,
                  delete_delay_seconds: float, dry_run: bool, now: datetime, sleep: Callable[[float], None],
@@ -373,7 +452,9 @@ class _Rotation:
         self.source_workflow: str = source["workflow"]
         self.canonical_events = frozenset(source["events"]["canonical"])
         self.source_events = self.canonical_events | frozenset(source["events"]["other"])
+        self._generation_owner_ids: set[int] | None = None
         self._generations: dict[str, list[Artifact]] | None = None
+        self._leftovers: dict[str, list[Artifact]] | None = None
         self._histories: dict[str, list[dict[str, Any]]] = {}
 
     # -- owner and replacements ---------------------------------------------------------------------
@@ -419,7 +500,8 @@ class _Rotation:
         promotion_artifact = matches[0]
         root, paths = self._download(promotion_artifact, "promotion")
         _require(paths == [PROMOTION_FILE], f"mb-promotion must hold exactly {PROMOTION_FILE}")
-        promotion, _ = _read_json(root, PROMOTION_FILE, limits.MAX_PROMOTION_BYTES)
+        promotion, promotion_bytes = _read_json(root, PROMOTION_FILE, limits.MAX_PROMOTION_BYTES)
+        _require(canonical_json(promotion) == promotion_bytes, f"{PROMOTION_FILE} is not canonical JSON")
         documents.validate_promotion(promotion)
         implementation = promotion["implementation"]
         _require(promotion["repository"] == self.repository and implementation["branch"] == self.canonical
@@ -430,19 +512,38 @@ class _Rotation:
         self.promotion = promotion
 
     def load_replacements(self) -> None:
+        """Verify every replacement R promoted. A key's failure stops the rotation; a family leg's
+        only rejects that leg (``rejected_legs``), whose promoted cache stays protected."""
+
         self.keeps = [self._load_keep(bundle) for bundle in sorted(self.promotion["bundles"],
                                                                    key=lambda bundle: bundle["key"])]
-        self.family_keeps = [self._load_family_keep(entry) for entry in sorted(
-            self.promotion["families"], key=lambda entry: (entry["family"], entry["key"])) if entry["available"]]
+        self.family_keeps: list[_Keep] = []
+        self.rejected_legs: dict[tuple[str, str], str] = {}
+        unverified: set[int] = set()
+        for entry in sorted(self.promotion["families"], key=lambda entry: (entry["family"], entry["key"])):
+            if not entry["available"]:
+                continue
+            try:
+                keep = self._load_family_keep(entry)
+                # Pinned before any deletion: the family handoffs are planned after the 90-day phase,
+                # which may retire the family cache a carried leg selected (its owner is the bound).
+                self.reads.artifact(keep.selected_id)
+                self.family_keeps.append(keep)
+            except MbError as exc:
+                self.rejected_legs[(entry["family"], entry["key"])] = single_line(exc, limit=400)
+                name = grammar.family_cache_name(entry["family"], entry["key"], entry["coverage_sha"])
+                unverified.update(artifact.id for artifact in self.owner_artifacts if artifact.name == name)
         self.keeps_by_key = {keep.key: keep for keep in self.keeps}
         self.family_keeps_by_scope = {(keep.family, keep.key): keep for keep in self.family_keeps}
         self.protected.update(keep.artifact.id for keep in (*self.keeps, *self.family_keeps))
-        self._check_owner_inventory()
+        self.protected.update(unverified)
+        self._check_owner_inventory(unverified)
 
-    def _check_owner_inventory(self) -> None:
-        """R's unexpired kit artifacts are exactly its promoted generation (module docstring)."""
+    def _check_owner_inventory(self, unverified: set[int]) -> None:
+        """R's unexpired kit artifacts are exactly its promoted generation (module docstring);
+        ``unverified`` are R's caches under the promoted name of a rejected family leg."""
 
-        replacements = {keep.artifact.id for keep in (*self.keeps, *self.family_keeps)}
+        replacements = {keep.artifact.id for keep in (*self.keeps, *self.family_keeps)} | unverified
         collected: dict[tuple[str | None, str], tuple[int, str]] = {
             (None, bundle["key"]): (bundle["collected_artifact_id"], bundle["collected_digest"])
             for bundle in self.promotion["bundles"]}
@@ -495,6 +596,10 @@ class _Rotation:
                      anchored=expectation["anchor"] is not None)
 
     def _load_family_keep(self, entry: Mapping[str, Any]) -> _Keep:
+        """The leg's family cache, verified structurally. Its envelope may cover an ancestor of the
+        promoted coverage (a carried leg, module docstring): R's build proved R5 and refresh named
+        the cache by the promoted coverage, so only repository, family and key must match."""
+
         family_id, key, coverage = entry["family"], entry["key"], entry["coverage_sha"]
         keep = self._owned_once(grammar.family_cache_name(family_id, key, coverage))
         root, _ = self._download(keep, "family-cache")
@@ -503,9 +608,9 @@ class _Rotation:
         _require(_inventory(root, ENVELOPE_NAME, LIMITS_BY_KIND["family-cache"]) == envelope["files"],
                  f"{keep.name} does not hold exactly its enveloped files")
         _require(envelope["repository"] == self.repository and envelope["family"] == family_id
-                 and envelope["key"] == key and envelope["coverage_sha"] == coverage,
-                 f"{keep.name} does not envelope {family_id} evidence for {key} at its coverage")
-        return _Keep(scope=f"{family_id}--{key}", key=key, family=family_id, artifact=keep, coverage_sha=coverage,
+                 and envelope["key"] == key,
+                 f"{keep.name} does not envelope {family_id} evidence for {key} of this repository")
+        return _Keep(scope=_leg_label(family_id, key), key=key, family=family_id, artifact=keep, coverage_sha=coverage,
                      selected_id=entry["selected_artifact_id"], subject_branch=envelope["subject"]["branch"],
                      producer_run_id=envelope["producer"]["run_id"])
 
@@ -564,25 +669,60 @@ class _Rotation:
             self._histories[branch] = history
         return self._histories[branch]
 
-    def _generation_caches(self) -> dict[str, list[Artifact]]:
-        """Caches and family caches held by the Pages runs that published R's coverage before R
-        or, failing that, the newest older published head (probing one key per subject branch)."""
+    def _window(self, branch: str, coverage: str) -> list[str]:
+        """``coverage`` and the older heads of ``branch``'s history, newest first: the at most
+        ``limits.GENERATION_PROBES`` commits whose cache names discovery reads."""
 
-        if self._generations is not None:
-            return self._generations
-        owners: set[int] = set()
-        probes: dict[str, _Keep] = {}
+        commits = [coverage, *(row["head_sha"] for row in self._source_history(branch))]
+        return list(dict.fromkeys(commits))[:limits.GENERATION_PROBES]
+
+    def _cache_owners(self, name: str) -> set[int]:
+        """Runs of this repository (never a fork's) owning an unexpired ``name`` of the default
+        branch created before R."""
+
+        return {artifact.run_id for artifact in self.reads.named(name)
+                if self._older(artifact) and artifact.head_branch == self.canonical
+                and self._own_run(artifact.run_id) is not None}
+
+    def _generation_owners(self) -> set[int]:
+        """The Pages runs that published R's coverage before R and the newest older published head
+        (probing the first promoted key of each subject branch)."""
+
+        if self._generation_owner_ids is None:
+            owners: set[int] = set()
+            probes: dict[str, _Keep] = {}
+            for keep in self.keeps:
+                probes.setdefault(keep.subject_branch, keep)
+            for branch, probe in probes.items():
+                for position, commit in enumerate(self._window(branch, probe.coverage_sha)):
+                    found = self._cache_owners(grammar.cache_name(probe.key, commit))
+                    owners |= found
+                    if position and any(self._superseding_pages_run(run_id) for run_id in found):
+                        break
+            self._generation_owner_ids = owners
+        return self._generation_owner_ids
+
+    def _leftover_owners(self) -> set[int]:
+        """Earlier Pages runs, beyond :meth:`_generation_owners`, that still hold caches of
+        promoted keys (module docstring): the owners of the last promoted key's cache and family
+        caches at every commit of its subject branch's window."""
+
+        sentinels: dict[str, _Keep] = {}
         for keep in self.keeps:
-            probes.setdefault(keep.subject_branch, keep)
-        for branch, probe in probes.items():
-            commits = [probe.coverage_sha, *(row["head_sha"] for row in self._source_history(branch))]
-            for position, commit in enumerate(list(dict.fromkeys(commits))[:GENERATION_PROBES]):
-                found = {artifact.run_id for artifact in self.reads.named(grammar.cache_name(probe.key, commit))
-                         if self._older(artifact) and artifact.head_branch == self.canonical
-                         and self._own_run(artifact.run_id) is not None}
-                owners |= found
-                if position and any(self._superseding_pages_run(run_id) for run_id in found):
-                    break
+            sentinels[keep.subject_branch] = keep
+        owners: set[int] = set()
+        for branch, sentinel in sentinels.items():
+            families = [str(leg.family) for leg in self.family_keeps if leg.key == sentinel.key]
+            for commit in self._window(branch, sentinel.coverage_sha):
+                owners |= self._cache_owners(grammar.cache_name(sentinel.key, commit))
+                for family in families:
+                    owners |= self._cache_owners(grammar.family_cache_name(family, sentinel.key, commit))
+        return owners - self._generation_owners()
+
+    def _pools(self, owners: Iterable[int]) -> dict[str, list[Artifact]]:
+        """The caches and family caches of promoted keys and verified legs ``owners`` hold, by
+        summary scope."""
+
         pools: dict[str, list[Artifact]] = {}
         for run_id in sorted(owners):
             for artifact in self.reads.for_run(run_id):
@@ -592,9 +732,20 @@ class _Rotation:
                 if parsed.kind == "cache" and parsed.key in self.keeps_by_key:
                     pools.setdefault(parsed.key, []).append(artifact)
                 elif parsed.kind == "family-cache" and (parsed.family, parsed.key) in self.family_keeps_by_scope:
-                    pools.setdefault(f"{parsed.family}--{parsed.key}", []).append(artifact)
-        self._generations = pools
+                    pools.setdefault(_leg_label(str(parsed.family), str(parsed.key)), []).append(artifact)
         return pools
+
+    def _caches(self, *, leftover: bool) -> dict[str, list[Artifact]]:
+        """The previous generation's pools, or (``leftover``) the earlier generations' ones; each
+        discovered when its first group is planned, so a spent budget reads nothing more."""
+
+        if leftover:
+            if self._leftovers is None:
+                self._leftovers = self._pools(self._leftover_owners())
+            return self._leftovers
+        if self._generations is None:
+            self._generations = self._pools(self._generation_owners())
+        return self._generations
 
     def _superseding_pages_run(self, run_id: int) -> bool:
         owner = self.reads.run(run_id)
@@ -614,9 +765,9 @@ class _Rotation:
         except MbError as exc:
             return _Group(label, rejection=single_line(exc, limit=400))
 
-    def _cache_candidates(self, keep: _Keep) -> list[_Candidate]:
+    def _cache_candidates(self, keep: _Keep, *, leftover: bool = False) -> list[_Candidate]:
         candidates = []
-        for artifact in _oldest_first(self._generation_caches().get(keep.scope, [])):
+        for artifact in _oldest_first(self._caches(leftover=leftover).get(keep.scope, [])):
             if artifact.id == keep.artifact.id or not self._older(artifact) or artifact.head_branch != self.canonical:
                 continue
             if self._owner(artifact, workflow_path=PAGES_WORKFLOW_PATH, events=PAGES_EVENTS, head_branch=self.canonical,
@@ -662,7 +813,7 @@ class _Rotation:
         anchors: list[_Candidate] = []
         probes = 0
         for row in self._source_history(branch):
-            if probes == ANCHOR_PROBES:
+            if probes == limits.ANCHOR_PROBES:
                 break
             if runs.run_order(row)[0] > boundary:
                 continue  # its anchor is newer than the boundary: never B, never older than B
@@ -718,7 +869,8 @@ class _Rotation:
     def _transient_candidates(self) -> list[_Candidate]:
         """R's transients (``_check_owner_inventory`` already bound each one to the promotion): a
         collected artifact yields to its own scope's replacement; ``github-pages`` and the promotion
-        (QS: every keep before each transient) to every replacement."""
+        (QS: every keep before each transient) to every replacement. A rejected leg's collected
+        artifact, and with it ``github-pages`` and the promotion, are retained (see :meth:`steps`)."""
 
         every_keep = tuple(keep.artifact for keep in (*self.keeps, *self.family_keeps))
         chosen = []
@@ -729,60 +881,85 @@ class _Rotation:
             if parsed.kind == "collected":
                 keeps = (self.keeps_by_key[str(parsed.key)].artifact,)
             elif parsed.kind == "collected-family":
-                keeps = (self.family_keeps_by_scope[(parsed.family, parsed.key)].artifact,)
+                leg = self.family_keeps_by_scope.get((str(parsed.family), str(parsed.key)))
+                if leg is None:
+                    continue
+                keeps = (leg.artifact,)
+            elif self.rejected_legs:
+                continue
             else:
                 keeps = every_keep
             chosen.append((_TRANSIENT_ORDER[parsed.kind], artifact.name, artifact.id,
                            _Candidate(artifact, keeps=keeps, transient=True)))
         return [candidate for *_, candidate in sorted(chosen, key=lambda item: item[:3])]
 
-    def scopes(self) -> list[tuple[str, str, Callable[[], list[_Group]]]]:
-        """``(summary section, label, planner)`` in execution order."""
+    def labels(self) -> dict[str, list[str]]:
+        """Every summary label per section, in summary order: each promoted key, each available
+        family leg (verified or rejected) and R's transients."""
 
-        planned: list[tuple[str, str, Callable[[], list[_Group]]]] = []
+        legs = sorted({*self.family_keeps_by_scope, *self.rejected_legs})
+        return {"keys": [keep.scope for keep in self.keeps], "families": [_leg_label(*leg) for leg in legs],
+                "pages-run": [PAGES_RUN_SCOPE]}
+
+    def steps(self) -> list[_Step]:
+        """Every retirement group in execution order, longest-lived first (module docstring)."""
+
+        legs = sorted({*self.family_keeps_by_scope, *self.rejected_legs})
+        planned: list[_Step] = []
         for keep in self.keeps:
-            planned.append(("keys", keep.scope, lambda keep=keep: [
-                self._group("cache", lambda: self._cache_candidates(keep)),
-                self._group("handoff", lambda: self._handoff_candidates(keep)),
-                self._group("anchor", lambda: self._anchor_candidates(keep)),
-            ]))
-        for keep in self.family_keeps:
-            planned.append(("families", keep.scope, lambda keep=keep: [
-                self._group("family cache", lambda: self._cache_candidates(keep)),
-                self._group("family handoff", lambda: self._family_handoff_candidates(keep)),
-            ]))
-        planned.append(("pages-run", PAGES_RUN_SCOPE,
-                        lambda: [self._group("pages-run transient", self._transient_candidates)]))
+            planned.append(_Step("keys", keep.scope, "cache", lambda keep=keep: self._cache_candidates(keep)))
+            for family, key in legs:
+                if key != keep.key:
+                    continue
+                leg = self.family_keeps_by_scope.get((family, key))
+                if leg is None:
+                    planned.append(_Step("families", _leg_label(family, key), "family", rejection=(
+                        f"its replacement cannot be verified: {self.rejected_legs[(family, key)]}")))
+                else:
+                    planned.append(_Step("families", leg.scope, "family cache",
+                                         lambda leg=leg: self._cache_candidates(leg)))
+            planned.append(_Step("keys", keep.scope, "anchor", lambda keep=keep: self._anchor_candidates(keep)))
+        for keep in self.keeps:
+            planned.append(_Step("keys", keep.scope, "leftover cache",
+                                 lambda keep=keep: self._cache_candidates(keep, leftover=True)))
+            planned += [_Step("families", leg.scope, "leftover family cache",
+                              lambda leg=leg: self._cache_candidates(leg, leftover=True))
+                        for leg in self.family_keeps if leg.key == keep.key]
+        planned += [_Step("families", keep.scope, "family handoff",
+                          lambda keep=keep: self._family_handoff_candidates(keep)) for keep in self.family_keeps]
+        planned += [_Step("keys", keep.scope, "handoff", lambda keep=keep: self._handoff_candidates(keep))
+                    for keep in self.keeps]
+        if self.rejected_legs:
+            unverified = ", ".join(_leg_label(*leg) for leg in sorted(self.rejected_legs))
+            planned.append(_Step("pages-run", PAGES_RUN_SCOPE, "pages-run transient", rejection=(
+                f"the collected artifact of {unverified}, github-pages and {grammar.PROMOTION_NAME} yield to a "
+                "replacement that cannot be verified")))
+        planned.append(_Step("pages-run", PAGES_RUN_SCOPE, "pages-run transient", self._transient_candidates))
         return planned
 
     # -- execution ----------------------------------------------------------------------------------
 
-    def retire_scope(self, groups: Sequence[_Group]) -> list[int]:
-        """QS ``_rotate_candidate_groups``: a rejected family is retained while the others proceed;
-        a failed deletion check stops the scope with the deletions already made."""
+    def retire_group(self, group: _Group) -> list[int]:
+        """QS ``_rotate_candidate_groups`` for one group: a rejected group, or one whose owner run
+        changed, raises :class:`MbError` before any deletion (the scope's other groups proceed); a
+        failed deletion check raises :class:`RotationDeferred` with the deletions already made (the
+        scope stops)."""
 
+        if group.rejection is not None:
+            raise _fail(f"{group.label} retirement: {group.rejection}")
+        selected = self.budget.select(list(group.candidates))
+        try:
+            for run_id in dict.fromkeys(owner for candidate in selected for owner in candidate.owners):
+                self.reads.observe_run(run_id)
+        except MbError as exc:
+            raise _fail(f"{group.label} retirement: {single_line(exc, limit=400)}") from exc
         deleted: list[int] = []
-        deferred: list[str] = []
-        for group in groups:
-            if group.rejection is not None:
-                deferred.append(f"{group.label} retirement: {group.rejection}")
-                continue
-            selected = self.budget.select(list(group.candidates))
-            try:
-                for run_id in dict.fromkeys(owner for candidate in selected for owner in candidate.owners):
-                    self.reads.observe_run(run_id)
-            except MbError as exc:
-                deferred.append(f"{group.label} retirement: {single_line(exc, limit=400)}")
-                continue
-            try:
-                for candidate in selected:
-                    if self._retire(candidate):
-                        deleted.append(candidate.artifact.id)
-            except MbError as exc:
-                message = f"{group.label} retirement: {single_line(exc, limit=400)}"
-                raise RotationDeferred("; ".join([*deferred, message]), deleted) from exc
-        if deferred:
-            raise RotationDeferred("; ".join(deferred), deleted)
+        try:
+            for candidate in selected:
+                if self._retire(candidate):
+                    deleted.append(candidate.artifact.id)
+        except MbError as exc:
+            raise RotationDeferred(f"{group.label} retirement: {single_line(exc, limit=400)}", deleted) from exc
         return deleted
 
     def _retire(self, candidate: _Candidate) -> bool:
@@ -839,9 +1016,11 @@ def rotate_generation(invocation: Invocation, *, api: GitHubApi, owner_run_id: i
     transients; ``deferral_reasons`` (key or family label -> one bounded line);
     ``planned_artifact_ids`` (every id that passed its re-observation, in order: deleted, found
     gone at ``DELETE``, or, in a dry run, left in place); ``remaining_rotation_deletions``,
-    ``rotation_deletion_limit``, ``dry_run`` and ``owner_run_id``. Deferral is a normal outcome;
-    an owner, promotion or replacement that cannot be authenticated raises before any deletion
-    (``Unavailable`` when R holds no promotion any more)."""
+    ``rotation_deletion_limit``, ``dry_run`` and ``owner_run_id``. Deferral is a normal outcome,
+    and so is a family leg whose replacement cannot be verified (only that leg, its collected
+    artifact, ``github-pages`` and the promotion are retained); an owner, promotion, key replacement
+    or owner inventory that cannot be authenticated raises before any deletion (``Unavailable`` when
+    R holds no promotion any more)."""
 
     grammar.require_positive_int(owner_run_id, "owner run id")
     grammar.require_sha1(owner_sha, "owner SHA")
@@ -870,39 +1049,51 @@ def rotate_generation(invocation: Invocation, *, api: GitHubApi, owner_run_id: i
 
 
 def _execute(rotation: _Rotation) -> dict[str, object]:
-    sections: dict[str, dict[str, list[int]]] = {"keys": {}, "families": {}, "pages-run": {}}
-    deferred: dict[str, list[str]] = {"keys": [], "families": [], "pages-run": []}
-    reasons: dict[str, dict[str, str]] = {"keys": {}, "families": {}, "pages-run": {}}
+    labels = rotation.labels()
+    outcomes = {(section, label): _Outcome() for section, names in labels.items() for label in names}
     budget = rotation.budget
-    for section, label, plan in rotation.scopes():
-        if budget.remaining == 0:
-            sections[section][label] = []
-            deferred[section].append(label)
-            reasons[section][label] = "the global deletion budget is exhausted; retention will retire the rest"
+    for step in rotation.steps():
+        outcome = outcomes[(step.section, step.label)]
+        if outcome.stopped:
             continue
+        if step.rejection is not None:
+            outcome.reasons.append(f"{step.group} retirement: {step.rejection}")
+            continue
+        if budget.remaining == 0:
+            outcome.unplanned = True
+            continue
+        assert step.plan is not None
         budget.begin_scope()
         try:
-            sections[section][label] = rotation.retire_scope(plan())
+            outcome.deleted += rotation.retire_group(rotation._group(step.group, step.plan))
+        except RotationDeferred as exc:
+            outcome.deleted += exc.deleted_artifact_ids
+            outcome.reasons.append(single_line(exc, limit=1000))
+            outcome.stopped = True
         except MbError as exc:
-            sections[section][label] = exc.deleted_artifact_ids if isinstance(exc, RotationDeferred) else []
-            deferred[section].append(label)
-            reasons[section][label] = single_line(exc, limit=1000)
-            continue
-        if budget.last_deferred_count:
-            deferred[section].append(label)
-            reasons[section][label] = (f"the global deletion budget left {budget.last_deferred_count} "
-                                       "artifact(s) to retention")
+            outcome.reasons.append(single_line(exc, limit=1000))
+        else:
+            # Only a completed group reports the tail its budget cut; a rejected or stopped group's
+            # reason already covers every candidate it retained.
+            outcome.budget_deferred += budget.last_deferred_count
+
+    def section(name: str) -> dict[str, _Outcome]:
+        return {label: outcomes[(name, label)] for label in labels[name]}
+
+    keys, families = section("keys"), section("families")
+    transients = outcomes[("pages-run", PAGES_RUN_SCOPE)]
+    reasons = {label: outcome.reason() for label, outcome in {**keys, **families}.items()}
     return {
-        "compatibility_deferred_branches": deferred["families"],
-        "deferral_reasons": {**reasons["keys"], **reasons["families"]},
-        "deferred_branches": deferred["keys"],
-        "deleted_artifact_ids": sections["keys"],
-        "deleted_compatibility_artifact_ids": sections["families"],
-        "deleted_pages_run_artifact_ids": sections["pages-run"][PAGES_RUN_SCOPE],
+        "compatibility_deferred_branches": [label for label in families if reasons[label] is not None],
+        "deferral_reasons": {label: reason for label, reason in reasons.items() if reason is not None},
+        "deferred_branches": [label for label in keys if reasons[label] is not None],
+        "deleted_artifact_ids": {label: outcome.deleted for label, outcome in keys.items()},
+        "deleted_compatibility_artifact_ids": {label: outcome.deleted for label, outcome in families.items()},
+        "deleted_pages_run_artifact_ids": transients.deleted,
         "dry_run": rotation.dry_run,
         "owner_run_id": rotation.owner_run_id,
-        "pages_run_deferral_reason": reasons["pages-run"].get(PAGES_RUN_SCOPE),
-        "pages_run_deferred": bool(deferred["pages-run"]),
+        "pages_run_deferral_reason": transients.reason(),
+        "pages_run_deferred": transients.reason() is not None,
         "planned_artifact_ids": list(rotation.planned),
         "remaining_rotation_deletions": budget.remaining,
         "rotation_deletion_limit": limits.DELETION_BUDGET,

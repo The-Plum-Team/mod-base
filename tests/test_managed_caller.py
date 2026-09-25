@@ -3,7 +3,7 @@
 Structure (regions, pin placeholders, triggers, locks, per-job permissions, wiring, forbid-list) and
 the shell of the three caller-owned jobs, executed with stub ``gh``: ``verify-kit`` (accepted and
 rejected bindings, bounded retry), the deploy head recheck (moved heads fail, malformed heads fail)
-and ``request-rotation`` (exact dispatch request).
+and ``request-rotation`` (exact dispatch request through the same bounded retry).
 """
 
 from __future__ import annotations
@@ -358,32 +358,54 @@ class RequestRotationExecutionTests(unittest.TestCase):
         require_tools("bash", "jq")
         temporary = tempfile.TemporaryDirectory(prefix="request rotation ")
         self.addCleanup(temporary.cleanup)
-        self.harness = ShellHarness(Path(temporary.name) / "harness")
+        self.root = Path(temporary.name)
+        self.harness = ShellHarness(self.root / "harness")
+        self.runner_temp = self.root / "runner temp"
+        self.runner_temp.mkdir()
         self.item = step(caller()["jobs"]["request-rotation"]["steps"], "Dispatch the separately locked exact-ID rotation")
-        self.dispatch = (f"workflow run pages.yml --ref master -f operation=rotate -f run_id={RUN_ID} "
-                         f"-f sha={HEAD}")
+        self.dispatch = f"POST repos/{REPOSITORY}/actions/workflows/pages.yml/dispatches"
 
     def invoke(self, dispatch: object = None, **env: str):
         fixtures = {f"GET repos/{REPOSITORY}": {"body": {"default_branch": "master"}},
                     self.dispatch: dispatch or {"body": ""}}
         environment = {"GH_TOKEN": "fixture-token", "GH_REPO": REPOSITORY, "GITHUB_REPOSITORY": REPOSITORY,
-                       "GITHUB_RUN_ID": RUN_ID, "GITHUB_SHA": HEAD, "GITHUB_REF": "refs/heads/master", **env}
+                       "GITHUB_RUN_ID": RUN_ID, "GITHUB_SHA": HEAD, "GITHUB_REF": "refs/heads/master",
+                       "RUNNER_TEMP": str(self.runner_temp), **env}
         return self.harness.run(self.item["run"], environment, fixtures=fixtures)
 
     def dispatches(self) -> list[dict]:
-        return [record for record in self.harness.records() if record["argv"][:2] == ["workflow", "run"]]
+        return [record for record in self.harness.records() if record.get("route") == self.dispatch]
+
+    def sleeps(self) -> list[list[str]]:
+        return [record["argv"] for record in self.harness.records() if record["tool"] == "sleep"]
 
     def test_step_environment(self) -> None:
         self.assertEqual(self.item["env"], {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"})
+        self.assertNotIn("gh workflow run", self.item["run"], "every caller call goes through the protected retry")
 
     def test_dispatches_exactly_one_rotation_of_this_run(self) -> None:
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
         posts = self.dispatches()
         self.assertEqual(len(posts), 1)
-        self.assertEqual(posts[0]["argv"], ["workflow", "run", "pages.yml", "--ref", "master", "-f", "operation=rotate",
-                                            "-f", f"run_id={RUN_ID}", "-f", f"sha={HEAD}"])
+        argv = posts[0]["argv"]
+        self.assertEqual(argv[:5], ["api", "--method", "POST", f"repos/{REPOSITORY}/actions/workflows/pages.yml/dispatches",
+                                    "--input"])
+        self.assertEqual(len(argv), 6)
+        self.assertEqual(Path(argv[5]).parent, self.runner_temp)
+        self.assertEqual(json.loads(posts[0]["input"]),
+                         {"ref": "master", "inputs": {"operation": "rotate", "run_id": RUN_ID, "sha": HEAD}})
         self.assertEqual((posts[0]["token"], posts[0]["repo"]), ("fixture-token", REPOSITORY))
+        self.assertEqual(self.sleeps(), [])
+
+    def test_the_dispatch_names_the_live_default_branch(self) -> None:
+        fixtures = {f"GET repos/{REPOSITORY}": {"body": {"default_branch": "main"}}, self.dispatch: {"body": ""}}
+        result = self.harness.run(self.item["run"], {
+            "GH_TOKEN": "fixture-token", "GH_REPO": REPOSITORY, "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_RUN_ID": RUN_ID,
+            "GITHUB_SHA": HEAD, "GITHUB_REF": "refs/heads/main", "RUNNER_TEMP": str(self.runner_temp)}, fixtures=fixtures)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.dispatches()[0]["input"])["ref"], "main")
 
     def test_refuses_foreign_refs_and_malformed_identity(self) -> None:
         for env in ({"GITHUB_REF": "refs/heads/feature"}, {"GITHUB_RUN_ID": "0"}, {"GITHUB_SHA": "HEAD"},
@@ -393,10 +415,28 @@ class RequestRotationExecutionTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(self.dispatches(), [])
 
-    def test_a_failed_dispatch_fails_the_request(self) -> None:
-        result = self.invoke({"fail": "could not create workflow dispatch event: HTTP 422", "status": 1})
+    def test_a_transient_dispatch_failure_is_retried_with_a_bounded_budget(self) -> None:
+        transient = {"fail": "gh: Server Error (HTTP 502)"}
+        result = self.invoke([transient, {"fail": "gh: API rate limit exceeded (HTTP 403)"}, {"body": ""}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        posts = self.dispatches()
+        self.assertEqual(len(posts), 3)
+        self.assertEqual({record["input"] for record in posts}, {posts[0]["input"]}, "every attempt sends one request")
+        self.assertEqual(self.sleeps(), [["5"], ["10"]])
+        result = self.invoke([{"fail": "gh: Service Unavailable (HTTP 503)"}] * 10)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(self.dispatches()), 1)
+        self.assertEqual(len(self.dispatches()), 4)
+        self.assertEqual(self.sleeps(), [["5"], ["10"], ["20"]])
+
+    def test_a_rejected_dispatch_fails_the_request_without_a_retry(self) -> None:
+        for failure in ("gh: Unexpected inputs provided (HTTP 422)", "gh: Resource not accessible by integration (HTTP 403)",
+                        "gh: Not Found (HTTP 404)"):
+            with self.subTest(failure=failure):
+                result = self.invoke({"fail": failure, "status": 1})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(self.dispatches()), 1)
+                self.assertEqual(self.sleeps(), [])
+                self.assertIn(failure, result.stderr)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,14 @@
 """The adapter host (SPEC §1.9): env scrub, argv allowlist, token gating, timeout, oversize and
-schema rejection, plus the child's in-process dispatch and the ``ctx`` helpers."""
+schema rejection, plus the child's in-process dispatch, the ``ctx`` helpers and the fixture mods'
+own hooks (the fixtures run ``conformance`` unmodified)."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -17,16 +20,25 @@ from unittest import mock
 from mod_base.adapter import api as adapter_api
 from mod_base.adapter import host, host_child, protocol
 from mod_base.adapter.protocol import HookFailed, HookUnsupported
-from mod_base.errors import MbError
+from mod_base.config import load_config
+from mod_base.errors import EXIT_REJECTED, ControllerSkew, MbError, Superseded, Unavailable, exit_code_for
+from mod_base.evidence.expectation import tested_run_projection
+from mod_base.family.envelope import create_envelope
+from mod_base.family.paired import collect_family
+from mod_base.github.api import ApiNotFound
 from mod_base.imaging.metrics import ImageError, SizePolicy
 from mod_base.imaging.png import pattern_png
 from mod_base.io.tree import TreeError
 from mod_base.model import limits as lim
-from mod_base.model.canonical import StrictJsonError
-from mod_base.model.validators import DocumentError
+from mod_base.model.canonical import StrictJsonError, canonical_json, strict_loads
+from mod_base.model.documents import run_claim_from_environment
+from mod_base.model.validators import DocumentError, is_display_text
 from mod_base.runtime import build_invocation
 from mod_base.workflow import PAGES_WORKFLOW_PATH
+from tests import test_family_support as fs
 from tests.fixtures.mods import support
+
+KIT_ROOT = Path(__file__).resolve().parents[1]
 
 PROBE = '''
 """Probe adapter: behaviour chosen by probe_mode.json next to this file."""
@@ -38,9 +50,15 @@ import time
 from pathlib import Path
 
 import probe_helper
+from mod_base.errors import MbError, Unavailable
 
 ADAPTER_API = 1
 _MODE = json.loads(Path(__file__).with_name("probe_mode.json").read_text())
+
+
+class _Unprintable(Exception):
+    def __str__(self):
+        raise RuntimeError("no text")
 
 
 def _report(ctx, extra=None):
@@ -87,6 +105,12 @@ def targets(ctx, branches):
         raise ValueError("boom\\nsecond line\\x1b[31m red")
     if mode == "exit":
         sys.exit(3)
+    if mode == "unprintable":
+        raise _Unprintable()
+    if mode == "reject":
+        raise MbError("refused by the adapter")
+    if mode == "unavailable":
+        raise Unavailable("no evidence\\nhere")
     target = {"key": "probe", "label": "Probe", "matrix_sha256": "0" * 64, "contract_sha256": "0" * 64,
               "subject": {"branch": "master", "commit": ctx.implementation_sha, "tree": "1" * 40}}
     if mode == "unknown-key":
@@ -466,6 +490,50 @@ class TimeoutTest(HostTestCase):
         self.assertLess(time.monotonic() - started, 30)
 
 
+class InProcessParityTest(HostTestCase):
+    """The conformance seam (``host_child.run_hook``, behind ``support.InProcessHost``) observes a
+    failing hook exactly as the isolated host does."""
+
+    def outcome(self, dispatch, invocation) -> BaseException:
+        # The probe imports a helper from the mod's PYTHONPATH; in process it comes from here, and
+        # patching sys.modules also drops the loaded adapter module afterwards.
+        with mock.patch.dict(sys.modules, {"probe_helper": types.SimpleNamespace(VALUE="in process")}):
+            try:
+                dispatch(invocation, "targets", {"branches": None})
+            except MbError as exc:
+                return exc
+        self.fail(f"{dispatch!r} accepted a failing hook")
+
+    def test_a_raising_hook_is_the_same_hook_failure_in_process_and_isolated(self) -> None:
+        for mode, text in (("raise", "ValueError: boom second line"),
+                           ("unprintable", "an exception whose message cannot be rendered"),
+                           # an MbError that would exit 3 in process is a rejection across the host
+                           ("unavailable", "failed: no evidence here")):
+            with self.subTest(mode=mode):
+                self.mode(mode)
+                invocation = self.invocation()
+                isolated = self.outcome(host.call, invocation)
+                in_process = self.outcome(support.InProcessHost(), invocation)
+                self.assertIs(type(isolated), HookFailed)
+                self.assertIs(type(in_process), HookFailed)
+                self.assertEqual(str(in_process), str(isolated))
+                self.assertIn(text, str(in_process))
+                self.assertEqual(in_process.reason, isolated.reason)
+                self.assertEqual(exit_code_for(in_process), EXIT_REJECTED)
+                self.assertEqual(exit_code_for(isolated), EXIT_REJECTED)
+
+    def test_a_kit_rejection_raised_by_a_hook_stays_a_rejection(self) -> None:
+        self.mode("reject")
+        invocation = self.invocation()
+        isolated = self.outcome(host.call, invocation)
+        in_process = self.outcome(support.InProcessHost(), invocation)
+        self.assertIs(type(isolated), HookFailed)
+        self.assertIs(type(in_process), MbError, "an MbError passes through run_hook unchanged")
+        self.assertEqual(str(in_process), "refused by the adapter")
+        self.assertIn("refused by the adapter", str(isolated))
+        self.assertEqual(exit_code_for(in_process), exit_code_for(isolated))
+
+
 class ChildProgramTest(unittest.TestCase):
     def test_main_accepts_only_the_exact_argv_shape(self) -> None:
         good = ["--adapter", "/a.py", "--hook", "targets", "--request", "/r.json", "--response", "/s.json"]
@@ -501,8 +569,9 @@ class InProcessDispatchTest(unittest.TestCase):
                 raise AssertionError(f"module attribute {name} was read")
 
         for hook in ("unknown", "__init__", 3):
-            with self.assertRaises(MbError):
+            with self.assertRaisesRegex(MbError, "unknown adapter hook") as caught:
                 host_child.run_hook(self.context, Untouchable("x"), hook, {})
+            self.assertNotIsInstance(caught.exception, HookFailed, "the module was never touched")
 
     def test_fixture_hook_needs_an_image_factory(self) -> None:
         module = host_child.load_adapter(self.mod.root / "scripts/pages/mod_base_fixtures.py")
@@ -523,6 +592,76 @@ class InProcessDispatchTest(unittest.TestCase):
         module.ADAPTER_API = True
         with self.assertRaisesRegex(MbError, "ADAPTER_API"):
             host_child.run_hook(self.context, module, "targets", {"branches": None})
+
+    def test_an_adapter_exception_becomes_a_bounded_hook_failure(self) -> None:
+        module = types.ModuleType("probe")
+        module.ADAPTER_API = 1
+
+        def targets(ctx, branches):
+            raise RuntimeError("refused\n::error::forged" + "x" * 5000)
+
+        module.targets = targets
+        with self.assertRaises(HookFailed) as caught:
+            host_child.run_hook(self.context, module, "targets", {"branches": None})
+        message = str(caught.exception)
+        self.assertTrue(message.startswith("adapter hook 'targets' failed: RuntimeError: refused ::error::forged"))
+        self.assertFalse(any(ord(character) < 32 for character in message))
+        self.assertLessEqual(len(message), len("adapter hook 'targets' failed: ") + protocol.MAX_ERROR_CHARS)
+        self.assertIsInstance(caught.exception.__cause__, RuntimeError)
+        self.assertEqual(caught.exception.reason, "hook-failed")
+
+    def test_a_fixture_hook_exception_is_a_hook_failure_too(self) -> None:
+        module = types.ModuleType("fixtures")
+
+        def synthesize(ctx, *, image_factory, **arguments):
+            raise OSError("disk full")
+
+        module.synthesize = synthesize
+        target = support.run_in_process(self.invocation, "targets", {"branches": None})[0]
+        expectation = support.run_in_process(self.invocation, "expectation", {
+            "target": target, "tested_run": tested_run_projection({"branch": self.mod.branch}, "workflow_dispatch"),
+            "extensions": {}})
+        arguments = {"target": target, "expectation": expectation, "out_root": str(self.directory)}
+        with self.assertRaisesRegex(HookFailed, "^adapter hook 'synthesize' failed: OSError: disk full$"):
+            host_child.run_hook(self.context, module, "synthesize", arguments, image_factory=pattern_png)
+
+    def test_unsupported_interrupts_and_exits_are_never_wrapped(self) -> None:
+        module = types.ModuleType("probe")
+        module.ADAPTER_API = 1
+        for raised in (HookUnsupported("not here"), KeyboardInterrupt(), SystemExit(3)):
+            with self.subTest(raised=type(raised).__name__):
+                def targets(ctx, branches, raised=raised):
+                    raise raised
+
+                module.targets = targets
+                with self.assertRaises(type(raised)) as caught:
+                    host_child.run_hook(self.context, module, "targets", {"branches": None})
+                self.assertIs(caught.exception, raised)
+
+    def test_only_an_mb_error_that_already_exits_2_passes_unchanged(self) -> None:
+        class ExitsZero(MbError):
+            exit_code = 0
+
+        module = types.ModuleType("probe")
+        module.ADAPTER_API = 1
+        unchanged = (MbError("kit rejection"), ApiNotFound("gone", status=404, method="GET", path="/x"),
+                     DocumentError("$.x", "bad"))
+        remapped = (Unavailable("nothing here"), Superseded("drifted"), ControllerSkew("skewed"), ExitsZero("fine"))
+        for raised in unchanged + remapped:
+            with self.subTest(raised=type(raised).__name__):
+                def targets(ctx, branches, raised=raised):
+                    raise raised
+
+                module.targets = targets
+                with self.assertRaises(MbError) as caught:
+                    host_child.run_hook(self.context, module, "targets", {"branches": None})
+                self.assertEqual(exit_code_for(caught.exception), EXIT_REJECTED)
+                if raised in unchanged:
+                    self.assertIs(caught.exception, raised)
+                else:
+                    self.assertIs(type(caught.exception), HookFailed)
+                    self.assertEqual(str(caught.exception), f"adapter hook 'targets' failed: {raised}")
+                    self.assertIs(caught.exception.__cause__, raised)
 
     def test_hook_cannot_mutate_the_callers_arguments(self) -> None:
         module = types.ModuleType("probe")
@@ -626,6 +765,122 @@ class ContextTest(unittest.TestCase):
             self.context.image_metrics(path, ("exact", 65, 36))
         with self.assertRaises(MbError):
             self.context.image_metrics(path, ("bogus", 64, 36))
+
+
+class FixtureModTest(unittest.TestCase):
+    """The shipped fixture mods are complete mods: their configuration resolves against their own
+    matrix, and the Quick Skin-like fixture runs every Quick Skin variant of ``conformance`` (SPEC
+    §9.1: delegated reuse, selected evidence composed with the published baseline, every family
+    outcome) and carries its family forward through its own hooks, with no test-time patching."""
+
+    FAMILY = "mod-compatibility"
+    FAMILY_WORKFLOW = ".github/workflows/mod-compatibility-review.yml"
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp(prefix="mb-fixture-mod-test-")).resolve()
+        self.addCleanup(shutil.rmtree, self.directory, True)
+
+    def test_every_matrix_description_the_config_reads_is_display_text(self) -> None:
+        for name in sorted(support.REPOSITORIES):
+            with self.subTest(fixture=name):
+                description = load_config(support.MODS / name).project["description"]
+                if isinstance(description, str):
+                    continue
+                value = strict_loads((support.MODS / name / "release/release-matrix.json").read_bytes(),
+                                     label=name, max_bytes=1 << 20)
+                for part in description["from_matrix"].split("."):
+                    self.assertIn(part, value)
+                    value = value[part]
+                self.assertTrue(is_display_text(value, 400), value)
+
+    def test_the_quick_skin_like_fixture_passes_conformance_unmodified(self) -> None:
+        # Exactly the documented command (SPEC §9.1), run on the shipped fixture directory itself.
+        environ = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.directory), "LANG": "C.UTF-8",
+                   "PYTHONPATH": str(KIT_ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONSAFEPATH": "1"}
+        completed = subprocess.run([sys.executable, "-P", "-m", "mod_base", "conformance", "--repo",
+                                    str(support.MODS / "qs_like"), "--all", "--families", "--kit-root", str(KIT_ROOT)],
+                                   cwd=self.directory, env=environ, stdin=subprocess.DEVNULL, capture_output=True,
+                                   timeout=3600, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8", "replace")[-3000:])
+        report = json.loads(completed.stdout)
+        self.assertEqual([item["key"] for item in report["keys"]], list(support.QS_KEYS))
+        self.assertEqual([item["anchor"] for item in report["keys"]], [True, False])
+        self.assertEqual({name: report["variants"][name] for name in ("delegated", "selected", "family-outcomes")},
+                         {"delegated": "passed", "selected": "passed", "family-outcomes": "passed"})
+        self.assertEqual([(item["family"], item["key"], item["status"]) for item in report["families"]],
+                         [(self.FAMILY, key, "available") for key in support.QS_KEYS])
+        self.assertLessEqual({"anchor_selection", "authenticate_extensions", "compose", "family_validate"},
+                             set(report["hooks"]))
+
+    def family_handoff(self, mod: support.FixtureMod, output: Path) -> None:
+        """The ``mod-compatibility`` handoff of ``mod.commit`` (checked out): the fixtures module's
+        ``available`` native bundle in its envelope, as the producer job writes it."""
+
+        environ = support.environment(mod, run_id=202, event="repository_dispatch", job="publish-evidence",
+                                      workflow=self.FAMILY_WORKFLOW)
+        invocation = support.invocation(mod, environ)
+        claim = run_claim_from_environment(environ)
+        target = support.run_in_process(invocation, "targets", {"branches": None})[0]
+        expectation = support.run_in_process(invocation, "expectation", {
+            "target": target, "tested_run": tested_run_projection(claim, "repository_dispatch"), "extensions": {}})
+        native = self.directory / f"native-{mod.commit[:12]}"
+        native.mkdir()
+        fixtures = host_child.load_adapter(mod.root / "scripts/pages/mod_base_fixtures.py")
+        context = adapter_api.Context(repo_root=mod.root, config=invocation.config, tmpdir=self.directory,
+                                      implementation_sha=mod.commit)
+        fixtures.family_bundle(context, family=self.FAMILY, key=target["key"], target=target, expectation=expectation,
+                               producer=support.run_record(claim, event="repository_dispatch"), out_root=str(native),
+                               image_factory=pattern_png, outcome="available")
+        create_envelope(invocation, family=self.FAMILY, key=target["key"], bundle_dir=native, coverage_sha=mod.commit,
+                        subject={"branch": mod.branch, "commit": mod.commit}, producer=claim, output=output)
+
+    def advance(self, mod: support.FixtureMod, relative: str, data: bytes) -> support.FixtureMod:
+        (mod.root / relative).write_bytes(data)
+        support.git(mod.root, "add", relative)
+        support.git(mod.root, "commit", "-q", "-m", f"change {relative}")
+        return dataclasses.replace(mod, commit=support.git(mod.root, "rev-parse", "HEAD"),
+                                   tree=support.git(mod.root, "rev-parse", "HEAD^{tree}"))
+
+    def collect(self, head: support.FixtureMod, handoff: Path, output: Path):
+        invocation = support.invocation(head, support.pages_environment(head, job="family", token=None))
+        record = output.parent / f"{output.name}-selected.json"  # select --family --output: the handoff
+        record.write_bytes(canonical_json(fs.selection(handoff)))
+        return collect_family(invocation, family=self.FAMILY, key=support.QS_KEYS[0], input_dir=handoff,
+                              expected_coverage_sha=head.commit, output=output, selected_json=record)
+
+    def test_the_family_carries_forward_only_past_an_unchanged_matrix(self) -> None:
+        mod = support.materialize("qs_like", self.directory / "repo")
+        handoff = self.directory / "handoff"
+        self.family_handoff(mod, handoff)
+        head = self.advance(mod, "README.md", b"An unrelated change.\n")
+        outcome = self.collect(head, handoff, self.directory / "carried")
+        self.assertEqual((outcome.status, outcome.carried_from), ("available", mod.commit))
+        self.assertEqual(outcome.projection["coverage_sha"], head.commit)
+        self.assertEqual([lane["lane_id"] for lane in outcome.projection["lanes"]], ["fabric-1.20.1/ears"])
+        self.assertEqual([item["artifact_node"] for item in outcome.projection["not_applicable"]], ["forge-1.20.1"])
+        matrix = json.loads((mod.root / "release/release-matrix.json").read_bytes())
+        matrix["targets"][0]["java"] = 21
+        changed = self.advance(head, "release/release-matrix.json", json.dumps(matrix).encode("utf-8"))
+        outcome = self.collect(changed, handoff, self.directory / "impacted")
+        self.assertEqual((outcome.status, outcome.reason),
+                         ("unavailable", "the release matrix changed since the covered commit"))
+        self.assertFalse(os.path.lexists(self.directory / "impacted"))
+
+    def test_a_family_without_carry_forward_refuses_an_earlier_generation(self) -> None:
+        def no_carry(root: Path) -> None:
+            path = root / "site/mod-base.json"
+            config = json.loads(path.read_bytes())
+            config["families"][0]["carry_forward"] = False
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+        mod = support.materialize("qs_like", self.directory / "repo", mutate=no_carry)
+        handoff = self.directory / "handoff"
+        self.family_handoff(mod, handoff)
+        self.assertEqual(self.collect(mod, handoff, self.directory / "direct").status, "available")
+        head = self.advance(mod, "README.md", b"An unrelated change.\n")
+        outcome = self.collect(head, handoff, self.directory / "refused")
+        self.assertEqual((outcome.status, outcome.reason),
+                         ("unavailable", "this family never carries a generation forward"))
 
 
 if __name__ == "__main__":

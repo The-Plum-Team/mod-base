@@ -235,7 +235,9 @@ class FetchInertTest(Repositories):
         self.assertNotIn("GH_TOKEN", environment)
         self.assertEqual({name for name in environment if name.startswith("GIT_")},
                          {"GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT", "GIT_NO_REPLACE_OBJECTS",
-                          "GIT_NO_LAZY_FETCH"})
+                          "GIT_NO_LAZY_FETCH", "GIT_GRAFT_FILE", "GIT_CEILING_DIRECTORIES"})
+        self.assertEqual((environment["GIT_GRAFT_FILE"], environment["GIT_CEILING_DIRECTORIES"]),
+                         (os.devnull, str(Path(os.path.abspath(self.local)).parent)))
 
     def test_credential_bearing_repository_configuration_refuses_the_fetch(self) -> None:
         # URL-scoped keys outrank the generic ``-c`` resets (git urlmatch prefers the most specific
@@ -330,6 +332,109 @@ class DefaultBranchTargetsTest(unittest.TestCase):
         limited = build_invocation(self.mod.root, config, dict(self.invocation.environ))
         with self.assertRaisesRegex(MbError, "targets.max"):
             targets.discover_targets(limited, api=None)
+
+
+class FirstParentHistoryTest(unittest.TestCase):
+    """The bounded first-parent history of the family carry-forward walk (inert local objects).
+
+    ``master``: ``c0 <- c1 <- m2 <- c3 <- head`` where ``m2`` merges ``side`` (a child of ``c1``)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.directory = Path(tempfile.mkdtemp(prefix="mb-targets-history-")).resolve()
+        mod = support.materialize("qs_like", cls.directory / "repo")
+        cls.root = mod.root
+
+        def commit(message: str) -> str:
+            support.git(cls.root, "commit", "-q", "--allow-empty", "-m", message)
+            return support.git(cls.root, "rev-parse", "HEAD")
+
+        cls.c0 = mod.commit
+        cls.c1 = commit("c1")
+        support.git(cls.root, "checkout", "-q", "-b", "side")
+        cls.side = commit("side")
+        support.git(cls.root, "checkout", "-q", "master")
+        support.git(cls.root, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+        cls.m2 = support.git(cls.root, "rev-parse", "HEAD")
+        cls.c3 = commit("c3")
+        cls.head = commit("head")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.directory, ignore_errors=True)
+
+    def test_newest_first_along_first_parents_only(self) -> None:
+        self.assertEqual(targets.first_parent_history(self.root, self.head, max_commits=32),
+                         [self.head, self.c3, self.m2, self.c1, self.c0])
+        self.assertEqual(targets.first_parent_history(self.root, self.side, max_commits=32),
+                         [self.side, self.c1, self.c0])
+
+    def test_the_bound_counts_earlier_commits_and_a_root_ends_early(self) -> None:
+        self.assertEqual(targets.first_parent_history(self.root, self.head, max_commits=2),
+                         [self.head, self.c3, self.m2])
+        self.assertEqual(targets.first_parent_history(self.root, self.head, max_commits=1), [self.head, self.c3])
+        self.assertEqual(targets.first_parent_history(self.root, self.c0, max_commits=5), [self.c0])
+
+    def test_a_shallow_boundary_ends_the_history(self) -> None:
+        shallow = self.directory / "shallow"
+        subprocess.run(["git", "clone", "-q", "--depth", "2", "--branch", "master", f"file://{self.root}",
+                        str(shallow)], check=True, capture_output=True, env=git_environment(self.directory),
+                       timeout=60)
+        self.assertEqual(targets.first_parent_history(shallow, self.head, max_commits=32), [self.head, self.c3])
+
+    def test_ambient_redirection_and_replacements_cannot_rewrite_the_history(self) -> None:
+        foreign = support.materialize("qs_like", self.directory / "foreign")
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(foreign.root / ".git"),
+                                          "GIT_OBJECT_DIRECTORY": str(foreign.root / ".git/objects")}):
+            self.assertEqual(targets.first_parent_history(self.root, self.head, max_commits=32)[1], self.c3)
+        replaced = self.directory / "replaced"
+        subprocess.run(["git", "clone", "-q", "--no-local", str(self.root), str(replaced)], check=True,
+                       capture_output=True, env=git_environment(self.directory), timeout=60)
+        subprocess.run(["git", "-C", str(replaced), "replace", "-f", self.c3, self.side], check=True,
+                       capture_output=True, env=git_environment(self.directory))
+        self.assertEqual(targets.first_parent_history(replaced, self.head, max_commits=32),
+                         [self.head, self.c3, self.m2, self.c1, self.c0])
+
+    def test_a_graft_file_cannot_rewrite_the_history(self) -> None:
+        grafted = self.directory / "grafted"
+        subprocess.run(["git", "clone", "-q", "--no-local", str(self.root), str(grafted)], check=True,
+                       capture_output=True, env=git_environment(self.directory), timeout=60)
+        (grafted / ".git/info").mkdir(exist_ok=True)
+        (grafted / ".git/info/grafts").write_text(f"{self.c3} {self.side}\n", encoding="ascii")
+        self.assertEqual(targets.first_parent_history(grafted, self.head, max_commits=32),
+                         [self.head, self.c3, self.m2, self.c1, self.c0])
+
+    def test_a_directory_that_is_not_a_repository_never_reads_an_enclosing_one(self) -> None:
+        nested = self.directory / "enclosing" / "not-a-repository"
+        subprocess.run(["git", "clone", "-q", "--no-local", str(self.root), str(nested.parent)], check=True,
+                       capture_output=True, env=git_environment(self.directory), timeout=60)
+        nested.mkdir()
+        for read in (lambda: targets.first_parent_history(nested, self.head, max_commits=32),
+                     lambda: targets.commit_tree_local(nested, self.head)):
+            with self.assertRaises(MbError) as caught:
+                read()
+            self.assertEqual(caught.exception.reason, "git")
+
+    def test_absent_commits_and_hostile_arguments_fail_closed(self) -> None:
+        with self.assertRaises(MbError) as caught:
+            targets.first_parent_history(self.root, "e" * 40, max_commits=32)
+        self.assertEqual(caught.exception.reason, "git")
+        for commit in ("HEAD", self.head.upper(), "--all", self.head[:12], None):
+            with self.subTest(commit=commit), self.assertRaises(MbError):
+                targets.first_parent_history(self.root, commit, max_commits=32)  # type: ignore[arg-type]
+        for bound in (0, -1, True, targets.MAX_FETCH_DEPTH + 1, "32"):
+            with self.subTest(bound=bound), self.assertRaises(MbError):
+                targets.first_parent_history(self.root, self.head, max_commits=bound)  # type: ignore[arg-type]
+        link = self.directory / "link"
+        link.symlink_to(self.root)
+        for root in (link, self.directory / "absent"):
+            with self.subTest(root=root.name), self.assertRaises(MbError):
+                targets.first_parent_history(root, self.head, max_commits=32)
+        with mock.patch.object(targets, "_git", return_value=subprocess.CompletedProcess(
+                [], 0, stdout=f"{self.c3}\n{self.head}\n".encode(), stderr=b"")), \
+                mock.patch.object(targets, "_has_commit", return_value=True), \
+                self.assertRaisesRegex(MbError, "malformed"):
+            targets.first_parent_history(self.root, self.head, max_commits=32)
 
 
 if __name__ == "__main__":

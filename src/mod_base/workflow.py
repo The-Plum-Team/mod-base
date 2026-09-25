@@ -119,6 +119,15 @@ def workflow_template_name(workflow: str, job: str) -> str:
     return result
 
 
+def unexpanded_api_job_name(workflow: str, job: str) -> str:
+    """Return the name the jobs API reports, once, for a matrix callee job that its job-level ``if``
+    skipped before its matrix expanded: the caller prefix and the unexpanded YAML template name, e.g.
+    ``"Publish / Collect ${{ matrix.family }} ${{ matrix.key }}"`` (Quick Skin
+    ``e2e_job_graph.UNEXPANDED_SCENARIO_JOB``). Exact equality only, like every other name."""
+
+    return f"{CALLER[workflow]} / {workflow_template_name(workflow, job)}"
+
+
 def step_name(key: str) -> str:
     try:
         return STEPS[key]

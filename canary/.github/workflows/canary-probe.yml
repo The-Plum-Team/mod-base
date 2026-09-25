@@ -1,0 +1,64 @@
+# Synthetic demonstration evidence — not a product.
+# Records platform observations for the canary evidence table (SPEC §9.2 G1, G2 and G6): the
+# referenced_workflows and job names of one Project site run, and this job's own job.workflow_sha.
+# Observation only: it changes nothing and gates nothing. The job context is read as a whole
+# (toJSON) so no unreleased context property is ever referenced by name. This is a caller-side job,
+# so its workflow_sha is the canary head commit, never the kit's: the kit-side value exists only
+# inside a job of a kit reusable workflow (a callee), which v1.0 does not record. That observation is
+# deferred, and v1.1 may add job.workflow_sha as a redundant cross-check only after three values
+# observed inside a kit callee job equal referenced_workflows[].sha (docs/OPERATIONS.md).
+name: Canary probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      pages-run-id:
+        description: The Project site run to observe (empty = the newest)
+        required: false
+        default: ""
+        type: string
+
+permissions: {}
+
+jobs:
+  observe:
+    name: Record platform observations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    steps:
+      - name: Record the Pages run identity, its job names and this job's context
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.pages-run-id }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          [[ -z "$RUN_ID" || "$RUN_ID" =~ ^[1-9][0-9]{0,17}$ ]]
+          if [[ -z "$RUN_ID" ]]; then
+            RUN_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pages.yml/runs?per_page=1" \
+              --jq '.workflow_runs[0].id // empty')"
+          fi
+          [[ "$RUN_ID" =~ ^[1-9][0-9]{0,17}$ ]] || { printf 'No Project site run to observe.\n' >&2; exit 1; }
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
+          attempt="$(jq -r '.run_attempt' <<< "$run")"
+          [[ "$attempt" =~ ^[1-9][0-9]{0,5}$ ]]
+          jobs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$attempt/jobs?per_page=100" \
+            --jq '.jobs[] | [.name, .status, (.conclusion // "")] | @tsv')"
+          fence='```'
+          {
+            printf '## Canary observations (synthetic demonstration evidence, not a product)\n\n'
+            printf 'Project site run: https://github.com/%s/actions/runs/%s (attempt %s, %s/%s, head %s)\n\n' \
+              "$GITHUB_REPOSITORY" "$RUN_ID" "$attempt" "$(jq -r '.status' <<< "$run")" \
+              "$(jq -r '.conclusion // "none"' <<< "$run")" "$(jq -r '.head_sha' <<< "$run")"
+            printf '### referenced_workflows (G1)\n\n%s\n' "$fence"
+            jq -r '.referenced_workflows // [] | .[] | [.path, .ref, .sha] | @tsv' <<< "$run"
+            printf '%s\n\n### Job names of that attempt (G2)\n\n%s\n%s\n%s\n\n' "$fence" "$fence" "$jobs" "$fence"
+            printf "### This job's context (G6, caller side: the canary head, never the kit SHA)\n\n"
+            printf 'workflow_sha: %s\nworkflow_ref: %s\ngithub.sha: %s\n' \
+              "$(jq -r '.workflow_sha // "absent"' <<< "$JOB_CONTEXT")" \
+              "$(jq -r '.workflow_ref // "absent"' <<< "$JOB_CONTEXT")" "$GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"

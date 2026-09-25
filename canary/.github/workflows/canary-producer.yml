@@ -1,0 +1,117 @@
+# Synthetic demonstration evidence — not a product.
+# The canary's stand-in for a mod's packaged E2E workflow (config.source.workflow): it generates the
+# packaged output of every key, hands it off through the pinned kit's prepare-evidence composite and
+# wakes the protected site through notify-pages, exactly like a real producer. Every kit reference
+# is written as a placeholder pin that the canary procedure (mod-base docs/OPERATIONS.md) fills in.
+name: Canary producer
+
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: canary-producer
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    name: Resolve synthetic targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      keys: ${{ steps.keys.outputs.keys }}
+    steps:
+      - name: Check out the canary head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify the pinned kit
+        uses: The-Plum-Team/mod-base/actions/setup@{{PIN}} # {{VERSION}}
+        with:
+          install-imaging: "false"
+      - name: List the synthetic keys through the adapter
+        id: keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          keys="$(env -u PYTHONPATH PYTHONPATH="$MOD_BASE_KIT_PATH/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P scripts/canary/produce.py keys)"
+          jq -e 'type == "array" and length >= 1 and length <= 64
+            and all(.[]; type == "string" and test("^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$"))' <<< "$keys" > /dev/null
+          printf 'keys=%s\n' "$(jq -c . <<< "$keys")" >> "$GITHUB_OUTPUT"
+
+  evidence:
+    name: Prepare synthetic evidence for ${{ matrix.key }}
+    needs: inventory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        key: ${{ fromJSON(needs.inventory.outputs.keys) }}
+    steps:
+      - name: Check out the canary head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify the pinned kit and install the imaging dependency
+        uses: The-Plum-Team/mod-base/actions/setup@{{PIN}} # {{VERSION}}
+      - name: Generate the synthetic packaged output
+        id: synthetic
+        shell: bash
+        env:
+          KEY: ${{ matrix.key }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          [[ "$KEY" =~ ^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$ && "$KEY" != *--* ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          output="$RUNNER_TEMP/canary-e2e"
+          env -u PYTHONPATH PYTHONPATH="$MOD_BASE_KIT_PATH/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P scripts/canary/produce.py synthesize --key "$KEY" --output "$output"
+          printf 'e2e_root=%s\ntree=%s\n' "$output" "$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+      - name: Prepare and hand off synthetic evidence
+        uses: The-Plum-Team/mod-base/actions/prepare-evidence@{{PIN}} # {{VERSION}}
+        with:
+          e2e-root: ${{ steps.synthetic.outputs.e2e_root }}
+          key: ${{ matrix.key }}
+          subject-branch: ${{ github.ref_name }}
+          subject-commit: ${{ github.sha }}
+          subject-tree: ${{ steps.synthetic.outputs.tree }}
+          tested-run-id: ${{ github.run_id }}
+          tested-run-attempt: ${{ github.run_attempt }}
+          tested-branch: ${{ github.ref_name }}
+          tested-commit: ${{ github.sha }}
+          tested-controller-branch: ${{ github.ref_name }}
+          tested-controller-sha: ${{ github.sha }}
+          anchor: auto
+
+  notify-pages:
+    name: Wake the protected project site
+    needs: evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the separately locked Pages publication
+        uses: The-Plum-Team/mod-base/actions/notify-pages@{{PIN}} # {{VERSION}}
+        with:
+          operation: deploy
+          run-id: ${{ github.run_id }}
+          sha: ${{ github.sha }}

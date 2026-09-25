@@ -24,7 +24,9 @@ The order of ``admit`` (SPEC §5.3.1), each step ending the admission when it de
    a successful Pages run at the protected head (owners memoized, every artifact still checked
    against its own head) and no successful source run for that subject that settled after the
    owner started handed the key off (a cache is not a tombstone), and every family leg is current:
-   it has no family handoff at the head, or a family cache at least as new as the newest one;
+   it has no family handoff at the head, or a family cache there that supersedes the newest one
+   (:func:`mod_base.pages.select.supersedes`: its Pages owner was created after that upload, so a
+   publication would select the cache, never the handoff);
 4. except for ``manual``, ``deferred-active-source`` while a ``source.workflow`` run that could
    produce admissible evidence for a subject is requested, queued, pending, waiting or in progress;
 5. ``awaiting-complete-v1-evidence`` while some key (other than a nominated one) has neither a v1
@@ -58,12 +60,13 @@ from typing import Any
 from mod_base.errors import MbError
 from mod_base.github import artifacts, contents, jobs, runs
 from mod_base.github.api import GitHubApi
+from mod_base.io.bounded_zip import artifact_limit
 from mod_base.model import grammar
 from mod_base.model import limits as lim
 from mod_base.pages.select import (
-    MAX_SUBJECT_RUNS,
     SourceRuns,
     display_title,
+    family_archive_limit,
     handoff_job_name,
     is_success,
     names_commit,
@@ -72,6 +75,7 @@ from mod_base.pages.select import (
     source_run_valid,
     subject_events,
     successful_job,
+    supersedes,
     upload_in_window,
 )
 from mod_base.pages.targets import discover_targets
@@ -90,8 +94,10 @@ OWNER = "MB5"
 COALESCE_SECONDS = 10 * 60
 PARTIAL_DEADLINE_SECONDS = 45 * 60
 RECOVERY_INTERVAL_SECONDS = 60 * 60
-MAX_REQUESTS = 160
-MAX_CANDIDATES = 8
+#: QS ``publication_progress.MAX_REQUESTS``: the read budget of one Pages job's client.
+MAX_REQUESTS = lim.MAX_PAGES_API_READS
+#: Owner runs authenticated for one exact-name or run inventory (``select``'s bound).
+MAX_CANDIDATES = lim.MAX_CANDIDATES
 MAX_FAILED_PUBLICATIONS = 3
 ACTIVE_RUN_STATUSES = frozenset({"requested", "queued", "pending", "waiting", "in_progress"})
 REASONS = frozenset({
@@ -103,8 +109,6 @@ REASONS = frozenset({
 
 #: QS's listing order of the active statuses (the frozenset above has no stable iteration order).
 _ACTIVE_STATUS_ORDER = ("requested", "queued", "pending", "waiting", "in_progress")
-#: GitHub's job-matrix bound: at most this many family legs (and progress legs) per publication.
-MAX_FAMILY_LEGS = 256
 #: The synthetic leg of a mod without families (never a ``<family>/<key>`` id).
 _ORDINARY_LEG = "ordinary"
 
@@ -154,7 +158,7 @@ def decide(*, expected: set[str], published: dict[str, float], ready: dict[str, 
     """QS ``publication_progress.decide`` (pure, deterministic; same reasons and ordering)."""
 
     if (not isinstance(policy, ProgressPolicy) or isinstance(now, bool) or not isinstance(now, (int, float))
-            or not math.isfinite(now) or now < 0 or not expected or len(expected) > MAX_FAMILY_LEGS
+            or not math.isfinite(now) or now < 0 or not expected or len(expected) > lim.MAX_FAMILY_LEGS
             or not set(published) <= expected or not set(ready) <= expected or not set(published) <= set(ready)
             or isinstance(failed_publications, bool) or not isinstance(failed_publications, int)
             or failed_publications < 0
@@ -307,13 +311,13 @@ class _Admitter:
     def successful_runs(self, commit: str, subject_canonical: bool) -> list[dict[str, Any]]:
         """The source runs that may supply a subject's evidence, newest first: with
         ``source.require_newest_run`` only the newest run, when it succeeded (``select`` never looks
-        further), otherwise the newest :data:`MAX_CANDIDATES` successful runs (one memoized listing
+        further), otherwise the newest ``limits.MAX_CANDIDATES`` successful runs (one memoized listing
         serves every subject; see :class:`mod_base.pages.select.SourceRuns`)."""
 
         found = self.sources.for_subject(commit, subject_canonical=subject_canonical)
         if self.config.source["require_newest_run"]:
             return found[:1] if found and is_success(found[0]) else []
-        return [run for run in found if is_success(run)][:MAX_CANDIDATES]
+        return [run for run in found if is_success(run)][:lim.MAX_CANDIDATES]
 
     def head_current(self) -> bool:
         return contents.branch_head(self.api, self.default)[0] == self.head
@@ -325,8 +329,8 @@ class _Admitter:
 
     def legs(self) -> list[tuple[str, str]]:
         legs = sorted((family["id"], key) for family in self.config.families for key in self.keys())
-        if len(legs) > MAX_FAMILY_LEGS:
-            raise _fail(f"{len(legs)} family legs exceed the {MAX_FAMILY_LEGS}-job matrix bound")
+        if len(legs) > lim.MAX_FAMILY_LEGS:
+            raise _fail(f"{len(legs)} family legs exceed the {lim.MAX_FAMILY_LEGS}-job matrix bound")
         return legs
 
     def is_canonical(self, key: str) -> bool:
@@ -342,20 +346,27 @@ class _Admitter:
         return grouped
 
     def window_valid(self, artifact: artifacts.Artifact, run: Mapping[str, Any], job: Mapping[str, Any] | None,
-                     step: str, *, max_size: int = lim.MAX_RAW_BUNDLE_BYTES) -> bool:
-        """QS ``artifact_valid``: the exact upload of this successful attempt's job step."""
+                     step: str, *, max_size: int | None = None) -> bool:
+        """QS ``artifact_valid``: the exact upload of this successful attempt's job step (at most
+        ``max_size`` archive bytes; by default a handoff's :func:`~mod_base.io.bounded_zip.artifact_limit`)."""
 
-        return (not artifact.expired and 0 < artifact.size <= max_size and artifact.run_id == run.get("id")
+        maximum = artifact_limit("handoff") if max_size is None else max_size
+        return (not artifact.expired and 0 < artifact.size <= maximum and artifact.run_id == run.get("id")
                 and artifact.head_sha == run.get("head_sha") and artifact.head_branch == run.get("head_branch")
                 and upload_in_window(artifact, job, step))
 
-    def owned_cache(self, name: str) -> artifacts.Artifact | None:
-        """The newest ``name`` owned by a successful Pages run at the protected head."""
+    def owned_cache(self, name: str, *, after: artifacts.Artifact | None = None) -> artifacts.Artifact | None:
+        """The newest ``name`` owned by a successful Pages run at the protected head; with ``after``
+        (a handoff) only one that :func:`~mod_base.pages.select.supersedes` it, as ``select`` takes
+        it (a cache uploaded no later than ``after`` cannot, so no older owner is read)."""
 
         candidates = [artifact for artifact in self.named(name) if not artifact.expired
                       and artifact.head_branch == self.default and artifact.head_sha == self.head]
-        for artifact in candidates[:MAX_CANDIDATES]:
-            if self.pages_owner(self.owner(artifact.run_id)):
+        for artifact in candidates[:lim.MAX_CANDIDATES]:
+            if after is not None and artifact.order[0] <= after.order[0]:
+                return None
+            owner = self.owner(artifact.run_id)
+            if self.pages_owner(owner) and (after is None or supersedes(owner, after)):
                 return artifact
         return None
 
@@ -370,7 +381,7 @@ class _Admitter:
         workflow = family["producer"]["workflow"]
         if workflow not in self._producer_runs:
             self._producer_runs[workflow] = runs.workflow_runs(self.api, workflow, head_sha=self.head,
-                                                               status="success", max_items=MAX_SUBJECT_RUNS)
+                                                               status="success", max_items=lim.MAX_SUBJECT_RUNS)
         return [run for run in self._producer_runs[workflow]
                 if producer_run_valid(run, self.invocation, family, default_branch=self.default, head_sha=self.head)]
 
@@ -380,12 +391,12 @@ class _Admitter:
         family_id = family["id"]
         if family_id not in self._family_handoffs:
             found: dict[str, tuple[artifacts.Artifact, dict[str, Any]]] = {}
-            for run in self.producer_runs(family)[:MAX_CANDIDATES]:
+            for run in self.producer_runs(family)[:lim.MAX_CANDIDATES]:
                 for name, artifact in self.uploads(run["id"]).items():
                     parsed = grammar.parse_artifact_name(name)
                     if (parsed is not None and parsed.kind == "family-handoff" and parsed.family == family_id
                             and parsed.attempt == run["run_attempt"] and parsed.key in self.subjects
-                            and not artifact.expired and 0 < artifact.size <= family["handoff_max_bytes"]):
+                            and not artifact.expired and 0 < artifact.size <= family_archive_limit(family)):
                         found.setdefault(parsed.key, (artifact, run))
             self._family_handoffs[family_id] = found
         return self._family_handoffs[family_id]
@@ -433,7 +444,7 @@ class _Admitter:
                 raise _fail(f"the deploy wake's run hands off {name}, which is not a target", reason="wake")
             if parsed.attempt != run["run_attempt"]:
                 continue
-            if (artifact.expired or not 0 < artifact.size <= lim.MAX_RAW_BUNDLE_BYTES
+            if (artifact.expired or not 0 < artifact.size <= artifact_limit("handoff")
                     or artifact.head_sha != wake.sha or artifact.head_branch != self.default):
                 raise _fail(f"the deploy wake's handoff {name} is expired, oversized or foreign", reason="wake")
             handoffs[parsed.key] = artifact  # type: ignore[index]
@@ -459,7 +470,7 @@ class _Admitter:
         parsed = grammar.require_artifact_name(artifact.name, "family-handoff")
         if (parsed.family != wake.family or parsed.key != wake.bundle_key or artifact.digest != wake.artifact_digest
                 or artifact.run_id != wake.run_id or artifact.expired
-                or not 0 < artifact.size <= family["handoff_max_bytes"]
+                or not 0 < artifact.size <= family_archive_limit(family)
                 or artifact.head_sha != wake.sha or artifact.head_branch != self.default):
             raise _fail(f"the family wake's artifact {wake.artifact_id} is not the named family handoff", reason="wake")
         run = runs.wait_for_completion(self.api, wake.run_id, attempts=lim.RUN_POLL_ATTEMPTS,  # type: ignore[arg-type]
@@ -480,7 +491,7 @@ class _Admitter:
         """Every key is cached at its subject by a successful Pages run at the head, and no source
         run for that subject settled after that owner started while handing the key off (a cache
         is not a tombstone: a lost same-head replacement wake stays recoverable, QS discover);
-        every family leg has no family handoff at the head or a cache at least as new."""
+        every family leg has no family handoff at the head or a cache there that supersedes it."""
 
         caches: dict[str, artifacts.Artifact] = {}
         for key in self.keys():
@@ -503,8 +514,7 @@ class _Admitter:
             handoff = self.family_handoffs(self.config.family(family_id)).get(key)
             if handoff is None:
                 continue
-            cache = self.owned_cache(grammar.family_cache_name(family_id, key, commit))
-            if cache is None or cache.order < handoff[0].order:
+            if self.owned_cache(grammar.family_cache_name(family_id, key, commit), after=handoff[0]) is None:
                 return False
         return True
 
@@ -561,7 +571,7 @@ class _Admitter:
 
         keys = self.keys()
         probe = grammar.cache_name(keys[0], self.subjects[keys[0]]["commit"])
-        candidates = sorted(self.named(probe), key=lambda artifact: artifact.id, reverse=True)[:MAX_CANDIDATES]
+        candidates = sorted(self.named(probe), key=lambda artifact: artifact.id, reverse=True)[:lim.MAX_CANDIDATES]
         for candidate in candidates:
             if candidate.expired or candidate.head_sha != self.head or candidate.head_branch != self.default:
                 continue
@@ -630,7 +640,7 @@ class _Admitter:
             keys = [key for leg_family, key in legs
                     if leg_family == family_id and self.subjects[key]["commit"] == self.head]
             found: set[str] = set()
-            for run in self.producer_runs(family)[:MAX_CANDIDATES]:
+            for run in self.producer_runs(family)[:lim.MAX_CANDIDATES]:
                 pending = [key for key in keys if key not in found]
                 if not pending:
                     break
@@ -640,7 +650,7 @@ class _Admitter:
                 for key in pending:
                     artifact = exact.get(grammar.family_handoff_name(family_id, key, run["run_attempt"]))
                     if artifact is None or not self.window_valid(artifact, run, job, producer["step"],
-                                                                 max_size=family["handoff_max_bytes"]):
+                                                                 max_size=family_archive_limit(family)):
                         continue
                     # The inventory is immutable-id addressed; recheck the exact id after owner
                     # admission so a stale, rerun or deleted nomination cannot suppress work (QS).
@@ -689,8 +699,8 @@ class _Admitter:
         count = 0
         for status in ("failure", "cancelled"):
             listing = runs.workflow_runs(self.api, PAGES_WORKFLOW_PATH, head_sha=self.head, status=status,
-                                         max_items=MAX_SUBJECT_RUNS)
-            for run in listing[:MAX_CANDIDATES]:
+                                         max_items=lim.MAX_SUBJECT_RUNS)
+            for run in listing[:lim.MAX_CANDIDATES]:
                 head, event = run.get("head_repository"), run.get("event")
                 if (_seconds(run.get("created_at"), "Pages run created_at") < since
                         or run.get("head_branch") != self.default or run.get("status") != "completed"

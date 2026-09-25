@@ -31,7 +31,15 @@ from mod_base.pages.select import Selected
 from mod_base.runtime import build_invocation
 from mod_base.workflow import PAGES_WORKFLOW_PATH
 from tests.fixtures.mods import support
-from tests.test_select import BP_HANDOFF_JOB, BP_HANDOFF_STEP, QS_HANDOFF_JOB, QS_HANDOFF_STEP, World, at
+from tests.test_select import (
+    BP_HANDOFF_JOB,
+    BP_HANDOFF_STEP,
+    QS_HANDOFF_JOB,
+    QS_HANDOFF_STEP,
+    World,
+    at,
+    pin_workflow,
+)
 
 SOURCE = support.SOURCE_WORKFLOW
 QS_KEY = "mc1.20.1"
@@ -41,11 +49,6 @@ RELEASE = "release/1.21.1"
 
 def branch_token(branch: str) -> str:
     return hashlib.sha256(branch.encode("utf-8")).hexdigest()[:24]
-
-
-def pin_workflow(sha: str = support.KIT_SHA, version: str = mod_base.__version__) -> bytes:
-    return (f"name: Packaged E2E\njobs:\n  e2e:\n    steps:\n"
-            f"      - uses: The-Plum-Team/mod-base/actions/prepare-evidence@{sha} # v{version}\n").encode()
 
 
 def title(commit: str) -> str:
@@ -268,9 +271,9 @@ class QuickSkinAuthenticationTest(Flow):
                 self.world.run(4000, **{"head_sha": self.mod.commit, "head_branch": "topic", "event": "pull_request",
                                         **run})
                 if label != "verified":
-                    # The isolated host reports an adapter refusal as HookFailed (an MbError); the
-                    # in-process test host lets the adapter's own exception through.
-                    with self.assertRaises(MbError if label != "other head" else ValueError):
+                    # Both the isolated host and the in-process seam report an adapter refusal as
+                    # HookFailed (an MbError), never the adapter's own exception.
+                    with self.assertRaises(MbError):
                         self.authenticate(selected, bundle)
                     continue
                 draft = self.authenticate(selected, bundle)
@@ -318,27 +321,60 @@ class QuickSkinAuthenticationTest(Flow):
         with self.assertRaisesRegex(MbError, "advanced"):
             self.authenticate(cache, cache_root)
 
-    def test_family_generations_bind_their_kit_to_the_producer_pin_or_the_pages_owner(self) -> None:
+    def test_family_generations_bind_their_kit_to_the_envelope_producer_pin(self) -> None:
         workflow = ".github/workflows/mod-compatibility-review.yml"
+        producer = self.world.run(2000, path=workflow, event="repository_dispatch")
         envelope = {"kind": "mod-base.family.envelope", "family": "mod-compatibility",
                     "kit": {"repository": "The-Plum-Team/mod-base", "sha": support.KIT_SHA,
-                            "version": mod_base.__version__}}
-        producer = self.world.run(2000, path=workflow, event="repository_dispatch")
-        owner = self.world.run(8800, path=PAGES_WORKFLOW_PATH, kit_sha=support.KIT_SHA)
+                            "version": mod_base.__version__},
+                    "producer": {"run_id": 2000, "run_attempt": 1, "workflow_path": workflow, "branch": "master",
+                                 "commit": producer["head_sha"], "controller_branch": "master",
+                                 "controller_sha": producer["head_sha"]}}
+        # A later kit bump: the Pages run that owns (refreshed) the cache executed another kit.
+        owner = self.world.run(8800, path=PAGES_WORKFLOW_PATH, kit_sha="e" * 40)
 
         def bind(kind: str, run: dict[str, Any], manifest: dict[str, Any] = envelope) -> dict[str, str]:
             return authenticate.kit_binding(self.world.api, self.pages(), manifest=manifest, owner_run=run,
                                             selected_kind=kind)
 
         self.world.api.add_file(producer["head_sha"], workflow, pin_workflow())
-        self.assertEqual(bind("family-handoff", producer), {"source": "workflow_file", "sha": support.KIT_SHA})
-        self.assertEqual(bind("family-cache", owner), {"source": "referenced_workflows", "sha": support.KIT_SHA})
+        for kind in ("family-handoff", "family-cache"):
+            with self.subTest(kind):
+                # The cache is the producer's source/ verbatim: its kit is the producer's pin, whatever
+                # kit the Pages owner executed.
+                self.assertEqual(bind(kind, producer), {"source": "workflow_file", "sha": support.KIT_SHA})
+        # A rerun producer: the envelope names its exact attempt, which the caller passes.
+        rerun = self.world.run(2004, path=workflow, event="repository_dispatch", attempt=2,
+                               earlier=({"run_attempt": 1},))
+        second = {**envelope, "producer": {**envelope["producer"], "run_id": 2004, "run_attempt": 2}}
+        self.assertEqual(bind("family-cache", rerun, second), {"source": "workflow_file", "sha": support.KIT_SHA})
+        first = {**second, "producer": {**second["producer"], "run_attempt": 1}}
         other_kit = {**envelope, "kit": {**envelope["kit"], "sha": "d" * 40}}
+        another_producer = self.world.run(2002, path=workflow, event="repository_dispatch")
+        self.world.api.add_file(another_producer["head_sha"], workflow, pin_workflow())
+        moved = self.world.run(2003, path=workflow, event="repository_dispatch", head_sha="f" * 40)
+        self.world.api.add_file(moved["head_sha"], workflow, pin_workflow())
         source_run = self.world.run(2001)
-        for label, kind, run, manifest in (("another kit's handoff", "family-handoff", producer, other_kit),
-                                           ("another kit's cache", "family-cache", owner, other_kit),
-                                           ("a source run as producer", "family-handoff", source_run, envelope),
-                                           ("a producer as Pages owner", "family-cache", producer, envelope)):
+        no_producer = {name: value for name, value in envelope.items() if name != "producer"}
+        boolean_id = {**envelope, "producer": {**envelope["producer"], "run_id": True}}
+        for label, kind, run, manifest in (
+                ("another kit's handoff", "family-handoff", producer, other_kit),
+                ("another kit's cache", "family-cache", producer, other_kit),
+                ("a source run as producer", "family-handoff", source_run,
+                 {**envelope, "producer": {**envelope["producer"], "run_id": 2001}}),
+                ("the Pages owner of a cache", "family-cache", owner, envelope),
+                ("the Pages owner under the envelope's run id", "family-cache", {**owner, "id": 2000}, envelope),
+                ("another producer run of the same pin", "family-cache", another_producer, envelope),
+                ("the producer run at another head", "family-handoff", {**moved, "id": 2000}, envelope),
+                ("an envelope without a producer", "family-cache", producer, no_producer),
+                ("a boolean producer run id", "family-handoff", {**producer, "id": 1}, boolean_id),
+                ("another attempt than the envelope's", "family-cache", rerun, first),
+                ("an attempt-less owner run", "family-handoff",
+                 {name: value for name, value in producer.items() if name != "run_attempt"}, envelope),
+                ("a boolean producer attempt", "family-handoff", {**producer, "run_attempt": True},
+                 {**envelope, "producer": {**envelope["producer"], "run_attempt": True}}),
+                ("an envelope naming another producer workflow", "family-cache", producer,
+                 {**envelope, "producer": {**envelope["producer"], "workflow_path": ".github/workflows/other.yml"}})):
             with self.subTest(label), self.assertRaises(MbError) as caught:
                 bind(kind, run, manifest)
             self.assertEqual(caught.exception.reason, "kit-binding")
@@ -348,9 +384,10 @@ class QuickSkinAuthenticationTest(Flow):
             bind("anchor", owner)
         self.assertEqual(caught.exception.reason, "usage")
         self.world.api.add_file(producer["head_sha"], workflow, pin_workflow("d" * 40))
-        with self.assertRaises(MbError) as caught:
-            bind("family-handoff", producer)
-        self.assertEqual(caught.exception.reason, "kit-binding")
+        for kind in ("family-handoff", "family-cache"):
+            with self.subTest(f"{kind} after the producer pin changed"), self.assertRaises(MbError) as caught:
+                bind(kind, producer)
+            self.assertEqual(caught.exception.reason, "kit-binding")
 
     def test_family_generations_are_not_authenticated_here(self) -> None:
         selected = Selected(kind="family-handoff", artifact_id=1, name=grammar.family_handoff_name(

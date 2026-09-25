@@ -4,14 +4,18 @@ Accepts exactly ``--adapter PATH --hook NAME --request FILE --response FILE``; r
 the request envelope, loads the adapter with :func:`load_adapter`, builds
 :class:`mod_base.adapter.api.Context` (``api`` from ``GH_TOKEN``/``GITHUB_API_URL`` only when the
 request grants network: read-only and capped at ``limits.MAX_PAGES_API_READS`` requests) and
-dispatches through :func:`run_hook`, then writes one canonical response envelope (``unsupported``
-for :class:`~mod_base.adapter.protocol.HookUnsupported`; any other exception becomes ``status:
-"error"`` with a bounded one-line message).
+dispatches through the same code as :func:`run_hook`, then writes one canonical response envelope
+(``unsupported`` for :class:`~mod_base.adapter.protocol.HookUnsupported`; any other exception
+becomes ``status: "error"`` with a bounded one-line message, which the parent raises as
+:class:`~mod_base.adapter.protocol.HookFailed`).
 
 :func:`run_hook` is also the frozen in-process seam of ``conformance``: it loads the adapter (and
 the ``config.adapter.fixtures_path`` module) with :func:`load_adapter` in a process whose
 ``PYTHONPATH`` is ``host.adapter_pythonpath`` and calls :func:`run_hook` with a ``Context`` whose
-``api`` is a :class:`mod_base.github.fake.FakeGitHub`, so network hooks run against the fake.
+``api`` is a :class:`mod_base.github.fake.FakeGitHub`, so network hooks run against the fake. So
+that a simulation observes what production observes, :func:`run_hook` raises the adapter's own
+exception (anything but ``HookUnsupported`` or an :class:`~mod_base.errors.MbError` that already
+exits 2) as the same ``HookFailed`` (same message) that the isolated host raises for it.
 
 Only the argv shape, the request and the child's own environment are trusted inputs here. A
 malformed argv or request writes no response (the parent then fails closed on the missing
@@ -37,7 +41,7 @@ from mod_base.adapter import protocol
 from mod_base.adapter.api import Context
 from mod_base.adapter.protocol import HookUnsupported, ImageFactory
 from mod_base.config import parse_config
-from mod_base.errors import MbError, run_main, single_line
+from mod_base.errors import EXIT_REJECTED, MbError, exit_code_for, run_main, single_line
 from mod_base.github.api import from_environment
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json, read_json_file, read_regular_file
@@ -98,7 +102,34 @@ def run_hook(context: Context, adapter: ModuleType, hook: str, arguments: Mappin
     (``protocol.FIXTURE_HOOKS``, only ever from ``conformance``): ``image_factory`` is required,
     arguments and result go through ``protocol.validate_fixture_arguments``/``_result`` and the call
     is ``adapter.synthesize(context, **arguments, image_factory=image_factory)``. Any other hook
-    name raises before the module is touched."""
+    name raises before the module is touched.
+
+    Failures surface as the isolated host reports them: ``HookUnsupported`` and every
+    :class:`~mod_base.errors.MbError` that already exits 2 (a protocol violation, or a kit rejection
+    the adapter raised) pass unchanged; any other exception from the adapter's code becomes
+    :class:`~mod_base.adapter.protocol.HookFailed` whose bounded one-line message equals the one
+    ``protocol.validate_response`` raises for the child's error (exit 2, never an internal error).
+    That includes an ``MbError`` with another exit code (an adapter's ``Unavailable``,
+    ``Superseded`` or ``ControllerSkew``): across the host it is a ``HookFailed`` too, so a
+    simulation can never report a clean absence (exit 3) where production rejects the hook.
+    ``KeyboardInterrupt`` and ``SystemExit`` are never wrapped."""
+
+    try:
+        return _dispatch(context, adapter, hook, arguments, image_factory=image_factory)
+    except HookUnsupported:
+        raise
+    except MbError as exc:
+        if exit_code_for(exc) == EXIT_REJECTED:
+            raise
+        raise protocol.HookFailed(f"adapter hook {hook!r} failed: {_error_text(exc)}") from exc
+    except Exception as exc:  # noqa: BLE001 - the adapter's own exception is its fail-closed refusal
+        raise protocol.HookFailed(f"adapter hook {hook!r} failed: {_error_text(exc)}") from exc
+
+
+def _dispatch(context: Context, adapter: ModuleType, hook: str, arguments: Mapping[str, Any], *,
+              image_factory: ImageFactory | None) -> Any:
+    """:func:`run_hook` without the ``HookFailed`` mapping: the child reports the raw exception
+    text, and the parent's ``protocol.validate_response`` adds the same ``HookFailed`` prefix."""
 
     if isinstance(hook, str) and hook in protocol.HOOKS:
         _adapter_api(adapter)
@@ -142,8 +173,15 @@ def _parse_argv(argv: Sequence[str]) -> dict[str, str]:
 
 
 def _error_text(error: BaseException) -> str:
-    message = str(error) if isinstance(error, MbError) else f"{type(error).__name__}: {error}"
-    text = single_line(message, limit=protocol.MAX_ERROR_CHARS)
+    """``error`` as one bounded printable line: an ``MbError``'s message, otherwise ``Type:
+    message``. An adapter-defined exception whose text cannot be rendered (its ``__str__`` raises)
+    is still reported, generically, instead of escaping the error path."""
+
+    try:
+        text = single_line(str(error) if isinstance(error, MbError) else f"{type(error).__name__}: {error}",
+                           limit=protocol.MAX_ERROR_CHARS)
+    except Exception:  # noqa: BLE001 - rendering runs the adapter's own __str__
+        text = "an exception whose message cannot be rendered"
     return "".join("?" if "\ud800" <= character <= "\udfff" else character for character in text)
 
 
@@ -195,7 +233,7 @@ def _serve(argv: Sequence[str]) -> int:
     try:
         context = _context(request, values["adapter"])
         adapter = load_adapter(Path(values["adapter"]))
-        result = run_hook(context, adapter, hook, request["arguments"])
+        result = _dispatch(context, adapter, hook, request["arguments"], image_factory=None)
         canonical_json(result)  # an unencodable result is the hook's error, reported below
         envelope.update(status="ok", result=result)
     except HookUnsupported:

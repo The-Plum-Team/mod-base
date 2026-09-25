@@ -110,9 +110,20 @@ outside your files as notes.
 
 ## Releases
 
-1. Merge to `main` through a pull request with the required checks green.
-2. Run the canary at that commit ([OPERATIONS.md](../OPERATIONS.md#canary-procedure)).
-3. Set `__version__` in `src/mod_base/__init__.py` to the version being tagged (in the merged
-   change), then create the annotated, immutable tag `vX.Y.Z` on that commit.
-4. Publish a GitHub Release listing schema changes, managed-file changes, adapter-protocol changes
-   and the `pixel_metrics_version`.
+The tag comes first and the canary then proves it
+([OPERATIONS.md](../OPERATIONS.md#releasing-mod-base) has the commands):
+
+1. Merge the release change to `main` through a pull request with the required checks green. It
+   sets `__version__` in `src/mod_base/__init__.py` to the version being released, adds its
+   `CHANGELOG.md` section and refreshes the staged-file lock and the digest literal.
+2. Wait for `mod-base CI` to be green on that exact merge commit.
+3. Create the annotated, immutable tag `vX.Y.Z` on that commit and push it.
+4. Run the canary pinned to the tag ([OPERATIONS.md](../OPERATIONS.md#canary-procedure)); its
+   `verify --network` requires the tag to exist and peel to the pinned commit.
+5. Once the canary is green, publish a GitHub Release listing schema changes, managed-file changes,
+   adapter-protocol changes and the `pixel_metrics_version`; only then may a mod bump to the tag.
+
+Tags are never moved or deleted. A failing canary is fixed forward with the next patch tag through
+the same steps; the failed tag gets no Release and no mod pins it. Every tag names its own commit,
+because `__version__` must equal the tag: `v1.0.0` repeats unchanged `v0.9.0` code in a new
+release commit instead of tagging the `v0.9.0` commit again.

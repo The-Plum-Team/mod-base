@@ -822,7 +822,7 @@ _COMPACT = Obj(
                 "id": RUN_ID,
                 "name": Str(max_len=240),
                 "digest": DIGEST,
-                "size": Int(1, lim.MAX_RAW_BUNDLE_BYTES),
+                "size": Int(1, lim.MAX_ARTIFACT_BYTES),
                 "run_id": RUN_ID,
                 "run_attempt": RUN_ATTEMPT,
             }
@@ -1293,7 +1293,7 @@ _SELECTED_ARTIFACT = Obj(
         "id": RUN_ID,
         "name": Str(max_len=240),
         "digest": DIGEST,
-        "size": Int(1, lim.MAX_RAW_BUNDLE_BYTES),
+        "size": Int(1, lim.MAX_ARTIFACT_BYTES),
         "run_id": RUN_ID,
         "run_attempt": RUN_ATTEMPT,
         "workflow_path": WORKFLOW_PATH,

@@ -17,12 +17,16 @@ be listed at the protected head: a head that moved since the job started is repo
 ``stale-implementation`` (never a partial inventory).
 
 Git runs with a sanitized environment (no inherited ``GIT_*`` variable, no global or system
-configuration, no prompt, no replacement objects) and command-line overrides that reset the
-unscoped credential helper and extra HTTP header, disable hooks, submodules and automatic
-maintenance, and allow only the ``https`` transport. URL-scoped configuration outranks those
+configuration, no prompt, no replacement objects or graft file, and a discovery ceiling at the
+checkout's parent, so a directory that is not a repository never resolves to an enclosing one) and
+command-line overrides that reset the unscoped credential helper and extra HTTP header, disable
+hooks, submodules and automatic maintenance, and allow only the ``https`` transport. URL-scoped configuration outranks those
 overrides (``http.<url>.extraheader`` is what ``actions/checkout`` persists), so a fetch is refused
 outright while the repository's effective configuration carries any credential, extra header,
 cookie file, askpass program or URL rewrite, or an ``origin`` URL with user information.
+
+:func:`first_parent_history` reads a bounded first-parent history from the local object store
+(never a fetch): the Pages jobs that walk it check out the protected head with its full history.
 """
 
 from __future__ import annotations
@@ -104,7 +108,7 @@ def list_enrolled_branches(api: GitHubApi, *, max_branches: int) -> list[dict[st
             for name, commit in branch_heads(api, max_branches=max_branches).items()]
 
 
-def _git_environment(home: Path) -> dict[str, str]:
+def _git_environment(home: Path, root: Path) -> dict[str, str]:
     return {
         "PATH": _GIT_SEARCH_PATH,
         "HOME": str(home),
@@ -115,6 +119,8 @@ def _git_environment(home: Path) -> dict[str, str]:
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_NO_LAZY_FETCH": "1",
+        "GIT_GRAFT_FILE": os.devnull,
+        "GIT_CEILING_DIRECTORIES": str(root.parent),
     }
 
 
@@ -130,7 +136,8 @@ def _git(root: Path, arguments: list[str], *, home: Path, timeout: float = GIT_T
     command = [_git_executable(), "--no-replace-objects", "-C", str(root), *arguments]
     try:
         completed = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, env=_git_environment(home), timeout=timeout, check=False)
+                                   stderr=subprocess.DEVNULL, env=_git_environment(home, root), timeout=timeout,
+                                   check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise _fail(f"git {arguments[0]} failed: {exc}", reason="git") from exc
     if check and completed.returncode != 0:
@@ -163,6 +170,31 @@ def commit_tree_local(repo_root: Path, commit: str) -> str:
     if len(output) > _MAX_GIT_OUTPUT:
         raise _fail("git rev-parse output exceeds its bound", reason="git")
     return grammar.require_sha1(output.decode("ascii", "replace").strip(), "local tree")
+
+
+def first_parent_history(repo_root: Path, commit: str, *, max_commits: int) -> list[str]:
+    """``commit`` followed by at most ``max_commits`` of its first-parent ancestors, newest first,
+    read from the local object store (``git rev-list --first-parent``: inert objects, no fetch).
+    A root commit or a shallow boundary ends the list early; an absent ``commit`` fails closed."""
+
+    root = _repository(repo_root)
+    grammar.require_sha1(commit, "history commit")
+    maximum = grammar.require_positive_int(max_commits, "max_commits", maximum=MAX_FETCH_DEPTH)
+    with tempfile.TemporaryDirectory(prefix="mb-git-") as directory:
+        home = Path(directory)
+        if not _has_commit(root, commit, home=home):
+            raise _fail(f"commit {commit} is not in the local object store", reason="git")
+        output = _git(root, ["rev-list", "--first-parent", f"--max-count={maximum + 1}", "--end-of-options", commit],
+                      home=home).stdout
+    if len(output) > (maximum + 1) * 41:
+        raise _fail("git rev-list output exceeds its bound", reason="git")
+    history = output.decode("ascii", "replace").split("\n")
+    if history[-1] == "":
+        history.pop()
+    if (not history or history[0] != commit or len(set(history)) != len(history)
+            or not all(grammar.is_match(grammar.SHA1, entry) for entry in history)):
+        raise _fail(f"the first-parent history of {commit} is malformed", reason="git")
+    return history
 
 
 def _require_anonymous_configuration(root: Path, *, home: Path) -> None:

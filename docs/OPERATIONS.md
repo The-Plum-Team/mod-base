@@ -190,25 +190,51 @@ The branch policy list must be exactly `master` for both mods.
 
 ## Releasing mod-base
 
-1. Merge the release change to `main` through a pull request; it sets `__version__` in
-   `src/mod_base/__init__.py` to `X.Y.Z` and refreshes the staged-file lock, then the digest literal
+The tag comes first and the canary then proves it (rollout stages S1 and S3). The canary pins the
+tag under test, and `verify --network`, `bump` and Block Pops' `stage` of a new pin all refuse a
+`# vX.Y.Z` pin whose tag does not exist or does not peel to the pinned commit. A green canary
+decides whether mods may pin a tag, never whether it is created.
+
+1. Merge the release change to `main` through a pull request. It sets `__version__` in
+   `src/mod_base/__init__.py` to `X.Y.Z`, adds the `## vX.Y.Z` section to `CHANGELOG.md`, and
+   refreshes the staged-file lock, then the digest literal
    (`PYTHONPATH=src python3 -m mod_base.template.lock --write`, then
    `python3 tools/update_tree_digest.py --write`).
-2. Wait for `mod-base CI` on that commit, then run the canary against it (below).
-3. Tag the exact commit and push the tag:
+2. Wait for `mod-base CI` to be green on that exact merge commit:
 
    ```bash
-   git fetch origin main && git switch --detach origin/main
-   git tag -a vX.Y.Z -m "mod-base vX.Y.Z"
+   COMMIT=<the release merge commit>
+   gh run list -R "$KIT" --workflow ci.yml --commit "$COMMIT" --json event,status,conclusion
+   ```
+
+3. Tag that commit and push the tag. Its `__version__` must already equal the tag: every handoff
+   records the executing kit's `__version__`, and authentication requires it to equal the pin's
+   `# vX.Y.Z` comment.
+
+   ```bash
+   git fetch origin main && git merge-base --is-ancestor "$COMMIT" origin/main
+   git show "$COMMIT:src/mod_base/__init__.py" | grep -Fx '__version__ = "X.Y.Z"'
+   git tag -a vX.Y.Z -m "mod-base vX.Y.Z" "$COMMIT"
    git push origin vX.Y.Z
    ```
 
-4. Publish the release notes with `gh release create vX.Y.Z -R "$KIT" --verify-tag --notes-file notes.md`,
-   listing schema and kind changes, managed-file changes, adapter-protocol changes and the
-   `pixel_metrics_version`.
+4. Run the canary pinned to the tag ([Canary procedure](#canary-procedure)): the first release seeds
+   it, a later one moves it with `bump --to vX.Y.Z`.
+5. Only once the canary is green, publish the release notes with
+   `gh release create vX.Y.Z -R "$KIT" --verify-tag --notes-file notes.md`, listing schema and kind
+   changes, managed-file changes, adapter-protocol changes and the `pixel_metrics_version`. Mods
+   bump to the tag only after that.
 
-A tag is never moved or deleted. A faulty release is fixed forward by `vX.Y.Z+1`, or mods pin back
-to the previous tag with an ordinary pull request.
+A tag is never moved or deleted. A tag whose canary fails gets no GitHub Release and no mod pins
+it: the fix merges to `main` and is released as the next patch tag `vX.Y.(Z+1)` through the same
+five steps, canary included. A faulty release that mods already pin is fixed forward the same way,
+or mods pin back to the previous tag with an ordinary pull request.
+
+Every tag names its own release commit. When nothing changed after `v0.9.0`, `v1.0.0` (stage S3)
+reuses the `v0.9.0` code unchanged, but its release change still sets `__version__` to `1.0.0`,
+adds the `## v1.0.0` changelog section and regenerates the digest literal. Tagging the `v0.9.0`
+commit a second time would make every handoff record kit version `0.9.0` under a `# v1.0.0` pin,
+which authentication refuses.
 
 ## Bumping the kit in a mod
 
@@ -232,7 +258,8 @@ The canary is a separate public caller repository, so it exercises exactly the c
 resolution real mods use. It publishes only synthetic evidence under a "Synthetic demonstration
 evidence — not a product" banner.
 
-1. Check out the kit at the tag under test and create the canary working tree:
+1. Check out the kit at the tag under test, already pushed by
+   [Releasing mod-base](#releasing-mod-base) step 3, and create the canary working tree:
 
    ```bash
    TAG=v0.9.0
@@ -263,30 +290,72 @@ evidence — not a product" banner.
    python3 scripts/ci/mod_base_kit.py run template check --repo .
    ```
 
+   The canary carries these template files itself, so `init` leaves them exactly as copied:
+   `.github/workflows/pages.yml` (pinned by step 2), `.github/CODEOWNERS`, `CONTRIBUTING.md`,
+   `LICENSE` (the canary's own All Rights Reserved notice), `docs/ai/PROJECT.md`,
+   `site/mod-base.json` and `scripts/pages/mod_base_adapter.py`.
+
+   `init` creates every other template file and prints `created <path>` for each: `.gitattributes`,
+   `.gitignore`, `.github/dependabot.yml`, `.github/pull_request_template.md`, `AGENTS.md`,
+   `scripts/ci/mod_base_kit.py`, `docs/ai/shared/REPOSITORY.md`, `docs/ai/shared/PUBLIC-EVIDENCE.md`
+   and `docs/architecture/decisions/README.md`. Any other `created` line means the working tree
+   lacks a file of `canary/`: start again from step 1.
+
    A later canary cycle moves to a newer tag with `python3 scripts/ci/mod_base_kit.py bump --to vX.Y.Z`.
 
 4. Commit, add the remote, push `main`, then finish P3 (Pages and environment).
-5. Run the cycles required by stage S1, observing each item G1–G7 below:
-   - three full generations: `gh workflow run canary-producer.yml -R "$CANARY" --ref main`, each
-     followed by its Pages run (deploy, finalize) and its separate rotation run;
-   - one forced head move (G7), one producer re-run attempt (`gh run rerun <producer-run> -R "$CANARY"`),
-     one family-less generation and one synthetic family generation;
-   - `canary-probe.yml` once, to record `job.workflow_sha`.
+5. Run the cycles required by stage S1, observing each item G1–G7 below. A producer's wake (or the
+   hourly schedule) starts each Pages run, and one that publishes dispatches its own rotation run;
+   `gh run list -R "$CANARY" --workflow pages.yml` lists both with their ids.
+   - three full generations, each followed by its Pages run (deploy, finalize) and its separate
+     rotation run:
+
+     ```bash
+     gh workflow run canary-producer.yml -R "$CANARY" --ref main
+     ```
+
+   - one forced head move (G7) and one producer re-run attempt
+     (`gh run rerun <producer-run> -R "$CANARY"`);
+   - one family-less generation: a producer generation at a head without a family generation (the
+     first full generation is one), whose gallery reports that no "Synthetic pairs" evidence has
+     been published;
+   - one synthetic family generation, dispatched after a producer generation has published at the
+     same head. `canary-family.yml` generates the `demo-pairs` generation of one key (the first key
+     unless `key` names another) and wakes `pages.yml` with `operation=family`:
+
+     ```bash
+     gh workflow run canary-family.yml -R "$CANARY" --ref main
+     gh workflow run canary-family.yml -R "$CANARY" --ref main -f key=<key>   # a key other than the first
+     ```
+
+   - one carried family leg: after a family generation has published, push a documentation-only
+     commit and run a producer generation at the new head; its Pages run publishes the
+     `demo-pairs` legs carried forward from the earlier head (the canary's `carry_forward` family
+     carries across any commit that leaves its release matrix and scenario contract unchanged);
+   - `canary-probe.yml` at least once, after a Pages run: it writes that run's
+     `referenced_workflows` and job names, and its own (caller-side) `job.workflow_sha`, to its job
+     summary. Its only input, the optional `pages-run-id`, names the Pages run to observe (empty:
+     the newest):
+
+     ```bash
+     gh workflow run canary-probe.yml -R "$CANARY" --ref main -f pages-run-id=<pages-run-id>
+     ```
 
 What to observe for each item:
 
 | Item | Claim | How to observe |
 |---|---|---|
 | G1 | `referenced_workflows` lists `The-Plum-Team/mod-base/.github/workflows/<file>.yml@<sha>` with a matching `sha` for every callee, while the run is in progress and even for skipped callees | `gh api "repos/$CANARY/actions/runs/$RUN" --jq '[.status, (.referenced_workflows[] \| .path + " " + .sha)]'` during and after the run |
-| G2 | Job names are `Publish / Admit publication`, `Publish / Collect <key>`, `Publish / Build atomic static site`, `Finalize / Refresh evidence cache for <key>`, `Rotate / Rotate the authenticated successful generation` | `gh api "repos/$CANARY/actions/runs/$RUN/attempts/1/jobs?per_page=100" --jq '.jobs[].name'` |
+| G2 | Job names are `Publish / Admit publication`, `Publish / Collect <key>`, `Publish / Build atomic static site`, `Finalize / Refresh evidence cache for <key>`, `Rotate / Rotate the authenticated successful generation`. A mod without families additionally reports its skipped `family` matrix job once, unexpanded, as `Publish / Collect ${{ matrix.family }} ${{ matrix.key }}` with conclusion `skipped` (Quick Skin's E2E job graph relies on the same platform behavior; `build` accepts that job only in this form, or its absence, and refuses any other stray). The canary configures `demo-pairs`, so it cannot show that row: record it from Block Pops' first Pages run | `gh api "repos/$CANARY/actions/runs/$RUN/attempts/1/jobs?per_page=100" --jq '.jobs[].name'` (for the unexpanded row: the same query against the Block Pops run, with `.jobs[] \| [.name, .conclusion]`) |
 | G3 | The `github-pages` artifact uploaded by the callee `build` job deploys from the caller's `deploy` job under the `main` branch policy | `Deploy GitHub Pages` succeeds; `curl -fsS https://the-plum-team.github.io/mod-base-canary/build.json` shows the kit SHA |
 | G4 | `GITHUB_WORKFLOW_REF` inside a callee is the caller's `.../pages.yml@refs/heads/main` | every callee's "Bind the two-part implementation identity" step succeeds (it asserts the value) |
 | G5 | The composite tree check passes against the live trees API; admission sees the composite's upload window | the producer's "Verify the executing kit against the checked-out pin" succeeds; the admit summary nominates the handoff |
-| G6 | `notify-pages` dispatches `pages.yml` holding only `actions: write`; rotation self-dispatches; `job.workflow_sha` value | the dispatched run appears in `gh run list -R "$CANARY" --workflow pages.yml --event workflow_dispatch`; the rotation run follows; `canary-probe.yml` log |
+| G6 | `notify-pages` dispatches `pages.yml` holding only `actions: write`; rotation self-dispatches; the caller-side `job.workflow_sha` is the canary head (the kit-side value, visible only inside a kit callee job, is not observed in v1.0: deferred) | the dispatched run appears in `gh run list -R "$CANARY" --workflow pages.yml --event workflow_dispatch`; the rotation run follows; the `canary-probe.yml` job summary shows `workflow_sha` equal to the canary head it ran at |
 | G7 | A head that moves between build and deploy keeps the previous site | during a Pages run, `git commit --allow-empty -m "canary: move head" && git push`; `deploy` fails ("advanced before deployment") and `build.json` is unchanged |
 
-Record every observation in [Canary evidence](#canary-evidence) with its run URL. The tag is
-promoted to `v1.0.0` only when G1–G7 are all observed.
+Record every observation in [Canary evidence](#canary-evidence) with its run URL. Stage S3 tags
+`v1.0.0` only after G1–G7 are all observed at `v0.9.0`, and then runs the canary again pinned
+to `v1.0.0`.
 
 ## Canary evidence
 
@@ -302,21 +371,24 @@ Fill one row per observation (run URLs are `https://github.com/The-Plum-Team/mod
 | G6 | pending | | | |
 | G7 | pending | | | |
 
-`job.workflow_sha` observations (v1.1 may add it as a redundant cross-check only after three
-observations equal `referenced_workflows`):
+`job.workflow_sha` observations. v1.1 may add it as a redundant cross-check of the kit SHA only
+after three values **observed inside a kit callee job** (a step of a kit reusable workflow, which
+v1.0 does not have) equal that run's `referenced_workflows[].sha`. `canary-probe.yml` cannot supply
+such a value: it is a caller-side job, so its `job.workflow_sha` is the canary head. Record its
+value only as the caller-side row of G6; it never counts toward the three.
 
-| Run | `job.workflow_sha` | `referenced_workflows[].sha` | Equal |
-|---|---|---|---|
-| pending | | | |
+| Run | Observed in | `job.workflow_sha` | `referenced_workflows[].sha` | Equal |
+|---|---|---|---|---|
+| pending | a kit callee job (deferred to v1.1) | | | |
 
 ## Rollout
 
 | Stage | Action | Exit criterion |
 |---|---|---|
 | S0 | create and push mod-base; apply P2; CI green | `Test`, `Workflow policy`, `Front end` required and green on `main` |
-| S1 | tag `v0.9.0`; create and run the canary (P3) | G1–G7 recorded above |
+| S1 | tag `v0.9.0` ([Releasing mod-base](#releasing-mod-base)); then create the canary pinned to that tag (P3) and run it | G1–G7 recorded above |
 | S2 | open the mod drafts pinned to `v0.9.0` (Quick Skin `feat/mod-base`, Block Pops PR A and PR B) | every local verification green |
-| S3 | tag `v1.0.0` (same commit when unchanged) and re-pin the drafts | canary green at `v1.0.0` |
+| S3 | tag `v1.0.0` on its own release commit (the `v0.9.0` code when unchanged, with `__version__` `1.0.0`); then move the canary to that tag with `bump --to v1.0.0`, run it and re-pin the drafts | canary green at `v1.0.0` |
 | S4 | Block Pops first: apply P1, mark PR A ready, record `verify --network`, owner approval, merge, dispatch E2E | the `master` key is live at `/e2e/`, a rotation run is green, visual review finds `mb-anchor--` |
 | S5 | Quick Skin: ready or batch PR; full Build and E2E; merge | all keys live as `mb-cache--`, two rotations, one family publication, one baseline consumed |
 | S6 | Block Pops PR B, then PR C clearing `template.deferred` | `template check` clean with an empty `deferred` |
@@ -394,7 +466,9 @@ gh workflow run pages.yml -R "$QS" --ref master -f operation=manual
 gh workflow run on-demand-e2e.yml -R "$QS" --ref master -f capture_coverage=full
 gh workflow run on-demand-e2e.yml -R "$BP" --ref master
 
-# Retry the rotation of a successful Pages run
+# Retry the rotation of a successful Pages run (at most 64 deletions per run, longest-lived first;
+# a retry continues where the budget stopped, keeping the promotion until the end, and also drains
+# older generations' deferred caches; an already rotated or expired generation is a green no-op)
 gh workflow run pages.yml -R "$QS" --ref master -f operation=rotate -f run_id=<pages-run-id> -f sha=<its-head-sha>
 
 # Inspect a run's jobs, the admission reason and the kit identities

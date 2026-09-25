@@ -1,0 +1,243 @@
+# mod-base's own continuous integration (SPEC §5.10). The required checks of the "mod-base main"
+# ruleset are the contexts "Test", "Workflow policy" and "Front end"; "Conformance (informational)"
+# is advisory. Every job reads the repository only, and every action is pinned by commit SHA.
+name: mod-base CI
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: mod-base-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test on Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out the kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement requirements/pillow.txt
+      - name: Install the pinned actionlint and check the shell tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^[0-9a-f]\{64\}  actionlint_\([0-9][0-9.]*\)_linux_amd64\.tar\.gz$/\1/p' tools/actionlint.sha256)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'tools/actionlint.sha256 names no linux_amd64 release\n' >&2; exit 1; }
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          work="$RUNNER_TEMP/actionlint"
+          mkdir -p "$work/bin"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 --output "$work/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          (cd "$work" && sha256sum --check --strict "$GITHUB_WORKSPACE/tools/actionlint.sha256")
+          tar -xzf "$work/$archive" -C "$work/bin" actionlint
+          "$work/bin/actionlint" -version
+          printf '%s\n' "$work/bin" >> "$GITHUB_PATH"
+          shellcheck --version
+          node --version
+      - name: Compile every Python file
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -X pycache_prefix="$RUNNER_TEMP/pycache" -m compileall -q src tests tools canary
+      - name: Run the complete test suite
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python3 tools/parallel_unittest.py -v -t . tests
+
+  test-gate:
+    name: Test
+    needs: test
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every Python version to pass
+        shell: bash
+        env:
+          RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          [[ "$RESULT" == success ]] || { printf 'The test matrix finished with %s.\n' "$RESULT" >&2; exit 1; }
+
+  workflow-policy:
+    name: Workflow policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement requirements/pillow.txt
+      - name: Install the pinned actionlint and check the shell tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^[0-9a-f]\{64\}  actionlint_\([0-9][0-9.]*\)_linux_amd64\.tar\.gz$/\1/p' tools/actionlint.sha256)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'tools/actionlint.sha256 names no linux_amd64 release\n' >&2; exit 1; }
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          work="$RUNNER_TEMP/actionlint"
+          mkdir -p "$work/bin"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 --output "$work/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          (cd "$work" && sha256sum --check --strict "$GITHUB_WORKSPACE/tools/actionlint.sha256")
+          tar -xzf "$work/$archive" -C "$work/bin" actionlint
+          "$work/bin/actionlint" -version
+          printf '%s\n' "$work/bin" >> "$GITHUB_PATH"
+          shellcheck --version
+      - name: Lint the kit workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          actionlint -no-color .github/workflows/*.yml
+      - name: Check the shell tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in tools/*.sh; do bash -n "$script"; done
+          shellcheck tools/*.sh
+      - name: Check the staged-file lock and the kit tree-digest literal
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python3 -P -m mod_base.template.lock
+          PYTHONPATH=src python3 -P tools/update_tree_digest.py --check
+      - name: Run the textual workflow policy tests
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python3 -m unittest -v tests.test_workflow_policy tests.test_workflow_names \
+            tests.test_workflow_names_constants tests.test_workflow_pins tests.test_workflow_publish \
+            tests.test_workflow_finalize tests.test_workflow_rotate tests.test_managed_caller \
+            tests.test_composite_credential_boundary tests.test_tree_digest_literal
+
+  front-end:
+    name: Front end
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement requirements/pillow.txt
+      - name: Check the site scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          for script in site/assets/*.js; do node --check "$script"; done
+      - name: Run the static scans, template lint and fixture renders
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python3 -m unittest -v tests.test_frontend_static tests.test_build_templating \
+            tests.test_build_render tests.test_build_frontend
+
+  conformance:
+    name: Conformance (informational)
+    runs-on: ubuntu-24.04
+    # Every key of a mod is produced at three heads (the later generations), Quick Skin's 17 included.
+    timeout-minutes: 180
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out Quick Skin master (read-only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/Quick-Skin-Mod
+          ref: master
+          path: mods/quick-skin
+          persist-credentials: false
+      - name: Check out Block Pops master (read-only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/Block-Pops-Minecraft-Mod
+          ref: master
+          path: mods/block-pops
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement requirements/pillow.txt
+      - name: Run this kit's conformance against each adopted mod
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          status=0
+          for mod in mods/quick-skin mods/block-pops; do
+            if [[ ! -f "$mod/site/mod-base.json" ]]; then
+              printf '::notice::%s carries no site/mod-base.json yet; conformance skipped\n' "$mod"
+              continue
+            fi
+            printf 'Conformance of %s\n' "$mod"
+            if ! PYTHONPATH=src python3 -P -m mod_base conformance --repo "$mod" --kit-root . --all --families; then
+              printf '::warning::conformance failed for %s\n' "$mod"
+              status=1
+            fi
+          done
+          exit "$status"

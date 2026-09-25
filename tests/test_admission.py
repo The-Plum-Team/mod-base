@@ -28,9 +28,12 @@ from mod_base import cli
 from mod_base.adapter import host
 from mod_base.errors import MbError
 from mod_base.github.api import ApiError
+from mod_base.io.bounded_zip import artifact_limit
 from mod_base.model import grammar
+from mod_base.model import limits as lim
 from mod_base.pages import admission, commands_control
 from mod_base.pages.admission import Admission, Decision, ProgressPolicy, WakeInputs, admit, decide
+from mod_base.pages.select import family_archive_limit
 from mod_base.runtime import build_invocation
 from mod_base.workflow import PAGES_WORKFLOW_PATH, api_job_name, caller_job_name, step_name
 from tests.fixtures.mods import support
@@ -160,14 +163,16 @@ class QuickSkinWorld:
                      sleep=self.sleeps.append)
 
     def e2e(self, run_id: int = 900, *, at: float = 1000, keys: list[str] | None = None,
-            **run: Any) -> dict[str, dict[str, Any]]:
-        """A successful source run whose latest attempt handed off ``keys`` inside their jobs."""
+            size_in_bytes: int | None = None, **run: Any) -> dict[str, dict[str, Any]]:
+        """A successful source run whose latest attempt handed off ``keys`` inside their jobs (each
+        handoff archive ``size_in_bytes`` large when given)."""
 
         record = self.world.run(run_id, **{"head_sha": self.head, "created": at - 50, "updated": at + 10, **run})
         keys = self.keys if keys is None else keys
         self.world.jobs(record, [self.world.job(QS_HANDOFF_JOB.replace("{key}", key),
                                                 steps=((QS_HANDOFF_STEP, at - 5, at + 5),)) for key in keys])
-        return {key: self.world.artifact(grammar.handoff_name(key, record["run_attempt"]), record, created=at)
+        size = {} if size_in_bytes is None else {"size_in_bytes": size_in_bytes}
+        return {key: self.world.artifact(grammar.handoff_name(key, record["run_attempt"]), record, created=at, **size)
                 for key in keys}
 
     def publish(self, run_id: int = 1000, *, at: float = 2000, legs: tuple[str, ...] = (),
@@ -196,13 +201,16 @@ class QuickSkinWorld:
             self.world.artifact(grammar.family_cache_name(FAMILY, key, self.head), owner, created=at)
         return owner
 
-    def family(self, key: str, run_id: int, *, at: float = 3000, **run: Any) -> dict[str, Any]:
+    def family(self, key: str, run_id: int, *, at: float = 3000, size_in_bytes: int | None = None,
+               **run: Any) -> dict[str, Any]:
         """A successful producer run at the head that handed off ``key``'s family generation."""
 
         record = self.world.run(run_id, **{"path": FAMILY_WORKFLOW, "event": "repository_dispatch",
                                            "head_sha": self.head, "created": at - 50, "updated": at + 10, **run})
         self.world.jobs(record, [self.world.job(FAMILY_JOB, steps=((FAMILY_STEP, at - 5, at + 5),))])
-        return self.world.artifact(grammar.family_handoff_name(FAMILY, key, record["run_attempt"]), record, created=at)
+        size = {} if size_in_bytes is None else {"size_in_bytes": size_in_bytes}
+        return self.world.artifact(grammar.family_handoff_name(FAMILY, key, record["run_attempt"]), record, created=at,
+                                   **size)
 
     def failed_pages(self, run_id: int, *, build: bool, at: float = 4000) -> None:
         record = self.world.run(run_id, path=PAGES_WORKFLOW_PATH, head_sha=self.head, conclusion="failure",
@@ -337,6 +345,18 @@ class QuickSkinAdmissionTest(AdmissionTest):
         self.assertEqual(result.reason, "final-complete", "a lost same-head replacement wake is recovered")
         self.assertIn(f"{FAMILY}/mc1.20.1", result.nominations)
 
+    def test_a_family_leg_is_current_only_after_a_publication_that_started_after_its_handoff(self) -> None:
+        # Pages run 1000 (created at 1850) selected before the family handoffs were uploaded (1900)
+        # and rolled its family caches forward afterwards (2000): those caches may carry an older
+        # generation and a publication would select the handoffs (select.supersedes), so recovery
+        # stays open until a publication created after the uploads.
+        for index, key in enumerate(self.qs.keys):
+            self.qs.family(key, 2000 + index, at=1900)
+        self.qs.publish(legs=tuple(self.qs.keys), at=2000)
+        self.assertNotEqual(self.qs.admit().reason, "current")
+        self.qs.publish(1001, legs=tuple(self.qs.keys), at=2300)
+        self.assertEqual(self.qs.admit(), Admission(eligible=False, reason="current"))
+
     def test_half_coverage_coalesces_then_admits(self) -> None:
         self.qs.publish()
         self.qs.family("mc1.20.1", 2000, at=3000)
@@ -452,6 +472,42 @@ class QuickSkinAdmissionTest(AdmissionTest):
                 self.qs.admit("family", WakeInputs(**{**wake.__dict__, **changes}))
         self.assertEqual(self.qs.admit("family", WakeInputs(**{**wake.__dict__, "coverage_sha": "d" * 40})).reason,
                          "stale-wake")
+
+    def test_artifact_sizes_are_bounded_by_their_archive_limits(self) -> None:
+        # A bundle at its expanded bound becomes a larger archive: admission bounds the archive by the
+        # kind's archive limit (bounded_zip.artifact_limit), never by the expanded bound itself, so
+        # what a producer's own bound admits is never refused here (docs/SCHEMAS.md).
+        handoff = artifact_limit("handoff")
+        self.assertGreater(handoff, lim.MAX_RAW_BUNDLE_BYTES)
+        for size, admitted in ((lim.MAX_RAW_BUNDLE_BYTES + 1, True), (handoff, True), (handoff + 1, False)):
+            with self.subTest(kind="handoff", size=size):
+                self.setUp()
+                self.qs.e2e(size_in_bytes=size)
+                wake = WakeInputs(run_id=900, sha=self.qs.head)
+                if admitted:
+                    self.assertTrue(self.qs.admit("deploy", wake).eligible)
+                else:
+                    with self.assertRaises(MbError) as caught:
+                        self.qs.admit("deploy", wake)
+                    self.assertIn("oversized", str(caught.exception))
+        family = self.qs.invocation().config.family(FAMILY)
+        limit = family_archive_limit(family)
+        self.assertGreater(limit, family["handoff_max_bytes"])
+        for size, admitted in ((family["handoff_max_bytes"] + 1, True), (limit, True), (limit + 1, False)):
+            with self.subTest(kind="family-handoff", size=size):
+                self.setUp()
+                self.qs.e2e()
+                self.qs.publish(legs=tuple(self.qs.keys))
+                artifact = self.qs.family("mc1.20.1", 2000, at=3000, size_in_bytes=size)
+                wake = WakeInputs(run_id=2000, sha=self.qs.head, family=FAMILY, bundle_key="mc1.20.1",
+                                  artifact_id=artifact["id"], artifact_digest=artifact["digest"],
+                                  coverage_sha=self.qs.head)
+                if admitted:
+                    self.assertTrue(self.qs.admit("family", wake).eligible)
+                else:
+                    with self.assertRaises(MbError) as caught:
+                        self.qs.admit("family", wake)
+                    self.assertEqual(caught.exception.reason, "wake")
 
     def test_api_failures_are_never_absence(self) -> None:
         self.qs.e2e()

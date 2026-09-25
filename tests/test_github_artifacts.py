@@ -234,9 +234,16 @@ class DownloadTests(unittest.TestCase):
         bound = archive_limit(cache)
         self.assertLess(bound, artifacts.MAX_ARCHIVE_BYTES)
         name = grammar.cache_name("mc1.20.1", COMMIT)
+        family = LIMITS_BY_KIND["collected-family"]
+        # The download cap binds every kind whose archive bound reaches beyond it; the kind's expanded
+        # total stays within that cap, so ``family collect`` refuses larger files before upload.
+        self.assertLessEqual(family.max_total_bytes, artifacts.MAX_ARCHIVE_BYTES)
         for kind, extraction, size, artifact_name in (("cache", cache, bound + 1, name),
                                                       ("promotion", LIMITS_BY_KIND["promotion"],
-                                                       archive_limit(LIMITS_BY_KIND["promotion"]) + 1, "mb-promotion")):
+                                                       archive_limit(LIMITS_BY_KIND["promotion"]) + 1, "mb-promotion"),
+                                                      ("collected-family", family,
+                                                       min(artifacts.MAX_ARCHIVE_BYTES, archive_limit(family)) + 1,
+                                                       grammar.collected_family_name("mod-compatibility", "mc1.20.1"))):
             with self.subTest(kind=kind), self.assertRaisesRegex(MbError, "artifact size"):
                 artifacts.download(self.api, **self.arguments(name=artifact_name, size=size, extraction=extraction))
         with self.assertRaisesRegex(MbError, "extraction ratio"):

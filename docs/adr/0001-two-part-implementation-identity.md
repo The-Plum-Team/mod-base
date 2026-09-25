@@ -37,7 +37,9 @@ this use, and an unknown context property risks a workflow parse failure.
   from the producer workflow at the producer commit), never to the current pin.
 - Pre-merge `verify --network` adds the same reachability check plus "the tag peels to the pin"
   before a pin can merge (as pull-request code in Quick Skin, controller-side in Block Pops).
-- `job.workflow_sha` is only recorded by the canary; `uses: $/...` is never used.
+- `job.workflow_sha` is not used; the canary records only its caller-side value (the canary head),
+  and the kit-side value, visible only inside a kit callee job, is deferred to v1.1; `uses: $/...`
+  is never used.
 
 ## Consequences
 

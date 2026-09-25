@@ -176,8 +176,9 @@ class PageSafetyTest(unittest.TestCase):
             policies = page.find("meta", http_equiv="Content-Security-Policy")
             self.assertEqual([attrs["content"] for attrs in policies], [CSP], relative)
             self.assertEqual([attrs["content"] for attrs in page.find("meta", name="referrer")], ["no-referrer"])
-            # Static: the generated theme.css ``color-scheme`` decides the used scheme once it loads.
-            self.assertEqual([attrs["content"] for attrs in page.find("meta", name="color-scheme")], ["dark light"])
+            # ``dark`` or ``dark light`` by config (templating.color_scheme); theme.css decides the rest.
+            self.assertEqual([attrs["content"] for attrs in page.find("meta", name="color-scheme")],
+                             ["{{mb:color_scheme}}"])
             self.assertEqual([attrs["content"] for attrs in page.find("meta", name="theme-color")],
                              ["{{mb:theme_color}}"])
             self.assertEqual(page.find("html")[0].get("lang"), "en")

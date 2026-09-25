@@ -1,0 +1,159 @@
+{
+  "adapter": {
+    "api": 1,
+    "extensions": [],
+    "fixtures_path": "scripts/pages/mod_base_fixtures.py",
+    "network_hooks": [],
+    "path": "scripts/pages/mod_base_adapter.py",
+    "python_path": [
+      "scripts/pages"
+    ],
+    "timeout_seconds": 120
+  },
+  "admission": {
+    "coalesce_seconds": 600,
+    "defer_on_active_source_runs": true,
+    "max_failed_publications": 3,
+    "mode": "progress",
+    "partial_deadline_seconds": 2700,
+    "recovery_interval_seconds": 3600
+  },
+  "anchor": {
+    "enabled": true,
+    "retention_days": 90,
+    "successor_grace_days": 0
+  },
+  "baseline_archive": {
+    "enabled": false
+  },
+  "canonical_branch": "main",
+  "copy": {
+    "evidence_lead": "Synthetic demonstration evidence — not a product. The canary runs the pinned mod-base kit exactly as a mod does: a producer hands off evidence, the protected site authenticates and publishes it.",
+    "family_notes": {
+      "demo-pairs": "Synthetic demonstration evidence — not a product. Each lane pairs two generated images."
+    },
+    "gallery_lead": "Synthetic demonstration evidence — not a product. Every capture below is a generated pattern published by the mod-base canary to prove the shared publication pipeline end to end.",
+    "methodology": [
+      "Synthetic demonstration evidence — not a product. The canary's producer synthesizes deterministic images instead of launching Minecraft.",
+      "Every published frame still passes the kit's pixel, provenance and inventory checks, so a canary publication proves the kit's workflows, not any game behaviour."
+    ],
+    "principles": [
+      "Synthetic demonstration evidence — not a product.",
+      "Every image is generated; nothing here describes a real mod or release."
+    ]
+  },
+  "families": [
+    {
+      "carry_forward": true,
+      "description": "Generated reference and candidate pairs that exercise the family pipeline. Synthetic demonstration evidence — not a product.",
+      "handoff_max_bytes": 67108864,
+      "id": "demo-pairs",
+      "image_policy": {
+        "derivative_box": [
+          480,
+          270
+        ],
+        "webp_method": 6,
+        "webp_quality": 80
+      },
+      "producer": {
+        "events": [
+          "workflow_dispatch"
+        ],
+        "job": "Publish synthetic family evidence",
+        "step": "Upload the mod-base family handoff",
+        "workflow": ".github/workflows/canary-family.yml"
+      },
+      "retention_days": 7,
+      "title": "Synthetic pairs"
+    }
+  ],
+  "images": {
+    "cross_check_runtime_metrics": true,
+    "derivative_box": [
+      480,
+      270
+    ],
+    "pixel_metrics_version": 1,
+    "source_size": [
+      640,
+      360
+    ],
+    "webp_method": 6,
+    "webp_quality": 82
+  },
+  "kind": "mod-base.config",
+  "labels": {
+    "loaders": {
+      "fabric": "Fabric",
+      "neoforge": "NeoForge"
+    },
+    "release_prefix": "Synthetic target",
+    "roles": {
+      "client_a": "Client A"
+    },
+    "scenarios": {
+      "tour": "Synthetic tour"
+    },
+    "search_placeholder": "Checkpoint, loader, target…",
+    "tiers": {
+      "all": "Full review",
+      "key": "Key checkpoint"
+    }
+  },
+  "project": {
+    "description": {
+      "from_matrix": "project.description"
+    },
+    "eyebrow": "Synthetic demonstration",
+    "icon": null,
+    "license_label": "All Rights Reserved",
+    "links": [],
+    "name": "mod-base canary (synthetic demo)",
+    "tagline": "Synthetic demonstration evidence — not a product."
+  },
+  "schema_version": 1,
+  "source": {
+    "attestation_job": null,
+    "delegated_reuse_extension": null,
+    "display_title": null,
+    "events": {
+      "canonical": [
+        "workflow_dispatch"
+      ],
+      "other": []
+    },
+    "handoff_job": "Prepare synthetic evidence for {key}",
+    "handoff_step": "Prepare and hand off synthetic evidence",
+    "require_job_graph": false,
+    "require_newest_run": true,
+    "workflow": ".github/workflows/canary-producer.yml"
+  },
+  "targets": {
+    "max": 64,
+    "mode": "default-branch"
+  },
+  "template": {
+    "agents_local": [
+      "docs/ai/PROJECT.md"
+    ],
+    "deferred": []
+  },
+  "theme": {
+    "dark": {
+      "accent": "#b99cf5",
+      "accent_strong": "#9f7ff0",
+      "bg": "#110f16",
+      "danger": "#ff9b91",
+      "highlight": "#f0c75e",
+      "image_well": "#0a090d",
+      "line": "#3a3348",
+      "muted": "#b3abc2",
+      "surface": "#18151f",
+      "surface_raised": "#201c29",
+      "surface_soft": "#272233",
+      "text": "#f2eff7"
+    },
+    "light": null
+  }
+}

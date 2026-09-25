@@ -1,5 +1,5 @@
-"""``family collect`` (MB4): the envelope, the adapter's ``family_validate``, R4/R5, the collected
-layout and the exit-3 statuses that never produce an upload."""
+"""``family collect`` (MB4): the envelope, the recorded selection and its kit binding, the adapter's
+``family_validate``, R4/R5, the collected layout and the exit-3 statuses that never produce an upload."""
 
 from __future__ import annotations
 
@@ -22,12 +22,14 @@ from mod_base.family.envelope import ENVELOPE_NAME, create_envelope, validate_en
 from mod_base.family.paired import (
     IMAGES_DIRECTORY,
     PROJECTION_NAME,
+    SELECTED_NAME,
     SOURCE_DIRECTORY,
     FamilyOutcome,
     collect_family,
     validate_projection,
 )
 from mod_base.io.bounded_zip import LIMITS_BY_KIND
+from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json
 from mod_base.runtime import Invocation
 from tests import test_family_support as fs
@@ -78,11 +80,20 @@ class CollectTest(unittest.TestCase):
             support.git(self.c1.root, "checkout", "-q", self.c1.branch)
         return work / "handoff"
 
+    def selected_json(self, value: Any) -> Path:
+        """``value`` written as ``select --output`` writes it, into a new file outside every input."""
+
+        return fs.write_selection(Path(tempfile.mkdtemp(prefix="selected-", dir=self.work)) / "selected.json", value)
+
     def collect(self, input_dir: Path, *, expected: str | None = None, output: Path | None = None,
-                invocation: Invocation | None = None) -> FamilyOutcome:
+                invocation: Invocation | None = None, selected: Any = None) -> FamilyOutcome:
+        """``family collect`` of ``input_dir`` with the recorded selection ``selected`` (by default the
+        family handoff of its envelope's producer attempt, :func:`fs.selection`)."""
+
+        self.selection = fs.selection(input_dir) if selected is None else selected
         return collect_family(invocation or self.invocation, family=fs.FAMILY, key=fs.KEY, input_dir=input_dir,
                               expected_coverage_sha=expected or self.c1.commit,
-                              output=output or self.work / "collected")
+                              output=output or self.work / "collected", selected_json=self.selected_json(self.selection))
 
     def assert_rejected(self, action: Any, fragment: str = "", reason: str | None = None) -> MbError:
         with self.assertRaises(MbError) as caught:
@@ -102,8 +113,9 @@ class CollectTest(unittest.TestCase):
         self.assertEqual({name[len(SOURCE_DIRECTORY) + 1:]: data for name, data in written.items()
                           if name.startswith(SOURCE_DIRECTORY + "/")}, listing(handoff))
         images = {name for name in written if name.startswith(IMAGES_DIRECTORY + "/")}
-        self.assertEqual(set(written), {PROJECTION_NAME} | images | {f"{SOURCE_DIRECTORY}/{name}"
-                                                                     for name in listing(handoff)})
+        self.assertEqual(set(written), {PROJECTION_NAME, SELECTED_NAME} | images | {f"{SOURCE_DIRECTORY}/{name}"
+                                                                                    for name in listing(handoff)})
+        self.assertEqual(written[SELECTED_NAME], canonical_json(self.selection), "the recorded selection, verbatim")
         self.assertEqual(validate_projection(self.invocation, output / PROJECTION_NAME, images_root=output,
                                              family=fs.FAMILY, key=fs.KEY, expected_coverage_sha=expected),
                          outcome.projection)
@@ -291,7 +303,7 @@ class RejectedTest(CollectTest):
 
     def test_the_collected_output_must_fit_its_extraction_bounds(self) -> None:
         handoff = self.handoff()
-        files = len(listing(handoff)) + 1 + 2
+        files = len(listing(handoff)) + 2 + 2  # source/, paired.json and selected.json, two images
         size = sum(len(data) for data in listing(handoff).values())
         bound = LIMITS_BY_KIND["collected-family"]
         for label, limits in {"entries": dataclasses.replace(bound, max_entries=files - 1),
@@ -318,7 +330,8 @@ class RejectedTest(CollectTest):
         other = self.handoff()
         self.assert_rejected(lambda: collect_family(self.invocation, family=fs.FAMILY, key="mc26.3", input_dir=other,
                                                     expected_coverage_sha=self.c1.commit,
-                                                    output=self.work / "collected"), "key")
+                                                    output=self.work / "collected",
+                                                    selected_json=self.selected_json(fs.selection(other))), "key")
 
     def test_the_hook_runs_only_in_the_family_job(self) -> None:
         handoff = self.handoff()
@@ -338,7 +351,9 @@ class RejectedTest(CollectTest):
         self.assert_rejected(lambda: collect_family(invocation, family=fs.FAMILY, key=fs.KEY,
                                                     input_dir=self.work / "handoff",
                                                     expected_coverage_sha=mod.commit,
-                                                    output=self.work / "collected"), "family_validate")
+                                                    output=self.work / "collected",
+                                                    selected_json=self.selected_json(fs.selection(self.work / "handoff"))),
+                             "family_validate", "hook-unsupported")
 
     def test_the_output_is_new_and_outside_the_input(self) -> None:
         handoff = self.handoff()
@@ -350,6 +365,134 @@ class RejectedTest(CollectTest):
         self.assert_rejected(lambda: self.collect(handoff, output=handoff), "outside")
 
 
+class SelectionTest(CollectTest):
+    """The recorded selection (``select --family --output``) is bound to the collected generation
+    before the adapter runs, written verbatim into the output, and the generation's kit is the pin of
+    its producer workflow at the producer commit (SPEC §1.8), read from the inert object store."""
+
+    def test_a_carried_family_cache_is_named_between_its_envelope_and_the_coverage(self) -> None:
+        handoff = self.handoff(subject=self.c0, adjust=lambda manifest: manifest.update(carry=True))
+        for label, named in (("named by its envelope's coverage", self.c0.commit),
+                             ("carried to the coverage by an earlier publication", self.c1.commit)):
+            with self.subTest(label=label):
+                output = Path(tempfile.mkdtemp(prefix="cache-", dir=self.work)) / "collected"
+                selected = fs.selection(handoff, kind="family-cache", coverage_sha=named)
+                outcome = self.collect(handoff, output=output, selected=selected)
+                self.assertEqual((outcome.status, outcome.carried_from), ("available", self.c0.commit))
+                self.assertEqual((output / SELECTED_NAME).read_bytes(), canonical_json(selected))
+        cases = {
+            "a commit the envelope coverage does not precede": (self.s.commit, "does not precede"),
+            "a commit that is not an ancestor of the coverage": (self.s.commit, "not named by an ancestor"),
+            "an absent commit": ("9" * 40, "not present as an inert object"),
+        }
+        current = self.handoff()
+        for label, (named, fragment) in cases.items():
+            with self.subTest(label=label):
+                # ``s`` forks from C0: C1's envelope never precedes it, and C0's does but C1 is no descendant.
+                source = current if fragment == "does not precede" else handoff
+                selected = fs.selection(source, kind="family-cache", coverage_sha=named)
+                self.assert_rejected(lambda: self.collect(source, selected=selected), fragment)
+        self.assertEqual(self.host.calls, [("family_validate", False)] * 2, "a refused selection never reaches the hook")
+
+    def test_a_family_handoff_selection_is_its_envelope_producers_upload(self) -> None:
+        handoff = self.handoff()
+        valid = fs.selection(handoff)
+        cases = {
+            "another producer run": ({**valid, "run_id": valid["run_id"] + 1}, "is not the upload"),
+            "another attempt": ({**valid, "run_attempt": 2, "name": grammar.family_handoff_name(fs.FAMILY, fs.KEY, 2)},
+                                "is not the upload"),
+            "another key": ({**valid, "name": grammar.family_handoff_name(fs.FAMILY, "mc26.3", 1)},
+                            "not a generation of"),
+            "an ordinary handoff": ({**valid, "kind": "handoff", "name": grammar.handoff_name(fs.KEY, 1)},
+                                    "not a generation of"),
+        }
+        for label, (selected, fragment) in cases.items():
+            with self.subTest(label=label):
+                error = self.assert_rejected(lambda: self.collect(handoff, selected=selected), fragment)
+                self.assertEqual(error.reason, "family-selection")
+        self.assertEqual(self.host.calls, [])
+
+    def test_a_malformed_selection_is_refused_before_the_envelope(self) -> None:
+        handoff = self.handoff()
+        valid = fs.selection(handoff)
+        cases = {
+            "not canonical": json.dumps(valid, indent=2).encode("utf-8"),
+            "an extra member": canonical_json({**valid, "note": "x"}),
+            "not an object": canonical_json([valid]),
+            "not JSON": b"{",
+            "a boolean id": canonical_json({**valid, "artifact_id": True}),
+        }
+        for label, data in cases.items():
+            with self.subTest(label=label):
+                record = Path(tempfile.mkdtemp(prefix="selected-", dir=self.work)) / "selected.json"
+                record.write_bytes(data)
+                error = self.assert_rejected(lambda: collect_family(
+                    self.invocation, family=fs.FAMILY, key=fs.KEY, input_dir=handoff,
+                    expected_coverage_sha=self.c1.commit, output=self.work / "collected", selected_json=record))
+                self.assertEqual(error.reason, "family-selection")
+        linked = Path(tempfile.mkdtemp(prefix="selected-", dir=self.work)) / "selected.json"
+        linked.symlink_to(self.selected_json(valid))
+        self.assert_rejected(lambda: collect_family(
+            self.invocation, family=fs.FAMILY, key=fs.KEY, input_dir=handoff, expected_coverage_sha=self.c1.commit,
+            output=self.work / "collected", selected_json=linked), "symlink", "family-selection")
+        self.assertEqual(self.host.calls, [])
+
+    def test_the_kit_is_the_producer_workflows_pin_at_the_producer_commit(self) -> None:
+        workflow = fs.PRODUCER_WORKFLOW
+        forged = self.handoff()
+        fs.rewrite_envelope(forged, lambda envelope: envelope["kit"].update(sha="2" * 40))
+        self.assert_rejected(lambda: self.collect(forged), "is not the pin of", "kit-binding")
+        cases = {
+            "another kit": ({workflow: support.pin_workflow(workflow, sha="3" * 40)}, "is not the pin of"),
+            "another version": ({workflow: support.pin_workflow(workflow, version="9.9.9")}, "is not the pin of"),
+            "no pin": ({workflow: b"name: Family producer\njobs: {}\n"}, "cannot read the kit pin"),
+        }
+        for position, (label, (changes, fragment)) in enumerate(cases.items()):
+            with self.subTest(label=label):
+                head = support.commit_on_branch(self.c1, f"kit-{position}", changes)
+                handoff = self.handoff(subject=head)
+                self.assert_rejected(lambda: self.collect(handoff, expected=head.commit), fragment, "kit-binding")
+        self.assertEqual(self.host.calls, [], "a generation of another kit never reaches the hook")
+
+
+class ReadBlobTest(unittest.TestCase):
+    """``family._git.read_blob``: a bounded regular file of a present commit, never anything else."""
+
+    def test_only_a_bounded_regular_file_of_a_present_commit_is_read(self) -> None:
+        from mod_base.family import _git
+
+        root = Path(tempfile.mkdtemp(prefix="mb-read-blob-")).resolve()
+        self.addCleanup(shutil.rmtree, root, True)
+        repo = root / "repo"
+        (repo / "sub").mkdir(parents=True)
+        (repo / "a.txt").write_bytes(b"hello")
+        (repo / "run.sh").write_bytes(b"#!/bin/sh\n")
+        (repo / "run.sh").chmod(0o755)
+        (repo / "sub" / "b.txt").write_bytes(b"b")
+        (repo / "link").symlink_to("a.txt")
+        support.git(repo, "init", "-q", "--initial-branch=main")
+        support.git(repo, "add", "-A")
+        support.git(repo, "commit", "-q", "-m", "blobs")
+        commit = support.git(repo, "rev-parse", "HEAD")
+        self.assertEqual(_git.read_blob(repo, commit, "a.txt", 5), b"hello")
+        self.assertEqual(_git.read_blob(repo, commit, "run.sh", 64), b"#!/bin/sh\n")
+        self.assertEqual(_git.read_blob(repo, commit, "sub/b.txt", 1), b"b")
+        cases = {
+            "larger than the bound": (commit, "a.txt", 4, "larger than"),
+            "a directory": (commit, "sub", 64, "not a regular file"),
+            "a symlink": (commit, "link", 64, "not a regular file"),
+            "an absent path": (commit, "absent.txt", 64, "not a file"),
+            "an absent commit": ("9" * 40, "a.txt", 64, "not present as an inert object"),
+            "a traversal": (commit, "../a.txt", 64, "not a canonical repository path"),
+            "a zero bound": (commit, "a.txt", 0, "positive integer"),
+        }
+        for label, (at, path, bound, fragment) in cases.items():
+            with self.subTest(label=label), self.assertRaises(MbError) as caught:
+                _git.read_blob(repo, at, path, bound)
+            self.assertIn(fragment, str(caught.exception))
+            self.assertEqual(caught.exception.reason, "git")
+
+
 class CollectCommandTest(CollectTest):
     def run_cli(self, input_dir: Path, *, expected: str | None = None) -> tuple[int, str, str]:
         outputs = Path(tempfile.mkdtemp(prefix="outputs-", dir=self.work)) / "github-output"
@@ -359,6 +502,7 @@ class CollectCommandTest(CollectTest):
         with mock.patch.object(cli, "environ", return_value=environ), contextlib.redirect_stderr(stderr):
             code = cli.main(["family", "collect", "--repo", str(self.c1.root), "--family", fs.FAMILY, "--key", fs.KEY,
                              "--input", str(input_dir), "--expected-coverage-sha", expected or self.c1.commit,
+                             "--selected-json", str(self.selected_json(fs.selection(input_dir))),
                              "--output", str(self.work / "collected")])
         return code, stderr.getvalue(), outputs.read_text(encoding="utf-8")
 

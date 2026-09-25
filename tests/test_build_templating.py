@@ -16,6 +16,7 @@ from mod_base.pages.templating import (
     CONDITIONS,
     PLACEHOLDERS,
     TemplateError,
+    color_scheme,
     lint,
     render,
     theme_color,
@@ -135,6 +136,14 @@ class KitTemplatesTest(unittest.TestCase):
                 self.assertIn(attribute, ATTRIBUTES, (relative, value))
         self.assertEqual(used, PLACEHOLDERS)
 
+    def test_both_pages_declare_the_color_scheme_through_its_placeholder(self) -> None:
+        for relative in TEMPLATES:
+            template = (KIT / "site" / relative).read_text(encoding="utf-8")
+            self.assertEqual(template.count('<meta name="color-scheme" content="{{mb:color_scheme}}">'), 1, relative)
+            for scheme in ("dark", "dark light"):
+                rendered = render(template, values(color_scheme=scheme), conditions())
+                self.assertEqual(re.findall(r'<meta name="color-scheme" content="([^"]*)">', rendered), [scheme])
+
     def test_the_icon_and_families_conditions_gate_the_icon_and_family_markup(self) -> None:
         landing = (KIT / "site" / "index.html").read_text(encoding="utf-8")
         gallery = (KIT / "site" / "e2e" / "index.html").read_text(encoding="utf-8")
@@ -169,6 +178,7 @@ class ThemeTest(unittest.TestCase):
         self.assertEqual(tokens["--backdrop"], "rgb(4 8 6 / 74%)")
         self.assertEqual(tokens["--shadow-rgb"], "0 0 0")
         self.assertEqual(theme_color({"dark": QS_THEME, "light": None}), "#111713")
+        self.assertEqual(color_scheme({"dark": QS_THEME, "light": None}), "dark", "a dark-only site never paints light")
         self.assertTrue(css.endswith("}\n"))
         self.assertEqual(css, theme_css({"dark": dict(QS_THEME), "light": None}), "the output is deterministic")
 
@@ -182,6 +192,7 @@ class ThemeTest(unittest.TestCase):
         red, green, blue = (int(channel) for channel in light["--backdrop"].removeprefix("rgb(").split(" / ")[0].split())
         self.assertLessEqual(max(red, green, blue), 16, "the dialog backdrop stays dark on a light palette")
         self.assertEqual(theme_color({"dark": QS_THEME, "light": BP_LIGHT}), "#111713", "theme-color follows dark")
+        self.assertEqual(color_scheme({"dark": QS_THEME, "light": BP_LIGHT}), "dark light")
 
     def test_the_fixture_configs_render_their_themes(self) -> None:
         for name in ("qs.json", "bp.json"):
@@ -191,6 +202,7 @@ class ThemeTest(unittest.TestCase):
             config = json.loads(path.read_text(encoding="utf-8"))
             css = theme_css(config["theme"])
             self.assertEqual(css.count("@media"), 0 if config["theme"]["light"] is None else 1)
+            self.assertEqual(color_scheme(config["theme"]), "dark" if config["theme"]["light"] is None else "dark light")
 
     def test_invalid_themes_are_rejected(self) -> None:
         cases = [
@@ -204,8 +216,9 @@ class ThemeTest(unittest.TestCase):
             {"dark": QS_THEME, "light": {**BP_LIGHT, "text": 3}},
         ]
         for theme in cases:
-            with self.subTest(theme=sorted(theme)), self.assertRaises(TemplateError):
-                theme_css(theme)  # type: ignore[arg-type]
+            for function in (theme_css, color_scheme):
+                with self.subTest(theme=sorted(theme), function=function.__name__), self.assertRaises(TemplateError):
+                    function(theme)  # type: ignore[arg-type]
 
     def test_the_theme_keys_are_the_config_keys(self) -> None:
         from mod_base.config import THEME_KEYS
