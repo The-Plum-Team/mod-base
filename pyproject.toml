@@ -1,0 +1,26 @@
+# Local development only: `python3 -m pip install -e .` exposes the `mod_base` package from src/.
+# CI never pip-installs the kit; it runs `python3 -P -m mod_base` with PYTHONPATH=<kit>/src at the
+# pinned commit. Pillow is installed separately from the hash-locked requirements/pillow.txt.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mod-base"
+dynamic = ["version"]
+description = "Shared public-evidence and Pages publication kit for The-Plum-Team Minecraft mods"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+mod-base = "mod_base.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "mod_base.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["mod_base*"]

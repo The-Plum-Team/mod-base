@@ -1,0 +1,482 @@
+{
+  "comparisons": [
+    {
+      "comparison_id": "1.20.1-fabric/full/client_a/skin_changed",
+      "derivative": {
+        "changed_fraction": 0.1111111,
+        "region": [
+          0.25,
+          0.1,
+          0.75,
+          0.9
+        ],
+        "required_changed_fraction": 0.02,
+        "rms_difference": 11.5
+      },
+      "first_frame_id": "1.20.1-fabric/full/client_a/title_screen",
+      "lane_id": "1.20.1-fabric/full",
+      "minimum_changed_fraction": 0.02,
+      "region": [
+        0.25,
+        0.1,
+        0.75,
+        0.9
+      ],
+      "role": "client_a",
+      "second_frame_id": "1.20.1-fabric/full/client_a/skin_apply",
+      "source": {
+        "changed_fraction": 0.1234567,
+        "region": [
+          0.25,
+          0.1,
+          0.75,
+          0.9
+        ],
+        "required_changed_fraction": 0.02,
+        "rms_difference": 12.345
+      }
+    },
+    {
+      "comparison_id": "1.20.1-forge/full/client_a/skin_changed",
+      "derivative": {
+        "changed_fraction": 0.1111111,
+        "region": [
+          0.25,
+          0.1,
+          0.75,
+          0.9
+        ],
+        "required_changed_fraction": 0.02,
+        "rms_difference": 11.5
+      },
+      "first_frame_id": "1.20.1-forge/full/client_a/title_screen",
+      "lane_id": "1.20.1-forge/full",
+      "minimum_changed_fraction": 0.02,
+      "region": [
+        0.25,
+        0.1,
+        0.75,
+        0.9
+      ],
+      "role": "client_a",
+      "second_frame_id": "1.20.1-forge/full/client_a/skin_apply",
+      "source": {
+        "changed_fraction": 0.1234567,
+        "region": [
+          0.25,
+          0.1,
+          0.75,
+          0.9
+        ],
+        "required_changed_fraction": 0.02,
+        "rms_difference": 12.345
+      }
+    }
+  ],
+  "contract_sha256": "cc8321d6375c494d043fdd0260f21bc0ec51dacc9f6abb7f909cdcd3041b78bf",
+  "expectation": {
+    "path": "expectation.json",
+    "sha256": "f3af073c4d19292b63afdf558c354fd6987c6f96d93839ce8e4226e83dd335a5",
+    "size": 2869
+  },
+  "extensions": null,
+  "files": [
+    {
+      "path": "expectation.json",
+      "sha256": "f3af073c4d19292b63afdf558c354fd6987c6f96d93839ce8e4226e83dd335a5",
+      "size": 2869
+    },
+    {
+      "path": "images/1ac3856fafcd8aed08fdb32a986978e4f5cbc9e27370ba72e4f677f60ee24f7f.webp",
+      "sha256": "1ac3856fafcd8aed08fdb32a986978e4f5cbc9e27370ba72e4f677f60ee24f7f",
+      "size": 98765
+    },
+    {
+      "path": "images/378e273a9bc3150008d4c0a84bd8b6e3395982ac6028505565973ba294648e90.webp",
+      "sha256": "378e273a9bc3150008d4c0a84bd8b6e3395982ac6028505565973ba294648e90",
+      "size": 98765
+    },
+    {
+      "path": "images/c1a5702ca60574a89c914f6279d6a791f2f36c1dc7943b83a7f9167d2d1c84c9.webp",
+      "sha256": "c1a5702ca60574a89c914f6279d6a791f2f36c1dc7943b83a7f9167d2d1c84c9",
+      "size": 98765
+    },
+    {
+      "path": "images/f39318ff3b38be1521f7172e431b9d3fe5b1d6ee77f70cc16477f6fcc97805b8.webp",
+      "sha256": "f39318ff3b38be1521f7172e431b9d3fe5b1d6ee77f70cc16477f6fcc97805b8",
+      "size": 98765
+    },
+    {
+      "path": "selection.json",
+      "sha256": "bcc3029a665da487aa98719fbc9a116a7d3a12ee96ccdb5a7fbf0b8d371a2a09",
+      "size": 2511
+    }
+  ],
+  "frames": [
+    {
+      "artifact_node": "1.20.1-fabric",
+      "capture_id": "full.client_a.title_screen",
+      "capture_order": 0,
+      "derivative": {
+        "format": "webp",
+        "height": 900,
+        "path": "images/378e273a9bc3150008d4c0a84bd8b6e3395982ac6028505565973ba294648e90.webp",
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "378e273a9bc3150008d4c0a84bd8b6e3395982ac6028505565973ba294648e90",
+          "height": 900,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "59b392f67721890cb99f9457a59a7e50a564a38b93e07a78801f9440de345adc",
+          "width": 1600
+        },
+        "sha256": "378e273a9bc3150008d4c0a84bd8b6e3395982ac6028505565973ba294648e90",
+        "size": 98765,
+        "width": 1600
+      },
+      "epoch": "baseline",
+      "expectation": "The Quick Skin title-screen button is visible.",
+      "frame_id": "1.20.1-fabric/full/client_a/title_screen",
+      "lane_id": "1.20.1-fabric/full",
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "review_tier": "key",
+      "role": "client_a",
+      "runtime_evidence": "PASS title_screen: renderer confirmed the expected state on fabric",
+      "scenario": "full",
+      "source": {
+        "format": "png",
+        "height": 1080,
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "eb27348a2175a991145c0b34bed04ca26e1f3f48f461090b257d501cee817d99",
+          "height": 1080,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "ed9ad8c7606d5d7557a09bc4b62a77f35f782f7c34e3ef13308b888c9c643fc2",
+          "width": 1920
+        },
+        "sha256": "eb27348a2175a991145c0b34bed04ca26e1f3f48f461090b257d501cee817d99",
+        "size": 654321,
+        "width": 1920
+      },
+      "step": "title_screen",
+      "tested": {
+        "branch": "master",
+        "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "conclusion": "success",
+        "controller_branch": "master",
+        "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "created_at": "2026-09-25T10:00:00Z",
+        "event": "workflow_dispatch",
+        "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "jar_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1",
+        "run_attempt": 1,
+        "run_id": 101,
+        "workflow_path": ".github/workflows/on-demand-e2e.yml"
+      },
+      "title": "Title screen"
+    },
+    {
+      "artifact_node": "1.20.1-fabric",
+      "capture_id": "full.client_a.skin_apply",
+      "capture_order": 1,
+      "derivative": {
+        "format": "webp",
+        "height": 900,
+        "path": "images/c1a5702ca60574a89c914f6279d6a791f2f36c1dc7943b83a7f9167d2d1c84c9.webp",
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "c1a5702ca60574a89c914f6279d6a791f2f36c1dc7943b83a7f9167d2d1c84c9",
+          "height": 900,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "db297e5ea9a063aced185b03d5bc753425648da013989cb87f84d97451442d38",
+          "width": 1600
+        },
+        "sha256": "c1a5702ca60574a89c914f6279d6a791f2f36c1dc7943b83a7f9167d2d1c84c9",
+        "size": 98765,
+        "width": 1600
+      },
+      "epoch": "selected",
+      "expectation": "The plaid local skin renders on the player model.",
+      "frame_id": "1.20.1-fabric/full/client_a/skin_apply",
+      "lane_id": "1.20.1-fabric/full",
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "review_tier": "all",
+      "role": "client_a",
+      "runtime_evidence": "PASS skin_apply: renderer confirmed the expected state on fabric",
+      "scenario": "full",
+      "source": {
+        "format": "png",
+        "height": 1080,
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "f8c139d85be75703d14db9a05d5c2fb64e4ce3fa0c8d5710ec02db610254b48d",
+          "height": 1080,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "97116bfb0f28940e518332b2c3ae3e7791262aec2ff59e1176cffaca27986e46",
+          "width": 1920
+        },
+        "sha256": "f8c139d85be75703d14db9a05d5c2fb64e4ce3fa0c8d5710ec02db610254b48d",
+        "size": 654321,
+        "width": 1920
+      },
+      "step": "skin_apply",
+      "tested": {
+        "branch": "master",
+        "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "conclusion": "success",
+        "controller_branch": "master",
+        "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "created_at": "2026-09-25T10:00:00Z",
+        "event": "workflow_dispatch",
+        "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "jar_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1",
+        "run_attempt": 1,
+        "run_id": 101,
+        "workflow_path": ".github/workflows/on-demand-e2e.yml"
+      },
+      "title": "Applied local skin"
+    },
+    {
+      "artifact_node": "1.20.1-forge",
+      "capture_id": "full.client_a.title_screen",
+      "capture_order": 0,
+      "derivative": {
+        "format": "webp",
+        "height": 900,
+        "path": "images/f39318ff3b38be1521f7172e431b9d3fe5b1d6ee77f70cc16477f6fcc97805b8.webp",
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "f39318ff3b38be1521f7172e431b9d3fe5b1d6ee77f70cc16477f6fcc97805b8",
+          "height": 900,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "850257c89c087c3cc44dcf2ab8746bed83ac3e6ce0b01036113dfa01d6dc80b6",
+          "width": 1600
+        },
+        "sha256": "f39318ff3b38be1521f7172e431b9d3fe5b1d6ee77f70cc16477f6fcc97805b8",
+        "size": 98765,
+        "width": 1600
+      },
+      "epoch": "baseline",
+      "expectation": "The Quick Skin title-screen button is visible.",
+      "frame_id": "1.20.1-forge/full/client_a/title_screen",
+      "lane_id": "1.20.1-forge/full",
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "review_tier": "key",
+      "role": "client_a",
+      "runtime_evidence": "PASS title_screen: renderer confirmed the expected state on forge",
+      "scenario": "full",
+      "source": {
+        "format": "png",
+        "height": 1080,
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "ce31b1b285aca3856688092f785f2911f136ce08f404961c99733fb7f83cff89",
+          "height": 1080,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "6c2049b87b7a2920279c1ff8e5782073cd03756fbb2a04c8762d07bbb6234164",
+          "width": 1920
+        },
+        "sha256": "ce31b1b285aca3856688092f785f2911f136ce08f404961c99733fb7f83cff89",
+        "size": 654321,
+        "width": 1920
+      },
+      "step": "title_screen",
+      "tested": {
+        "branch": "master",
+        "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "conclusion": "success",
+        "controller_branch": "master",
+        "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "created_at": "2026-09-25T10:00:00Z",
+        "event": "workflow_dispatch",
+        "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "jar_sha256": "b069ccac2d21ed0a4eb12dc76482790f431e239887f55630575b829cb2e70556",
+        "run_attempt": 1,
+        "run_id": 101,
+        "workflow_path": ".github/workflows/on-demand-e2e.yml"
+      },
+      "title": "Title screen"
+    },
+    {
+      "artifact_node": "1.20.1-forge",
+      "capture_id": "full.client_a.skin_apply",
+      "capture_order": 1,
+      "derivative": {
+        "format": "webp",
+        "height": 900,
+        "path": "images/1ac3856fafcd8aed08fdb32a986978e4f5cbc9e27370ba72e4f677f60ee24f7f.webp",
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "1ac3856fafcd8aed08fdb32a986978e4f5cbc9e27370ba72e4f677f60ee24f7f",
+          "height": 900,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "5e5d0679e3ee3c1bcf374ea4f480ccf27a9f2287a0af33ea67d2399e93f24d99",
+          "width": 1600
+        },
+        "sha256": "1ac3856fafcd8aed08fdb32a986978e4f5cbc9e27370ba72e4f677f60ee24f7f",
+        "size": 98765,
+        "width": 1600
+      },
+      "epoch": "selected",
+      "expectation": "The plaid local skin renders on the player model.",
+      "frame_id": "1.20.1-forge/full/client_a/skin_apply",
+      "lane_id": "1.20.1-forge/full",
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "review_tier": "all",
+      "role": "client_a",
+      "runtime_evidence": "PASS skin_apply: renderer confirmed the expected state on forge",
+      "scenario": "full",
+      "source": {
+        "format": "png",
+        "height": 1080,
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "d39c2b041341ec31d2b44dd24a74a754b6d4c7ac108167b69d90e5b5117418bb",
+          "height": 1080,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "bcbe32edc22a44fcc8898e16649af2640f3ae7965362c499975483ca552c4440",
+          "width": 1920
+        },
+        "sha256": "d39c2b041341ec31d2b44dd24a74a754b6d4c7ac108167b69d90e5b5117418bb",
+        "size": 654321,
+        "width": 1920
+      },
+      "step": "skin_apply",
+      "tested": {
+        "branch": "master",
+        "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "conclusion": "success",
+        "controller_branch": "master",
+        "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "created_at": "2026-09-25T10:00:00Z",
+        "event": "workflow_dispatch",
+        "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "jar_sha256": "b069ccac2d21ed0a4eb12dc76482790f431e239887f55630575b829cb2e70556",
+        "run_attempt": 1,
+        "run_id": 101,
+        "workflow_path": ".github/workflows/on-demand-e2e.yml"
+      },
+      "title": "Applied local skin"
+    }
+  ],
+  "key": "mc1.20.1",
+  "kind": "mod-base.evidence.compact",
+  "kit": {
+    "repository": "The-Plum-Team/mod-base",
+    "sha": "734f6e6bc8ba05938734384ab7835c45111af4d3",
+    "version": "0.9.0"
+  },
+  "lanes": [
+    {
+      "artifact_node": "1.20.1-fabric",
+      "elapsed_s": 312.5,
+      "jars": {
+        "harness_sha256": "32f726f0475f32347de8ac8010bad51bd874ed3a03b824988c9d528caac32da6",
+        "production_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1"
+      },
+      "java": 17,
+      "lane_id": "1.20.1-fabric/full",
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "profile": "pr",
+      "roles": [
+        "client_a"
+      ],
+      "scenario": "full",
+      "status": "pass"
+    },
+    {
+      "artifact_node": "1.20.1-forge",
+      "elapsed_s": 312.5,
+      "jars": {
+        "harness_sha256": "88a49da634439788e45aeaa4b6b7fe954c563e455dbf2b2cfa1e84fee432ab99",
+        "production_sha256": "b069ccac2d21ed0a4eb12dc76482790f431e239887f55630575b829cb2e70556"
+      },
+      "java": 17,
+      "lane_id": "1.20.1-forge/full",
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "profile": "pr",
+      "roles": [
+        "client_a"
+      ],
+      "scenario": "full",
+      "status": "pass"
+    }
+  ],
+  "matrix_sha256": "6e00cd562cc2d88e238dfb81d9439de7ec843ee9d0c9879d549cb1436786f975",
+  "provenance": {
+    "coverage_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "handoff": {
+      "branch": "master",
+      "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "controller_branch": "master",
+      "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "run_attempt": 1,
+      "run_id": 101,
+      "workflow_path": ".github/workflows/on-demand-e2e.yml"
+    },
+    "reuse": "none",
+    "tested": {
+      "branch": "master",
+      "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "controller_branch": "master",
+      "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "run_attempt": 1,
+      "run_id": 101,
+      "workflow_path": ".github/workflows/on-demand-e2e.yml"
+    }
+  },
+  "repository": "The-Plum-Team/Quick-Skin-Mod",
+  "schema_version": 1,
+  "scope": {
+    "components": {
+      "baseline": {
+        "artifact_id": 8001,
+        "digest": "sha256:04c675f4c2b25913ed1953c45c13138467cf0ba3df566aa7f30563ab66e7fcc4",
+        "manifest_sha256": "be6588c9216c0e64c7f5d5e8e3a22753a99ccdddbd80cf96d02675555508aa4f",
+        "name": "mb-baseline--mc1.20.1--b14ea3e8a8a23ac679621cfe87cf8ee6a6e376e9--77"
+      },
+      "selected_manifest_sha256": "53d4d151f01e5c05574c4ec3f55bbb07e0b2792a1ab7e19629715de728e710ac"
+    },
+    "kind": "composed"
+  },
+  "selection": {
+    "path": "selection.json",
+    "sha256": "bcc3029a665da487aa98719fbc9a116a7d3a12ee96ccdb5a7fbf0b8d371a2a09",
+    "size": 2511
+  },
+  "source_artifact": {
+    "digest": "sha256:807b77b12c66fdd98579bde15fa7568d3314330a21efbb36f91805aec1da52fa",
+    "id": 9001,
+    "kind": "handoff",
+    "name": "mb-handoff--mc1.20.1--a1",
+    "run_attempt": 1,
+    "run_id": 101,
+    "size": 4567890
+  },
+  "subject": {
+    "branch": "master",
+    "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "tree": "5459e70b2b7c2688978c36fedc9a4958a5b2cde0"
+  }
+}

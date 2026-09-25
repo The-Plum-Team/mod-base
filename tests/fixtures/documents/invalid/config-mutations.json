@@ -1,0 +1,781 @@
+{
+  "cases": [
+    {
+      "error": "$: has unknown keys",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "unknown-top-level-key",
+      "set": [
+        [
+          "/pages",
+          {}
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter: has unknown keys",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "unknown-nested-key",
+      "set": [
+        [
+          "/adapter/entry",
+          "x"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/theme"
+      ],
+      "error": "is missing required keys ['theme']",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "missing-theme"
+    },
+    {
+      "error": "$.kind: must be 'mod-base.config'",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "wrong-kind",
+      "set": [
+        [
+          "/kind",
+          "mod-base.settings"
+        ]
+      ]
+    },
+    {
+      "error": "$.schema_version: must be 1",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "schema-version-two",
+      "set": [
+        [
+          "/schema_version",
+          2
+        ]
+      ]
+    },
+    {
+      "error": "$.theme.dark.accent: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "colour-uppercase",
+      "set": [
+        [
+          "/theme/dark/accent",
+          "#77E39B"
+        ]
+      ]
+    },
+    {
+      "error": "$.theme.light.bg: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "colour-short",
+      "set": [
+        [
+          "/theme/light/bg",
+          "#fff"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/theme/light/danger"
+      ],
+      "error": "$.theme.light: is missing required keys ['danger']",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "theme-light-missing-token"
+    },
+    {
+      "error": "$.project.tagline: must be trimmed printable text without markup",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "text-with-markup",
+      "set": [
+        [
+          "/project/tagline",
+          "Change <b>your</b> look"
+        ]
+      ]
+    },
+    {
+      "error": "$.copy.evidence_lead: must be trimmed printable text without markup",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "text-with-template",
+      "set": [
+        [
+          "/copy/evidence_lead",
+          "{{mb:name}} evidence"
+        ]
+      ]
+    },
+    {
+      "error": "$.labels.release_prefix: must be trimmed printable text without markup",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "text-with-comment",
+      "set": [
+        [
+          "/labels/release_prefix",
+          "<!-- mb:if icon -->"
+        ]
+      ]
+    },
+    {
+      "error": "$.copy.principles[0]: must be trimmed printable text without markup",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "text-with-newline",
+      "set": [
+        [
+          "/copy/principles/0",
+          "line\nbreak"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.name: must be trimmed printable text without markup",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "text-with-bidi-override",
+      "set": [
+        [
+          "/project/name",
+          "Quick‮Skin"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.eyebrow: must be trimmed printable text",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "text-untrimmed",
+      "set": [
+        [
+          "/project/eyebrow",
+          " Minecraft appearance mod"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.name: length must be between 1 and 60",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "text-too-long",
+      "set": [
+        [
+          "/project/name",
+          {
+            "$repeat": [
+              "Q",
+              61
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.project.links[0].url: must be an https URL",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "url-http",
+      "set": [
+        [
+          "/project/links/0/url",
+          "http://modrinth.com/mod/quick-skin"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.links[0].url: must be an https URL",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "url-userinfo",
+      "set": [
+        [
+          "/project/links/0/url",
+          "https://token@modrinth.com/mod/quick-skin"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.links[0].url: must be an https URL",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "url-port",
+      "set": [
+        [
+          "/project/links/0/url",
+          "https://modrinth.com:8443/mod/quick-skin"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.links[0].url: must be an https URL",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "url-whitespace",
+      "set": [
+        [
+          "/project/links/0/url",
+          "https://modrinth.com/mod/quick skin"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.links[0].url: must be an https URL",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "url-uppercase-host",
+      "set": [
+        [
+          "/project/links/0/url",
+          "https://Modrinth.com/mod/quick-skin"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.links[1]: duplicates an earlier item",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "link-duplicate-id",
+      "set": [
+        [
+          "/project/links/1/id",
+          "modrinth"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "qs",
+      "name": "description-literal",
+      "set": [
+        [
+          "/project/description",
+          "Change, preview and synchronize skins and capes."
+        ]
+      ]
+    },
+    {
+      "error": "$.project.description",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "description-bad-matrix-path",
+      "set": [
+        [
+          "/project/description",
+          {
+            "from_matrix": "project/../secret"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.project.icon.rendering: must be one of",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "icon-rendering-unknown",
+      "set": [
+        [
+          "/project/icon/rendering",
+          "crisp"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.icon.path: must be a repository-relative path",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "icon-path-traversal",
+      "set": [
+        [
+          "/project/icon/path",
+          "../icon.png"
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter.path: must start with scripts/pages/",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "adapter-outside-pages",
+      "set": [
+        [
+          "/adapter/path",
+          "scripts/ci/mod_base_adapter.py"
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter.python_path[0]: must be a repository-relative path",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "adapter-in-git-dir",
+      "set": [
+        [
+          "/adapter/python_path/0",
+          ".git"
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter.python_path[0]: must be a repository-relative path",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "python-path-absolute",
+      "set": [
+        [
+          "/adapter/python_path/0",
+          "/usr/lib/python3"
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter.python_path[0]: must be a repository-relative path",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "python-path-parent",
+      "set": [
+        [
+          "/adapter/python_path/0",
+          ".."
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter.network_hooks[0]: must be one of",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "network-hook-not-network",
+      "set": [
+        [
+          "/adapter/network_hooks/0",
+          "targets"
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter.api: must be in the kit's adapter window",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "adapter-api-outside-window",
+      "set": [
+        [
+          "/adapter/api",
+          2
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter.timeout_seconds: must be between 1 and 1800",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "adapter-timeout-too-long",
+      "set": [
+        [
+          "/adapter/timeout_seconds",
+          1801
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/adapter/timeout_seconds"
+      ],
+      "expect": "valid",
+      "fixture": "qs",
+      "name": "adapter-timeout-default"
+    },
+    {
+      "error": "$.adapter.fixtures_path: must not be the privileged adapter module",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "fixtures-is-adapter",
+      "set": [
+        [
+          "/adapter/fixtures_path",
+          "scripts/pages/mod_base_adapter.py"
+        ]
+      ]
+    },
+    {
+      "error": "$.adapter.extensions[0]: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "extension-name-grammar",
+      "set": [
+        [
+          "/adapter/extensions/0",
+          "BlockPops.scope"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.delegated_reuse_extension: must be one of adapter.extensions",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "delegated-extension-undeclared",
+      "set": [
+        [
+          "/source/delegated_reuse_extension",
+          "quick-skin.other"
+        ]
+      ]
+    },
+    {
+      "error": "$.targets",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "targets-default-with-branches",
+      "set": [
+        [
+          "/targets/max_branches",
+          10
+        ]
+      ]
+    },
+    {
+      "error": "$.targets",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "targets-too-many-branches",
+      "set": [
+        [
+          "/targets/max_branches",
+          101
+        ]
+      ]
+    },
+    {
+      "error": "$.targets",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "targets-max-over-64",
+      "set": [
+        [
+          "/targets/max",
+          65
+        ]
+      ]
+    },
+    {
+      "error": "$.source.workflow: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "source-workflow-grammar",
+      "set": [
+        [
+          "/source/workflow",
+          ".github/workflows/../e2e.yml"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.events.canonical: must name at least one event",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "source-no-canonical-event",
+      "set": [
+        [
+          "/source/events/canonical",
+          []
+        ]
+      ]
+    },
+    {
+      "error": "$.source.display_title: must contain {subject_commit} exactly once",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "display-title-without-placeholder",
+      "set": [
+        [
+          "/source/display_title",
+          "Packaged E2E"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.display_title: may contain a single {subject_commit} placeholder",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "display-title-extra-braces",
+      "set": [
+        [
+          "/source/display_title",
+          "Packaged E2E / {subject_commit} {run}"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.handoff_job: may contain a single {key} placeholder",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "handoff-job-expression",
+      "set": [
+        [
+          "/source/handoff_job",
+          "Prepare public evidence for ${{ matrix.bundle_key }} (advisory)"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "bp",
+      "name": "handoff-job-without-key"
+    },
+    {
+      "error": "$.source.attestation_job: may contain no placeholder",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "attestation-job-with-placeholder",
+      "set": [
+        [
+          "/source/attestation_job",
+          "Attest {key} / Verify exact tested tree"
+        ]
+      ]
+    },
+    {
+      "error": "$.images.pixel_metrics_version: must be 1",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "image-metrics-version",
+      "set": [
+        [
+          "/images/pixel_metrics_version",
+          2
+        ]
+      ]
+    },
+    {
+      "error": "$.images.source_size: exceeds the pixel bound",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "image-source-too-large",
+      "set": [
+        [
+          "/images/source_size",
+          [
+            8000,
+            4000
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.anchor.successor_grace_days: cannot exceed retention_days",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "anchor-grace-over-retention",
+      "set": [
+        [
+          "/anchor/retention_days",
+          10
+        ],
+        [
+          "/anchor/successor_grace_days",
+          20
+        ]
+      ]
+    },
+    {
+      "error": "$.anchor.retention_days: must be between 1 and 90",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "anchor-retention-over-90",
+      "set": [
+        [
+          "/anchor/retention_days",
+          120
+        ]
+      ]
+    },
+    {
+      "error": "$.admission",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "admission-always-with-progress-fields",
+      "set": [
+        [
+          "/admission/coalesce_seconds",
+          600
+        ]
+      ]
+    },
+    {
+      "error": "$.admission.coalesce_seconds: cannot exceed partial_deadline_seconds",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "admission-coalesce-after-deadline",
+      "set": [
+        [
+          "/admission/coalesce_seconds",
+          3000
+        ]
+      ]
+    },
+    {
+      "error": "$.baseline_archive",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "baseline-disabled-with-retention",
+      "set": [
+        [
+          "/baseline_archive/retention_days",
+          90
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0].id: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "family-id-grammar",
+      "set": [
+        [
+          "/families/0/id",
+          "Mod_Compatibility"
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0].retention_days: must be between 1 and 7",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "family-retention-over-7",
+      "set": [
+        [
+          "/families/0/retention_days",
+          8
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0].producer.workflow: must differ from source.workflow",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "family-producer-is-source",
+      "set": [
+        [
+          "/families/0/producer/workflow",
+          ".github/workflows/on-demand-e2e.yml"
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0].handoff_max_bytes: must be between 1 and",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "family-handoff-over-1gib",
+      "set": [
+        [
+          "/families/0/handoff_max_bytes",
+          1073741825
+        ]
+      ]
+    },
+    {
+      "error": "$.copy.family_notes.mod-compatibility: names no configured family",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "family-note-unknown-family",
+      "set": [
+        [
+          "/copy/family_notes/mod-compatibility",
+          "Note."
+        ]
+      ]
+    },
+    {
+      "error": "$.families[1]: duplicates an earlier item",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "family-duplicate-id",
+      "set": [
+        [
+          "/families/1",
+          {
+            "carry_forward": true,
+            "description": "Clean reference versus mod-installed pairs, published only after a complete clean review.",
+            "handoff_max_bytes": 536870912,
+            "id": "mod-compatibility",
+            "image_policy": {
+              "derivative_box": [
+                1280,
+                720
+              ],
+              "webp_method": 6,
+              "webp_quality": 80
+            },
+            "producer": {
+              "events": [
+                "repository_dispatch",
+                "schedule",
+                "workflow_dispatch"
+              ],
+              "job": "Publish compact compatibility evidence",
+              "step": "Upload the mod-base family handoff",
+              "workflow": ".github/workflows/mod-compatibility-review.yml"
+            },
+            "retention_days": 7,
+            "title": "Mod compatibility"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.labels.scenarios: has an invalid key",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "labels-bad-scenario-id",
+      "set": [
+        [
+          "/labels/scenarios/Bad Id",
+          "Bad"
+        ]
+      ]
+    },
+    {
+      "error": "$.template.agents_local[0]: must end with .md",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "template-agents-not-markdown",
+      "set": [
+        [
+          "/template/agents_local/0",
+          "docs/ai/PROJECT.txt"
+        ]
+      ]
+    },
+    {
+      "error": "$.template.deferred[1]: duplicates an earlier item",
+      "expect": "invalid",
+      "fixture": "bp",
+      "name": "template-deferred-duplicate",
+      "set": [
+        [
+          "/template/deferred/1",
+          ".gitattributes"
+        ]
+      ]
+    },
+    {
+      "error": "$.canonical_branch: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "qs",
+      "name": "canonical-branch-grammar",
+      "set": [
+        [
+          "/canonical_branch",
+          "refs/heads/../master"
+        ]
+      ]
+    }
+  ]
+}

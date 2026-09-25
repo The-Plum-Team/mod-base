@@ -1,0 +1,273 @@
+"""The frozen CLI surface (SPEC §2.2) and the registry's clean failure modes."""
+
+from __future__ import annotations
+
+import io
+import sys
+import tempfile
+import types
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+from mod_base import cli
+from mod_base.errors import MbError
+
+SHA = "a" * 40
+DIGEST = "sha256:" + "b" * 64
+REPO = ["--repo", "mod", "--config", "mod/site/mod-base.json"]
+
+#: command -> (argv, expected parsed attributes)
+SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
+    "pin verify": (["pin", "verify", "--repo", "mod", "--network"], {"network": True}),
+    "digest": (["digest", "--root", "kit", "--check", DIGEST], {"check": DIGEST}),
+    "template check": (["template", "check", "--repo", "mod"], {"template_command": "check"}),
+    "template sync": (["template", "sync", "--repo", "mod", "--write"], {"write": True}),
+    "template init": (["template", "init", "--repo", "mod", "--seed", "--from-config", "c.json"],
+                      {"seed": True, "from_config": Path("c.json")}),
+    "expect": (["expect", *REPO, "--key", "mc1.20.1", "--tested-run-json", "t.json", "--extensions", "e.json",
+                "--output", "x.json"], {"key": "mc1.20.1", "tested_run_json": Path("t.json")}),
+    "prepare": ([
+        "prepare", *REPO, "--e2e-root", "e2e-out", "--key", "mc1.20.1", "--output", "handoff",
+        "--subject-branch", "master", "--subject-commit", SHA, "--subject-tree", SHA,
+        "--tested-run-id", "12", "--tested-run-attempt", "1", "--tested-branch", "master", "--tested-commit", SHA,
+        "--tested-controller-branch", "master", "--tested-controller-sha", SHA, "--extensions", "e.json",
+        "--anchor", "auto", "--anchor-output", "anchor",
+    ], {"tested_run_id": 12, "anchor": "auto", "anchor_output": Path("anchor")}),
+    "anchor identity": (["anchor", "identity", *REPO, "--key", "mc1.20.1", "--handoff", "h"], {"handoff": Path("h")}),
+    "anchor create": (["anchor", "create", *REPO, "--key", "mc1.20.1", "--handoff", "h", "--raw-artifact-id", "7",
+                       "--raw-artifact-name", "mb-handoff--mc1.20.1--a1", "--raw-artifact-digest", DIGEST,
+                       "--output", "a"], {"raw_artifact_id": 7}),
+    "anchor validate": (["anchor", "validate", "--key", "mc1.20.1", "--input", "a", "--expected-subject-commit", SHA],
+                        {"expected_subject_commit": SHA}),
+    "family envelope": (["family", "envelope", *REPO, "--family", "mod-compatibility", "--key", "mc1.20.1",
+                         "--bundle", "b", "--coverage-sha", SHA, "--subject-branch", "master", "--subject-commit", SHA,
+                         "--output", "o"], {"family": "mod-compatibility"}),
+    "family collect": (["family", "collect", *REPO, "--family", "mod-compatibility", "--key", "mc1.20.1", "--input", "i",
+                        "--expected-coverage-sha", SHA, "--output", "o"], {"expected_coverage_sha": SHA}),
+    "admit": (["admit", *REPO, "--operation", "family", "--run-id", "5", "--sha", SHA, "--family", "mod-compatibility",
+               "--bundle-key", "mc1.20.1", "--artifact-id", "9", "--artifact-digest", DIGEST, "--coverage-sha", SHA,
+               "--github-output", "out"], {"operation": "family", "artifact_id": 9}),
+    "select": (["select", *REPO, "--key", "mc1.20.1", "--family", "mod-compatibility", "--nomination", "44",
+                "--expected-subject-commit", SHA, "--github-output", "out", "--output", "selected.json"],
+               {"nomination": 44, "output": Path("selected.json")}),
+    "download": (["download", "--artifact-id", "1", "--name", "mb-handoff--mc1.20.1--a1", "--digest", DIGEST,
+                  "--size", "10", "--run-id", "2", "--output", "d"], {"size": 10}),
+    "authenticate": (["authenticate", *REPO, "--key", "mc1.20.1", "--selected", "d", "--selected-json", "s.json",
+                      "--output", "selection.json"], {"selected_json": Path("s.json")}),
+    "compose": (["compose", *REPO, "--key", "mc1.20.1", "--selected", "d", "--selection", "s.json", "--output", "o"],
+                {"selected": Path("d"), "selection": Path("s.json")}),
+    "compact": (["compact", *REPO, "--key", "mc1.20.1", "--input", "i", "--selection", "s.json", "--output", "o"],
+                {"selection": Path("s.json")}),
+    "validate": (["validate", *REPO, "--key", "mc1.20.1", "--kind", "compact", "--input", "i", "--bind-raw", "r",
+                  "--expected-subject-commit", SHA], {"kind": "compact", "bind_raw": Path("r")}),
+    "build": (["build", *REPO, "--kit-root", "kit", "--collected", "c", "--families", "f", "--output", "_site",
+               "--promotion", "p", "--github-output", "out"], {"output": Path("_site")}),
+    "refresh": (["refresh", *REPO, "--key", "mc1.20.1", "--family", "mod-compatibility", "--input", "i",
+                 "--github-output", "out"], {"family": "mod-compatibility"}),
+    "rotate": (["rotate", *REPO, "--owner-run-id", "3", "--owner-sha", SHA, "--delete-delay-seconds", "1.0",
+                "--dry-run"], {"owner_run_id": 3, "dry_run": True, "delete_delay_seconds": 1.0}),
+    "conformance": (["conformance", "--repo", "mod", "--keys", "mc1.20.1,mc26.3", "--kit-root", ".", "--families"],
+                    {"keys": ("mc1.20.1", "mc26.3"), "families": True}),
+    "conformance all": (["conformance", "--repo", "mod", "--all"], {"all_keys": True, "keys": None}),
+    "budget": (["budget"], {}),
+}
+
+
+def parse(argv: list[str]):
+    return cli.build_parser(argv[0]).parse_args(argv)
+
+
+def run(argv: list[str]) -> tuple[int, str, str]:
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = cli.main(argv)
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+class SurfaceTest(unittest.TestCase):
+    def test_registry_covers_every_spec_command(self) -> None:
+        self.assertEqual(set(cli.COMMANDS), {
+            "pin", "digest", "template", "expect", "prepare", "anchor", "family", "admit", "select", "download",
+            "authenticate", "compose", "compact", "validate", "build", "refresh", "rotate", "conformance", "budget",
+        })
+        self.assertEqual(cli.COMMANDS["download"], "mod_base.github.commands")
+        self.assertEqual(cli.COMMANDS["admit"], "mod_base.pages.commands_control")
+        self.assertEqual(cli.COMMANDS["build"], "mod_base.pages.commands_build")
+        self.assertEqual(cli.COMMANDS["rotate"], "mod_base.pages.commands_rotate")
+        self.assertEqual(cli.COMMANDS["digest"], "mod_base.pin_commands")
+        self.assertEqual({cli.COMMANDS[name] for name in ("expect", "prepare", "validate", "compact", "compose", "anchor")},
+                         {"mod_base.evidence.commands"})
+        seen = {argv[0] for argv, _ in SURFACE.values()}
+        self.assertEqual(seen, set(cli.COMMANDS))
+
+    def test_every_command_parses_its_frozen_flags(self) -> None:
+        for label, (argv, expected) in SURFACE.items():
+            with self.subTest(command=label):
+                namespace = parse(argv)
+                self.assertTrue(callable(namespace.handler))
+                for name, value in expected.items():
+                    self.assertEqual(getattr(namespace, name), value)
+
+    def test_config_defaults_to_none(self) -> None:
+        namespace = parse(["compact", "--repo", "mod", "--key", "k1", "--input", "i", "--selection", "s", "--output", "o"])
+        self.assertIsNone(namespace.config)
+
+    def test_malformed_values_are_rejected_at_parse_time(self) -> None:
+        bad = [
+            ["prepare", *REPO, "--e2e-root", "e", "--key", "MC", "--output", "o"],
+            ["select", *REPO, "--key", "k1", "--expected-subject-commit", "abc", "--github-output", "o"],
+            ["download", "--artifact-id", "0", "--name", "n", "--digest", DIGEST, "--size", "1", "--run-id", "1", "--output", "o"],
+            ["download", "--artifact-id", "1", "--name", "n", "--digest", "b" * 64, "--size", "1", "--run-id", "1", "--output", "o"],
+            ["admit", *REPO, "--operation", "rotate", "--github-output", "o"],
+            ["validate", *REPO, "--key", "k1", "--kind", "raw", "--input", "i"],
+            ["rotate", *REPO, "--owner-run-id", "3", "--owner-sha", SHA, "--delete-delay-seconds", "nan"],
+            ["conformance", "--repo", "m", "--keys", "k1,k1"],
+            ["conformance", "--repo", "m", "--keys", "k1", "--all"],
+            ["family", "collect", *REPO, "--family", "Bad", "--key", "k1", "--input", "i",
+             "--expected-coverage-sha", SHA, "--output", "o"],
+            ["prepare", "--repo", "m"],
+            ["compose", *REPO, "--key", "k1", "--selected", "d", "--output", "o"],
+        ]
+        for argv in bad:
+            with self.subTest(argv=argv), self.assertRaises(MbError) as caught:
+                parse(argv)
+            self.assertEqual(caught.exception.exit_code, 2)
+            self.assertEqual(caught.exception.reason, "usage")
+
+    def test_usage_errors_are_one_line_exit_2(self) -> None:
+        code, stdout, stderr = run(["select", "--repo", "m", "--key", "Bad key"])
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr.count("\n"), 1)
+        self.assertTrue(stderr.startswith("mod_base: usage: "))
+
+    def test_help_version_and_missing_command(self) -> None:
+        code, stdout, _ = run(["--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("conformance", stdout)
+        code, stdout, _ = run(["--version"])
+        self.assertEqual((code, stdout), (0, "mod-base 0.9.0\n"))
+        code, _, stderr = run([])
+        self.assertEqual(code, 2)
+        self.assertIn("a command is required", stderr)
+        code, _, stderr = run(["deploy"])
+        self.assertEqual(code, 2)
+        self.assertIn("unknown command 'deploy'", stderr)
+
+
+class UnavailableGroupTest(unittest.TestCase):
+    """A missing or unimplemented group fails with one MbError line, never an import traceback."""
+
+    def run_with(self, command: str, module_name: str, module: types.ModuleType | None) -> tuple[int, str]:
+        modules = dict(sys.modules)
+        if module is not None:
+            modules[module_name] = module
+        with mock.patch.dict(cli.COMMANDS, {command: module_name}), mock.patch.dict(sys.modules, modules, clear=True):
+            code, _, stderr = run([command])
+        return code, stderr
+
+    def test_missing_module(self) -> None:
+        code, stderr = self.run_with("budget", "mod_base.not_a_real_module", None)
+        self.assertEqual(code, 2)
+        self.assertIn("command 'budget' is unavailable: mod_base.not_a_real_module cannot be imported", stderr)
+        self.assertNotIn("Traceback", stderr)
+        self.assertEqual(stderr.count("\n"), 1)
+
+    def test_module_without_register(self) -> None:
+        code, stderr = self.run_with("budget", "fake_group", types.ModuleType("fake_group"))
+        self.assertEqual(code, 2)
+        self.assertIn("defines no register()", stderr)
+
+    def test_module_that_does_not_register_the_command(self) -> None:
+        module = types.ModuleType("fake_group")
+        module.register = lambda subparsers: subparsers.add_parser("other")  # type: ignore[attr-defined]
+        code, stderr = self.run_with("budget", "fake_group", module)
+        self.assertEqual(code, 2)
+        self.assertIn("does not register it", stderr)
+
+    def test_unimplemented_entry_point(self) -> None:
+        module = types.ModuleType("fake_group")
+
+        def handler(args: object) -> int:
+            raise NotImplementedError("owned by MB99")
+
+        def register(subparsers) -> None:
+            subparsers.add_parser("budget").set_defaults(handler=handler)
+
+        module.register = register  # type: ignore[attr-defined]
+        code, stderr = self.run_with("budget", "fake_group", module)
+        self.assertEqual(code, 2)
+        self.assertEqual(stderr, "mod_base: not implemented: owned by MB99\n")
+
+    def test_import_error_inside_a_group(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "broken_group.py"
+            path.write_text("import definitely_missing_dependency\n", encoding="utf-8")
+            sys.path.insert(0, directory)
+            try:
+                with mock.patch.dict(cli.COMMANDS, {"budget": "broken_group"}):
+                    code, _, stderr = run(["budget"])
+            finally:
+                sys.path.remove(directory)
+                sys.modules.pop("broken_group", None)
+        self.assertEqual(code, 2)
+        self.assertIn("broken_group cannot be imported (ModuleNotFoundError", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+
+class SelectOutputTest(unittest.TestCase):
+    """``select --output F`` writes the frozen Selected JSON object for ``authenticate``."""
+
+    def test_writes_a_new_file_and_refuses_an_existing_one(self) -> None:
+        from mod_base.pages import commands_control, select
+
+        chosen = select.Selected(kind="handoff", artifact_id=9, name="mb-handoff--mc1.20.1--a1", digest=DIGEST,
+                                 size=10, run_id=2, run_attempt=1)
+        document = {name: getattr(chosen, name) for name in select.SELECTED_KEYS}
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(commands_control.runtime, "build_invocation", return_value=mock.sentinel.invocation), \
+                mock.patch.object(commands_control, "_client", return_value=mock.sentinel.api), \
+                mock.patch.object(select, "select_evidence", return_value=chosen), \
+                mock.patch.object(select.Selected, "to_json", lambda self: document):
+            output = Path(directory) / "selected.json"
+            argv = ["select", *REPO, "--key", "mc1.20.1", "--expected-subject-commit", SHA,
+                    "--github-output", str(Path(directory) / "out"), "--output", str(output)]
+            self.assertEqual(run(argv)[0], 0)
+            from mod_base.model.canonical import canonical_json
+
+            self.assertEqual(output.read_bytes(), canonical_json(document))
+            code, _, stderr = run(argv)
+            self.assertEqual(code, 2)
+            self.assertIn("cannot create", stderr)
+
+    def test_selected_keys_are_the_dataclass_fields(self) -> None:
+        import dataclasses
+
+        from mod_base.pages import select
+
+        self.assertEqual(select.SELECTED_KEYS, tuple(field.name for field in dataclasses.fields(select.Selected)))
+
+
+class GithubOutputTest(unittest.TestCase):
+    def test_appends_single_line_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output"
+            path.write_text("existing=1\n", encoding="utf-8")
+            cli.write_github_output(path, {"eligible": True, "count": 3, "reason": "current", "empty": ""})
+            self.assertEqual(path.read_text(encoding="utf-8"),
+                             "existing=1\neligible=true\ncount=3\nreason=current\nempty=\n")
+            cli.write_github_output(None, {"ignored": "x"})
+
+    def test_rejects_injection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output"
+            for values in ({"a": "x\nb=y"}, {"a": "x\r"}, {"Bad": "x"}, {"a-b": "x"}, {"a": 1.5}, {"a": None}):
+                with self.subTest(values=values), self.assertRaises(MbError):
+                    cli.write_github_output(path, values)  # type: ignore[arg-type]
+            self.assertFalse(path.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

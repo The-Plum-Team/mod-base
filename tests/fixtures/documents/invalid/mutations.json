@@ -1,0 +1,2411 @@
+{
+  "cases": [
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "unknown-top-level-key",
+      "set": [
+        [
+          "/extra",
+          1
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].source: has unknown keys",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "unknown-nested-key",
+      "set": [
+        [
+          "/frames/0/source/extra",
+          true
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[1].derivative.pixel: has unknown keys",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "unknown-metrics-key",
+      "set": [
+        [
+          "/frames/1/derivative/pixel/alpha",
+          1
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/binding"
+      ],
+      "error": "is missing required keys ['binding']",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "missing-required-key"
+    },
+    {
+      "delete": [
+        "/frames/2/runtime_evidence"
+      ],
+      "error": "$.frames[2]: is missing required keys ['runtime_evidence']",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "missing-runtime-evidence"
+    },
+    {
+      "error": "$.provenance.handoff.run_id: must be an integer",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "bool-is-not-an-integer",
+      "set": [
+        [
+          "/provenance/handoff/run_id",
+          true
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[0].java: must be an integer",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "float-is-not-an-integer",
+      "set": [
+        [
+          "/lanes/0/java",
+          17.0
+        ]
+      ]
+    },
+    {
+      "error": "$.comparisons[0].source.changed_fraction: must be a number",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "string-is-not-a-number",
+      "set": [
+        [
+          "/comparisons/0/source/changed_fraction",
+          "0.5"
+        ]
+      ]
+    },
+    {
+      "error": "$.schema_version: must be one of the readable",
+      "expect": "invalid",
+      "fixture": "kit-stamp",
+      "name": "unknown-schema-version",
+      "set": [
+        [
+          "/schema_version",
+          2
+        ]
+      ]
+    },
+    {
+      "error": "$.kind",
+      "expect": "invalid",
+      "fixture": "kit-stamp",
+      "name": "wrong-kind",
+      "set": [
+        [
+          "/kind",
+          "mod-base.kit-stamp-v2"
+        ]
+      ]
+    },
+    {
+      "error": "$.image_policy.webp_quality: must be between 1 and 100",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "webp-quality-out-of-bounds",
+      "set": [
+        [
+          "/image_policy/webp_quality",
+          101
+        ]
+      ]
+    },
+    {
+      "error": "$.image_policy.source_size: exceeds the pixel bound",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "source-size-over-pixel-bound",
+      "set": [
+        [
+          "/image_policy/source_size",
+          [
+            16384,
+            16384
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].source.pixel.dark_fraction: must be between 0.0 and 1.0",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "fraction-above-one",
+      "set": [
+        [
+          "/frames/0/source/pixel/dark_fraction",
+          1.5
+        ]
+      ]
+    },
+    {
+      "error": "$.files[0].size: must be between 1 and",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "zero-size-file",
+      "set": [
+        [
+          "/files/0/size",
+          0
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].derivative.size: must be between 1 and 4194304",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "derivative-too-large",
+      "set": [
+        [
+          "/frames/0/derivative/size",
+          4194305
+        ]
+      ]
+    },
+    {
+      "error": "$.captures: must hold between 1 and 1000 items",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "empty-captures",
+      "set": [
+        [
+          "/captures",
+          []
+        ]
+      ]
+    },
+    {
+      "error": "$.captures[0].title: length must be between 1 and 200",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "title-too-long",
+      "set": [
+        [
+          "/captures/0/title",
+          {
+            "$repeat": [
+              "t",
+              201
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.comparisons[0].region: must satisfy left < right",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "region-inverted",
+      "set": [
+        [
+          "/comparisons/0/region",
+          [
+            0.8,
+            0.1,
+            0.2,
+            0.9
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.key: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "key-double-hyphen",
+      "set": [
+        [
+          "/key",
+          "mc1--20"
+        ]
+      ]
+    },
+    {
+      "error": "$.key: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "key-uppercase",
+      "set": [
+        [
+          "/key",
+          "MC1.20.1"
+        ]
+      ]
+    },
+    {
+      "error": "$.implementation.sha: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "build",
+      "name": "sha1-uppercase",
+      "set": [
+        [
+          "/implementation/sha",
+          "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ]
+      ]
+    },
+    {
+      "error": "$.selected_artifact.digest: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "digest-without-prefix",
+      "set": [
+        [
+          "/selected_artifact/digest",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[0].lane_id: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "lane-id-single-segment",
+      "set": [
+        [
+          "/lanes/0/lane_id",
+          "fabric"
+        ]
+      ]
+    },
+    {
+      "error": "$.family: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "family-envelope",
+      "name": "family-uppercase",
+      "set": [
+        [
+          "/family",
+          "Mod-Compat"
+        ]
+      ]
+    },
+    {
+      "error": "$.subject.branch: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "branch-traversal",
+      "set": [
+        [
+          "/subject/branch",
+          "release/../master"
+        ]
+      ]
+    },
+    {
+      "error": "$.selected_artifact.created_at: must be an RFC 3339",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "timestamp-without-z",
+      "set": [
+        [
+          "/selected_artifact/created_at",
+          "2026-09-25T10:00:00+00:00"
+        ]
+      ]
+    },
+    {
+      "error": "$.selected_artifact.created_at: must be an RFC 3339",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "timestamp-impossible-date",
+      "set": [
+        [
+          "/selected_artifact/created_at",
+          "2026-02-30T10:00:00Z"
+        ]
+      ]
+    },
+    {
+      "error": "$.files[1].path: must be a canonical bundle-relative path",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "bundle-path-traversal",
+      "set": [
+        [
+          "/files/1/path",
+          "runtime/../escape.png"
+        ]
+      ]
+    },
+    {
+      "error": "$.files[1].path: must be a canonical bundle-relative path",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "bundle-path-absolute",
+      "set": [
+        [
+          "/files/1/path",
+          "/etc/passwd"
+        ]
+      ]
+    },
+    {
+      "error": "$.kit.repository: must be 'The-Plum-Team/mod-base'",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "kit-repository-foreign",
+      "set": [
+        [
+          "/kit/repository",
+          "attacker/mod-base"
+        ]
+      ]
+    },
+    {
+      "error": "$.version: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "kit-stamp",
+      "name": "kit-version-grammar",
+      "set": [
+        [
+          "/version",
+          "v0.9.0"
+        ]
+      ]
+    },
+    {
+      "error": "$.extensions.names[0]: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "extension-name-grammar",
+      "set": [
+        [
+          "/extensions",
+          {
+            "names": [
+              "QuickSkin.runtime"
+            ],
+            "path": "extensions.json",
+            "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": 10
+          }
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-4096",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          {
+            "$repeat": [
+              "a",
+              4096
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].runtime_evidence: length must be between 1 and 4096",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-4097",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          {
+            "$repeat": [
+              "a",
+              4097
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].runtime_evidence: must be non-blank text without control characters",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-newline",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          "PASS\nforged line"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].runtime_evidence: must be non-blank text without control characters",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-tab",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          "PASS\tstep"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].runtime_evidence: must be non-blank text without control characters",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-escape",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          "PASS \u001b[31m"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].runtime_evidence: must be non-blank text without control characters",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-del",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          "PASS "
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].runtime_evidence: must be non-blank text",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-blank",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          "    "
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].runtime_evidence: length must be between 1 and 4096",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-empty",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          ""
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-unicode",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          "PASS: cape frame 2 → réf ✓ ○"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "handoff",
+      "name": "runtime-evidence-c1-allowed",
+      "set": [
+        [
+          "/frames/0/runtime_evidence",
+          "PASS  next"
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[0].pairs[0].runtime_evidence: must be non-blank text",
+      "expect": "invalid",
+      "fixture": "family-paired",
+      "name": "paired-runtime-evidence-del",
+      "set": [
+        [
+          "/lanes/0/pairs/0/runtime_evidence",
+          "x"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[3].runtime_evidence: length must be between 1 and 4096",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-runtime-evidence-4097",
+      "set": [
+        [
+          "/frames/3/runtime_evidence",
+          {
+            "$repeat": [
+              "b",
+              4097
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.captures[0].lane_id: references no lane",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "capture-unknown-lane",
+      "set": [
+        [
+          "/captures/0/lane_id",
+          "1.20.1-quilt/full"
+        ]
+      ]
+    },
+    {
+      "error": "$.captures[0].role: is not a role of its lane",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "capture-unknown-role",
+      "set": [
+        [
+          "/captures/0/role",
+          "client_b"
+        ]
+      ]
+    },
+    {
+      "error": "$.captures[1].capture_order: must strictly increase",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "capture-order-not-increasing",
+      "set": [
+        [
+          "/captures/1/capture_order",
+          0
+        ]
+      ]
+    },
+    {
+      "error": "$.captures[1].frame_id: duplicates frame_id",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "duplicate-frame-id",
+      "set": [
+        [
+          "/captures/1/frame_id",
+          "1.20.1-fabric/full/client_a/title_screen"
+        ]
+      ]
+    },
+    {
+      "error": "$.comparisons[0].second_frame_id: must reference a frame of the same lane and role",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "comparison-across-lanes",
+      "set": [
+        [
+          "/comparisons/0/second_frame_id",
+          "1.20.1-forge/full/client_a/skin_apply"
+        ]
+      ]
+    },
+    {
+      "error": "$.comparisons[0]: compares a frame with itself",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "comparison-self",
+      "set": [
+        [
+          "/comparisons/0/second_frame_id",
+          "1.20.1-fabric/full/client_a/title_screen"
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[0].scenario: is not a declared scenario",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "undeclared-scenario",
+      "set": [
+        [
+          "/lanes/0/scenario",
+          "session"
+        ]
+      ]
+    },
+    {
+      "error": "$.anchor.artifact_nodes[0]: is not an artifact node of any lane",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "anchor-node-unknown",
+      "set": [
+        [
+          "/anchor/artifact_nodes",
+          [
+            "26.3-fabric"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.scope: a selected scope requires detail_sha256",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "selected-scope-without-hash",
+      "set": [
+        [
+          "/scope",
+          {
+            "kind": "selected"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.scope.detail_sha256: must equal the SHA-256",
+      "expect": "invalid",
+      "fixture": "expectation",
+      "name": "scope-detail-hash-mismatch",
+      "set": [
+        [
+          "/scope",
+          {
+            "detail": {
+              "scope": "legacy"
+            },
+            "detail_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "kind": "complete"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.provenance.coverage_sha: must equal subject.commit",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "coverage-not-subject",
+      "set": [
+        [
+          "/provenance/coverage_sha",
+          "dddddddddddddddddddddddddddddddddddddddd"
+        ]
+      ]
+    },
+    {
+      "error": "$.provenance.tested: reuse 'none' requires the tested run",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "reuse-none-other-run",
+      "set": [
+        [
+          "/provenance/tested/run_id",
+          999
+        ]
+      ]
+    },
+    {
+      "error": "$.extensions: reuse 'delegated' requires extensions",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "reuse-delegated-without-extensions",
+      "set": [
+        [
+          "/provenance/reuse",
+          "delegated"
+        ],
+        [
+          "/provenance/tested/run_id",
+          999
+        ]
+      ]
+    },
+    {
+      "error": "$.provenance.handoff: a handoff run is its own controller",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "handoff-claim-foreign-controller",
+      "set": [
+        [
+          "/provenance/handoff/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].loader: must equal its lane's value",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "frame-lane-mismatch",
+      "set": [
+        [
+          "/frames/0/loader",
+          "forge"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].source.pixel: dimensions must equal",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "frame-pixel-dimension-mismatch",
+      "set": [
+        [
+          "/frames/0/source/pixel/width",
+          1280
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].source.pixel.file_sha256: must equal sha256",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "frame-pixel-file-sha-mismatch",
+      "set": [
+        [
+          "/frames/0/source/pixel/file_sha256",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ]
+      ]
+    },
+    {
+      "error": "$.comparisons[0].source.changed_fraction: is below the required minimum",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "comparison-below-minimum",
+      "set": [
+        [
+          "/comparisons/0/source/changed_fraction",
+          0.01
+        ]
+      ]
+    },
+    {
+      "error": "$.comparisons[0].source.required_changed_fraction: must equal",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "comparison-required-mismatch",
+      "set": [
+        [
+          "/comparisons/0/source/required_changed_fraction",
+          0.01
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/comparisons/0/source/region"
+      ],
+      "error": "$.comparisons[0].source.region: must equal the comparison region",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "comparison-region-mismatch"
+    },
+    {
+      "error": "files must be sorted by path",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "files-unsorted",
+      "set": [
+        [
+          "/files",
+          [
+            {
+              "path": "runtime/profiles/1.20.1-forge/result.json",
+              "sha256": "9728763e6dc0f7662c14916fa320ecdea9ddaf70bd9bc8d66cc9cd56e2b7b1db",
+              "size": 20480
+            },
+            {
+              "path": "runtime/profiles/1.20.1-forge/client_a/title_screen.png",
+              "sha256": "ce31b1b285aca3856688092f785f2911f136ce08f404961c99733fb7f83cff89",
+              "size": 654321
+            },
+            {
+              "path": "runtime/profiles/1.20.1-forge/client_a/skin_apply.png",
+              "sha256": "d39c2b041341ec31d2b44dd24a74a754b6d4c7ac108167b69d90e5b5117418bb",
+              "size": 654321
+            },
+            {
+              "path": "runtime/profiles/1.20.1-fabric/result.json",
+              "sha256": "8733853ec41704c7b7411bc150cb6f8917d56f22ea3020f1c8d39a666cc8e017",
+              "size": 20480
+            },
+            {
+              "path": "runtime/profiles/1.20.1-fabric/client_a/title_screen.png",
+              "sha256": "eb27348a2175a991145c0b34bed04ca26e1f3f48f461090b257d501cee817d99",
+              "size": 654321
+            },
+            {
+              "path": "runtime/profiles/1.20.1-fabric/client_a/skin_apply.png",
+              "sha256": "f8c139d85be75703d14db9a05d5c2fb64e4ce3fa0c8d5710ec02db610254b48d",
+              "size": 654321
+            },
+            {
+              "path": "expectation.json",
+              "sha256": "f3af073c4d19292b63afdf558c354fd6987c6f96d93839ce8e4226e83dd335a5",
+              "size": 2869
+            }
+          ]
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/files/1"
+      ],
+      "error": "is missing from files",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "files-missing-frame"
+    },
+    {
+      "error": "only expectation.json, extensions.json and runtime/**.{json,png} may be shipped",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "files-foreign-extension",
+      "set": [
+        [
+          "/files/7",
+          {
+            "path": "runtime/zz.sh",
+            "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": 1
+          }
+        ]
+      ]
+    },
+    {
+      "error": "must not list manifest.json",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "files-list-manifest",
+      "set": [
+        [
+          "/files",
+          [
+            {
+              "path": "expectation.json",
+              "sha256": "f3af073c4d19292b63afdf558c354fd6987c6f96d93839ce8e4226e83dd335a5",
+              "size": 2869
+            },
+            {
+              "path": "manifest.json",
+              "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "size": 1
+            },
+            {
+              "path": "runtime/profiles/1.20.1-fabric/client_a/skin_apply.png",
+              "sha256": "f8c139d85be75703d14db9a05d5c2fb64e4ce3fa0c8d5710ec02db610254b48d",
+              "size": 654321
+            },
+            {
+              "path": "runtime/profiles/1.20.1-fabric/client_a/title_screen.png",
+              "sha256": "eb27348a2175a991145c0b34bed04ca26e1f3f48f461090b257d501cee817d99",
+              "size": 654321
+            },
+            {
+              "path": "runtime/profiles/1.20.1-fabric/result.json",
+              "sha256": "8733853ec41704c7b7411bc150cb6f8917d56f22ea3020f1c8d39a666cc8e017",
+              "size": 20480
+            },
+            {
+              "path": "runtime/profiles/1.20.1-forge/client_a/skin_apply.png",
+              "sha256": "d39c2b041341ec31d2b44dd24a74a754b6d4c7ac108167b69d90e5b5117418bb",
+              "size": 654321
+            },
+            {
+              "path": "runtime/profiles/1.20.1-forge/client_a/title_screen.png",
+              "sha256": "ce31b1b285aca3856688092f785f2911f136ce08f404961c99733fb7f83cff89",
+              "size": 654321
+            },
+            {
+              "path": "runtime/profiles/1.20.1-forge/result.json",
+              "sha256": "9728763e6dc0f7662c14916fa320ecdea9ddaf70bd9bc8d66cc9cd56e2b7b1db",
+              "size": 20480
+            }
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.expectation: sha256/size must equal the files record",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "expectation-ref-mismatch",
+      "set": [
+        [
+          "/expectation/size",
+          1
+        ]
+      ]
+    },
+    {
+      "context": {
+        "expectation": "expectation"
+      },
+      "error": "$.frames[0].title: must equal the expectation capture at the same position",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "handoff-frame-title-differs",
+      "set": [
+        [
+          "/frames/0/title",
+          "Another title"
+        ]
+      ]
+    },
+    {
+      "context": {
+        "expectation": "expectation"
+      },
+      "error": "$.lanes[0].java: must equal the expectation lane",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "handoff-lane-java-differs",
+      "set": [
+        [
+          "/lanes/0/java",
+          21
+        ]
+      ]
+    },
+    {
+      "context": {
+        "expectation": "expectation"
+      },
+      "expect": "valid",
+      "fixture": "handoff",
+      "name": "handoff-with-expectation"
+    },
+    {
+      "error": "$.frames[0].derivative.path: must be images/<sha256>.webp",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "compact-derivative-path",
+      "set": [
+        [
+          "/frames/0/derivative/path",
+          "images/other.webp"
+        ]
+      ]
+    },
+    {
+      "context": {
+        "expectation": "expectation"
+      },
+      "error": "dimensions must equal thumbnail(source, derivative_box) = 1600x900",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "compact-derivative-size",
+      "set": [
+        [
+          "/frames/0/derivative/width",
+          1599
+        ],
+        [
+          "/frames/0/derivative/pixel/width",
+          1599
+        ]
+      ]
+    },
+    {
+      "context": {
+        "expectation": "expectation"
+      },
+      "expect": "valid",
+      "fixture": "compact",
+      "name": "compact-with-expectation"
+    },
+    {
+      "error": "epoch and tested are required exactly for composed frames",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "compact-epoch-on-complete",
+      "set": [
+        [
+          "/frames/0/epoch",
+          "selected"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/scope/components"
+      ],
+      "error": "$.scope: components are required exactly for a composed scope",
+      "expect": "invalid",
+      "fixture": "compact-composed",
+      "name": "composed-missing-components"
+    },
+    {
+      "error": "must be an mb-baseline name for this key",
+      "expect": "invalid",
+      "fixture": "compact-composed",
+      "name": "composed-baseline-foreign-key",
+      "set": [
+        [
+          "/scope/components/baseline/name",
+          "mb-baseline--mc26.3--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa--7"
+        ]
+      ]
+    },
+    {
+      "error": "$.source_artifact.name: must be the handoff name of this key",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "compact-source-name-wrong-key",
+      "set": [
+        [
+          "/source_artifact/name",
+          "mb-handoff--mc26.3--a1"
+        ]
+      ]
+    },
+    {
+      "error": "$.comparisons[1].derivative.changed_fraction: is below the required minimum",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "compact-derivative-comparison-below",
+      "set": [
+        [
+          "/comparisons/1/derivative/changed_fraction",
+          0.0
+        ]
+      ]
+    },
+    {
+      "error": "must be exactly expectation.json, selection.json",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "compact-extra-image-file",
+      "set": [
+        [
+          "/files",
+          [
+            {
+              "path": "expectation.json",
+              "sha256": "f3af073c4d19292b63afdf558c354fd6987c6f96d93839ce8e4226e83dd335a5",
+              "size": 2869
+            },
+            {
+              "path": "images/1ac3856fafcd8aed08fdb32a986978e4f5cbc9e27370ba72e4f677f60ee24f7f.webp",
+              "sha256": "1ac3856fafcd8aed08fdb32a986978e4f5cbc9e27370ba72e4f677f60ee24f7f",
+              "size": 98765
+            },
+            {
+              "path": "images/378e273a9bc3150008d4c0a84bd8b6e3395982ac6028505565973ba294648e90.webp",
+              "sha256": "378e273a9bc3150008d4c0a84bd8b6e3395982ac6028505565973ba294648e90",
+              "size": 98765
+            },
+            {
+              "path": "images/c1a5702ca60574a89c914f6279d6a791f2f36c1dc7943b83a7f9167d2d1c84c9.webp",
+              "sha256": "c1a5702ca60574a89c914f6279d6a791f2f36c1dc7943b83a7f9167d2d1c84c9",
+              "size": 98765
+            },
+            {
+              "path": "images/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.webp",
+              "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "size": 5
+            },
+            {
+              "path": "images/f39318ff3b38be1521f7172e431b9d3fe5b1d6ee77f70cc16477f6fcc97805b8.webp",
+              "sha256": "f39318ff3b38be1521f7172e431b9d3fe5b1d6ee77f70cc16477f6fcc97805b8",
+              "size": 98765
+            },
+            {
+              "path": "selection.json",
+              "sha256": "1af3b1ee5ec6ac369bc75ced1fc2769380f86813356d0fd94a848f1753d82e0f",
+              "size": 2190
+            }
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "an anchor requires a direct canonical run",
+      "expect": "invalid",
+      "fixture": "anchor",
+      "name": "anchor-not-direct-run",
+      "set": [
+        [
+          "/subject/commit",
+          "ffffffffffffffffffffffffffffffffffffffff"
+        ]
+      ]
+    },
+    {
+      "error": "$.reference.loaders: must equal the sorted distinct values",
+      "expect": "invalid",
+      "fixture": "anchor",
+      "name": "anchor-reference-mismatch",
+      "set": [
+        [
+          "/reference/loaders",
+          [
+            "fabric"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "pixel_sha256: must equal pixel.pixel_sha256",
+      "expect": "invalid",
+      "fixture": "anchor",
+      "name": "anchor-pixel-sha-mismatch",
+      "set": [
+        [
+          "/frames/0/source/pixel_sha256",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ]
+      ]
+    },
+    {
+      "context": {
+        "expectation": "expectation"
+      },
+      "expect": "valid",
+      "fixture": "anchor",
+      "name": "anchor-with-expectation"
+    },
+    {
+      "error": "$.source.attestation_job: is required exactly when reuse is 'attested'",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-attested-without-job",
+      "set": [
+        [
+          "/source/reuse",
+          "attested"
+        ],
+        [
+          "/source/tested_run/run_id",
+          7
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "selection",
+      "name": "selection-kit-binding-older-kit",
+      "set": [
+        [
+          "/source/kit_binding/sha",
+          "9999999999999999999999999999999999999999"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.handoff_run.head_sha: must equal the run's own commit",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-handoff-run-head",
+      "set": [
+        [
+          "/source/handoff_run/head_sha",
+          "8888888888888888888888888888888888888888"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "selection",
+      "name": "selection-delegated-tested-head",
+      "set": [
+        [
+          "/source/reuse",
+          "delegated"
+        ],
+        [
+          "/source/tested_run/run_id",
+          7
+        ],
+        [
+          "/source/tested_run/head_sha",
+          "8888888888888888888888888888888888888888"
+        ],
+        [
+          "/extensions_verified",
+          [
+            "quick-skin.runtime_source"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.provenance.producer: a handoff or producer run is its own controller",
+      "expect": "invalid",
+      "fixture": "family-paired",
+      "name": "paired-producer-foreign-controller",
+      "set": [
+        [
+          "/provenance/producer/controller_sha",
+          "8888888888888888888888888888888888888888"
+        ]
+      ]
+    },
+    {
+      "error": "must be the cache name of this key and coverage",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-cache-binding-mode",
+      "set": [
+        [
+          "/selected_artifact/kind",
+          "cache"
+        ]
+      ]
+    },
+    {
+      "error": "$.implementation.workflow_ref: must be <repository>/.github/workflows/pages.yml",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-workflow-ref-foreign",
+      "set": [
+        [
+          "/implementation/workflow_ref",
+          "The-Plum-Team/Quick-Skin-Mod/.github/workflows/evil.yml@refs/heads/master"
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0].key: is not an ordinary bundle key",
+      "expect": "invalid",
+      "fixture": "promotion",
+      "name": "promotion-family-unknown-key",
+      "set": [
+        [
+          "/families/0/key",
+          "mc26.3"
+        ]
+      ]
+    },
+    {
+      "error": "collected fields are required exactly for an available family",
+      "expect": "invalid",
+      "fixture": "promotion",
+      "name": "promotion-family-unavailable-with-artifact",
+      "set": [
+        [
+          "/families/0/available",
+          false
+        ],
+        [
+          "/families/0/status",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "promotion",
+      "name": "promotion-family-superseded",
+      "set": [
+        [
+          "/families/0",
+          {
+            "available": false,
+            "family": "mod-compatibility",
+            "key": "mc1.20.1",
+            "status": "superseded"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.heads: must map the implementation branch",
+      "expect": "invalid",
+      "fixture": "promotion",
+      "name": "promotion-heads-mismatch",
+      "set": [
+        [
+          "/heads",
+          {
+            "master": "7777777777777777777777777777777777777777"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.implementation.run_url: must be the run URL",
+      "expect": "invalid",
+      "fixture": "build",
+      "name": "build-run-url-mismatch",
+      "set": [
+        [
+          "/implementation/run_url",
+          "https://github.com/The-Plum-Team/Quick-Skin-Mod/actions/runs/1"
+        ]
+      ]
+    },
+    {
+      "error": "$.releases[0].short_sha: must be a prefix of subject_commit",
+      "expect": "invalid",
+      "fixture": "site",
+      "name": "site-short-sha-mismatch",
+      "set": [
+        [
+          "/releases/0/short_sha",
+          "0000000"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.tagline: must be trimmed printable text without markup",
+      "expect": "invalid",
+      "fixture": "site",
+      "name": "site-display-text-markup",
+      "set": [
+        [
+          "/project/tagline",
+          "<script>alert(1)</script>"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.name: must be trimmed printable text without markup",
+      "expect": "invalid",
+      "fixture": "site",
+      "name": "site-display-text-template",
+      "set": [
+        [
+          "/project/name",
+          "{{mb:name}}"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.links[0].url: must be an https URL",
+      "expect": "invalid",
+      "fixture": "site",
+      "name": "site-http-link",
+      "set": [
+        [
+          "/project/links/0/url",
+          "http://modrinth.com/mod/quick-skin"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.links[0].url: must be an https URL",
+      "expect": "invalid",
+      "fixture": "site",
+      "name": "site-userinfo-link",
+      "set": [
+        [
+          "/project/links/0/url",
+          "https://user@modrinth.com/mod"
+        ]
+      ]
+    },
+    {
+      "error": "$.releases[0].frame_count: must equal its frames",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-frame-count",
+      "set": [
+        [
+          "/releases/0/frame_count",
+          5
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].image: must be images/<key>/<published.file_sha256>.webp",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-image-path",
+      "set": [
+        [
+          "/frames/0/image",
+          "images/other.webp"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames: must hold between 1 and",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-empty-frames",
+      "set": [
+        [
+          "/frames",
+          []
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "gallery",
+      "name": "gallery-no-families",
+      "set": [
+        [
+          "/families",
+          []
+        ],
+        [
+          "/copy/family_notes",
+          {}
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "gallery",
+      "name": "gallery-unavailable-family",
+      "set": [
+        [
+          "/families/0",
+          {
+            "available": false,
+            "description": "No compatibility evidence published yet.",
+            "family": "mod-compatibility",
+            "lanes": [],
+            "not_applicable": [],
+            "releases": [],
+            "status": "unavailable",
+            "title": "Mod compatibility"
+          }
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "gallery",
+      "name": "gallery-superseded-family",
+      "set": [
+        [
+          "/families/0",
+          {
+            "available": false,
+            "description": "Contract drift: republished after the next wave.",
+            "family": "mod-compatibility",
+            "lanes": [],
+            "not_applicable": [],
+            "releases": [
+              {
+                "available": false,
+                "key": "mc1.20.1",
+                "status": "superseded"
+              }
+            ],
+            "status": "superseded",
+            "title": "Mod compatibility"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "must be an available release key of this family",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-unavailable-family-with-lanes",
+      "set": [
+        [
+          "/families/0/available",
+          false
+        ],
+        [
+          "/families/0/status",
+          "superseded"
+        ],
+        [
+          "/families/0/releases/0",
+          {
+            "available": false,
+            "key": "mc1.20.1",
+            "status": "superseded"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0]: available/status must summarize its releases",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-status-not-summary",
+      "set": [
+        [
+          "/families/0/available",
+          false
+        ],
+        [
+          "/families/0/status",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/families/0/releases"
+      ],
+      "error": "$.families[0]: is missing required keys ['releases']",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-spec-shape-without-releases"
+    },
+    {
+      "error": "$.families[0].releases[0].key: is not a release key of this gallery",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-release-unknown-key",
+      "set": [
+        [
+          "/families/0/releases/0/key",
+          "mc26.3"
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0].releases[0].coverage_sha: must equal the ordinary release coverage",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-coverage-mismatch",
+      "set": [
+        [
+          "/families/0/releases/0/coverage_sha",
+          "dddddddddddddddddddddddddddddddddddddddd"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/families/0/releases/0/links"
+      ],
+      "error": "$.families[0].releases[0]: coverage_sha, contracts, links and image_policy exist exactly for an available key",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-available-without-links"
+    },
+    {
+      "error": "exist exactly for an available key",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-unavailable-with-policy",
+      "set": [
+        [
+          "/families/0/releases/0/available",
+          false
+        ],
+        [
+          "/families/0/releases/0/status",
+          "unavailable"
+        ]
+      ]
+    },
+    {
+      "error": "$.families[0].releases[0].links[0].run_url: must be a run of this repository",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-link-foreign-repository",
+      "set": [
+        [
+          "/families/0/releases/0/links/0/run_url",
+          "https://github.com/attacker/repo/actions/runs/303"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/families/0/lanes/0/key"
+      ],
+      "error": "$.families[0].lanes[0]: is missing required keys ['key']",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-lane-without-key"
+    },
+    {
+      "error": "$.families[0].not_applicable[0].key: must be an available release key",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-not-applicable-foreign-key",
+      "set": [
+        [
+          "/families/0/not_applicable/0/key",
+          "mc26.3"
+        ]
+      ]
+    },
+    {
+      "error": "$.releases[0].handoff.run_url: must be the run URL of its run_id",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-release-run-url-foreign-id",
+      "set": [
+        [
+          "/releases/0/handoff/run_url",
+          "https://github.com/The-Plum-Team/Quick-Skin-Mod/actions/runs/1"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].provenance.handoff_run_url: must be a run of this repository",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-frame-run-url-foreign-repository",
+      "set": [
+        [
+          "/frames/0/provenance/handoff_run_url",
+          "https://github.com/attacker/repo/actions/runs/101"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.repository_url: must be https://github.com/<owner>/<name>",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-repository-url-not-github",
+      "set": [
+        [
+          "/project/repository_url",
+          "https://gitlab.com/The-Plum-Team/Quick-Skin-Mod"
+        ]
+      ]
+    },
+    {
+      "error": "$.project.actions_url: must be a workflow page of project.repository_url",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-actions-url-foreign",
+      "set": [
+        [
+          "/project/actions_url",
+          "https://github.com/attacker/repo/actions/workflows/x.yml"
+        ]
+      ]
+    },
+    {
+      "error": "must be families/mod-compatibility/images/<sha256>.webp",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-image-prefix",
+      "set": [
+        [
+          "/families/0/lanes/0/pairs/0/reference/image/path",
+          "images/x.webp"
+        ]
+      ]
+    },
+    {
+      "error": "$.copy.family_notes.other-family: names no listed family",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-family-note-unknown",
+      "set": [
+        [
+          "/copy/family_notes/other-family",
+          "Note"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].provenance.tested_run_url: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-foreign-run-url",
+      "set": [
+        [
+          "/frames/0/provenance/tested_run_url",
+          "https://evil.example/actions/runs/1"
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[0].pairs[0].verdict: is not publishable",
+      "expect": "invalid",
+      "fixture": "family-paired",
+      "name": "paired-defect",
+      "set": [
+        [
+          "/lanes/0/pairs/0/verdict/defect",
+          true
+        ]
+      ]
+    },
+    {
+      "error": "is not publishable",
+      "expect": "invalid",
+      "fixture": "family-paired",
+      "name": "paired-runtime-failed",
+      "set": [
+        [
+          "/lanes/0/pairs/0/verdict/runtime_passed",
+          false
+        ]
+      ]
+    },
+    {
+      "error": "$.status: must be 'available'",
+      "expect": "invalid",
+      "fixture": "family-paired",
+      "name": "paired-status-superseded",
+      "set": [
+        [
+          "/status",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "error": "dimensions must equal thumbnail(source, derivative_box) = 1280x720",
+      "expect": "invalid",
+      "fixture": "family-paired",
+      "name": "paired-image-dimensions",
+      "set": [
+        [
+          "/lanes/0/pairs/0/candidate/image/height",
+          719
+        ],
+        [
+          "/lanes/0/pairs/0/candidate/image/pixel/height",
+          719
+        ]
+      ]
+    },
+    {
+      "error": "duplicates a lane or another not-applicable entry",
+      "expect": "invalid",
+      "fixture": "family-paired",
+      "name": "paired-not-applicable-overlap",
+      "set": [
+        [
+          "/not_applicable/0/artifact_node",
+          "1.20.1-fabric"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "family-paired",
+      "name": "paired-matches-reference-null"
+    },
+    {
+      "error": "$.native.manifest_sha256: must equal the files record of manifest.json",
+      "expect": "invalid",
+      "fixture": "family-envelope",
+      "name": "envelope-manifest-mismatch",
+      "set": [
+        [
+          "/native/manifest_sha256",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ]
+      ]
+    },
+    {
+      "error": "must not list envelope.json",
+      "expect": "invalid",
+      "fixture": "family-envelope",
+      "name": "envelope-lists-itself",
+      "set": [
+        [
+          "/files",
+          [
+            {
+              "path": "envelope.json",
+              "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "size": 3
+            },
+            {
+              "path": "images/0163f2a6305882aed13ff6b4325d062a9873a54633e4b3c8b703e47a5474c589.webp",
+              "sha256": "0163f2a6305882aed13ff6b4325d062a9873a54633e4b3c8b703e47a5474c589",
+              "size": 45678
+            },
+            {
+              "path": "images/603393001008c024ec42d762ee5c417943e0cf206aa51e973cf11cfd1ce56aef.webp",
+              "sha256": "603393001008c024ec42d762ee5c417943e0cf206aa51e973cf11cfd1ce56aef",
+              "size": 45679
+            },
+            {
+              "path": "manifest.json",
+              "sha256": "1b82ca0f68b08a77a67b4057997bdd7f6c5f3e7d36063bff74a71d9ea0ee1053",
+              "size": 34567
+            }
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.carried_from: must differ from coverage_sha",
+      "expect": "invalid",
+      "fixture": "family-envelope",
+      "name": "envelope-carried-from-self",
+      "set": [
+        [
+          "/carried_from",
+          "eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ]
+      ]
+    },
+    {
+      "error": "only fragment files may list required markers or lines",
+      "expect": "invalid",
+      "fixture": "template-manifest",
+      "name": "template-managed-with-lines",
+      "set": [
+        [
+          "/files/0/lines",
+          [
+            "x"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "a managed source must live under managed/",
+      "expect": "invalid",
+      "fixture": "template-manifest",
+      "name": "template-managed-from-seed",
+      "set": [
+        [
+          "/files/0/source",
+          "seed/.gitattributes"
+        ]
+      ]
+    },
+    {
+      "error": "$.files[0].path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "template-manifest",
+      "name": "template-git-directory",
+      "set": [
+        [
+          "/files/0/path",
+          ".git/hooks/pre-commit"
+        ]
+      ]
+    },
+    {
+      "error": "$.tree_digest: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "kit-stamp",
+      "name": "stamp-digest-grammar",
+      "set": [
+        [
+          "/tree_digest",
+          "sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+      ]
+    },
+    {
+      "error": "$.provenance.tested: reuse 'none' requires the tested branch and commit to be the subject's",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "reuse-none-tested-commit-differs",
+      "set": [
+        [
+          "/provenance/tested/commit",
+          "ffffffffffffffffffffffffffffffffffffffff"
+        ]
+      ]
+    },
+    {
+      "error": "$.provenance.tested: reuse 'none' requires the tested branch and commit to be the subject's",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "reuse-none-tested-branch-differs",
+      "set": [
+        [
+          "/provenance/tested/branch",
+          "some/other-branch"
+        ]
+      ]
+    },
+    {
+      "error": "$.provenance.tested: reuse 'none' requires the tested controller to be the handoff run's own branch and commit",
+      "expect": "invalid",
+      "fixture": "handoff",
+      "name": "reuse-none-tested-controller-differs",
+      "set": [
+        [
+          "/provenance/tested/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "handoff",
+      "name": "reuse-none-controller-split",
+      "set": [
+        [
+          "/provenance/handoff/commit",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/provenance/handoff/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/provenance/tested/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "handoff",
+      "name": "reuse-attested-distinct-tested-run",
+      "set": [
+        [
+          "/provenance/reuse",
+          "attested"
+        ],
+        [
+          "/provenance/tested/run_id",
+          999
+        ],
+        [
+          "/provenance/tested/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.tested_run: reuse 'none' requires the tested branch and commit to be the subject's",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-reuse-none-tested-commit",
+      "set": [
+        [
+          "/source/tested_run/commit",
+          "ffffffffffffffffffffffffffffffffffffffff"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.tested_run: reuse 'none' requires the tested branch and commit to be the subject's",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-reuse-none-tested-branch",
+      "set": [
+        [
+          "/source/tested_run/branch",
+          "some/other-branch"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.tested_run.event: reuse 'none' records the handoff run itself",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-reuse-none-tested-event",
+      "set": [
+        [
+          "/source/tested_run/event",
+          "schedule"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.tested_run.display_title: reuse 'none' records the handoff run itself",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-reuse-none-display-title-differs",
+      "set": [
+        [
+          "/source/tested_run/display_title",
+          "Packaged E2E / x"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.kit_binding.source: a handoff binds its kit through workflow_file",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-kit-binding-source-for-handoff",
+      "set": [
+        [
+          "/source/kit_binding/source",
+          "referenced_workflows"
+        ]
+      ]
+    },
+    {
+      "error": "$.selected_artifact.workflow_path: must be the handoff run's workflow",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-handoff-workflow-differs",
+      "set": [
+        [
+          "/selected_artifact/workflow_path",
+          ".github/workflows/other.yml"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.handoff_run: attested reuse requires a verified display_title",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-attested-without-display-title",
+      "set": [
+        [
+          "/source/reuse",
+          "attested"
+        ],
+        [
+          "/source/tested_run/run_id",
+          7
+        ],
+        [
+          "/source/attestation_job",
+          {
+            "conclusion": "success",
+            "id": 55,
+            "name": "Attest exact tested packaged tree / Verify exact tested tree"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.source.tested_run: attested reuse requires a verified display_title",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-attested-tested-without-display-title",
+      "set": [
+        [
+          "/source/reuse",
+          "attested"
+        ],
+        [
+          "/source/tested_run/run_id",
+          7
+        ],
+        [
+          "/source/attestation_job",
+          {
+            "conclusion": "success",
+            "id": 55,
+            "name": "Attest exact tested packaged tree / Verify exact tested tree"
+          }
+        ],
+        [
+          "/source/handoff_run/display_title",
+          "Packaged E2E / eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "selection",
+      "name": "selection-attested-valid",
+      "set": [
+        [
+          "/source/reuse",
+          "attested"
+        ],
+        [
+          "/source/tested_run/run_id",
+          7
+        ],
+        [
+          "/source/attestation_job",
+          {
+            "conclusion": "success",
+            "id": 55,
+            "name": "Attest exact tested packaged tree / Verify exact tested tree"
+          }
+        ],
+        [
+          "/source/handoff_run/display_title",
+          "Packaged E2E / eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ],
+        [
+          "/source/tested_run/display_title",
+          "Packaged E2E / eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.tested_run.head_sha: must equal the tested run's controller_sha",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-attested-tested-head-foreign",
+      "set": [
+        [
+          "/source/reuse",
+          "attested"
+        ],
+        [
+          "/source/tested_run/run_id",
+          7
+        ],
+        [
+          "/source/attestation_job",
+          {
+            "conclusion": "success",
+            "id": 55,
+            "name": "Attest exact tested packaged tree / Verify exact tested tree"
+          }
+        ],
+        [
+          "/source/handoff_run/display_title",
+          "t"
+        ],
+        [
+          "/source/tested_run/display_title",
+          "t"
+        ],
+        [
+          "/source/tested_run/head_sha",
+          "8888888888888888888888888888888888888888"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.handoff_run: a verified display_title is mandatory when the handoff controller differs from the subject",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-controller-split-without-display-title",
+      "set": [
+        [
+          "/source/handoff_run/commit",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/handoff_run/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/handoff_run/head_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/tested_run/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/tested_run/head_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "selection",
+      "name": "selection-controller-split-valid",
+      "set": [
+        [
+          "/source/handoff_run/commit",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/handoff_run/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/handoff_run/head_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/tested_run/controller_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/tested_run/head_sha",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        [
+          "/source/handoff_run/display_title",
+          "Packaged E2E / eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ],
+        [
+          "/source/tested_run/display_title",
+          "Packaged E2E / eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "selection",
+      "name": "selection-cache-valid",
+      "set": [
+        [
+          "/selected_artifact/kind",
+          "cache"
+        ],
+        [
+          "/selected_artifact/name",
+          "mb-cache--mc1.20.1--eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ],
+        [
+          "/selected_artifact/run_id",
+          450
+        ],
+        [
+          "/selected_artifact/workflow_path",
+          ".github/workflows/pages.yml"
+        ],
+        [
+          "/binding/mode",
+          "cache-revalidated"
+        ],
+        [
+          "/source/kit_binding/source",
+          "referenced_workflows"
+        ]
+      ]
+    },
+    {
+      "error": "$.source.kit_binding.source: a cache binds its kit through referenced_workflows",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-cache-kit-binding-workflow-file",
+      "set": [
+        [
+          "/selected_artifact/kind",
+          "cache"
+        ],
+        [
+          "/selected_artifact/name",
+          "mb-cache--mc1.20.1--eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ],
+        [
+          "/selected_artifact/run_id",
+          450
+        ],
+        [
+          "/selected_artifact/workflow_path",
+          ".github/workflows/pages.yml"
+        ],
+        [
+          "/binding/mode",
+          "cache-revalidated"
+        ],
+        [
+          "/source/kit_binding/source",
+          "referenced_workflows"
+        ],
+        [
+          "/source/kit_binding/source",
+          "workflow_file"
+        ]
+      ]
+    },
+    {
+      "error": "$.selected_artifact.workflow_path: a cache is owned by a .github/workflows/pages.yml run",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-cache-not-pages-owned",
+      "set": [
+        [
+          "/selected_artifact/kind",
+          "cache"
+        ],
+        [
+          "/selected_artifact/name",
+          "mb-cache--mc1.20.1--eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ],
+        [
+          "/selected_artifact/run_id",
+          450
+        ],
+        [
+          "/selected_artifact/workflow_path",
+          ".github/workflows/pages.yml"
+        ],
+        [
+          "/binding/mode",
+          "cache-revalidated"
+        ],
+        [
+          "/source/kit_binding/source",
+          "referenced_workflows"
+        ],
+        [
+          "/selected_artifact/workflow_path",
+          ".github/workflows/on-demand-e2e.yml"
+        ]
+      ]
+    },
+    {
+      "error": "$.selected_artifact.run_id: a selected cache is owned by an earlier Pages run",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-cache-owned-by-this-run",
+      "set": [
+        [
+          "/selected_artifact/kind",
+          "cache"
+        ],
+        [
+          "/selected_artifact/name",
+          "mb-cache--mc1.20.1--eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ],
+        [
+          "/selected_artifact/run_id",
+          450
+        ],
+        [
+          "/selected_artifact/workflow_path",
+          ".github/workflows/pages.yml"
+        ],
+        [
+          "/binding/mode",
+          "cache-revalidated"
+        ],
+        [
+          "/source/kit_binding/source",
+          "referenced_workflows"
+        ],
+        [
+          "/selected_artifact/run_id",
+          500
+        ]
+      ]
+    },
+    {
+      "error": "$.binding.mode: a cache is bound by revalidation",
+      "expect": "invalid",
+      "fixture": "selection",
+      "name": "selection-cache-reencode-binding",
+      "set": [
+        [
+          "/selected_artifact/kind",
+          "cache"
+        ],
+        [
+          "/selected_artifact/name",
+          "mb-cache--mc1.20.1--eb2c848e89009c3f78ec15dddc51f0afdb532989"
+        ],
+        [
+          "/selected_artifact/run_id",
+          450
+        ],
+        [
+          "/selected_artifact/workflow_path",
+          ".github/workflows/pages.yml"
+        ],
+        [
+          "/binding/mode",
+          "cache-revalidated"
+        ],
+        [
+          "/source/kit_binding/source",
+          "referenced_workflows"
+        ],
+        [
+          "/binding/mode",
+          "reencode-identical"
+        ]
+      ]
+    },
+    {
+      "error": "$.scope.kind: must be one of ['complete', 'composed']",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "compact-selected-scope-published",
+      "set": [
+        [
+          "/scope",
+          {
+            "detail_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "kind": "selected"
+          }
+        ]
+      ]
+    }
+  ]
+}
