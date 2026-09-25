@@ -14,7 +14,7 @@ from typing import Any
 
 from mod_base import KIT_REPOSITORY
 from mod_base.errors import MbError
-from mod_base.github.api import GitHubApi
+from mod_base.github.api import GitHubApi, InconsistentListing
 from mod_base.model import documents, grammar, limits
 from mod_base.model.validators import DocumentError
 
@@ -157,8 +157,14 @@ def workflow_runs(api: GitHubApi, workflow_path: str, *, branch: str | None = No
     """List runs of ``workflow_path`` (by file name) newest first with the given filters; the
     response ``total_count`` must equal the listed rows when it is at most ``max_items``.
 
-    Beyond ``max_items`` runs the newest ``max_items`` are returned (GitHub itself lists at most
-    1,000 filtered runs). Every row is re-checked against the workflow path and each filter."""
+    Beyond ``max_items`` runs the newest ``max_items`` are returned, and a filtered search returns
+    at most its ``limits.MAX_FILTERED_RUNS_LISTED`` newest (GitHub lists no more): such a read must
+    list exactly that many rows, ending at its last full page. Otherwise only a short page ends the
+    read (a full page reaching ``total_count`` is confirmed by the next), and the rows must equal
+    ``total_count``. Every row is re-checked against the workflow path and each filter. A snapshot
+    whose ``total_count`` changes between pages or disagrees with its rows, or that repeats a run (a
+    page race while runs start or settle), is read again from page 1 through ``api.read_listing``
+    and fails closed only after ``limits.LISTING_READ_ATTEMPTS`` such reads."""
 
     grammar.require(grammar.WORKFLOW_PATH, workflow_path, "workflow path")
     _positive(max_items, "max_items", 100_000)
@@ -175,41 +181,56 @@ def workflow_runs(api: GitHubApi, workflow_path: str, *, branch: str | None = No
         params["status"] = status
     filename = workflow_path.rsplit("/", 1)[1]
     path = f"/repos/{api.repository}/actions/workflows/{filename}/runs"
-    runs: list[dict[str, Any]] = []
-    total: int | None = None
-    for page in range(1, max_items // 100 + 3):
-        payload = api.get_json(path, params={**params, "per_page": 100, "page": page})
-        rows = payload.get("workflow_runs") if isinstance(payload, dict) else None
-        count = payload.get("total_count") if isinstance(payload, dict) else None
-        if (not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows)
-                or isinstance(count, bool) or not isinstance(count, int) or count < 0):
-            raise _fail("workflow-runs listing is malformed")
-        if total is not None and count != total:
-            raise _fail("workflow-runs total_count changed between pages")
-        total = count
-        runs.extend(rows)
-        if len(rows) < 100 or len(runs) >= min(max_items, total):
-            break
-    else:
-        raise _fail("workflow-runs listing did not end within its page bound")
-    assert total is not None
-    if total <= max_items and len(runs) != total:
-        raise _fail(f"workflow-runs total_count {total} disagrees with {len(runs)} listed runs")
-    runs = runs[:max_items]
-    # The listing has one row per run (its latest attempt), so a repeated id is a page race.
-    seen: set[int] = set()
-    for run in runs:
-        _, run_id, _ = run_order(run)
-        if run_id in seen:
-            raise _fail("workflow-runs listing repeats a run")
-        seen.add(run_id)
-        if (run.get("path") != workflow_path
-                or (branch is not None and run.get("head_branch") != branch)
-                or (head_sha is not None and run.get("head_sha") != head_sha)
-                or (event is not None and run.get("event") != event)
-                or (status is not None and run.get("status") != status and run.get("conclusion") != status)):
-            raise _fail(f"workflow-runs listing returned run {run_id} outside its filters")
-    return sorted(runs, key=run_order, reverse=True)
+
+    def inconsistent(message: str) -> InconsistentListing:
+        return InconsistentListing(message, status=200, method="GET", path=path)
+
+    def read() -> list[dict[str, Any]]:
+        runs: list[dict[str, Any]] = []
+        total: int | None = None
+        for page in range(1, max_items // 100 + 3):
+            payload = api.get_json(path, params={**params, "per_page": 100, "page": page})
+            rows = payload.get("workflow_runs") if isinstance(payload, dict) else None
+            count = payload.get("total_count") if isinstance(payload, dict) else None
+            if (not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows)
+                    or isinstance(count, bool) or not isinstance(count, int) or count < 0):
+                raise _fail("workflow-runs listing is malformed")
+            if total is not None and count != total:
+                raise inconsistent("workflow-runs total_count changed between pages")
+            total = count
+            runs.extend(rows)
+            expected = min(total, max_items, limits.MAX_FILTERED_RUNS_LISTED if params else total)
+            if expected < total:
+                # Only the newest ``expected`` runs are read: a full page reaching them ends the read,
+                # and a short page before them is a snapshot missing runs.
+                if len(runs) >= expected:
+                    break
+                if len(rows) < 100:
+                    raise inconsistent(f"workflow-runs total_count {total} disagrees with {len(runs)} listed runs")
+            elif len(runs) > total or len(rows) < 100:
+                # The whole listing: only a short page ends it, so a lagging count hides no run.
+                if len(runs) != total:
+                    raise inconsistent(f"workflow-runs total_count {total} disagrees with {len(runs)} listed runs")
+                break
+        else:
+            raise _fail("workflow-runs listing did not end within its page bound")
+        runs = runs[:max_items]
+        # The listing has one row per run (its latest attempt), so a repeated id is a page race.
+        seen: set[int] = set()
+        for run in runs:
+            _, run_id, _ = run_order(run)
+            if run_id in seen:
+                raise inconsistent("workflow-runs listing repeats a run")
+            seen.add(run_id)
+            if (run.get("path") != workflow_path
+                    or (branch is not None and run.get("head_branch") != branch)
+                    or (head_sha is not None and run.get("head_sha") != head_sha)
+                    or (event is not None and run.get("event") != event)
+                    or (status is not None and run.get("status") != status and run.get("conclusion") != status)):
+                raise _fail(f"workflow-runs listing returned run {run_id} outside its filters")
+        return sorted(runs, key=run_order, reverse=True)
+
+    return api.read_listing(read)
 
 
 def wait_for_completion(api: GitHubApi, run_id: int, *, attempts: int = limits.RUN_POLL_ATTEMPTS,

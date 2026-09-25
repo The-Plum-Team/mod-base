@@ -320,9 +320,11 @@ def family_archive_limit(family: Mapping[str, Any]) -> int:
 
 def run_upload(api: GitHubApi, run: Mapping[str, Any], name: str, *, max_size: int) -> artifacts.Artifact | None:
     """The single usable artifact ``name`` of ``run`` (not expired, ``0 < size <= max_size``), or
-    ``None``. Two artifacts of one name, or metadata naming another head, fail closed."""
+    ``None``. Two artifacts of one name, or metadata naming another head, fail closed. One
+    exact-name listing of the run (``artifacts.list_run_named``) finds it, so none of the run's other
+    uploads can disturb it."""
 
-    return _single_upload(run, artifacts.list_for_run(api, run["id"]), name, max_size=max_size)
+    return _single_upload(run, artifacts.list_run_named(api, run["id"], name), name, max_size=max_size)
 
 
 def _single_upload(run: Mapping[str, Any], inventory: list[artifacts.Artifact], name: str, *,

@@ -230,11 +230,11 @@ it: the fix merges to `main` and is released as the next patch tag `vX.Y.(Z+1)` 
 five steps, canary included. A faulty release that mods already pin is fixed forward the same way,
 or mods pin back to the previous tag with an ordinary pull request.
 
-Every tag names its own release commit. When nothing changed after `v0.9.0`, `v1.0.0` (stage S3)
-reuses the `v0.9.0` code unchanged, but its release change still sets `__version__` to `1.0.0`,
-adds the `## v1.0.0` changelog section and regenerates the digest literal. Tagging the `v0.9.0`
-commit a second time would make every handoff record kit version `0.9.0` under a `# v1.0.0` pin,
-which authentication refuses.
+Every tag names its own release commit. When nothing changed after the last `v0.9.x` patch tag
+(now `v0.9.1`), `v1.0.0` (stage S3) reuses its code unchanged, but its release change still sets
+`__version__` to `1.0.0`, adds the `## v1.0.0` changelog section and regenerates the digest
+literal. Tagging the `v0.9.1` commit a second time would make every handoff record kit version
+`0.9.1` under a `# v1.0.0` pin, which authentication refuses.
 
 ## Bumping the kit in a mod
 
@@ -354,22 +354,29 @@ What to observe for each item:
 | G7 | A head that moves between build and deploy keeps the previous site | during a Pages run, `git commit --allow-empty -m "canary: move head" && git push`; `deploy` fails ("advanced before deployment") and `build.json` is unchanged |
 
 Record every observation in [Canary evidence](#canary-evidence) with its run URL. Stage S3 tags
-`v1.0.0` only after G1–G7 are all observed at `v0.9.0`, and then runs the canary again pinned
-to `v1.0.0`.
+`v1.0.0` only after G1–G7 are all observed in a green canary cycle at one `v0.9.x` patch tag, and
+then runs the canary again pinned to `v1.0.0`. The `v0.9.0` cycle failed (see the Defect row), so
+that tag is now `v0.9.1`: its re-run observes G1–G7 again, and the `v0.9.0` rows stay as history.
 
 ## Canary evidence
 
 Fill one row per observation (run URLs are `https://github.com/The-Plum-Team/mod-base-canary/actions/runs/<id>`).
+The first cycle ran at `v0.9.0` (`b6918cc`) with the canary head at `4ec994b`, then at `edfeb7f` (a
+documentation-only commit for the carried family leg).
 
 | Item | Kit tag / SHA | Run | Observed | Date |
 |---|---|---|---|---|
-| G1 | pending | | | |
-| G2 | pending | | | |
-| G3 | pending | | | |
-| G4 | pending | | | |
-| G5 | pending | | | |
-| G6 | pending | | | |
+| G1 | v0.9.0 / `b6918cc` | 36189680701 (rotation) | observed while the run was `in_progress`: `referenced_workflows` lists `rotate.yml`, `finalize.yml` and `publish.yml` of `The-Plum-Team/mod-base` `@b6918cc`, each with a matching `sha` | 2026-09-25 |
+| G2 | v0.9.0 / `b6918cc` | 36189495635, 36189846471 | observed: `Publish / Admit publication`, `Publish / Collect mc1.20.1`, `Publish / Collect demo-pairs mc1.20.1`, `Publish / Build atomic static site`, `Finalize / Refresh evidence cache for mc1.20.1`, `Finalize / Refresh demo-pairs cache for mc1.20.1` (36189495635). A skipped matrix job appears once, unexpanded: the deferred run 36189846471, where `build` was skipped too, lists `Publish / Collect ${{ matrix.key }}` and `Publish / Collect ${{ matrix.family }} ${{ matrix.key }}`, each once with conclusion `skipped`. Still to be recorded from Block Pops' first Pages run: `build` accepting that unexpanded family row in a family-less run that publishes | 2026-09-25 |
+| G3 | v0.9.0 / `b6918cc` | 36189495635 | observed: `Deploy GitHub Pages` succeeded; `build.json` names implementation `4ec994b`, run 36189495635 and kit `b6918cc` `0.9.0` | 2026-09-25 |
+| G4 | v0.9.0 / `b6918cc` | the cycle's Pages runs | observed: every callee's "Bind the two-part implementation identity" step succeeded | 2026-09-25 |
+| G5 | v0.9.0 / `b6918cc` | 36189435580 (producer) | observed: "Verify the executing kit against the checked-out pin" (the composite tree check) succeeded; admission nominated its handoffs with reason `initial-ordinary` | 2026-09-25 |
+| G6 | v0.9.0 / `b6918cc` | 36189680701, 36189915606 (probe) | partly observed: `notify-pages` dispatched `pages.yml` holding `actions: write`; the rotation self-dispatched as 36189680701; the probe recorded the caller-side `job.workflow_sha` `4ec994b`, the canary head | 2026-09-25 |
 | G7 | pending | | | |
+| Family wake | v0.9.0 / `b6918cc` | 36189846471 | observed: a family wake with 1 of 2 keys' `demo-pairs` generations ready was deferred with reason `coalescing` | 2026-09-25 |
+| Carried family leg | v0.9.0 / `b6918cc` | 36190041285 | observed: the Pages run at `edfeb7f` published the `demo-pairs` leg of `mc1.20.1` generated at `4ec994b`, with coverage `edfeb7f` | 2026-09-25 |
+| Defect | v0.9.0 / `b6918cc` | 36190041285 | `Finalize / Refresh evidence cache for mc1.20.1` failed closed with `github-api: GitHub API GET /repos/The-Plum-Team/mod-base-canary/actions/runs/36190041285/artifacts listing total_count 6 disagrees with 5 listed rows` while its sibling finalize jobs uploaded their caches: the site deployed, but the generation lost its cache refresh and rotation. Fixed in v0.9.1 (consistent listings, exact-name run inventories in `refresh`); re-run the canary at v0.9.1 | 2026-09-25 |
+| Re-run attempt | pending | | | |
 
 `job.workflow_sha` observations. v1.1 may add it as a redundant cross-check of the kit SHA only
 after three values **observed inside a kit callee job** (a step of a kit reusable workflow, which
@@ -386,9 +393,9 @@ value only as the caller-side row of G6; it never counts toward the three.
 | Stage | Action | Exit criterion |
 |---|---|---|
 | S0 | create and push mod-base; apply P2; CI green | `Test`, `Workflow policy`, `Front end` required and green on `main` |
-| S1 | tag `v0.9.0` ([Releasing mod-base](#releasing-mod-base)); then create the canary pinned to that tag (P3) and run it | G1–G7 recorded above |
-| S2 | open the mod drafts pinned to `v0.9.0` (Quick Skin `feat/mod-base`, Block Pops PR A and PR B) | every local verification green |
-| S3 | tag `v1.0.0` on its own release commit (the `v0.9.0` code when unchanged, with `__version__` `1.0.0`); then move the canary to that tag with `bump --to v1.0.0`, run it and re-pin the drafts | canary green at `v1.0.0` |
+| S1 | tag `v0.9.0` ([Releasing mod-base](#releasing-mod-base)); then create the canary pinned to that tag (P3) and run it; a failing canary is fixed forward as the next `v0.9.x` patch tag (now `v0.9.1`), to which the canary moves with `bump` | G1–G7 recorded above in one green cycle at a `v0.9.x` tag |
+| S2 | open the mod drafts pinned to the current `v0.9.x` tag (`v0.9.0`, then `bump --to v0.9.1`) (Quick Skin `feat/mod-base`, Block Pops PR A and PR B) | every local verification green |
+| S3 | tag `v1.0.0` on its own release commit (the last `v0.9.x` code when unchanged, with `__version__` `1.0.0`); then move the canary to that tag with `bump --to v1.0.0`, run it and re-pin the drafts | canary green at `v1.0.0` |
 | S4 | Block Pops first: apply P1, mark PR A ready, record `verify --network`, owner approval, merge, dispatch E2E | the `master` key is live at `/e2e/`, a rotation run is green, visual review finds `mb-anchor--` |
 | S5 | Quick Skin: ready or batch PR; full Build and E2E; merge | all keys live as `mb-cache--`, two rotations, one family publication, one baseline consumed |
 | S6 | Block Pops PR B, then PR C clearing `template.deferred` | `template check` clean with an empty `deferred` |

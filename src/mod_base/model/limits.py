@@ -123,10 +123,23 @@ MAX_ARTIFACT_NAME_BYTES = 240
 DELETION_BUDGET = 64
 RUN_POLL_ATTEMPTS = 30
 RUN_POLL_INTERVAL_SECONDS = 2.0
+#: Complete reads of one paginated listing before an inconsistent snapshot fails closed. GitHub's
+#: listings are eventually consistent while the listed run still uploads (or a rotation deletes)
+#: artifacts: rows that disagree with ``total_count``, a ``total_count`` that changes between pages or
+#: a repeated row discard the whole snapshot, which is read again from page 1
+#: (``github.api.read_consistently``). Every read spends the client's request budget.
+LISTING_READ_ATTEMPTS = 4
+#: The wait before the first re-read of an inconsistent listing; it doubles for every later one.
+LISTING_RETRY_DELAY_SECONDS = 2.0
+#: The longest wait between two reads of one listing (so at most 2 + 4 + 8 seconds in all).
+MAX_LISTING_RETRY_DELAY_SECONDS = 8.0
+#: The most runs GitHub lists for a workflow-run search filtered by ``branch``, ``event``, ``head_sha``
+#: or ``status`` (among others); its ``total_count`` may be larger (``github.runs.workflow_runs``).
+MAX_FILTERED_RUNS_LISTED = 1000
 #: Owner runs authenticated for one exact-name or run inventory (QS ``publication_progress``
 #: ``MAX_CANDIDATES``; ``select`` and ``admit``).
 MAX_CANDIDATES = 8
-#: Rows of one ``head_sha``-filtered source-run listing (one page).
+#: Rows of one ``head_sha``-filtered source-run listing (one page; a full one is confirmed by a second).
 MAX_SUBJECT_RUNS = 100
 #: Rows of the canonical-branch listing searched for display-titled source runs (newest first, so
 #: the bound can only hide an older run: no evidence, never an older run passing as the newest).

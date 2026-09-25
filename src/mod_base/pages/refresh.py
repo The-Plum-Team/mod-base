@@ -48,6 +48,14 @@ Details of this port:
   run whose ``Finalize / Refresh evidence cache for <key>`` job uploaded it in its retention step).
   One that fails that check, or is gone (404), is no retained baseline; every other API failure
   propagates.
+* **Exact-name inventory.** Every sibling ``refresh``/``refresh-family`` job of this attempt uploads
+  its cache while this one runs, so this run's artifacts are never listed whole: each name the job
+  uses (the promotion and its collected artifact) is one exact-name listing of this run
+  (``artifacts.list_run_named``), in which a sibling's upload never appears, and every name must
+  still be held exactly once. A listing GitHub serves inconsistently anyway (its ``total_count``
+  disagreeing with its rows, as it does while the run uploads) is read again within the client's
+  budget (``github.api.read_consistently``) and fails closed only after
+  ``limits.LISTING_READ_ATTEMPTS`` inconsistent reads.
 * **Post-validation recheck** (BP ``refresh_cache`` ``context["recheck"]`` then the cache seal
   recheck): after the upload bytes are written and sealed, and before the upload directory is
   published, this run, its exact attempt, the ``Deploy``/``Build`` jobs (same ids, still
@@ -157,8 +165,9 @@ class _Upload:
 def _snapshot(api: GitHubApi, invocation: Invocation, implementation: Mapping[str, Any],
               names: tuple[str, ...]) -> tuple[dict[str, Any], dict[str, list[artifacts.Artifact]], bytes]:
     """This run and exact attempt (in progress, executing kit), its successful ``Deploy`` and
-    ``Build`` jobs and its artifacts named ``names``: ``(build job, owned artifacts, observation)``,
-    the observation being the canonical record the post-validation recheck compares."""
+    ``Build`` jobs and its artifacts named ``names`` (one exact-name listing each, so the caches
+    sibling jobs are uploading never enter it): ``(build job, owned artifacts, observation)``, the
+    observation being the canonical record the post-validation recheck compares."""
 
     run = require_current_run(api, invocation, implementation)
     if runs.referenced_kit_sha(run) != invocation.kit["sha"]:
@@ -167,9 +176,9 @@ def _snapshot(api: GitHubApi, invocation: Invocation, implementation: Mapping[st
     attempt_jobs = jobs.attempt_jobs(api, run_id, attempt)
     deploy = _successful(attempt_jobs, caller_job_name("deploy"), attempt)
     build_job = _successful(attempt_jobs, api_job_name("publish", "build"), attempt)
-    listed = artifacts.list_for_run(api, run_id)
     branch = invocation.config.canonical_branch
-    owned = {name: _owned(listed, name, implementation, branch) for name in names}
+    owned = {name: _owned(artifacts.list_run_named(api, run_id, name), name, implementation, branch)
+             for name in names}
     observation = canonical_json({
         "run": [run.get("event"), run.get("created_at")],
         "jobs": [[job.get("name"), job.get("id"), job.get("conclusion"), job.get("started_at"),

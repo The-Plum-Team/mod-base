@@ -27,7 +27,7 @@ from unittest import mock
 from mod_base import cli
 from mod_base.adapter import host
 from mod_base.errors import MbError
-from mod_base.github.api import ApiError
+from mod_base.github.api import ApiError, InconsistentListing
 from mod_base.io.bounded_zip import artifact_limit
 from mod_base.model import grammar
 from mod_base.model import limits as lim
@@ -455,6 +455,63 @@ class QuickSkinAdmissionTest(AdmissionTest):
                          "initial-ordinary")
         self.qs.world.run(950, head_sha="d" * 40, status="in_progress", conclusion=None, created=1500)
         self.assertEqual(self.qs.admit().reason, "initial-ordinary", "another head is never waited for")
+
+    def test_an_inconsistent_active_source_page_is_read_again_then_fails_closed(self) -> None:
+        # Runs start and settle while the active inventory is read: a page may count a run it does
+        # not list yet. The page is read again (the client's budget and backoff), never trusted.
+        self.qs.e2e()
+        self.qs.world.run(950, head_sha=self.qs.head, status="in_progress", conclusion=None, created=1500)
+        original = self.qs.api.get_json
+        skewed = {"in_progress": 1}
+
+        def get_json(path: str, *, params: Any = None) -> Any:
+            served = original(path, params=params)
+            status = (params or {}).get("status")
+            if path.endswith("/on-demand-e2e.yml/runs") and skewed.get(status, 0) > 0:
+                skewed[status] -= 1
+                served["total_count"] += 1
+            return served
+
+        with mock.patch.object(self.qs.api, "get_json", side_effect=get_json):
+            self.assertEqual(self.qs.admit().reason, "deferred-active-source")
+            self.assertEqual(self.qs.api.sleeps, [2.0])
+            skewed["in_progress"] = lim.LISTING_READ_ATTEMPTS
+            with self.assertRaisesRegex(InconsistentListing, "lists 1 of its total_count 2 runs"):
+                self.qs.admit()
+        self.assertEqual(self.qs.api.sleeps, [2.0, 2.0, 4.0, 8.0])
+        self.assertEqual(self.qs.sleeps, [], "the admission's own run polling never waited")
+
+    def test_a_full_active_source_page_is_confirmed_by_an_empty_second_page(self) -> None:
+        # The inventory is one page of at most 100 runs; a full page reaching its total_count could
+        # still hide a run behind a lagging count, so page 2 must be empty under the same count.
+        self.qs.e2e()
+        for index in range(100):
+            self.qs.world.run(3000 + index, head_sha=self.qs.head, status="in_progress", conclusion=None,
+                              created=1500 + index)
+        original = self.qs.api.get_json
+        pages: list[int] = []
+        lagging = {"responses": 0}
+
+        def get_json(path: str, *, params: Any = None) -> Any:
+            served = original(path, params=params)
+            if path.endswith("/on-demand-e2e.yml/runs") and (params or {}).get("status") == "in_progress":
+                pages.append(int(params.get("page", 1)))
+                if lagging["responses"] > 0:
+                    lagging["responses"] -= 1
+                    served["total_count"] -= 1
+            return served
+
+        with mock.patch.object(self.qs.api, "get_json", side_effect=get_json):
+            self.assertEqual(self.qs.admit().reason, "deferred-active-source")
+            self.assertEqual(([1, 2], []), (pages, self.qs.api.sleeps))
+            # 101 active runs under a lagging total_count of 100: page 2 shows the hidden run, the
+            # inventory is read again, and the fresh count is beyond the one-page bound.
+            self.qs.world.run(3100, head_sha=self.qs.head, status="in_progress", conclusion=None, created=1700)
+            pages.clear()
+            lagging["responses"] = 2
+            with self.assertRaisesRegex(MbError, "malformed, truncated or oversized"):
+                self.qs.admit()
+        self.assertEqual(([1, 2, 1], [2.0]), (pages, self.qs.api.sleeps))
 
     def test_family_wake_is_authenticated_by_id_and_reopens_a_complete_publication(self) -> None:
         self.qs.e2e()

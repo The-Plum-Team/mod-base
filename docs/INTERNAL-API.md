@@ -188,6 +188,30 @@ Integration-round amendments:
   `select` step wrote.
 * **Templating.** `templating.PLACEHOLDERS` gains `color_scheme`, the `<meta name="color-scheme">`
   value: `dark` for a dark-only theme, `dark light` when `theme.light` is set (SPEC §6.2).
+* **Consistent listings (v0.9.1).** GitHub's listings are eventually consistent while the listed run
+  still uploads or a rotation deletes artifacts: the canary's `Finalize / Refresh evidence cache` job
+  failed closed on `listing total_count 6 disagrees with 5 listed rows` while its sibling finalize
+  jobs uploaded their caches. A snapshot whose rows disagree with `total_count`, whose `total_count`
+  changes between pages or that repeats a row is now the new `github.api.InconsistentListing`, and
+  the new `github.api.read_consistently` discards it and reads the whole listing again from page 1:
+  at most `limits.LISTING_READ_ATTEMPTS` (4) reads, waiting `listing_retry_delay` (2, 4 and 8 s:
+  `LISTING_RETRY_DELAY_SECONDS` doubling to `MAX_LISTING_RETRY_DELAY_SECONDS`) in between, every read
+  spending the client's request budget; only the last inconsistent snapshot fails closed, and an
+  incomplete listing is never returned. Only a short page ends a listing: a full page that reaches
+  `total_count` is confirmed by the next (empty) page, so a `total_count` lagging behind the rows
+  hides none of them (one more read, only when the rows are an exact multiple of 100; `admit`'s
+  one-page active source-run inventory likewise reads page 2 after a full page). A truncated
+  `workflow_runs` read (more runs than `max_items`, or than the `limits.MAX_FILTERED_RUNS_LISTED`
+  (1,000) newest runs GitHub lists for a filtered search) must list exactly that many rows.
+  `GitHubApi.paginate` (and the fake's) applies the retry to every paginated listing; `runs.workflow_runs` and `admit`'s active source-run inventory go through the new
+  `GitHubApi.read_listing` / `FakeGitHub.read_listing`. Callers that need only some names of a run
+  that may still be uploading list them by exact name through the new
+  `artifacts.list_run_named(api, run_id, name, *, max_items=512)`: `refresh` (the promotion and its
+  collected artifact) and `select`'s handoff of a source run. `build` (its own run's full inventory,
+  read before it uploads anything), `admit`, rotation and the family walk keep whole-run inventories
+  of settled runs, where one listing serves many names. `FakeGitHub` gains an optional `sleep`
+  (recorded in `sleeps`, never slept by default) and the seams `skew_listing` and `during_listing`;
+  the conformance simulation skews every refresh's first listing after a sibling's upload.
 * **Checked document.** `tests/test_internal_api.py` also checks every class's documented dataclass
   `fields` (names, order and each default's `repr`, `<factory>` for a default factory) and
   properties, every name of a described name list, and every documented constant value written in
@@ -500,6 +524,7 @@ their units in the integration round; `DELETION_BUDGET` is 64, see the rotation-
 * `MAX_KEYS`, `MAX_BRANCHES`, `MAX_ARTIFACTS_PER_NAME`, `MAX_PAGES_API_READS`, `MAX_API_RESPONSE_BYTES`
 * `MAX_JOBS_PER_ATTEMPT`, `MAX_RUN_ATTEMPT`, `MAX_RUN_ID`, `MAX_ARTIFACT_NAME_BYTES`, `DELETION_BUDGET`
 * `RUN_POLL_ATTEMPTS`, `RUN_POLL_INTERVAL_SECONDS`
+* `LISTING_READ_ATTEMPTS`, `LISTING_RETRY_DELAY_SECONDS`, `MAX_LISTING_RETRY_DELAY_SECONDS`, `MAX_FILTERED_RUNS_LISTED`: the consistent-listing retry and the 1,000 newest runs GitHub lists for a filtered workflow-run search (see the consistent-listing amendment)
 * `MAX_CANDIDATES`, `MAX_SUBJECT_RUNS`, `MAX_CANONICAL_RUNS`, `MAX_FAMILY_LEGS`
 * `MAX_WORKFLOW_FILE_BYTES`, `GENERATION_PROBES`, `ANCHOR_PROBES`
 
@@ -767,6 +792,7 @@ Constants:
   * `__init__(self, message: str, *, status: int, method: str, path: str) -> None`
 * `class ApiNotFound(ApiError)`: HTTP 404 (never retried).
 * `class ApiRateLimited(ApiError)`: The retry budget ended on a rate-limit response.
+* `class InconsistentListing(ApiError)`: A listing that is not one consistent snapshot: its rows disagree with its ``total_count``, the ``total_count`` changed between pages or a row repeats. :func:`read_consistently` reads such a listing again; it escapes only after ``limits.LISTING_READ_ATTEMPTS`` inconsistent reads.
 * `class ReadOnlyViolation(MbError)`: A non-GET request was attempted on a read-only client.
 * `class RequestBudgetExhausted(MbError)`: The client's ``max_requests`` budget is spent (for example Pages' 160 reads).
 * `class GitHubApi`: A repository-scoped client. ``repository`` is ``owner/name``; paths passed to methods are absolute API paths starting with ``/`` (for example ``/repos/o/r/actions/runs/1``).
@@ -775,11 +801,14 @@ Constants:
   * `writable` (property) -> `bool`
   * `request_count` (property) -> `int`
   * `get_json(self, path: str, *, params: Mapping[str, str | int] | None = None) -> Any`: GET ``path`` and return strictly decoded JSON (``model.canonical.strict_loads``).
-  * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`: GET every page (``per_page=100``) and return the concatenated ``field`` arrays (or the top-level arrays when ``field`` is None). More than ``max_items`` rows, a non-object row or a ``total_count`` that disagrees with the rows raises :class:`ApiError`.
+  * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`: GET every page (``per_page=100``) until a short page (a full page reaching ``total_count`` is confirmed by the next) and return the concatenated ``field`` arrays (or the top-level arrays when ``field`` is None). More than ``max_items`` rows or a non-object row raises :class:`ApiError`; a snapshot whose ``total_count`` disagrees with the rows (or changes between pages), or whose rows repeat an ``id``, is read again from page 1 and raises :class:`InconsistentListing` only after ``limits.LISTING_READ_ATTEMPTS`` such reads.
+  * `read_listing(self, read: Callable[[], _T]) -> _T`: ``read()`` (one complete listing through this client) re-run by :func:`read_consistently` with this client's ``sleep`` until it raises no :class:`InconsistentListing`.
   * `post_json(self, path: str, payload: Mapping[str, Any]) -> Any`: POST canonical JSON; requires ``writable``. Returns decoded JSON or None for 204.
   * `delete(self, path: str) -> None`: DELETE ``path``; requires ``writable``. 204 is success; anything else raises.
   * `download(self, path: str, *, max_bytes: int) -> bytes`: GET a binary endpoint (artifact ZIP) that answers with one redirect: the redirect is followed exactly once to an https URL with the ``Authorization`` header stripped; the body is read to at most ``max_bytes``.
   * `rate_limit_snapshot(self) -> dict[str, int]`: ``GET /rate_limit`` projected to numeric ``core`` counters: ``limit``, ``used``, ``remaining``, ``reset`` (the ``budget`` command; never tokens or headers).
+* `def listing_retry_delay(attempt: int) -> float`: The wait before re-reading an inconsistent listing after its read ``attempt`` (0-based): ``limits.LISTING_RETRY_DELAY_SECONDS`` doubling per re-read, at most ``limits.MAX_LISTING_RETRY_DELAY_SECONDS``.
+* `def read_consistently(read: Callable[[], _T], *, sleep: Callable[[float], None]) -> _T`: ``read()``, one complete listing from its first page, until it returns a consistent snapshot: an :class:`InconsistentListing` is read again after :func:`listing_retry_delay`, at most ``limits.LISTING_READ_ATTEMPTS`` times in all, and the last one fails closed; every read spends the client's request budget.
 * `def from_environment(environ: Mapping[str, str], *, writable: bool = False, max_requests: int | None = None) -> GitHubApi`: Build a client from ``GITHUB_REPOSITORY``, ``GH_TOKEN``/``GITHUB_TOKEN`` and ``GITHUB_API_URL`` (default :data:`DEFAULT_BASE_URL`); a missing token or repository raises.
 
 ## `mod_base.github.runs`
@@ -793,7 +822,7 @@ Workflow-run reads and exact run validation (MB1).
 * `def validate_run(run: Mapping[str, Any], *, repository: str, workflow_path: str, events: Collection[str], head_branch: str | None = None, head_sha: str | None = None, workflow_id: int | None = None, require_success: bool = True, display_title: str | None = None) -> None`: Require exact provenance: ``path``, ``event`` in ``events``, ``head_repository.full_name``, and (when given) ``head_branch``, ``head_sha``, ``workflow_id``, ``display_title``; with ``require_success`` also ``status == "completed"`` and ``conclusion == "success"``. Raises :class:`mod_base.errors.MbError` on any difference.
 * `def run_order(run: Mapping[str, Any]) -> tuple[datetime, int, int]`: ``(created_at, id, run_attempt)`` after strict shape validation (a total dispatch order).
 * `def referenced_kit_sha(run: Mapping[str, Any], *, kit_repository: str = 'The-Plum-Team/mod-base') -> str`: The single kit SHA a run resolved: every ``referenced_workflows[]`` entry whose ``path`` starts with ``<kit_repository>/.github/workflows/`` must end in ``@<sha>`` equal to its ``sha``, and exactly one distinct 40-hex SHA must result (SPEC §1.2 step 3).
-* `def workflow_runs(api: GitHubApi, workflow_path: str, *, branch: str | None = None, head_sha: str | None = None, event: str | None = None, status: str | None = None, max_items: int = 1000) -> list[dict[str, Any]]`: List runs of ``workflow_path`` (by file name) newest first with the given filters; the response ``total_count`` must equal the listed rows when it is at most ``max_items``.
+* `def workflow_runs(api: GitHubApi, workflow_path: str, *, branch: str | None = None, head_sha: str | None = None, event: str | None = None, status: str | None = None, max_items: int = 1000) -> list[dict[str, Any]]`: List runs of ``workflow_path`` (by file name) newest first with the given filters; the response ``total_count`` must equal the listed rows when it is at most ``max_items``. Beyond ``max_items`` runs, or beyond the ``limits.MAX_FILTERED_RUNS_LISTED`` newest runs GitHub lists for a filtered search, the read must list exactly that many rows; otherwise only a short page ends it. A snapshot whose ``total_count`` changes between pages or disagrees with its rows, or that repeats a run, is read again through ``api.read_listing`` (``limits.LISTING_READ_ATTEMPTS`` reads at most).
 * `def wait_for_completion(api: GitHubApi, run_id: int, *, attempts: int = 30, interval: float = 2.0, sleep: Callable[[float], None] = sleep) -> dict[str, Any]`: Poll a run until ``status == "completed"`` (at most ``attempts`` reads); raise otherwise.
 * `def run_record(run: Mapping[str, Any], claim: Mapping[str, Any], *, require_controller_head: bool = True) -> dict[str, Any]`: Build the ``RunRecord`` (SPEC §3.0) for an authenticated API ``run`` and its ``RunClaim``: the claim's run id/attempt/workflow path must equal the run's; ``head_sha``, ``event``, ``created_at``, ``conclusion`` (``success``) and ``display_title`` come from the run. The result validates as ``documents.run_record``.
 
@@ -827,6 +856,7 @@ Artifact model, bounded listings, verified download and exact-ID deletion (MB1).
 * `def get_artifact(api: GitHubApi, artifact_id: int) -> Artifact`
 * `def list_named(api: GitHubApi, name: str, *, max_items: int = 512) -> list[Artifact]`: Artifacts with exactly ``name`` (``?name=``), every row re-checked to carry that name.
 * `def list_for_run(api: GitHubApi, run_id: int, *, max_items: int = 512) -> list[Artifact]`: Artifacts of one run; every row's ``run_id`` must equal ``run_id``.
+* `def list_run_named(api: GitHubApi, run_id: int, name: str, *, max_items: int = 512) -> list[Artifact]`: Artifacts of one run with exactly ``name`` (``/runs/{id}/artifacts?name=``), every row re-checked to carry that name and owner run; the run's other uploads (a sibling job's concurrent cache upload) are never part of the listing.
 * `def list_repository(api: GitHubApi, *, max_items: int) -> list[Artifact]`: Every repository artifact, newest first, bounded by ``max_items`` (fail closed beyond).
 * `def download(api: GitHubApi, *, artifact_id: int, name: str, digest: str, size: int, run_id: int, output: Path, extraction: ExtractionLimits) -> list[str]`: Download artifact ``artifact_id`` into the new directory ``output`` after re-reading its metadata and requiring exactly ``name``, ``digest``, ``size``, owner ``run_id`` and not expired; the ZIP bytes must hash to ``digest``. Returns the extracted relative paths.
 * `def delete(api: GitHubApi, artifact_id: int) -> None`: ``DELETE`` one artifact by id (writable client only; 404 raises, never "already gone").
@@ -856,7 +886,7 @@ Owner: MB1.
 An in-memory GitHub for tests and ``conformance`` (MB1).
 
 * `class FakeGitHub`: Duck-typed stand-in for ``GitHubApi``; seed it, then pass it where a client is expected.
-  * `__init__(self, *, repository: str, default_branch: str = 'master', writable: bool = False, max_requests: int | None = None) -> None`
+  * `__init__(self, *, repository: str, default_branch: str = 'master', writable: bool = False, max_requests: int | None = None, sleep: Callable[[float], None] | None = None) -> None`
   * `set_branch(self, name: str, commit: str, tree: str) -> None`
   * `add_run(self, run: Mapping[str, Any], *, attempts: list[Mapping[str, Any]] | None = None) -> None`
   * `add_jobs(self, run_id: int, run_attempt: int, jobs: list[Mapping[str, Any]]) -> None`
@@ -868,12 +898,16 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
   * `add_blob(self, data: bytes, *, oid: str | None = None, repository: str | None = None) -> str`: Seed ``/git/blobs/{oid}`` (``contents.blob``) and return its oid: the Git blob id of ``data`` unless ``oid`` forces another one (a corrupt object the reader must reject).
   * `add_ref(self, ref: str, sha: str, *, annotated_tag_sha: str | None = None, repository: str | None = None) -> None`: Seed ``/git/ref/{ref}`` (``ref`` like ``tags/v1.0.0`` or ``heads/main``). With ``annotated_tag_sha`` the ref points at that tag object, which peels to ``sha`` through ``/git/tags/{annotated_tag_sha}`` (``pin.verify``'s tag peel).
   * `add_response(self, path: str, payload: Any, *, params: Mapping[str, str | int] | None = None) -> None`: Seed the exact JSON body of one GET ``path`` (with exactly ``params``) that no typed seeder covers; a request for an unseeded path answers 404 like the API.
+  * `skew_listing(self, path: str, *, responses: int, offset: int = 1) -> None`: Serve the next ``responses`` responses of the listing ``path`` (any parameters) with a ``total_count`` ``offset`` rows off the rows it lists, as GitHub's eventually consistent listing does while a sibling job uploads.
+  * `during_listing(self, path: str, action: Callable[[], None], *, after_pages: int = 1) -> None`: Run ``action`` once, right after the listing ``path`` served its ``after_pages``-th response from now: an upload or deletion landing between two pages of one read.
   * `repository` (property) -> `str`
   * `writable` (property) -> `bool`
   * `request_count` (property) -> `int`
   * `deleted_artifact_ids` (property) -> `list[int]`
+  * `sleeps` (property) -> `list[float]`
   * `get_json(self, path: str, *, params: Mapping[str, str | int] | None = None) -> Any`
   * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`
+  * `read_listing(self, read: Callable[[], _T]) -> _T`
   * `post_json(self, path: str, payload: Mapping[str, Any]) -> Any`
   * `delete(self, path: str) -> None`
   * `download(self, path: str, *, max_bytes: int) -> bytes`

@@ -24,7 +24,7 @@ from mod_base.github.api import ApiError, ApiNotFound, GitHubApi, ReadOnlyViolat
 from mod_base.github.artifacts import Artifact
 from mod_base.github.fake import FakeGitHub
 from mod_base.io.bounded_zip import LIMITS_BY_KIND, ExtractionLimits, archive_limit
-from mod_base.model import grammar
+from mod_base.model import grammar, limits
 from tests.helpers import COMMIT, CREATED_AT, REPOSITORY
 from tests.test_github_api import Opener, Response, http_error
 from tests.test_io_bounded_zip import archive, archive_with, entry, patch_central
@@ -113,6 +113,74 @@ class ListingTests(unittest.TestCase):
                          {"total_count": 1, "artifacts": [record(1, NAME, b"x", run_id=RUN_ID + 1)]},
                          params={"per_page": 100, "page": 1})
         with self.assertRaisesRegex(MbError, "another run"):
+            artifacts.list_for_run(api, RUN_ID)
+
+    def test_list_run_named_is_exact_to_the_run_and_the_name(self) -> None:
+        listed = artifacts.list_run_named(self.api, RUN_ID, NAME)
+        self.assertEqual(44, len(listed))
+        self.assertEqual({(NAME, RUN_ID)}, {(item.name, item.run_id) for item in listed})
+        self.assertEqual(sorted(listed, key=lambda item: item.order, reverse=True), listed)
+        self.assertEqual([5000], [item.id for item in artifacts.list_run_named(
+            self.api, RUN_ID, grammar.collected_name("mc1.20.1"))])
+        self.assertEqual([], artifacts.list_run_named(self.api, RUN_ID, grammar.PROMOTION_NAME))
+        self.assertEqual(3, self.api.request_count, "one exact-name page each")
+        for name in ("pages-cache-master", "", "github-pages2"):
+            with self.subTest(name=name), self.assertRaisesRegex(MbError, "not a kit artifact name"):
+                artifacts.list_run_named(self.api, RUN_ID, name)
+        with self.assertRaisesRegex(MbError, "run id"):
+            artifacts.list_run_named(self.api, 0, NAME)
+        path = f"/repos/{REPOSITORY}/actions/runs/{RUN_ID}/artifacts"
+        for label, row in (("another name", record(1, grammar.PROMOTION_NAME, b"x")),
+                           ("another run", record(1, NAME, b"x", run_id=RUN_ID + 1))):
+            with self.subTest(label=label):
+                api = FakeGitHub(repository=REPOSITORY)
+                api.add_response(path, {"total_count": 1, "artifacts": [row]},
+                                 params={"name": NAME, "per_page": 100, "page": 1})
+                with self.assertRaisesRegex(MbError, "another name or run"):
+                    artifacts.list_run_named(api, RUN_ID, NAME)
+
+    def test_an_exact_name_listing_ignores_the_runs_concurrent_uploads(self) -> None:
+        # A sibling job's upload lands while the listing is read; only a listing of the whole run
+        # can see it, and even that one re-reads its changed snapshot instead of failing.
+        path = f"/repos/{REPOSITORY}/actions/runs/{RUN_ID}/artifacts"
+        sibling = record(6000, grammar.cache_name("mc1.21.1", COMMIT), b"s", created_at="2026-09-25T11:00:00Z")
+        self.api.during_listing(path, lambda: self.api.add_artifact(sibling, b"s"))
+        self.assertEqual([5000], [item.id for item in artifacts.list_run_named(
+            self.api, RUN_ID, grammar.collected_name("mc1.20.1"))])
+        self.assertEqual([], self.api.sleeps)
+        self.assertIn(6000, {item.id for item in artifacts.list_for_run(self.api, RUN_ID)})
+
+    def test_run_listings_recover_from_the_canary_inconsistency(self) -> None:
+        # ``listing total_count 6 disagrees with 5 listed rows``: an upload in flight is counted
+        # before it is listed. The next read is consistent, within the request budget.
+        api = FakeGitHub(repository=REPOSITORY, max_requests=2)
+        for index in range(5):
+            api.add_artifact(record(10 + index, grammar.collected_name(f"mc1.{index}"), b"x"), b"x")
+        path = f"/repos/{REPOSITORY}/actions/runs/{RUN_ID}/artifacts"
+        api.skew_listing(path, responses=1)
+        self.assertEqual(5, len(artifacts.list_for_run(api, RUN_ID)))
+        self.assertEqual(([2.0], 2), (api.sleeps, api.request_count))
+        api = FakeGitHub(repository=REPOSITORY)
+        api.add_artifact(record(10, NAME, b"x"), b"x")
+        api.skew_listing(path, responses=limits.LISTING_READ_ATTEMPTS)
+        with self.assertRaisesRegex(ApiError, "total_count 2 disagrees with 1 listed rows"):
+            artifacts.list_run_named(api, RUN_ID, NAME)
+
+    def test_a_run_listing_never_drops_a_row_behind_a_lagging_total(self) -> None:
+        # 101 artifacts under a total_count of 100: the full first page reaches the count, so only
+        # the confirming second page shows the oldest artifact (an ``mb-promotion``, say).
+        api = FakeGitHub(repository=REPOSITORY)
+        api.add_artifact(record(10, grammar.PROMOTION_NAME, b"p", created_at="2026-09-24T00:00:00Z"), b"p")
+        for index in range(100):
+            api.add_artifact(record(100 + index, grammar.collected_name(f"mc1.{index}"), b"x"), b"x")
+        path = f"/repos/{REPOSITORY}/actions/runs/{RUN_ID}/artifacts"
+        api.skew_listing(path, responses=2, offset=-1)
+        listed = artifacts.list_for_run(api, RUN_ID)
+        self.assertEqual(101, len(listed))
+        self.assertIn(10, {item.id for item in listed})
+        self.assertEqual(([2.0], 4), (api.sleeps, api.request_count))
+        api.skew_listing(path, responses=2 * limits.LISTING_READ_ATTEMPTS, offset=-1)
+        with self.assertRaisesRegex(ApiError, "total_count 100 disagrees with 101 listed rows"):
             artifacts.list_for_run(api, RUN_ID)
 
     def test_list_repository_is_bounded_and_rejects_repeated_ids(self) -> None:

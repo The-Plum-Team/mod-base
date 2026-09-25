@@ -27,9 +27,11 @@ from mod_base.github.api import (
     ApiNotFound,
     ApiRateLimited,
     GitHubApi,
+    InconsistentListing,
     ReadOnlyViolation,
     RequestBudgetExhausted,
 )
+from mod_base.model import limits
 
 REPOSITORY = "The-Plum-Team/Quick-Skin-Mod"
 BASE = "https://api.github.test"
@@ -324,20 +326,20 @@ class PaginationTests(ClientTestCase):
         self.assertEqual(list(range(230)), [row["id"] for row in rows])
         self.assertEqual([f"{BASE}{self.PATH}?name=mb-promotion&page={page}&per_page=100" for page in (1, 2, 3)],
                          [request.full_url for request in opener.requests])
-        client, opener, _ = self.client([self.page(100, 100)])
+        client, opener, _ = self.client([self.page(100, 100), self.page(0, 100, 100)])
         self.assertEqual(100, len(client.paginate(self.PATH, field="artifacts", max_items=512)))
-        self.assertEqual(1, len(opener.requests))  # a full page completing total_count ends the listing
+        # Only a short page ends a listing: a full page completing total_count is confirmed by the next.
+        self.assertEqual(2, len(opener.requests))
         client, _, _ = self.client([self.page(3, None, field=None)])
         self.assertEqual(3, len(client.paginate(self.PATH, field=None, max_items=5)))
         client, _, _ = self.client([self.page(0, 0)])
         self.assertEqual([], client.paginate(self.PATH, field="artifacts", max_items=5))
 
-    def test_inconsistent_or_unbounded_listings_are_rejected(self) -> None:
+    def test_malformed_or_unbounded_listings_are_rejected_without_a_second_read(self) -> None:
         cases = {
             "total beyond bound": [self.page(10, 600)],
+            "total grows beyond bound": [self.page(100, 150), self.page(50, 151, 100)],
             "rows beyond bound": [self.page(100, None), self.page(100, None, 100)],
-            "total disagrees": [self.page(10, 11)],
-            "total changes": [self.page(100, 150), self.page(50, 151, 100)],
             "total invalid": [Response(body=b'{"artifacts":[],"total_count":true}')],
             "field missing": [Response(body=b'{"total_count":0}')],
             "not an array": [Response(body=b'{"artifacts":{},"total_count":0}')],
@@ -346,9 +348,11 @@ class PaginationTests(ClientTestCase):
         }
         for label, outcomes in cases.items():
             with self.subTest(label=label):
-                client, _, _ = self.client(outcomes)
-                with self.assertRaisesRegex(ApiError, "listing"):
+                client, opener, sleeps = self.client(outcomes)
+                with self.assertRaisesRegex(ApiError, "listing") as caught:
                     client.paginate(self.PATH, field="artifacts", max_items=150)
+                self.assertNotIsInstance(caught.exception, InconsistentListing)
+                self.assertEqual((len(outcomes), []), (len(opener.requests), sleeps), "never read again")
         client, _, _ = self.client([self.page(3, None)])
         with self.assertRaisesRegex(ApiError, "is not an array"):
             client.paginate(self.PATH, field=None, max_items=5)
@@ -356,6 +360,122 @@ class PaginationTests(ClientTestCase):
                         {"field": "Bad-Field"}):
             with self.subTest(options=options), self.assertRaises(MbError):
                 client.paginate(self.PATH, **{"field": "artifacts", "max_items": 5, **options})
+
+
+class ConsistentListingTests(ClientTestCase):
+    """GitHub's listings are eventually consistent while the listed run uploads artifacts (the
+    canary's ``Finalize / Refresh evidence cache`` failed on ``total_count 6 disagrees with 5 listed
+    rows`` while its sibling jobs uploaded caches). An inconsistent snapshot is discarded and read
+    again from page 1 within the bounded attempts and the request budget; the last one fails closed,
+    and an incomplete listing is never returned."""
+
+    PATH = PaginationTests.PATH
+    page = staticmethod(PaginationTests.page)
+
+    def urls(self, opener: Opener) -> list[str]:
+        return [request.full_url.rsplit("?", 1)[1] for request in opener.requests]
+
+    def test_a_disagreeing_total_is_read_again_until_consistent(self) -> None:
+        # The canary's failure: an upload in flight is counted before it is listed.
+        client, opener, sleeps = self.client([self.page(5, 6), self.page(5, 6), self.page(6, 6)])
+        rows = client.paginate(self.PATH, field="artifacts", max_items=512)
+        self.assertEqual(list(range(6)), [row["id"] for row in rows])
+        self.assertEqual(["page=1&per_page=100"] * 3, self.urls(opener))
+        self.assertEqual(([2.0, 4.0], 3), (sleeps, client.request_count))
+
+    def test_a_total_that_changes_between_pages_restarts_from_page_one(self) -> None:
+        client, opener, sleeps = self.client([self.page(100, 150), self.page(50, 151, 100),
+                                              self.page(100, 151), self.page(51, 151, 100)])
+        rows = client.paginate(self.PATH, field="artifacts", params={"name": "mb-promotion"}, max_items=512)
+        self.assertEqual(list(range(151)), [row["id"] for row in rows])
+        self.assertEqual([f"name=mb-promotion&page={page}&per_page=100" for page in (1, 2, 1, 2)], self.urls(opener))
+        self.assertEqual([2.0], sleeps)
+
+    def test_a_row_repeated_across_pages_restarts_from_page_one(self) -> None:
+        # An upload and a deletion between two pages keep the total but shift the rows.
+        client, _, sleeps = self.client([self.page(100, 150), self.page(50, 150, 99),
+                                         self.page(100, 150), self.page(50, 150, 100)])
+        self.assertEqual(list(range(150)), [row["id"] for row in client.paginate(self.PATH, field="artifacts",
+                                                                                  max_items=512)])
+        self.assertEqual([2.0], sleeps)
+        body = b'{"artifacts":[{"id":7},{"id":7}],"total_count":2}'
+        client, _, _ = self.client([Response(body=body) for _ in range(limits.LISTING_READ_ATTEMPTS)])
+        with self.assertRaisesRegex(InconsistentListing, "repeats the row id 7"):
+            client.paginate(self.PATH, field="artifacts", max_items=5)
+
+    def test_a_total_lagging_at_a_full_page_is_read_again(self) -> None:
+        # 101 rows under a total_count of 100: the full first page reaches the total, and only the
+        # confirming second page shows the row the lagging count hides.
+        client, opener, sleeps = self.client([self.page(100, 100), self.page(1, 100, 100),
+                                              self.page(100, 101), self.page(1, 101, 100)])
+        rows = client.paginate(self.PATH, field="artifacts", max_items=512)
+        self.assertEqual(list(range(101)), [row["id"] for row in rows])
+        self.assertEqual(["page=1&per_page=100", "page=2&per_page=100"] * 2, self.urls(opener))
+        self.assertEqual([2.0], sleeps)
+        # More rows than a total within max_items is read again before the row bound rejects it.
+        client, _, sleeps = self.client([page for _ in range(limits.LISTING_READ_ATTEMPTS)
+                                         for page in (self.page(100, 100), self.page(1, 100, 100))])
+        with self.assertRaisesRegex(InconsistentListing, "total_count 100 disagrees with 101 listed rows"):
+            client.paginate(self.PATH, field="artifacts", max_items=100)
+        self.assertEqual([2.0, 4.0, 8.0], sleeps)
+
+    def test_the_last_of_the_bounded_reads_fails_closed(self) -> None:
+        attempts = limits.LISTING_READ_ATTEMPTS
+        client, opener, sleeps = self.client([self.page(5, 6) for _ in range(attempts)])
+        with self.assertRaises(InconsistentListing) as caught:
+            client.paginate(self.PATH, field="artifacts", max_items=512)
+        self.assertEqual(f"GitHub API GET {self.PATH} listing total_count 6 disagrees with 5 listed rows "
+                         f"(the last of {attempts} inconsistent reads)", str(caught.exception))
+        self.assertEqual(("github-api", 200, "GET", self.PATH), (caught.exception.reason, caught.exception.status,
+                                                                 caught.exception.method, caught.exception.path))
+        self.assertEqual(attempts, len(opener.requests))
+        self.assertEqual([api.listing_retry_delay(attempt) for attempt in range(attempts - 1)], sleeps)
+        self.assertEqual([2.0, 4.0, 8.0], sleeps)
+
+    def test_every_read_spends_the_request_budget(self) -> None:
+        client, opener, sleeps = self.client([self.page(5, 6), self.page(5, 6)], max_requests=2)
+        with self.assertRaises(RequestBudgetExhausted):
+            client.paginate(self.PATH, field="artifacts", max_items=512)
+        self.assertEqual((2, 2, [2.0, 4.0]), (client.request_count, len(opener.requests), sleeps))
+        # A transport retry inside one read counts too, and does not count as a listing re-read.
+        client, opener, sleeps = self.client([http_error(502), self.page(5, 6), self.page(6, 6)], max_requests=3)
+        self.assertEqual(6, len(client.paginate(self.PATH, field="artifacts", max_items=512)))
+        self.assertEqual(3, client.request_count)
+        self.assertEqual(2, len(sleeps), "one transport backoff and one listing backoff")
+
+    def test_the_backoff_is_bounded(self) -> None:
+        delays = [api.listing_retry_delay(attempt) for attempt in range(6)]
+        self.assertEqual([2.0, 4.0, 8.0, 8.0, 8.0, 8.0], delays)
+        self.assertEqual(limits.MAX_LISTING_RETRY_DELAY_SECONDS, max(delays))
+        self.assertLessEqual(limits.MAX_LISTING_RETRY_DELAY_SECONDS, api.MAX_RETRY_DELAY_SECONDS)
+        self.assertEqual((4, 2.0, 8.0), (limits.LISTING_READ_ATTEMPTS, limits.LISTING_RETRY_DELAY_SECONDS,
+                                         limits.MAX_LISTING_RETRY_DELAY_SECONDS))
+
+    def test_read_listing_retries_only_inconsistency(self) -> None:
+        client, _, sleeps = self.client([])
+        outcomes: list[Any] = [InconsistentListing("skewed", status=200, method="GET", path=self.PATH), ["rows"]]
+
+        def read() -> Any:
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        self.assertEqual(["rows"], client.read_listing(read))
+        self.assertEqual([2.0], sleeps)
+        for error in (ApiError("malformed", status=200, method="GET", path=self.PATH),
+                      MbError("outside its filters"), RequestBudgetExhausted("spent")):
+            with self.subTest(error=type(error).__name__):
+                client, _, sleeps = self.client([])
+                calls: list[int] = []
+
+                def failing() -> Any:
+                    calls.append(1)
+                    raise error
+
+                with self.assertRaises(type(error)):
+                    client.read_listing(failing)
+                self.assertEqual(([1], []), (calls, sleeps))
 
 
 class ReadOnlyTests(ClientTestCase):

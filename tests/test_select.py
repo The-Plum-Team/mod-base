@@ -273,6 +273,9 @@ class QuickSkinSelectionTest(unittest.TestCase):
         self.assertEqual(len(self.world.api.requests("/actions/workflows/on-demand-e2e.yml/runs")), 1)
         self.assertEqual([call[0] for call in self.world.api.requests("/artifacts")],
                          [f"/repos/{QS_REPOSITORY}/actions/runs/30/artifacts", f"/repos/{QS_REPOSITORY}/actions/artifacts"])
+        # The run's handoff is one exact-name listing: none of the run's other uploads can disturb it.
+        self.assertEqual(self.world.api.requests("/actions/runs/30/artifacts")[0][1],
+                         {"name": grammar.handoff_name(QS_KEY, 1), "per_page": 100, "page": 1})
         self.assertEqual(self.world.api.requests("/actions/runs/40"), [])
 
     def test_failed_foreign_and_earlier_attempt_handoffs_are_never_selected(self) -> None:

@@ -30,6 +30,12 @@ Listings honour ``per_page`` (default 30, at most 100) and ``page`` like the API
 ``add_response`` seed wins over every typed route; anything unseeded answers 404
 (:class:`mod_base.github.api.ApiNotFound`), and a parameter a route does not understand answers
 422. Every served body is a fresh strict-JSON copy, so callers can never mutate seeded state.
+
+Two seams reproduce GitHub's eventually consistent listings: :meth:`FakeGitHub.skew_listing` serves
+the next responses of a listing with a ``total_count`` off by some rows (a sibling job's upload in
+flight), and :meth:`FakeGitHub.during_listing` changes the seeded state between two pages of one
+read (an upload or deletion landing mid-listing). The consistent-listing retry never really sleeps
+on the fake unless a ``sleep`` is given; :attr:`FakeGitHub.sleeps` records every wait it asked for.
 """
 
 from __future__ import annotations
@@ -39,8 +45,8 @@ import copy
 import hashlib
 import itertools
 import urllib.parse
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, TypeVar
 
 from mod_base.github.api import (
     MAX_DOWNLOAD_BYTES,
@@ -53,6 +59,7 @@ from mod_base.github.api import (
     _validate_path,
     paginate_with,
     rate_limit_counters,
+    read_consistently,
 )
 from mod_base.errors import MbError
 from mod_base.model import grammar
@@ -66,6 +73,7 @@ RATE_LIMIT = 5000
 RATE_LIMIT_RESET = 1_900_000_000
 _LIST_PARAMS = frozenset({"per_page", "page"})
 _RUN_FILTERS = frozenset({"branch", "head_sha", "event", "status"})
+_T = TypeVar("_T")
 
 
 def _git_blob_id(data: bytes) -> str:
@@ -92,13 +100,18 @@ class FakeGitHub:
     """Duck-typed stand-in for ``GitHubApi``; seed it, then pass it where a client is expected."""
 
     def __init__(self, *, repository: str, default_branch: str = "master", writable: bool = False,
-                 max_requests: int | None = None) -> None:
+                 max_requests: int | None = None, sleep: Callable[[float], None] | None = None) -> None:
         self._repository = grammar.require(grammar.REPOSITORY, repository, "repository")
         self._default_branch = grammar.require(grammar.BRANCH, default_branch, "default branch")
         _require(isinstance(writable, bool), "writable must be a boolean")
         _require(max_requests is None or _positive(max_requests), "max_requests must be a positive integer")
+        _require(sleep is None or callable(sleep), "sleep must be callable")
         self._writable = writable
         self._max_requests = max_requests
+        self._sleep = sleep
+        self._sleeps: list[float] = []
+        self._skews: dict[str, tuple[int, int]] = {}
+        self._page_actions: dict[str, tuple[int, Callable[[], None]]] = {}
         self._request_count = 0
         self._deleted: list[int] = []
         self._mutations: list[tuple[str, str, Any]] = []
@@ -249,6 +262,28 @@ class FakeGitHub:
         canonical_json(payload)  # must be JSON
         self._responses[(path, self._param_key(params))] = copy.deepcopy(payload)
 
+    def skew_listing(self, path: str, *, responses: int, offset: int = 1) -> None:
+        """Serve the next ``responses`` responses of the listing ``path`` (any parameters, every page
+        counts) with a ``total_count`` ``offset`` rows off the rows it lists (never below zero), as
+        GitHub's eventually consistent listing does while a sibling job uploads: the canary's
+        ``total_count 6 disagrees with 5 listed rows``. A later call for ``path`` replaces it."""
+
+        _validate_path(path)
+        _require(_positive(responses), "responses must be a positive integer")
+        _require(not isinstance(offset, bool) and isinstance(offset, int) and offset != 0,
+                 "offset must be a non-zero integer")
+        self._skews[path] = (responses, offset)
+
+    def during_listing(self, path: str, action: Callable[[], None], *, after_pages: int = 1) -> None:
+        """Run ``action`` (typically :meth:`add_artifact`) once, right after the listing ``path`` (any
+        parameters) served its ``after_pages``-th response from now: a concurrent upload or deletion
+        landing between two pages of one read. A later call for ``path`` replaces it."""
+
+        _validate_path(path)
+        _require(_positive(after_pages), "after_pages must be a positive integer")
+        _require(callable(action), "action must be callable")
+        self._page_actions[path] = (after_pages, action)
+
     # -- GitHubApi surface -----------------------------------------------------------------------
 
     @property
@@ -268,6 +303,12 @@ class FakeGitHub:
         return list(self._deleted)
 
     @property
+    def sleeps(self) -> list[float]:
+        """Every wait the consistent-listing retry asked for, in order (slept only through ``sleep``)."""
+
+        return list(self._sleeps)
+
+    @property
     def mutations(self) -> list[tuple[str, str, Any]]:
         """Every accepted mutating call, in order: ``(method, path, payload or None)``."""
 
@@ -279,12 +320,24 @@ class FakeGitHub:
         self._spend()
         key = (path, self._param_key(params))
         if key in self._responses:
-            return self._serve(self._responses[key])
-        return self._serve(self._route(path, {name: str(value) for name, value in (params or {}).items()}))
+            served = self._serve(self._responses[key])
+        else:
+            served = self._serve(self._route(path, {name: str(value) for name, value in (params or {}).items()}))
+        self._skew(path, served)
+        if path in self._page_actions:
+            remaining, action = self._page_actions.pop(path)
+            if remaining > 1:
+                self._page_actions[path] = (remaining - 1, action)
+            else:
+                action()
+        return served
 
     def paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None,
                  max_items: int) -> list[dict[str, Any]]:
-        return paginate_with(self.get_json, path, field=field, params=params, max_items=max_items)
+        return paginate_with(self.get_json, path, field=field, params=params, max_items=max_items, sleep=self._wait)
+
+    def read_listing(self, read: Callable[[], _T]) -> _T:
+        return read_consistently(read, sleep=self._wait)
 
     def post_json(self, path: str, payload: Mapping[str, Any]) -> Any:
         if not self._writable:
@@ -338,6 +391,22 @@ class FakeGitHub:
         return rate_limit_counters(self.get_json("/rate_limit"))
 
     # -- request plumbing ------------------------------------------------------------------------
+
+    def _wait(self, seconds: float) -> None:
+        self._sleeps.append(seconds)
+        if self._sleep is not None:
+            self._sleep(seconds)
+
+    def _skew(self, path: str, served: Any) -> None:
+        """Apply a pending :meth:`skew_listing` of ``path`` to the listing body ``served``."""
+
+        count = served.get("total_count") if isinstance(served, dict) else None
+        if path not in self._skews or isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            return
+        remaining, offset = self._skews.pop(path)
+        if remaining > 1:
+            self._skews[path] = (remaining - 1, offset)
+        served["total_count"] = max(served["total_count"] + offset, 0)
 
     def _spend(self) -> None:
         if self._max_requests is not None and self._request_count >= self._max_requests:

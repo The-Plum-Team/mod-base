@@ -28,6 +28,7 @@ from mod_base.github import artifacts as github_artifacts
 from mod_base.github.api import ApiError, ApiNotFound
 from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json
+from mod_base.model.limits import LISTING_READ_ATTEMPTS, MAX_PAGES_API_READS
 from mod_base.pages import authenticate, commands_build
 from mod_base.pages.build import PROMOTION_FILE, build_site
 from mod_base.pages.refresh import RefreshResult, refresh_bundle
@@ -458,6 +459,96 @@ class DriftTest(RefreshFlow):
         self.assertEqual(staged[0], {}, "nothing is staged before the first observation")
         self.assertEqual(staged[1], listing(self.work / "cache"), "the recheck sees the complete sealed stage")
         self.assertEqual(listing(self.work / "cache"), listing(self.pub.collected["mc1.20.1"]))
+
+
+class ConcurrentUploadTest(RefreshFlow):
+    """The canary's defect (run 36190041285): ``Finalize / Refresh evidence cache for mc1.20.1`` failed
+    closed on ``listing total_count 6 disagrees with 5 listed rows`` while the sibling finalize jobs
+    of the same run uploaded their caches, and the generation lost its cache refresh and rotation.
+    Refresh now reads only its own names, each by exact name, and reads a listing GitHub serves
+    inconsistently again within its budget; one that stays inconsistent still fails closed."""
+
+    KEY = "mc1.20.1"
+
+    def run_artifacts(self) -> str:
+        return f"/repos/{self.pub.mod.repository}/actions/runs/{bs.PAGES_RUN}/artifacts"
+
+    def sibling_upload(self, key: str, artifact_id: int) -> None:
+        """A sibling ``Finalize / Refresh`` job's cache, uploaded into this run while it runs."""
+
+        run = {"id": bs.PAGES_RUN, "head_sha": self.pub.mod.commit, "head_branch": "master"}
+        self.world.artifact(grammar.cache_name(key, self.pub.mod.commit), run, created=1300,
+                            archive=self.pub.archives[f"collected:{key}"], artifact_id=artifact_id)
+
+    def expected(self) -> RefreshResult:
+        commit = self.pub.mod.commit
+        return RefreshResult(available=True, cache_name=grammar.cache_name(self.KEY, commit),
+                             baseline_name=grammar.baseline_name(self.KEY, commit, bs.E2E_RUN))
+
+    def test_the_canary_inconsistency_is_read_again_and_the_cache_rolls_forward(self) -> None:
+        baseline = self.refresh(self.KEY)
+        reads = self.world.api.request_count
+        self.setUp()
+        self.sibling_upload("mc26.3", 7501)
+        # An upload in flight is counted before it is listed, for the first listing the job reads.
+        self.world.api.skew_listing(self.run_artifacts(), responses=1)
+        self.assertEqual(self.refresh(self.KEY), baseline)
+        self.assertEqual(listing(self.work / "cache"), listing(self.pub.collected[self.KEY]))
+        self.assertEqual(self.world.api.sleeps, [2.0])
+        self.assertEqual(self.world.api.request_count, reads + 1, "one re-read within the budget")
+        self.assertLessEqual(self.world.api.request_count, MAX_PAGES_API_READS)
+
+    def test_every_listing_of_this_run_is_by_exact_name(self) -> None:
+        self.sibling_upload("mc26.3", 7501)
+        self.assertEqual(self.refresh(self.KEY), self.expected())
+        listed = self.world.api.requests(f"/actions/runs/{bs.PAGES_RUN}/artifacts")
+        self.assertEqual(len(listed), 4, "the promotion and the collected artifact, observed and rechecked")
+        self.assertEqual({call[1].get("name") for call in listed},
+                         {grammar.PROMOTION_NAME, grammar.collected_name(self.KEY)})
+
+    def test_a_sibling_upload_landing_mid_refresh_changes_nothing(self) -> None:
+        for after in (1, 2, 3):
+            with self.subTest(after_pages=after):
+                self.setUp()
+                self.world.api.during_listing(self.run_artifacts(), lambda: self.sibling_upload("mc26.3", 7501),
+                                              after_pages=after)
+                self.assertEqual(self.refresh(self.KEY), self.expected())
+                self.assertEqual(self.world.api.sleeps, [], "an exact-name listing never saw the sibling upload")
+        self.setUp()
+        self.world.api.during_listing(self.run_artifacts(), lambda: self.sibling_upload(bs.FAMILY_KEY, 7502))
+        self.world.api.skew_listing(self.run_artifacts(), responses=2)
+        self.assertEqual(self.refresh(bs.FAMILY_KEY, bs.FAMILY).cache_name,
+                         grammar.family_cache_name(bs.FAMILY, bs.FAMILY_KEY, self.pub.mod.commit))
+        self.assertEqual(self.world.api.sleeps, [2.0, 4.0])
+
+    def test_a_listing_that_stays_inconsistent_fails_closed_and_writes_nothing(self) -> None:
+        self.world.api.skew_listing(self.run_artifacts(), responses=LISTING_READ_ATTEMPTS)
+        self.rejected("total_count 2 disagrees with 1 listed rows (the last of 4 inconsistent reads)",
+                      reason="github-api", key=self.KEY)
+        self.assertFalse(self.world.api.requests("/zip"), "nothing is downloaded from an inconsistent inventory")
+        self.assertEqual(self.world.api.sleeps, [2.0, 4.0, 8.0])
+        # The recheck reads with the same rule: a listing inconsistent at the post-validation recheck
+        # is read again, and one that stays so leaves no upload directory.
+        from mod_base.pages import refresh as refresh_module
+
+        original = refresh_module.jobs.attempt_jobs
+        for responses, succeeds in ((1, True), (LISTING_READ_ATTEMPTS, False)):
+            with self.subTest(recheck_responses=responses):
+                self.setUp()
+                observed = 0
+
+                def attempt_jobs(api: Any, run_id: int, attempt: int, responses: int = responses) -> Any:
+                    nonlocal observed
+                    observed += 1
+                    if observed == 2:
+                        self.world.api.skew_listing(self.run_artifacts(), responses=responses)
+                    return original(api, run_id, attempt)
+
+                with mock.patch.object(refresh_module.jobs, "attempt_jobs", side_effect=attempt_jobs):
+                    if succeeds:
+                        self.assertEqual(self.refresh(self.KEY), self.expected())
+                    else:
+                        self.rejected("disagrees", reason="github-api", key=self.KEY)
 
 
 class CommandTest(RefreshFlow):

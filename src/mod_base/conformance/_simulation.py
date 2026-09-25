@@ -33,7 +33,10 @@ Stages, in order (a failed check raises ``MbError`` with reason ``conformance``)
 6. **Build** into a temporary ``_site`` with every current-attempt check, then the site assertions
    of :mod:`mod_base.conformance._site` and the promotion.
 7. **Refresh** every key and family leg (cache names, and a baseline name exactly for a new
-   complete generation: a key selected as a handoff whose baseline no earlier refresh retained),
+   complete generation: a key selected as a handoff whose baseline no earlier refresh retained);
+   once a sibling job has uploaded its cache, the run's next artifact listing reports a
+   ``total_count`` one row off its rows (GitHub's eventually consistent listing during concurrent
+   uploads), which each later refresh must read again, exactly once, within its budget;
    **rotate** ``--dry-run`` against a superseded earlier generation seeded at the same head (the
    plan must be exactly what the independent oracle :mod:`mod_base.conformance._rotation` derives,
    cut only by the deletion budget; nothing deleted) and a final ``recovery`` admission that
@@ -97,7 +100,7 @@ from mod_base.model.documents import run_claim_from_environment, validate_promot
 from mod_base.pages.admission import Admission, WakeInputs, admit
 from mod_base.pages.authenticate import authenticate_selection, write_new_file
 from mod_base.pages.build import build_site
-from mod_base.pages.refresh import refresh_bundle
+from mod_base.pages.refresh import RefreshResult, refresh_bundle
 from mod_base.pages.rotate import rotate_generation
 from mod_base.pages.select import Selected, display_title, handoff_job_name, select_evidence
 from mod_base.runtime import Invocation, build_invocation
@@ -802,9 +805,7 @@ class Simulation(Generations):
                   "caches": [], "baselines": []}
         for key in self.keys:
             output = self.work / f"refresh-{generation.run_id}-{key}"
-            with self.budget(f"refresh {key} of generation {generation.number}"):
-                refreshed = refresh_bundle(self.pages("refresh", generation.run_id), api=self.api, key=key,
-                                           family=None, input_dir=output)
+            refreshed = self.refresh_job(generation, key, None, output, concurrent=bool(seeded["caches"]))
             name = grammar.cache_name(key, generation.head)
             self.check(refreshed.available and refreshed.cache_name == name, f"{key}: refresh names another cache than {name}")
             archive = zip_directory(output)
@@ -825,9 +826,7 @@ class Simulation(Generations):
         for family in self.config.families:
             for key in self.keys:
                 output = self.work / f"refresh-family-{generation.run_id}-{family['id']}-{key}"
-                with self.budget(f"refresh {family['id']}/{key} of generation {generation.number}"):
-                    refreshed = refresh_bundle(self.pages("refresh-family", generation.run_id), api=self.api, key=key,
-                                               family=family["id"], input_dir=output)
+                refreshed = self.refresh_job(generation, key, family["id"], output, concurrent=bool(seeded["caches"]))
                 available = (family["id"], key) in generation.families
                 self.check(refreshed.available == available,
                            f"{family['id']}/{key}: refresh-family reported available={refreshed.available}")
@@ -841,6 +840,26 @@ class Simulation(Generations):
                                f"{family['id']}/{key}: an unavailable leg wrote a cache")
         self.pages_run(world, generation, status="completed", conclusion="success", updated=500)
         return seeded
+
+    def refresh_job(self, generation: Generation, key: str, family: str | None, output: Path, *,
+                    concurrent: bool) -> RefreshResult:
+        """One ``Finalize`` refresh job of ``generation`` for ``key`` (and ``family``). With
+        ``concurrent`` a sibling job's upload is still settling: the run's next artifact listing
+        reports a ``total_count`` one row off its rows (the canary's ``total_count 6 disagrees with 5
+        listed rows``), and the job must read it again exactly once, within its read budget."""
+
+        label = f"refresh {key if family is None else f'{family}/{key}'} of generation {generation.number}"
+        if concurrent:
+            self.api.skew_listing(f"/repos/{self.repository}/actions/runs/{generation.run_id}/artifacts", responses=1)
+        waits = len(self.api.sleeps)
+        with self.budget(label):
+            refreshed = refresh_bundle(self.pages("refresh" if family is None else "refresh-family", generation.run_id),
+                                       api=self.api, key=key, family=family, input_dir=output)
+        rereads = len(self.api.sleeps) - waits
+        self.check(rereads == int(concurrent), f"{label} read its artifact listing again {rereads} times, "
+                                               f"not {int(concurrent)}")
+        self.report.site["listing_rereads"] = self.report.site.get("listing_rereads", 0) + rereads
+        return refreshed
 
     def rotate(self, generation: Generation, *, now: float, dry_run: bool, label: str) -> tuple[set[int], bool]:
         """``rotate`` owned by ``generation``'s Pages run: its plan must be exactly the oracle's
