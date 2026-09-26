@@ -12,7 +12,7 @@ downloads it by id with its digest, size and owner run into ``collected_dir/<key
 :func:`collected_family_selection`).
 
 Steps: invocation checks (``GITHUB_*`` set, workflow ref is ``pages.yml`` on the default branch, no
-``GIT_*``, clean checkouts); this run and exact attempt are ``in_progress``; the attempt's jobs by
+``GIT_*``, clean checkouts); this run and exact attempt are unfinished; the attempt's jobs by
 exact names from :mod:`mod_base.workflow`; the downloads above; live heads (and, for enrolled
 branches, tree and matrix blob) equal every bundle subject; each bundle validated against a
 re-derived expectation, its embedded selection re-authenticated and bound
@@ -347,9 +347,17 @@ def _uploaded_in_step(artifact: artifacts.Artifact, attempt_jobs: list[dict[str,
     return started <= artifact.order[0] <= completed
 
 
+# The statuses of a run that has not finished. GitHub reports a running workflow run as ``queued``,
+# ``waiting`` or ``pending`` (not only ``in_progress``) while some of its matrix jobs wait for a
+# runner, so the current run is identified by being unfinished and conclusionless, never by one
+# status literal.
+_UNFINISHED_RUN_STATUSES = frozenset({"requested", "queued", "pending", "waiting", "in_progress"})
+
+
 def require_current_run(api: GitHubApi, invocation: Invocation, implementation: Mapping[str, Any]) -> dict[str, Any]:
     """SPEC §5.3.2 step 2: the API default branch is the canonical branch and this run and its exact
-    attempt are the ``in_progress`` ``pages.yml`` run of the canonical head; returns the run."""
+    attempt are the unfinished (no conclusion yet) ``pages.yml`` run of the canonical head; returns
+    the run."""
 
     default = invocation.config.canonical_branch
     if contents.default_branch(api) != default:
@@ -363,10 +371,11 @@ def require_current_run(api: GitHubApi, invocation: Invocation, implementation: 
                   record.get("path") == PAGES_WORKFLOW_PATH, record.get("event") in PAGES_EVENTS,
                   record.get("head_branch") == default, record.get("head_sha") == implementation["sha"],
                   isinstance(head, Mapping) and head.get("full_name") == invocation.repository,
-                  record.get("status") == "in_progress", record.get("conclusion") is None)
+                  record.get("status") in _UNFINISHED_RUN_STATUSES, record.get("conclusion") is None)
         if not all(checks):
-            raise _fail(f"this Pages {label} {run_id} attempt {attempt} is not the in-progress run of the protected head",
-                        reason="current-run")
+            observed = f"status {str(record.get('status'))[:20]!r}, conclusion {str(record.get('conclusion'))[:20]!r}"
+            raise _fail(f"this Pages {label} {run_id} attempt {attempt} is not the unfinished run of the protected head "
+                        f"({observed})", reason="current-run")
     return run
 
 

@@ -272,6 +272,16 @@ class PrerequisiteTest(RefreshFlow):
                        status="completed", conclusion="success", created=1000, kit_sha=bs.support.KIT_SHA)
         self.rejected(reason="current-run")
 
+    def test_this_run_may_report_any_unfinished_status_while_siblings_wait_for_runners(self) -> None:
+        # Canary run 36210848548: three sibling refresh jobs saw their own run as not in_progress
+        # while other matrix jobs were queued; an unfinished, conclusionless run is still current.
+        for status in ("queued", "waiting", "pending"):
+            with self.subTest(status):
+                self.setUp()
+                self.world.run(bs.PAGES_RUN, path=".github/workflows/pages.yml", head_sha=self.pub.mod.commit,
+                               status=status, conclusion=None, created=1000, kit_sha=bs.support.KIT_SHA)
+                self.assertTrue(self.refresh().available)
+
     def test_the_upload_directory_must_be_new_and_the_key_published(self) -> None:
         (self.work / "cache").mkdir()
         with self.assertRaisesRegex(MbError, "must not exist"):

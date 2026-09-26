@@ -5,6 +5,19 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v0.9.3
+
+A fix release for a false rejection the canary found at `v0.9.2`. Schema versions,
+`pixel_metrics_version` 1, `ADAPTER_API` 1 and every managed file are unchanged, so mods move their
+pin with `bump --to v0.9.3` and nothing else.
+
+- `build` and `refresh` identify their own Pages run as the unfinished, conclusionless `pages.yml`
+  run of the protected head, whatever non-terminal status GitHub reports (`requested`, `queued`,
+  `pending`, `waiting` or `in_progress`). GitHub reports a running workflow run as queued or
+  waiting while some of its matrix jobs wait for a runner, and three sibling refresh jobs of canary
+  run 36210848548 failed closed on that. A finished run is still refused, and the refusal now names
+  the observed status and conclusion.
+
 ## v0.9.2
 
 A fix release for the defects the Quick Skin and Block Pops migrations found at `v0.9.0`/`v0.9.1`,

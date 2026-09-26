@@ -22,7 +22,7 @@ Details of this port:
 
 * The invocation is this repository's ``pages.yml`` on the canonical branch in the ``refresh``
   (or, for a family, ``refresh-family``) job, and the run and its exact attempt are still the
-  ``in_progress`` run of the protected head whose ``referenced_workflows`` resolved the executing
+  unfinished run of the protected head whose ``referenced_workflows`` resolved the executing
   kit. No adapter hook runs (SPEC §4.3 forbids them in finalize jobs): the compact bundle is
   revalidated structurally with every derivative and derivative comparison re-inspected
   (``evidence.validate``), a family leg with R4 (``validate_projection``) and its envelope.
