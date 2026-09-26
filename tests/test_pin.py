@@ -355,6 +355,65 @@ class DigestTest(TempCase):
                 with self.assertRaises(BOOT.KitError):
                     BOOT.verify_staged_files(broken)
 
+    def test_actions_are_staged_under_their_own_lock(self) -> None:
+        """v0.9.2 stages ``actions/`` under :data:`pin.ACTIONS_LOCK`, leaving :data:`pin.STAGED_LOCK`
+        the exact template/ and tools/ listing a pre-v0.9.2 bootstrap checks (SPEC §1.5: an older
+        controller stages a newer candidate kit), while a v0.9.2 bootstrap stages an older kit
+        without ``actions/``."""
+
+        kit = kit_tree(self.root / "kit")
+        write(kit, "actions/prepare-evidence/action.yml", "name: Prepare evidence\n")
+        write(kit, pin.ACTIONS_LOCK, pin.actions_listing(kit))
+        self.assertEqual(BOOT.actions_listing(kit), pin.actions_listing(kit))
+        action = hashlib.sha256(b"name: Prepare evidence\n").hexdigest()
+        self.assertEqual((kit / pin.ACTIONS_LOCK).read_bytes().decode().splitlines(),
+                         [f"{action}  ./actions/prepare-evidence/action.yml"])
+        self.assertNotIn(b"./actions/", (kit / pin.STAGED_LOCK).read_bytes())
+        for module in (pin, BOOT):
+            module.verify_staged_files(kit)
+        overlay = self.root / "overlay"
+        BOOT.copy_kit(kit, overlay)
+        self.assertEqual((overlay / "actions/prepare-evidence/action.yml").read_bytes(), b"name: Prepare evidence\n")
+        pin.verify_staged_files(overlay)
+        BOOT.verify_staged_files(overlay)
+        # A pre-v0.9.2 bootstrap copies src/, site/, requirements/, template/ and tools/ and requires
+        # the template/ and tools/ listing to equal STAGED_LOCK: the newer kit still passes, and its
+        # own verification accepts the overlay without actions/.
+        older_bootstrap = self.root / "older-bootstrap-overlay"
+        for top in ("src", "site", "requirements", "template", "tools"):
+            shutil.copytree(kit / top, older_bootstrap / top)
+        self.assertEqual(BOOT._listing(older_bootstrap, ("template", "tools"), locked=True).encode("ascii"),
+                         (older_bootstrap / pin.STAGED_LOCK).read_bytes())
+        pin.verify_staged_files(older_bootstrap)
+        BOOT.verify_staged_files(older_bootstrap)
+        for label, mutate in (
+                ("rewritten action", lambda root: write(root, "actions/prepare-evidence/action.yml", "name: X\n")),
+                ("added action", lambda root: write(root, "actions/extra/action.yml", "name: Extra\n")),
+                ("missing actions lock", lambda root: (root / pin.ACTIONS_LOCK).unlink()),
+                ("actions symlink", lambda root: (shutil.rmtree(root / "actions"),
+                                                  (root / "actions").symlink_to(kit / "actions")))):
+            with self.subTest(label):
+                broken = self.root / f"overlay-{label.replace(' ', '-')}"
+                BOOT.copy_kit(kit, broken)
+                mutate(broken)
+                with self.assertRaises(MbError):
+                    pin.verify_staged_files(broken)
+                with self.assertRaises(BOOT.KitError):
+                    BOOT.verify_staged_files(broken)
+        # A kit older than v0.9.2 carries no ACTIONS_LOCK: its overlay holds no actions/, and an
+        # actions/ directory nothing binds is refused.
+        older = kit_tree(self.root / "older")
+        write(older, "actions/prepare-evidence/action.yml", "name: Prepare evidence\n")
+        staged = self.root / "older-overlay"
+        BOOT.copy_kit(older, staged)
+        self.assertFalse((staged / "actions").exists())
+        pin.verify_staged_files(staged)
+        BOOT.verify_staged_files(staged)
+        with self.assertRaises(MbError):
+            pin.verify_staged_files(older)
+        with self.assertRaises(BOOT.KitError):
+            BOOT.verify_staged_files(older)
+
 
 # -- Stamp ---------------------------------------------------------------------------------------------
 
@@ -1159,7 +1218,7 @@ class BootstrapSourceTest(unittest.TestCase):
         self.assertEqual(BOOT.PIN_LINE.flags, pin.PIN_LINE.flags)
         for name in ("KIT_PATH", "KIT_REFERENCE", "KIT_REPOSITORY_TOKEN", "KIT_REPOSITORY_BARE", "KIT_VALUE",
                      "USES_KEY", "USES_VALUE", "ESCAPE", "SIMPLE_ESCAPES", "TAG", "KIT_PATH_NAME", "DIGESTED_DIRS",
-                     "LOCKED_DIRS", "STAGED_LOCK", "STAMP_NAME", "GIT_SAFETY", "STATUS_ARGUMENTS", "BYTECODE_DIRECTORY",
+                     "LOCKED_DIRS", "STAGED_LOCK", "ACTIONS_DIR", "ACTIONS_LOCK", "STAMP_NAME", "GIT_SAFETY", "STATUS_ARGUMENTS", "BYTECODE_DIRECTORY",
                      "MAX_PIN_FILES", "MAX_PIN_FILE_BYTES", "MAX_PIN_TOTAL_BYTES", "MAX_ACTION_ENTRIES",
                      "MAX_KIT_FILES", "MAX_KIT_BYTES", "MAX_LOCK_BYTES", "MAX_TAG_PEELS", "FETCH_ATTEMPTS",
                      "GIT_TIMEOUT_SECONDS"):
@@ -1170,16 +1229,22 @@ class BootstrapSourceTest(unittest.TestCase):
         self.assertEqual(BOOT._git_environment(Path("/c")), pin._git_environment(Path("/c")))
         self.assertEqual(BOOT.KIT_REPOSITORY, pin.KIT_TOKEN)
         self.assertEqual(BOOT.KIT_REMOTE, pin.KIT_REMOTE)
-        self.assertLessEqual(set(BOOT.LOCKED_DIRS) | set(BOOT.DIGESTED_DIRS), set(BOOT.STAGED_DIRS))
+        self.assertEqual(BOOT.STAGED_DIRS, BOOT.DIGESTED_DIRS + BOOT.LOCKED_DIRS + (BOOT.ACTIONS_DIR,))
 
-    def test_the_kit_carries_a_current_staged_file_lock(self) -> None:
-        """template/ and tools/ reach the sandbox overlay outside kit-digest-v1; src/ binds them."""
+    def test_the_kit_carries_current_staged_file_locks(self) -> None:
+        """template/, tools/ and actions/ reach the sandbox overlay outside kit-digest-v1; src/ binds them."""
 
-        recorded = (KIT_ROOT / pin.STAGED_LOCK).read_bytes()
-        self.assertEqual(pin.staged_listing(KIT_ROOT), recorded,
-                         f"{pin.STAGED_LOCK} is stale: run PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 "
-                         "python3 -m mod_base.template.lock --write, then tools/update_tree_digest.py --write")
-        self.assertEqual(BOOT.staged_listing(KIT_ROOT), recorded)
+        for lock, listing, boot_listing in ((pin.STAGED_LOCK, pin.staged_listing, BOOT.staged_listing),
+                                            (pin.ACTIONS_LOCK, pin.actions_listing, BOOT.actions_listing)):
+            with self.subTest(lock):
+                recorded = (KIT_ROOT / lock).read_bytes()
+                self.assertEqual(listing(KIT_ROOT), recorded,
+                                 f"{lock} is stale: run PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 "
+                                 "python3 -m mod_base.template.lock --write, then tools/update_tree_digest.py --write")
+                self.assertEqual(boot_listing(KIT_ROOT), recorded)
+        self.assertIn(b"  ./actions/prepare-evidence/action.yml\n", (KIT_ROOT / pin.ACTIONS_LOCK).read_bytes())
+        self.assertNotIn(b"./actions/", (KIT_ROOT / pin.STAGED_LOCK).read_bytes(),
+                         "a pre-v0.9.2 bootstrap requires STAGED_LOCK to list exactly template/ and tools/")
 
 
 class PinCommandsTest(TempCase):

@@ -63,8 +63,8 @@ import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
-from contextlib import redirect_stdout
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +127,50 @@ def _child_environment(pythonpath: str, scratch: Path) -> dict[str, str]:
             "PYTHONSAFEPATH": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1", "PYTHONPATH": pythonpath}
 
 
+def _remove_tree(path: Path) -> None:
+    """Remove ``path`` recursively, making read-only directories and files writable first (git
+    object stores, a tool's cache): an error left after that is raised."""
+
+    def writable(directory: str, names: list[str]) -> None:
+        for name in [None, *names]:
+            target = directory if name is None else os.path.join(directory, name)
+            try:
+                info = os.lstat(target)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISLNK(info.st_mode):
+                os.chmod(target, stat.S_IMODE(info.st_mode) | stat.S_IRWXU)
+
+    for directory, subdirectories, files in os.walk(path):
+        writable(directory, subdirectories + files)
+    shutil.rmtree(path)
+
+
+@contextmanager
+def _scratch(prefix: str) -> Iterator[Path]:
+    """A private temporary directory that never hides the error of the code using it.
+
+    ``TemporaryDirectory`` raises its own cleanup error from ``__exit__`` and so replaces the
+    simulation's real failure (``ignore_cleanup_errors`` only hides it, also after a success, which
+    leaks the scratch). Here a cleanup failure after an error is dropped, so the error propagates
+    unchanged; after a success it is raised, as an ``MbError`` naming the directory.
+    """
+
+    path = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
+    try:
+        yield path
+    except BaseException:
+        try:
+            _remove_tree(path)
+        except OSError:
+            pass
+        raise
+    try:
+        _remove_tree(path)
+    except OSError as exc:
+        raise _fail(f"cannot remove the conformance scratch directory {path}: {exc.strerror or exc}") from exc
+
+
 def _check_report(report: Any) -> dict[str, Any]:
     required = {"repository", "kit", "keys", "families", "checks", "variants", "admission", "hooks", "site"}
     if not isinstance(report, dict) or set(report) != required:
@@ -151,8 +195,7 @@ def run_conformance(*, repo: Path, keys: Sequence[str] | None, all_keys: bool, k
     config = load_config(source)
     if not config.adapter.get("fixtures_path"):
         raise _fail("conformance needs config.adapter.fixtures_path (the synthesize fixtures module)")
-    with tempfile.TemporaryDirectory(prefix="mod-base-conformance-") as directory:
-        work = Path(directory).resolve()
+    with _scratch("mod-base-conformance-") as work:
         snapshot = work / "repo"
         make_snapshot(source, snapshot, branch=config.canonical_branch, replace=pinned_workflows(config))
         invocation = build_invocation(snapshot, None, {}, root=kit)

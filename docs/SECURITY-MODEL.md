@@ -151,7 +151,9 @@ sandbox against a malicious adapter:
 - A staged overlay must carry a stamp whose SHA equals the pin and whose kit-digest-v1 matches the
   recomputed tree, and its `template/` and `tools/` (which `template check` reads but the digest
   does not cover) must equal the listing `src/mod_base/template/staged_files.sha256` inside the
-  digested tree. No verified kit may hold bytecode: Python loads a planted `__pycache__` file in
+  digested tree, and a staged `actions/` (which a mod's gate may check) the listing
+  `src/mod_base/template/staged_actions.sha256` there; an `actions/` no digested lock binds is
+  refused. No verified kit may hold bytecode: Python loads a planted `__pycache__` file in
   place of the verified source, so `kit_path()` turns bytecode writing off and an overlay or cache
   holding any is refused. The user cache must be a clean git checkout at the pin, outside the
   repository, where no ignore rule can hide an added file; a fetch is anonymous, runs no hooks or

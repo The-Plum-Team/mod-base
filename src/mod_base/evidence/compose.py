@@ -20,7 +20,12 @@ collect flow"); it replaces step 5 (``compact``) for that bundle:
    expectation with no duplicate or missing frame, the selected evidence to be used in full (the
    ``epoch: selected`` frames are exactly step 2's frames, and every lane and comparison step 2
    re-tested comes from it, never from the older baseline), ``scope.components`` to name that
-   baseline and step 2's identity, and every ``tested`` record to equal its source;
+   baseline and step 2's identity, and every ``tested`` record to equal its source. A lane is
+   composed per frame, as Quick Skin's schema-7 view did: a lane the selection re-tested is exactly
+   the selected lane record (so the selection ran every role of it) and, when some of its frames
+   were not re-captured (a partially re-captured lane: 2 of 63 ``full`` captures for a HUD change),
+   records the baseline execution those frames came from as ``baseline_run``; every other lane is
+   the baseline's (:func:`_check_lane`). A comparison never spans the two epochs;
 5. complete the selection: ``binding`` (``reencode-identical``, frame and distinct-derivative
    counts), ``composition`` (``baseline_artifact`` with the authenticated ``owner_run_id``, and
    ``selected_manifest_sha256``) and ``manifest_sha256``, then re-emit the verified composed bundle
@@ -82,7 +87,7 @@ from mod_base.io.atomic_directory import atomic_directory, write_new
 from mod_base.io.bounded_zip import LIMITS_BY_KIND
 from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json, sha256_hex
-from mod_base.model.documents import compact_identity_sha256, validate_compact
+from mod_base.model.documents import LANE_FIELDS, compact_identity_sha256, validate_compact
 from mod_base.runtime import Invocation
 from mod_base.workflow import PAGES_EVENTS, PAGES_WORKFLOW_PATH, api_job_name, find_job, step_name
 
@@ -156,12 +161,50 @@ def _tested_run(bundle: Bundle) -> dict[str, Any]:
     return bundle.selection["source"]["tested_run"]
 
 
-def _lane_epochs(frames: list[Mapping[str, Any]]) -> dict[str, str]:
-    epochs: dict[str, str] = {}
-    for frame in frames:
-        if epochs.setdefault(frame["lane_id"], frame["epoch"]) != frame["epoch"]:
-            raise fail(f"lane {frame['lane_id']} mixes baseline and selected frames", reason="composition")
-    return epochs
+def _run_fields(lane: Mapping[str, Any]) -> dict[str, Any]:
+    """The execution record of a lane: every field but the expectation's lane fields and
+    ``baseline_run`` (``profile``, ``status``, ``jars`` and ``elapsed_s`` when measured)."""
+
+    return {name: value for name, value in lane.items() if name not in LANE_FIELDS and name != "baseline_run"}
+
+
+def _lane_fields(lane: Mapping[str, Any]) -> dict[str, Any]:
+    return {name: lane[name] for name in LANE_FIELDS}
+
+
+def _check_lane(lane: Mapping[str, Any], selected: Mapping[str, Mapping[str, Any]],
+                baseline: Mapping[str, Mapping[str, Any]], epochs: set[str]) -> None:
+    """R3 for one composed lane holding frames of ``epochs``.
+
+    A lane the selection did not re-test is exactly the baseline's lane (and holds no selected
+    frame). A re-tested lane is exactly the selected source lane, lane fields (roles included) and
+    run fields alike, so every published lane record is one an authenticated source holds, as in
+    Quick Skin's schema-7 view; ``validate_compact`` also holds its lane fields to the complete
+    expectation's, so a selection that ran only some of a lane's roles cannot be composed (Quick
+    Skin selections retain every authored role). When some of its frames come from the baseline,
+    its ``baseline_run`` is exactly the run fields of the baseline's same lane, whose lane fields
+    are the composed lane's; otherwise it carries none."""
+
+    lane_id = lane["lane_id"]
+    retested = selected.get(lane_id)
+    if retested is None:
+        source = baseline.get(lane_id)
+        if source is None or canonical_json(source) != canonical_json(lane) or epochs - {"baseline"}:
+            raise fail(f"R3: composed lane {lane_id} differs from its baseline source lane", reason="composition")
+        return
+    fields = _lane_fields(lane)
+    if _lane_fields(retested) != fields or _run_fields(retested) != _run_fields(lane):
+        raise fail(f"R3: composed lane {lane_id} is not the selected execution of its lane (a selection must run "
+                   "every role of a lane it re-tests)", reason="composition")
+    if "baseline" not in epochs:
+        if "baseline_run" in lane:
+            raise fail(f"R3: composed lane {lane_id} records a baseline run for no baseline frame",
+                       reason="composition")
+        return
+    source = baseline.get(lane_id)
+    if source is None or _lane_fields(source) != fields or lane.get("baseline_run") != _run_fields(source):
+        raise fail(f"R3: the baseline frames of lane {lane_id} do not record their baseline execution",
+                   reason="composition")
 
 
 def verify_composition(invocation: Invocation, *, composed_dir: Path, selected_dir: Path, baseline_dir: Path,
@@ -194,8 +237,8 @@ def verify_composition(invocation: Invocation, *, composed_dir: Path, selected_d
                        {lane["lane_id"]: lane for lane in manifest["lanes"]},
                        {item["comparison_id"]: item for item in manifest["comparisons"]})
                for epoch, (manifest, _) in sources.items()}
-    epochs = _lane_epochs(cm["frames"])
-    _require_selected_in_full(cm, indexes["selected"], epochs)
+    _require_selected_in_full(cm, indexes["selected"])
+    epochs: dict[str, set[str]] = {lane["lane_id"]: set() for lane in cm["lanes"]}
     for frame in cm["frames"]:
         epoch = frame["epoch"]
         frames, lanes, _ = indexes[epoch]
@@ -209,11 +252,9 @@ def verify_composition(invocation: Invocation, *, composed_dir: Path, selected_d
             raise fail(f"R3: the {epoch} evidence has no lane {frame['lane_id']}", reason="composition")
         tested = {**sources[epoch][1], "jar_sha256": lane["jars"]["production_sha256"]}
         require_equal(frame["tested"], tested, f"R3: composed frame {frame['frame_id']} records another tested run")
+        epochs[frame["lane_id"]].add(epoch)
     for lane in cm["lanes"]:
-        epoch = "selected" if lane["lane_id"] in indexes["selected"][1] else "baseline"
-        source_lane = indexes[epoch][1].get(lane["lane_id"])
-        if source_lane is None or canonical_json(source_lane) != canonical_json(lane):
-            raise fail(f"R3: composed lane {lane['lane_id']} differs from its {epoch} source lane", reason="composition")
+        _check_lane(lane, indexes["selected"][1], indexes["baseline"][1], epochs[lane["lane_id"]])
     by_id = {frame["frame_id"]: frame for frame in cm["frames"]}
     for comparison in cm["comparisons"]:
         first, second = by_id[comparison["first_frame_id"]], by_id[comparison["second_frame_id"]]
@@ -228,12 +269,11 @@ def verify_composition(invocation: Invocation, *, composed_dir: Path, selected_d
 
 
 def _require_selected_in_full(composed: Mapping[str, Any],
-                              selected: tuple[dict[str, Any], dict[str, Any], dict[str, Any]],
-                              epochs: Mapping[str, str]) -> None:
+                              selected: tuple[dict[str, Any], dict[str, Any], dict[str, Any]]) -> None:
     """R3: the composition uses the selected evidence in full. Its ``epoch: selected`` frames are
-    exactly the selected compaction's frames, every selected lane is present and none of its frames
-    comes from the baseline, and every selected comparison is present; a hook can never publish
-    older baseline evidence for what the selection re-tested."""
+    exactly the selected compaction's frames, every selected lane is present (and, by
+    :func:`_check_lane`, records the selected execution), and every selected comparison is present;
+    a hook can never publish older baseline evidence for what the selection re-tested."""
 
     frames, lanes, comparisons = selected
     marked = {frame["frame_id"] for frame in composed["frames"] if frame["epoch"] == "selected"}
@@ -241,9 +281,9 @@ def _require_selected_in_full(composed: Mapping[str, Any],
         raise fail("R3: the composed selected frames are not exactly the selected evidence's frames",
                    reason="composition")
     present = {lane["lane_id"] for lane in composed["lanes"]}
-    for lane_id in lanes:
-        if lane_id not in present or epochs.get(lane_id, "selected") != "selected":
-            raise fail(f"R3: selected lane {lane_id} is not composed from the selected evidence", reason="composition")
+    missing = sorted(set(lanes) - present)
+    if missing:
+        raise fail(f"R3: selected lane {missing[0]} is not composed from the selected evidence", reason="composition")
     if not set(comparisons) <= {item["comparison_id"] for item in composed["comparisons"]}:
         raise fail("R3: the composition drops a comparison of the selected evidence", reason="composition")
 

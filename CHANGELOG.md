@@ -5,6 +5,53 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v0.9.2
+
+A fix release for the defects the Quick Skin and Block Pops migrations found at `v0.9.0`/`v0.9.1`,
+before either adopts the kit. Schema versions (all 1; only optional fields are added),
+`pixel_metrics_version` 1 and `ADAPTER_API` 1 are unchanged. Two managed files change, so mods move
+their pin with `bump --to v0.9.2`, which re-synchronizes them: `.gitattributes` and
+`scripts/ci/mod_base_kit.py`.
+
+### Fixed
+
+- Partially re-captured lanes compose. R3 refused a composed lane whose frames mix epochs
+  (`lane <id> mixes baseline and selected frames`), while a Quick Skin selective generation
+  re-captures single checkpoints (hud-preview: 2 of the 63 `full` captures), so no real selective
+  generation could be published. Composition is now per frame, as Quick Skin's schema-7 view was:
+  every frame keeps its `epoch` and `tested` run (with its epoch's lane JAR); a re-tested lane keeps
+  the selected execution as its record and, when it still holds baseline frames, records the
+  baseline execution as the new optional composed-only `lanes[].baseline_run`; a comparison never
+  spans the two epochs. `validate_compact` checks the epoch consistency of every composed bundle,
+  R3 checks it against the sources (a re-tested lane is exactly the selected lane record, so a
+  selection must run every role of a lane it re-tests, as Quick Skin's do), `--bind-raw` binds the
+  raw lanes, and the gallery publishes `baseline_run` on the lane and shows that
+  execution's JAR, result and wall time in a baseline frame's validation record. Every earlier
+  composed bundle stays valid.
+- `template check` on Windows. A clone with `core.autocrlf=true` (Git for Windows' default) checked
+  the managed files out with CRLF and failed the byte-exact check. The managed `.gitattributes`
+  keeps its `*.bat whitespace=cr-at-eol` rule and now pins `text eol=lf` for every managed and
+  fragment path. The check stays byte-exact (committed bytes are what GitHub reads) and reports CRLF
+  line endings with the fix (and the diff of the LF form when that still differs) instead of a
+  whole-file diff; `template sync --write`, and so `bump`, rewrites a CRLF managed file or caller
+  with LF, keeping the caller's extension region. An existing clone applies the rule at its next
+  checkout of those files.
+- Conformance can run a real adapter's delegated and selected variants. The extension fixtures
+  (`delegated_extensions`, `selected_extensions`) now receive a seeding API as `ctx.api`: reads of
+  the simulated GitHub, `handoff_run`, and typed, bounded `add_artifact` (ZIP bytes, returning the
+  artifact record), `add_run`, `add_jobs` and `add_response`. The Quick Skin-like fixture uses it for
+  a sealed runtime reuse, a coverage certificate and a mixed-epoch composition; the report's `site`
+  gains `composed_lanes`.
+- `conformance` no longer hides the simulation's error behind a cleanup error of its scratch
+  directory.
+- Block Pops' staged kit includes `actions/`, so its gate can check the pinned composites. They are
+  bound by a second lock inside the digested `src/`, `src/mod_base/template/staged_actions.sha256`,
+  while `staged_files.sha256` keeps listing exactly `template/` and `tools/`. So a controller
+  upgrade stages in both directions: a controller bootstrap older than `v0.9.2` still stages a
+  `v0.9.2` candidate (without `actions/`), and a `v0.9.2` bootstrap stages a candidate pinned back to
+  an older kit (without `actions/`). A gate step that reads the overlay's `actions/` therefore needs
+  a `v0.9.2` or later controller bootstrap.
+
 ## v0.9.1
 
 A fix release for a defect the cross-repository canary found at `v0.9.0`. Document kinds and

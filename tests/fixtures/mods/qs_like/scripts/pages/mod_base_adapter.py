@@ -11,6 +11,17 @@ authenticated ``mb-baseline`` archive and a ``family_validate`` hook that projec
 module's ``family_bundle``) onto ``mod-base.family.paired``. Everything is read from inert Git
 objects of the subject commit (``ctx.read_blob``) or from the runtime tree or bundle the kit hands
 over.
+
+Like Quick Skin, a feature selection names whole ``scenarios`` or single ``captures``
+(``<scenario>.<role>.<step>``; both comparison partners must be selected), so a selective
+generation can re-capture only some frames of a lane; ``compose`` then composes that lane per frame
+(its baseline frames keep the baseline execution as ``baseline_run``). Like Quick Skin's
+``runtime_source`` and coverage certificate, the network hooks may also authenticate ZIP artifacts:
+a reference naming a ``seal_artifact`` binds the tested run's ``tested-source`` seal and the handoff
+run's ``reused-source`` descriptor (and its ``Reuse the tested source`` job), and a selection naming
+a ``certificate_artifact_id`` binds a coverage certificate that a successful ``feature-coverage``
+run issued for this baseline and runtime (the conformance fixtures seed them through
+``ctx.api``).
 """
 
 from __future__ import annotations
@@ -41,6 +52,14 @@ FAMILY_KIND = "qs-like.compatibility"
 MAX_NATIVE = 8 << 20
 MAX_IMAGE = 4 << 20
 IMAGE_PATH = re.compile(r"images/[0-9a-f]{64}\.webp")
+#: The ZIP artifacts the network hooks authenticate (Quick Skin's reuse seal and coverage certificate).
+SEAL_ARTIFACT = "tested-source-e2e"
+DESCRIPTOR_ARTIFACT = "reused-source-e2e"
+REUSE_JOB = "Reuse the tested source"
+CERTIFICATE_WORKFLOW = ".github/workflows/feature-coverage.yml"
+CERTIFICATE_JOB = "Certify complete feature coverage"
+CERTIFICATE_KIND = "qs-like.coverage-certificate"
+MAX_SMALL_ARCHIVE = 1 << 20
 
 
 def _sha256(data: bytes) -> str:
@@ -76,9 +95,19 @@ def targets(ctx, branches):
 def _scenarios(contract: dict, selection: dict | None) -> list[dict]:
     wanted = contract["profiles"][PROFILE]
     if selection is not None:
-        wanted = [scenario for scenario in wanted if scenario in selection["scenarios"]]
+        chosen = set(selection.get("scenarios", ()))
+        chosen |= {capture.split(".")[0] for capture in selection.get("captures", ())}
+        wanted = [scenario for scenario in wanted if scenario in chosen]
     by_id = {scenario["id"]: scenario for scenario in contract["scenarios"]}
     return [by_id[scenario] for scenario in wanted]
+
+
+def _selected(selection: dict | None, scenario: str, role: str, step: str) -> bool:
+    """Whether the capture ``scenario.role.step`` belongs to the selection (``None``: complete)."""
+
+    if selection is None or scenario in selection.get("scenarios", ()):
+        return True
+    return f"{scenario}.{role}.{step}" in selection.get("captures", ())
 
 
 def expectation(ctx, target, tested_run, extensions):
@@ -96,22 +125,32 @@ def expectation(ctx, target, tested_run, extensions):
         node = f"{loader}-{version}"
         for scenario in scenarios:
             lane_id = f"{node}/{scenario['id']}"
+            # Like Quick Skin's project_contract, a selected scenario keeps every authored role,
+            # whichever of its captures the selection names.
+            roles = scenario["roles"]
             lanes.append({"lane_id": lane_id, "artifact_node": node, "minecraft": version, "loader": loader,
-                          "java": row["java"], "scenario": scenario["id"],
-                          "roles": [role["role"] for role in scenario["roles"]]})
-            for role in scenario["roles"]:
+                          "java": row["java"], "scenario": scenario["id"], "roles": [role["role"] for role in roles]})
+            for role in roles:
                 order = 0
                 for step in role["steps"]:
                     if "capture" not in step:
                         continue
                     capture = step["capture"]
-                    captures.append({"frame_id": f"{lane_id}/{role['role']}/{step['id']}",
-                                     "capture_id": f"{scenario['id']}.{role['role']}.{step['id']}",
-                                     "capture_order": order, "lane_id": lane_id, "role": role["role"],
-                                     "step": step["id"], "title": capture["title"],
-                                     "expectation": capture["expectation"], "review_tier": capture["review_tier"]})
+                    if _selected(selection, scenario["id"], role["role"], step["id"]):
+                        captures.append({"frame_id": f"{lane_id}/{role['role']}/{step['id']}",
+                                         "capture_id": f"{scenario['id']}.{role['role']}.{step['id']}",
+                                         "capture_order": order, "lane_id": lane_id, "role": role["role"],
+                                         "step": step["id"], "title": capture["title"],
+                                         "expectation": capture["expectation"],
+                                         "review_tier": capture["review_tier"]})
                     order += 1
                 for comparison in role["comparisons"]:
+                    partners = [_selected(selection, scenario["id"], role["role"], comparison[side])
+                                for side in ("first", "second")]
+                    if partners[0] != partners[1]:
+                        raise ValueError(f"the selection captures one partner of comparison {comparison['id']}")
+                    if not partners[0]:
+                        continue
                     record = {"comparison_id": f"{lane_id}/{role['role']}/{comparison['id']}", "lane_id": lane_id,
                               "role": role["role"],
                               "first_frame_id": f"{lane_id}/{role['role']}/{comparison['first']}",
@@ -180,6 +219,59 @@ def collect(ctx, runtime_root, target, expectation):
     return {"runtime_files": sorted(set(files)), "lanes": lanes, "frames": frames, "comparisons": comparisons}
 
 
+def _artifact(ctx, artifact_id: int) -> dict:
+    return ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/artifacts/{artifact_id}")
+
+
+def _run_artifact(ctx, run_id: int, name: str) -> dict:
+    """The one unexpired artifact ``name`` of run ``run_id``."""
+
+    listing = ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/runs/{run_id}/artifacts", params={"name": name})
+    found = [item for item in listing["artifacts"] if item["name"] == name and item["expired"] is False]
+    if len(found) != 1:
+        raise ValueError(f"run {run_id} holds no single {name} artifact")
+    return found[0]
+
+
+def _zip_document(ctx, record: dict, name: str) -> dict:
+    """The one JSON document ``name`` of the ZIP artifact ``record``, bound to its size and digest."""
+
+    archive = ctx.api.download(f"/repos/{ctx.api.repository}/actions/artifacts/{record['id']}/zip",
+                               max_bytes=MAX_SMALL_ARCHIVE)
+    if len(archive) != record["size_in_bytes"] or f"sha256:{_sha256(archive)}" != record["digest"]:
+        raise ValueError(f"artifact {record['id']} differs from its record")
+    root = Path(ctx.tmpdir) / f"artifact-{record['id']}"
+    if extract(archive, root, LIMITS_BY_KIND["promotion"]) != [name]:
+        raise ValueError(f"artifact {record['id']} holds more than its {name}")
+    return json.loads((root / name).read_bytes())
+
+
+def _successful_job(ctx, run: dict, name: str) -> None:
+    jobs = ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs")
+    if not any(job["name"] == name and job["conclusion"] == "success" for job in jobs["jobs"]):
+        raise ValueError(f"run {run['id']} has no successful job {name!r}")
+
+
+def _verify_seal(ctx, manifest, reference) -> None:
+    """Quick Skin's reuse proof: the tested run's ``tested-source`` seal names exactly this reference,
+    and the handoff run uploaded the same reference as its ``reused-source`` descriptor in a
+    successful reuse job."""
+
+    seal = _artifact(ctx, reference["seal_artifact"]["id"])
+    if ({name: seal[name] for name in ("id", "name", "digest")} != reference["seal_artifact"]
+            or seal["name"] != SEAL_ARTIFACT or seal["workflow_run"]["id"] != reference["run_id"]):
+        raise ValueError("the seal artifact is not the tested run's tested-source seal")
+    sealed = _zip_document(ctx, seal, "tested-source.json")
+    if sealed != {name: reference[name] for name in ("repository", "run_id", "tested_sha")}:
+        raise ValueError("the tested-source seal names another tested run")
+    handoff = manifest["provenance"]["handoff"]
+    descriptor = _run_artifact(ctx, handoff["run_id"], DESCRIPTOR_ARTIFACT)
+    if _zip_document(ctx, descriptor, "reused-source.json") != reference:
+        raise ValueError("the handoff run's reused-source descriptor is not this reference")
+    run = ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/runs/{handoff['run_id']}")
+    _successful_job(ctx, run, REUSE_JOB)
+
+
 def authenticate_extensions(ctx, manifest, extensions):
     reuse_verified = False
     if RUNTIME_SOURCE in extensions:
@@ -191,6 +283,8 @@ def authenticate_extensions(ctx, manifest, extensions):
         if (run.get("head_sha") != reference["tested_sha"] or run.get("conclusion") != "success"
                 or tested["run_id"] != reference["run_id"] or tested["commit"] != reference["tested_sha"]):
             raise ValueError("the runtime_source reference is not the tested run")
+        if "seal_artifact" in reference:
+            _verify_seal(ctx, manifest, reference)
         reuse_verified = True
     if FEATURE_SELECTION in extensions:
         if manifest["scope"].get("detail_sha256") != _sha256(canonical_json(extensions[FEATURE_SELECTION])):
@@ -202,14 +296,45 @@ def _read(root: Path, name: str) -> bytes:
     return (root / name).read_bytes()
 
 
+def _verify_certificate(ctx, selection: dict, manifest: dict, baseline: dict) -> None:
+    """Quick Skin's coverage certificate: a successful ``feature-coverage`` run of the subject
+    certified this selection against exactly this baseline for exactly this selective runtime."""
+
+    record = _artifact(ctx, selection["certificate_artifact_id"])
+    owner = ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/runs/{record['workflow_run']['id']}")
+    subject = manifest["subject"]
+    if (owner["path"] != CERTIFICATE_WORKFLOW or owner["conclusion"] != "success"
+            or owner["head_sha"] != subject["commit"] or owner["head_branch"] != subject["branch"]):
+        raise ValueError("the coverage certificate was not issued by a successful feature-coverage run")
+    _successful_job(ctx, owner, CERTIFICATE_JOB)
+    certificate = _zip_document(ctx, record, "certificate.json")
+    wanted = {"kind": CERTIFICATE_KIND, "baseline_artifact": baseline,
+              "runtime_run_id": manifest["provenance"]["handoff"]["run_id"],
+              "selection_sha256": _sha256(canonical_json({name: value for name, value in selection.items()
+                                                          if name != "certificate_artifact_id"}))}
+    if certificate != wanted:
+        raise ValueError("the coverage certificate names another baseline, runtime or selection")
+
+
 def compose(ctx, key, selected_compact_dir, output_dir):
+    """Complete a selected compaction per frame: a frame the selection re-captured comes from it,
+    every other frame from the baseline, each with its epoch's ``tested`` run and lane JAR. A lane
+    the selection re-tested is the complete lane with the selected execution, plus the baseline
+    execution as ``baseline_run`` when some of its frames were not re-captured; every other lane
+    is the baseline's. A comparison always comes from one generation (a selection captures both
+    partners)."""
+
     selected_root, output = Path(selected_compact_dir), Path(output_dir)
     manifest = json.loads(_read(selected_root, "manifest.json"))
     selected_expectation = json.loads(_read(selected_root, "expectation.json"))
     draft = json.loads(_read(selected_root, "selection.json"))
     extensions = json.loads(_read(selected_root, "extensions.json")) if manifest["extensions"] else {}
-    baseline_id = extensions[FEATURE_SELECTION]["baseline_artifact_id"]
-    record = ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/artifacts/{baseline_id}")
+    selection = extensions[FEATURE_SELECTION]
+    baseline_id = selection["baseline_artifact_id"]
+    record = _artifact(ctx, baseline_id)
+    reference = {"id": record["id"], "name": record["name"], "digest": record["digest"]}
+    if "certificate_artifact_id" in selection:
+        _verify_certificate(ctx, selection, manifest, reference)
     archive = ctx.api.download(f"/repos/{ctx.api.repository}/actions/artifacts/{baseline_id}/zip",
                                max_bytes=record["size_in_bytes"])
     baseline_root = Path(ctx.tmpdir) / "baseline"
@@ -221,28 +346,48 @@ def compose(ctx, key, selected_compact_dir, output_dir):
     target = {name: selected_expectation[name]
               for name in ("key", "label", "subject", "matrix_sha256", "contract_sha256")}
     complete = expectation(ctx, target, None, composed_extensions)
-    selected_lanes = {lane["lane_id"] for lane in manifest["lanes"]}
     sources = {"selected": (manifest, selected_root, draft), "baseline": (baseline, baseline_root, baseline_selection)}
-
-    def epoch_of(lane_id: str) -> str:
-        return "selected" if lane_id in selected_lanes else "baseline"
 
     def indexed(epoch: str, field: str, id_field: str) -> dict:
         return {item[id_field]: item for item in sources[epoch][0][field]}
 
-    lanes = [indexed(epoch_of(lane["lane_id"]), "lanes", "lane_id")[lane["lane_id"]] for lane in complete["lanes"]]
-    frames, images = [], {}
+    selected_frames = indexed("selected", "frames", "frame_id")
+
+    def epoch_of(frame_id: str) -> str:
+        return "selected" if frame_id in selected_frames else "baseline"
+
+    def execution(lane: dict) -> dict:
+        return {name: lane[name] for name in ("profile", "status", "elapsed_s", "jars") if name in lane}
+
+    frames, images, lane_epochs = [], {}, {}
     for capture in complete["captures"]:
-        epoch = epoch_of(capture["lane_id"])
-        bundle, root, selection = sources[epoch]
+        epoch = epoch_of(capture["frame_id"])
+        bundle, root, selection_document = sources[epoch]
         frame = dict(indexed(epoch, "frames", "frame_id")[capture["frame_id"]])
         lane = indexed(epoch, "lanes", "lane_id")[capture["lane_id"]]
         frame["epoch"] = epoch
-        frame["tested"] = {**selection["source"]["tested_run"], "jar_sha256": lane["jars"]["production_sha256"]}
+        frame["tested"] = {**selection_document["source"]["tested_run"],
+                           "jar_sha256": lane["jars"]["production_sha256"]}
         images[frame["derivative"]["path"]] = _read(root, frame["derivative"]["path"])
         frames.append(frame)
-    comparisons = [indexed(epoch_of(item["lane_id"]), "comparisons", "comparison_id")[item["comparison_id"]]
-                   for item in complete["comparisons"]]
+        lane_epochs.setdefault(capture["lane_id"], set()).add(epoch)
+    selected_lanes, baseline_lanes = indexed("selected", "lanes", "lane_id"), indexed("baseline", "lanes", "lane_id")
+    lanes = []
+    for wanted in complete["lanes"]:
+        lane_id = wanted["lane_id"]
+        if lane_id not in selected_lanes:
+            lanes.append(baseline_lanes[lane_id])
+            continue
+        lane = {**wanted, **execution(selected_lanes[lane_id])}
+        if "baseline" in lane_epochs.get(lane_id, set()):
+            lane["baseline_run"] = execution(baseline_lanes[lane_id])
+        lanes.append(lane)
+    comparisons = []
+    for item in complete["comparisons"]:
+        epoch = epoch_of(item["first_frame_id"])
+        if epoch_of(item["second_frame_id"]) != epoch:
+            raise ValueError(f"comparison {item['comparison_id']} crosses tested generations")
+        comparisons.append(indexed(epoch, "comparisons", "comparison_id")[item["comparison_id"]])
     expectation_bytes = canonical_json(complete)
     selection_bytes = _read(selected_root, "selection.json")
     files = {"expectation.json": expectation_bytes, "selection.json": selection_bytes, **images}
@@ -270,7 +415,7 @@ def compose(ctx, key, selected_compact_dir, output_dir):
     for path, data in files.items():
         (output / path).parent.mkdir(parents=True, exist_ok=True)
         (output / path).write_bytes(data)
-    return {"baseline_artifact": {"id": record["id"], "name": record["name"], "digest": record["digest"]}}
+    return {"baseline_artifact": reference}
 
 
 def _native_file(root: Path, relative: str, limit: int) -> bytes:

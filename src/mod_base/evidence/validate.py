@@ -23,8 +23,8 @@ is forbidden): structure, the embedded final selection and its binding
 (``documents.check_compact_selection``), the inventory and every derivative and derivative
 comparison. ``bind_raw`` additionally re-encodes every derivative that came from a raw handoff
 (all frames of a ``complete`` bundle, the ``selected`` epoch of a ``composed`` one, which must be
-exactly the raw handoff's frames) from that handoff's PNGs and requires byte-identical WebP (Block
-Pops ``_bind_compact``).
+exactly the raw handoff's frames, and every raw lane exactly the composed lane's record, its
+``baseline_run`` aside) from that handoff's PNGs and requires byte-identical WebP (Block Pops ``_bind_compact``).
 """
 
 from __future__ import annotations
@@ -385,6 +385,11 @@ def bind_raw_handoff(invocation: Invocation, compact: Bundle, raw_root: Path) ->
         bound = [frame for frame in manifest["frames"] if frame["epoch"] == "selected"]
         if {frame["frame_id"] for frame in bound} != set(raw_frames):
             raise fail("the composed bundle's selected frames are not exactly its raw handoff's frames")
+        lanes = {lane["lane_id"]: lane for lane in manifest["lanes"]}
+        for raw_lane in raw.manifest["lanes"]:
+            lane = lanes.get(raw_lane["lane_id"])
+            if lane is None or _without(lane, "baseline_run") != raw_lane:
+                raise fail(f"the composed lane {raw_lane['lane_id']} is not the execution its raw handoff recorded")
     else:
         bound = manifest["frames"]
         if compact.expectation_raw != raw.expectation_raw:

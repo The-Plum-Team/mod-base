@@ -563,11 +563,11 @@ class CrossUnitUseTest(unittest.TestCase):
             "mod_base.pages.templating": {"theme_color"},
             "mod_base.pages.build": {"current_implementation", "require_current_run", "check_checkouts", "BuildError",
                                      "FAMILY_SELECTED_NAME"},
-            "mod_base.pin": {"yaml_unescape", "staged_listing", "verify_staged_files", "require_reachable",
-                             "verify_released", "resolve", "unclean_paths", "LOCKED_DIRS", "STAGED_LOCK",
-                             "KIT_REPOSITORY_BARE"},
+            "mod_base.pin": {"yaml_unescape", "staged_listing", "actions_listing", "verify_staged_files",
+                             "require_reachable", "verify_released", "resolve", "unclean_paths", "LOCKED_DIRS",
+                             "STAGED_LOCK", "ACTIONS_DIR", "ACTIONS_LOCK", "KIT_REPOSITORY_BARE"},
             "mod_base.template.tool": {"evaluate", "pending", "DEFERRABLE", "extension_violations", "link_violations"},
-            "mod_base.template.lock": {"recorded", "write", "main"},
+            "mod_base.template.lock": {"LOCKS", "recorded", "stale", "write", "main"},
             "mod_base": {"__version__", "SCHEMA_VERSIONS"},
         }
         for module, frozen in expected.items():

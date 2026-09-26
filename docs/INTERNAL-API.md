@@ -141,14 +141,17 @@ Integration-round amendments:
   never drain the leftovers an earlier rotation deferred. The deletion delay, exact-ID deletion and
   every owner and replacement check are unchanged; `rotate` reads `promotion.json` as canonical bytes.
 * **Staged-file lock (SPEC §1.5 amendment).** kit-digest-v1 and the kit stamp cover `src/`, `site/`
-  and `requirements/`, but `stage` also copies `template/` and `tools/` into the Block Pops overlay
-  and `template check` reads the overlay's `template/`. So the digested `src/` carries
-  `pin.STAGED_LOCK` (`src/mod_base/template/staged_files.sha256`): the kit-digest-v1-format listing
-  of every `template/` and `tools/` file (`pin.staged_listing`). Kit resolution verifies the digest
-  first, then refuses an overlay whose `template/` or `tools/` differ from that listing
-  (`pin.verify_staged_files`, reason `kit-digest`). After any change below `template/` or `tools/`,
-  run `python3 -m mod_base.template.lock --write`, then refresh the tree-digest literal
-  (`tools/update_tree_digest.py --write`), because the lock lives in `src/`.
+  and `requirements/`, but `stage` also copies `template/` and `tools/` (and, from v0.9.2, `actions/`)
+  into the Block Pops overlay and `template check` reads the overlay's `template/`. So the digested
+  `src/` carries `pin.STAGED_LOCK` (`src/mod_base/template/staged_files.sha256`): the
+  kit-digest-v1-format listing of every `template/` and `tools/` file (`pin.staged_listing`), and,
+  from v0.9.2, `pin.ACTIONS_LOCK` (`src/mod_base/template/staged_actions.sha256`), the listing of
+  every `actions/` file (`pin.actions_listing`). Kit resolution verifies the digest first, then
+  refuses an overlay whose `template/` or `tools/` differ from the first listing or whose `actions/`,
+  when present, differs from the second (`pin.verify_staged_files`, reason `kit-digest`). After any
+  change below `actions/`, `template/` or `tools/`, run `python3 -m mod_base.template.lock --write`,
+  then refresh the tree-digest literal (`tools/update_tree_digest.py --write`), because the locks
+  live in `src/`.
 * **Command outputs** (beyond the SPEC §2.2 table): `anchor identity` prints
   `canonical_json({eligible, name})` on stdout (`name` is `null` when not eligible) and writes
   `anchor_eligible` and `anchor_name` (empty when not eligible) to `$GITHUB_OUTPUT`; `family collect`
@@ -212,6 +215,43 @@ Integration-round amendments:
   of settled runs, where one listing serves many names. `FakeGitHub` gains an optional `sleep`
   (recorded in `sleeps`, never slept by default) and the seams `skew_listing` and `during_listing`;
   the conformance simulation skews every refresh's first listing after a sibling's upload.
+* **Pre-1.0 adoption fixes (v0.9.2).** Found while migrating Quick Skin and Block Pops at v0.9.0/v0.9.1:
+  * *Partially re-captured lanes.* R3 refused a composed lane holding frames of both epochs, so no
+    real Quick Skin selective generation (hud-preview re-captures 2 of 63 `full` checkpoints) could
+    be composed. A composed bundle is now composed per frame, faithfully to Quick Skin's schema-7
+    view: a re-tested lane is the selected source's lane record (a selection runs every role of a
+    lane it re-tests) and, when it still holds baseline frames, records the baseline execution as
+    the new optional composed-only field `lanes[].baseline_run` (and the gallery lane likewise,
+    `baseline_run: {status, elapsed_s?, jars}`, which the validation record shows for a baseline
+    frame); `documents.validate_compact` checks the epoch consistency of every composed bundle
+    (`SCHEMAS.md`, "Composed lanes and epochs"), and
+    `compose.verify_composition` its sources. Only optional fields are added (N/N-1 holds: every
+    v0.9.0/v0.9.1 composed bundle stays valid); the private `compose._lane_epochs` is gone.
+  * *Conformance seeding API.* The extension fixtures (`delegated_extensions`,
+    `selected_extensions`) receive the new `conformance._fixture_api.FixtureGitHub` as `ctx.api`:
+    the simulated GitHub's read surface plus typed, bounded `add_artifact` (ZIP bytes),
+    `add_run`, `add_jobs` and `add_response` (`ADAPTER.md`, "Optional conformance fixtures"); the
+    `responses` return form goes through the same `add_response` rules. The report's `site` gains
+    `composed_lanes`. The fixture signatures are unchanged.
+  * *Conformance scratch.* `run_conformance` no longer uses `TemporaryDirectory`, whose cleanup error
+    replaced the simulation's real one: a cleanup failure after an error is dropped, after a success
+    it is an `MbError` (read-only trees are made writable first).
+  * *Staged set (SPEC §1.5 amendment).* `stage` also copies `actions/`, so a mod's gate can check the
+    pinned composites, bound by a lock of its own, `pin.ACTIONS_LOCK` (`pin.ACTIONS_DIR`,
+    `pin.actions_listing`); `pin.STAGED_LOCK` and `pin.LOCKED_DIRS` are unchanged. A second lock, not a
+    longer first one, keeps SPEC §1.5's controller upgrade working in both directions: a bootstrap
+    older than v0.9.2 requires `template/` and `tools/` to equal `STAGED_LOCK` byte for byte and stages
+    no `actions/`, so it still stages a v0.9.2 candidate kit (whose own verification accepts an overlay
+    without `actions/`), and a v0.9.2 bootstrap stages a candidate pinned back to an older kit, which
+    carries no `ACTIONS_LOCK`, without `actions/`. An `actions/` no lock binds is refused. The managed
+    bootstrap changes accordingly (`ACTIONS_DIR`, `ACTIONS_LOCK`, `STAGED_DIRS`, `actions_listing`,
+    `verify_staged_files`, `copy_kit`); `mod_base.template.lock` maintains both locks (`LOCKS`, `stale`,
+    and `recorded` takes the lock path) and `tools/update_tree_digest.py` gates both.
+  * *Line endings.* The managed `.gitattributes` pins `text eol=lf` for every managed and fragment path,
+    so a `core.autocrlf=true` checkout passes `template check`, which stays byte-exact and reports CRLF
+    line endings with `tool.CRLF_ADVICE` (plus the diff of the LF form when that still differs);
+    `template sync --write`, and so `bump`, rewrites a CRLF managed file or caller with LF, keeping the
+    caller's extension region.
 * **Checked document.** `tests/test_internal_api.py` also checks every class's documented dataclass
   `fields` (names, order and each default's `repr`, `<factory>` for a default factory) and
   properties, every name of a described name list, and every documented constant value written in
@@ -1416,11 +1456,14 @@ Frozen for other units (integration round):
 
 * `LOCKED_DIRS = ('template', 'tools')`
 * `STAGED_LOCK = 'src/mod_base/template/staged_files.sha256'`
+* `ACTIONS_DIR = 'actions'`
+* `ACTIONS_LOCK = 'src/mod_base/template/staged_actions.sha256'`
 * `KIT_REPOSITORY_BARE`: the compiled pattern of a bare kit repository name (no following path),
   refused outside comment-only lines of a mod's workflow and action files.
 * `def yaml_unescape(text: str) -> str`: ``text`` with every YAML double-quoted escape decoded (unknown escapes are kept).
 * `def staged_listing(root: Path) -> bytes`: The listing of ``template/`` and ``tools/`` of the kit root ``root``: the bytes :data:`STAGED_LOCK` must hold.
-* `def verify_staged_files(root: Path) -> None`: Require ``template/`` and ``tools/`` of ``root`` to equal the :data:`STAGED_LOCK` listing inside its digested ``src/`` (verify the digest first).
+* `def actions_listing(root: Path) -> bytes`: The listing of ``actions/`` of the kit root ``root``: the bytes :data:`ACTIONS_LOCK` must hold.
+* `def verify_staged_files(root: Path) -> None`: Require ``template/`` and ``tools/`` of ``root`` to equal the :data:`STAGED_LOCK` listing inside its digested ``src/`` (verify the digest first), and a present ``actions/`` to equal the :data:`ACTIONS_LOCK` listing there. An absent ``actions/`` binds nothing, so an overlay staged by a bootstrap older than v0.9.2 (which stages none) stays valid; an ``actions/`` without :data:`ACTIONS_LOCK` (a kit older than v0.9.2) is unbound and refused.
 * `def require_reachable(sha: str, api: GitHubApi) -> None`: Require ``compare/<sha>...main`` to be ``ahead`` or ``identical`` with ``behind_by == 0``.
 * `def verify_released(pin: Pin, api: GitHubApi) -> None`: Require the pin to be reachable from mod-base ``main`` and its tag to peel to the pin.
 * `def resolve(repo: Path, environ: Mapping[str, str], *, overlay: bool = True, allow_unpinned: bool = True) -> tuple[Path, Pin, str]`: ``(kit root, pin, source)`` with ``source`` in ``overlay|environment|unpinned|cache|fetch``.
@@ -1478,12 +1521,15 @@ Owner: MB9 (register() implemented by MB0; handlers dispatch to the entry points
 
 Owner: MB9.
 
-The staged-file lock ``src/mod_base/template/staged_files.sha256`` (MB9): see the staged-file lock
-amendment. `python3 -m mod_base.template.lock [--root DIR] [--write]` checks it (exit 1 when stale,
-2 on an error) or rewrites it.
+The staged-file locks ``src/mod_base/template/staged_files.sha256`` and
+``src/mod_base/template/staged_actions.sha256`` (MB9): see the staged-file lock amendment and its
+v0.9.2 staged-set amendment. `python3 -m mod_base.template.lock [--root DIR] [--write]` checks them
+(exit 1 when one is stale, 2 on an error) or rewrites the stale ones.
 
-* `def recorded(kit_root: Path) -> bytes | None`: The lock ``kit_root`` carries, or ``None`` when it has none.
-* `def write(kit_root: Path) -> bool`: Rewrite the lock of ``kit_root`` when stale; return whether it changed.
+* `LOCKS`: every lock path with the `pin` listing function it must hold (`STAGED_LOCK` with `staged_listing`, `ACTIONS_LOCK` with `actions_listing`).
+* `def recorded(kit_root: Path, lock: str = STAGED_LOCK) -> bytes | None`: The lock ``lock`` (a :data:`LOCKS` path) ``kit_root`` carries, or ``None`` when it has none.
+* `def stale(kit_root: Path) -> list[str]`: The :data:`LOCKS` paths whose recorded bytes differ from the listing of ``kit_root``.
+* `def write(kit_root: Path) -> bool`: Rewrite every stale lock of ``kit_root``; return whether any changed.
 * `def main(argv: Sequence[str] | None = None) -> int`
 
 ## `mod_base.conformance.run`

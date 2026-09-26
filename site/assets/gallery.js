@@ -819,6 +819,8 @@ class Gallery {
     if (!lane) {
       return recordSection("Packaged lane", "No lane record was published for this capture.");
     }
+    // A partially re-captured lane keeps the baseline execution of the captures it did not re-test.
+    const run = frame.epoch === "baseline" && lane.baseline_run ? lane.baseline_run : lane;
     return recordSection(
       "Packaged lane",
       "The capture comes from a real headless Minecraft run of the packaged production JAR, not a development launch.",
@@ -827,10 +829,11 @@ class Gallery {
         ["Artifact node", node("span", "mono", lane.artifact_node)],
         ["Loader", `${lane.loader_name} · Minecraft ${lane.minecraft}`],
         ["Clients in this lane", lane.roles.map((role) => this.roleLabel(role)).join(", ")],
-        ["Mod JAR SHA-256", node("span", "mono", lane.jars.production_sha256)],
-        ["Harness JAR SHA-256", lane.jars.harness_sha256 ? node("span", "mono", lane.jars.harness_sha256) : undefined],
-        ["Lane result", lane.status],
-        ["Lane wall time", seconds(lane.elapsed_s)]
+        ["Lane run", lane.baseline_run ? epochLabel(frame.epoch) : undefined],
+        ["Mod JAR SHA-256", node("span", "mono", run.jars.production_sha256)],
+        ["Harness JAR SHA-256", run.jars.harness_sha256 ? node("span", "mono", run.jars.harness_sha256) : undefined],
+        ["Lane result", run.status],
+        ["Lane wall time", seconds(run.elapsed_s)]
       ])
     );
   }

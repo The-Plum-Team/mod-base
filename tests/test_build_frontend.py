@@ -221,6 +221,11 @@ async function gallery() {
   result.dialogTitle = elements(body, (node) => node.id === "capture-dialog-title").map((node) => node.textContent);
   const terms = elements(body, (node) => node.tagName === "DT").map((node) => node.textContent);
   result.terms = terms;
+  result.facts = elements(body, (node) => node.tagName === "DT").map((node) => {
+    const siblings = node.parentNode.childNodes;
+    const value = siblings[siblings.indexOf(node) + 1];
+    return [node.textContent, value ? value.textContent : null];
+  });
   result.dialogLinks = elements(body, (node) => node.tagName === "A").map((node) => node.href);
   result.raw = elements(body, (node) => node.tagName === "PRE").map((node) => Object.keys(JSON.parse(node.textContent)));
   dialog.fire("click", { target: dialog });
@@ -424,6 +429,29 @@ class FrontEndTest(unittest.TestCase):
         self.assertTrue(any(link.startswith(f"{self.repository_url}/blob/") for link in result["dialogLinks"]))
         self.assertEqual(result["raw"], [["frame", "lane", "comparisons"]])
         self.assertTrue(result["dialogClosed"])
+
+    def test_a_baseline_capture_of_a_partially_recaptured_lane_shows_its_own_execution(self) -> None:
+        gallery = json.loads((self.qs / "e2e" / "gallery-data.json").read_bytes())
+        result = run_page(self.qs, "gallery")
+        opened = dict(result["facts"])
+        key = gallery["releases"][0]["key"]
+        lane = next(item for item in gallery["lanes"] if item["lane_id"] == opened["Lane"] and item["key"] == key)
+        self.assertEqual(opened["Mod JAR SHA-256"], lane["jars"]["production_sha256"])
+        self.assertNotIn("Lane run", opened)
+        # Every capture of the opened lane is now a baseline frame of a re-tested lane.
+        lane["epoch"] = "selected"
+        lane["baseline_run"] = {"status": "pass", "elapsed_s": 12.0, "jars": {"production_sha256": "e" * 64}}
+        for item in gallery["frames"]:
+            if item["key"] == key and item["lane_id"] == lane["lane_id"]:
+                item["epoch"] = "baseline"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data.json"
+            path.write_text(json.dumps(gallery), encoding="utf-8")
+            facts = dict(run_page(self.qs, "gallery", data=path)["facts"])
+        self.assertEqual(facts["Lane"], lane["lane_id"])
+        self.assertEqual(facts["Lane run"], "Reused from baseline")
+        self.assertEqual(facts["Mod JAR SHA-256"], "e" * 64)
+        self.assertEqual(facts["Lane wall time"], "12.0 s")
 
     def test_the_compare_grid_is_keyed_by_release_minecraft_and_loader(self) -> None:
         result = run_page(self.qs, "gallery")

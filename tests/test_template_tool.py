@@ -24,8 +24,9 @@ from mod_base import cli
 from mod_base.config import parse_config
 from mod_base.errors import MbError
 from mod_base.model.documents import validate_template_manifest
-from mod_base.pin import STAGED_LOCK, staged_listing
+from mod_base.pin import ACTIONS_LOCK, STAGED_LOCK, actions_listing, staged_listing
 from mod_base.template import lock, tool
+from tests.test_pin import load_bootstrap
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_ROOT = KIT_ROOT / "template"
@@ -34,7 +35,8 @@ CONFIG_FIXTURE = KIT_ROOT / "tests" / "fixtures" / "documents" / "config" / "qs.
 SHA = "1" * 40
 OTHER_SHA = "2" * 40
 
-#: QS's ``.gitattributes`` at origin/master fd8e7dbf1 (SPEC §8.1: the managed bytes are exactly these).
+#: QS's ``.gitattributes`` at origin/master fd8e7dbf1 (SPEC §8.1): the managed bytes through v0.9.1, which
+#: v0.9.2 keeps as the file's start (:data:`EOL_RULES` follow).
 QS_GITATTRIBUTES = (
     b"# Gradle ships gradlew.bat with CRLF line endings, as a Windows batch file must have.\n"
     b"# Without this, git's whitespace check reads each carriage return as a trailing space and\n"
@@ -45,6 +47,27 @@ QS_GITATTRIBUTES = (
     b"# `cr-at-eol` adds to git's default rules rather than replacing them, so genuine trailing\n"
     b"# whitespace before the carriage return is still reported.\n"
     b"*.bat whitespace=cr-at-eol\n"
+)
+
+#: The rules v0.9.2 adds after them: every managed and fragment path is checked out with LF, so a
+#: ``core.autocrlf=true`` clone (Git for Windows' default) passes ``template check``.
+EOL_RULES = (
+    b"\n"
+    b"# mod-base manages the files below: `template check` compares the managed ones (the caller's\n"
+    b"# managed region included) byte for byte with the kit's template and reads the others line by\n"
+    b"# line. Git for Windows' default `core.autocrlf=true` would check them out with CRLF line endings\n"
+    b"# and fail that check on a clean clone, so they are always checked out with LF, whatever the local\n"
+    b"# setting. The list is exactly the template manifest's managed and fragment paths.\n"
+    b"/.gitattributes text eol=lf\n"
+    b"/.gitignore text eol=lf\n"
+    b"/.github/CODEOWNERS text eol=lf\n"
+    b"/.github/dependabot.yml text eol=lf\n"
+    b"/.github/pull_request_template.md text eol=lf\n"
+    b"/.github/workflows/pages.yml text eol=lf\n"
+    b"/AGENTS.md text eol=lf\n"
+    b"/docs/ai/shared/PUBLIC-EVIDENCE.md text eol=lf\n"
+    b"/docs/ai/shared/REPOSITORY.md text eol=lf\n"
+    b"/scripts/ci/mod_base_kit.py text eol=lf\n"
 )
 
 #: Block Pops' ``.gitignore`` at origin/master 9ba22a2 (its adoption PR A cannot change it).
@@ -276,20 +299,37 @@ class KitTemplateTest(unittest.TestCase):
             kit = Path(directory)
             shutil.copytree(TEMPLATE_ROOT, kit / "template")
             write(kit, "tools/helper.py", "x = 1\n")
+            write(kit, "actions/setup/action.yml", "name: Setup\n")
             (kit / "src" / "mod_base" / "template").mkdir(parents=True)
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(lock.main(["--root", str(kit)]), 1)
                 self.assertEqual(lock.main(["--root", str(kit), "--write"]), 0)
                 self.assertEqual((kit / STAGED_LOCK).read_bytes(), staged_listing(kit))
+                self.assertEqual((kit / ACTIONS_LOCK).read_bytes(), actions_listing(kit))
+                self.assertNotIn(b"./actions/", staged_listing(kit))
                 self.assertEqual(lock.main(["--root", str(kit)]), 0)
                 self.assertFalse(lock.write(kit))
+                write(kit, "actions/setup/action.yml", "name: Changed\n")
+                self.assertEqual(lock.stale(kit), [ACTIONS_LOCK])
+                self.assertEqual(lock.main(["--root", str(kit)]), 1)
+                self.assertTrue(lock.write(kit))
+                self.assertEqual(lock.stale(kit), [])
                 write(kit, "tools/helper.py", "x = 2\n")
+                self.assertEqual(lock.stale(kit), [STAGED_LOCK])
                 self.assertEqual(lock.main(["--root", str(kit)]), 1)
                 write(kit, "tools/__pycache__/helper.cpython-313.pyc", b"\0")
                 self.assertEqual(lock.main(["--root", str(kit), "--write"]), 2)
 
-    def test_managed_gitattributes_is_the_qs_file(self) -> None:
-        self.assertEqual((TEMPLATE_ROOT / "managed" / ".gitattributes").read_bytes(), QS_GITATTRIBUTES)
+    def test_managed_gitattributes_is_the_qs_file_plus_lf_checkouts(self) -> None:
+        managed = (TEMPLATE_ROOT / "managed" / ".gitattributes").read_bytes()
+        self.assertEqual(managed, QS_GITATTRIBUTES + EOL_RULES)
+        rules = [line.split() for line in managed.decode("ascii").splitlines() if line and not line.startswith("#")]
+        self.assertIn(["*.bat", "whitespace=cr-at-eol"], rules)
+        checked = sorted(entry["path"] for entry in self.manifest()["files"]
+                         if entry["class"] in ("managed", "fragment"))
+        self.assertEqual(sorted(rule[0] for rule in rules if rule[1:] == ["text", "eol=lf"]),
+                         sorted(f"/{path}" for path in checked))
+        self.assertIn(".github/workflows/pages.yml", checked)
 
     def test_managed_documents_obey_the_link_rule_and_stay_mod_neutral(self) -> None:
         managed = frozenset(tool.SHARED_IMPORTS)
@@ -366,7 +406,55 @@ class CheckTest(TemplateCase):
         self.assertEqual(self.kinds(), [(".gitattributes", "changed")])
         target.unlink()
         write(self.repo, ".gitattributes", data.replace(b"\n", b"\r\n"))
-        self.assertEqual(self.kinds(), [(".gitattributes", "changed")])
+        self.assertEqual([(drift.path, drift.kind, drift.detail) for drift in self.check()],
+                         [(".gitattributes", "changed", tool.CRLF_ADVICE)])
+        write(self.repo, ".gitattributes", data.replace(b"\n", b"\r\n") + b"extra\r\n")
+        advice, drift = self.check()
+        self.assertEqual(advice.detail, tool.CRLF_ADVICE)
+        self.assertIn("+extra", drift.detail)
+        self.assertNotIn("-/.gitattributes text eol=lf", drift.detail, "the diff is of the LF form")
+
+    def test_a_crlf_caller_is_checked_on_its_lf_form(self) -> None:
+        self.make_clean_mod()
+        caller = self.repo / ".github/workflows/pages.yml"
+        write(self.repo, ".github/workflows/pages.yml", caller_with(QS_EXTENSION).replace("\n", "\r\n"))
+        self.assertEqual([(drift.path, drift.detail) for drift in self.check()],
+                         [(".github/workflows/pages.yml", tool.CRLF_ADVICE)])
+        caller.write_bytes(caller_with(QS_EXTENSION).replace("name: Project site", "name: Edited")
+                           .replace("\n", "\r\n").encode())
+        advice, drift = self.check()
+        self.assertEqual(advice.detail, tool.CRLF_ADVICE)
+        self.assertIn("+name: Edited", drift.detail)
+        self.assertNotIn("region marker", drift.detail)
+
+    def crlf_clone(self, name: str) -> Path:
+        """The mod committed with LF, then cloned with ``core.autocrlf=true`` (a Windows checkout)."""
+
+        git(self.repo, "init", "-q", home=self.home)
+        git(self.repo, "-c", "core.autocrlf=false", "add", "-A", home=self.home)
+        git(self.repo, "commit", "-q", "-m", "mod", home=self.home)
+        clone = self.root / name
+        git(self.root, "clone", "-q", "-c", "core.autocrlf=true", str(self.repo), str(clone), home=self.home)
+        return clone
+
+    def test_an_autocrlf_checkout_passes_because_the_managed_attributes_pin_lf(self) -> None:
+        self.make_clean_mod()
+        write(self.repo, ".github/workflows/pages.yml", caller_with(QS_EXTENSION))
+        clone = self.crlf_clone("windows")
+        self.assertIn(b"\r\n", (clone / "site/mod-base.json").read_bytes(), "the clone converts ordinary text")
+        for path in tool.SHARED_IMPORTS + (".github/workflows/pages.yml", "scripts/ci/mod_base_kit.py", "AGENTS.md"):
+            self.assertNotIn(b"\r", (clone / path).read_bytes(), path)
+        self.assertEqual(tool.check(clone, kit_root=self.kit), [])
+
+    def test_an_autocrlf_checkout_without_the_lf_rules_reports_its_line_endings(self) -> None:
+        self.make_clean_mod()
+        write(self.repo, ".gitattributes", QS_GITATTRIBUTES)
+        clone = self.crlf_clone("windows-before")
+        drifts = {drift.path: drift for drift in tool.check(clone, kit_root=self.kit)}
+        for path in (".github/workflows/pages.yml", "scripts/ci/mod_base_kit.py", *tool.SHARED_IMPORTS):
+            self.assertEqual((drifts[path].kind, drifts[path].detail), ("changed", tool.CRLF_ADVICE), path)
+        self.assertIn("text eol=lf", drifts[".gitattributes"].detail)
+        self.assertNotIn(".gitignore", drifts, "fragments are read line by line")
 
     def test_caller_region_rules(self) -> None:
         self.make_clean_mod()
@@ -650,7 +738,7 @@ class CheckTest(TemplateCase):
         self.assertFalse((self.repo / ".gitattributes").exists())
         # PR B adds the files; PR C empties ``deferred`` and everything is checked strictly.
         write(self.repo, ".gitignore", BLOCK_POPS_GITIGNORE + "_site/\npublic-evidence/\n/.architectury-transformer/\n")
-        write(self.repo, ".gitattributes", QS_GITATTRIBUTES)
+        write(self.repo, ".gitattributes", QS_GITATTRIBUTES + EOL_RULES)
         write(self.repo, ".github/dependabot.yml", self.seed(".github/dependabot.yml.tmpl"))
         write(self.repo, ".github/pull_request_template.md", self.seed(".github/pull_request_template.md.tmpl"))
         write(self.repo, "AGENTS.md", "@docs/ai/shared/REPOSITORY.md\n@docs/ai/shared/PUBLIC-EVIDENCE.md\n"
@@ -719,6 +807,37 @@ class SyncTest(TemplateCase):
         with self.assertRaises(MbError):
             tool.sync(self.repo, kit_root=self.kit, write=True)
         self.assertFalse(target.exists())
+
+    def test_write_rewrites_a_crlf_checkout_with_lf_and_keeps_the_extension_region(self) -> None:
+        self.make_clean_mod()
+        caller = self.repo / ".github/workflows/pages.yml"
+        document = self.repo / "docs/ai/shared/REPOSITORY.md"
+        caller.write_bytes(caller_with(QS_EXTENSION).replace("\n", "\r\n").encode())
+        document.write_bytes(document.read_bytes().replace(b"\n", b"\r\n"))
+        planned = tool.sync(self.repo, kit_root=self.kit, write=False)
+        self.assertEqual(sorted(drift.path for drift in planned),
+                         [".github/workflows/pages.yml", "docs/ai/shared/REPOSITORY.md"])
+        tool.sync(self.repo, kit_root=self.kit, write=True)
+        self.assertEqual(caller.read_text(), caller_with(QS_EXTENSION))
+        self.assertNotIn(b"\r", document.read_bytes())
+        self.assertEqual(self.check(), [])
+
+    def test_a_bump_of_a_crlf_checkout_rewrites_the_pin_and_syncs_with_lf(self) -> None:
+        """``bump`` rewrites every pin line (keeping each file's line endings), then runs the new
+        kit's ``template sync --write``: a pre-LF-rules ``core.autocrlf=true`` checkout comes out clean."""
+
+        self.make_clean_mod()
+        caller = self.repo / ".github/workflows/pages.yml"
+        e2e = self.repo / ".github/workflows/e2e.yml"
+        caller.write_bytes(caller_with(QS_EXTENSION).replace("\n", "\r\n").encode())
+        e2e.write_bytes(e2e.read_bytes().replace(b"\n", b"\r\n"))
+        bootstrap = load_bootstrap()
+        self.assertEqual(sorted(bootstrap.rewrite_pin(self.repo, bootstrap.Pin(OTHER_SHA, "v1.2.4", ()))),
+                         [".github/workflows/e2e.yml", ".github/workflows/pages.yml"])
+        tool.sync(self.repo, kit_root=self.kit, write=True)
+        self.assertEqual(caller.read_text(), caller_with(QS_EXTENSION, sha=OTHER_SHA, version="v1.2.4"))
+        self.assertIn(f"@{OTHER_SHA} # v1.2.4\r\n".encode(), e2e.read_bytes(), "a mod workflow keeps its endings")
+        self.assertEqual(self.check(), [])
 
     def test_deferred_absent_files_are_not_created(self) -> None:
         self.make_clean_mod(config_document(deferred=[".gitattributes"]))

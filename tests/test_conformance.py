@@ -36,9 +36,12 @@ from mod_base.config import load_config
 from mod_base.adapter import host_child
 from mod_base.adapter.api import Context
 from mod_base.conformance import _generations, _rotation, _simulation, _world
+from mod_base.conformance import run as conformance_run
+from mod_base.conformance._fixture_api import MAX_FIXTURE_ARCHIVE_BYTES, MAX_FIXTURE_READS, FixtureGitHub
 from mod_base.conformance._snapshot import commit_file, make_snapshot, require_snapshot
 from mod_base.conformance.run import _child_environment, run_conformance
 from mod_base.errors import MbError
+from mod_base.github.api import ReadOnlyViolation
 from mod_base.github.fake import FakeGitHub
 from mod_base.model import grammar
 from mod_base.pages import rotate, select
@@ -172,6 +175,8 @@ class FixtureModConformanceTest(unittest.TestCase):
         self.assertEqual({name: report["variants"][name] for name in ("delegated", "selected", "family-outcomes",
                                                                         "carried")},
                          {"delegated": "passed", "selected": "passed", "family-outcomes": "passed", "carried": "passed"})
+        # The selection re-captures one session checkpoint: both session lanes mix epochs.
+        self.assertEqual(report["site"]["composed_lanes"], {"baseline": 2, "mixed": 2, "selected": 0})
         self.assertEqual([(item["generation"], item["family_legs"]) for item in report["site"]["generations"]],
                          [(2, {"carried": 2}), (3, {"carried": 1, "fresh": 1}), (4, {"carried": 2})])
         self.assertEqual([(item["key"], item["status"]) for item in report["families"]],
@@ -343,6 +348,151 @@ class SimulationPartsTest(unittest.TestCase):
         with self.assertRaises(MbError):  # the snapshot is no longer clean
             commit_file(snapshot, "linked/x.md", b"x", branch="main")
         self.assertFalse((self.work / "x.md").exists())
+
+
+def zip_bytes(files: dict[str, bytes]) -> bytes:
+    return _world.zip_files(files)
+
+
+class FixtureApiTest(unittest.TestCase):
+    """``ctx.api`` of the extension fixtures: the simulated GitHub read and seeded, typed and bounded."""
+
+    REPOSITORY = "The-Plum-Team/qs-like"
+
+    def setUp(self) -> None:
+        self.config = load_config(support.MODS / "qs_like")
+        self.world = _world.World(repository=self.REPOSITORY, config=self.config, head="a" * 40, tree="b" * 40)
+        source = self.config.source["workflow"]
+        self.tested = self.world.run(4400, path=source, event="pull_request", created=1800,
+                                     head_branch="conformance/reused-pull-request")
+        self.handoff = self.world.run(4401, path=source, event="workflow_dispatch", created=1900)
+        protected = frozenset({source, *(family["producer"]["workflow"] for family in self.config.families)})
+        self.api = FixtureGitHub(self.world, handoff_run=self.handoff, protected_workflows=protected)
+        self.prefix = f"/repos/{self.REPOSITORY}"
+
+    def test_an_artifact_carries_its_zip_bytes_and_returns_its_record(self) -> None:
+        archive = zip_bytes({"tested-source.json": b"{}\n"})
+        record = self.api.add_artifact(4400, "tested-source-e2e", archive)
+        self.assertEqual((record["name"], record["size_in_bytes"], record["workflow_run"]["id"]),
+                         ("tested-source-e2e", len(archive), 4400))
+        self.assertEqual(record["digest"], "sha256:" + hashlib.sha256(archive).hexdigest())
+        self.assertEqual(self.api.download(f"{self.prefix}/actions/artifacts/{record['id']}/zip",
+                                           max_bytes=len(archive)), archive)
+        listed = self.api.get_json(f"{self.prefix}/actions/runs/4400/artifacts", params={"name": "tested-source-e2e"})
+        self.assertEqual([item["id"] for item in listed["artifacts"]], [record["id"]])
+        self.assertEqual(self.api.handoff_run, {"id": 4401, "run_attempt": 1, "path": self.handoff["path"],
+                                                "event": "workflow_dispatch", "head_branch": "master",
+                                                "head_sha": "a" * 40})
+
+    def test_jobs_stay_after_the_simulations_own_jobs_of_the_attempt(self) -> None:
+        self.api.add_jobs(4401, 1, [{"name": "Reuse the tested source"}])
+        self.world.jobs(self.handoff, [self.world.job("Prepare evidence", started=1950, completed=1990)])
+        names = [job["name"] for job in self.api.get_json(f"{self.prefix}/actions/runs/4401/attempts/1/jobs")["jobs"]]
+        self.assertEqual(names, ["Prepare evidence", "Reuse the tested source"])
+        self.world.jobs(self.handoff, [self.world.job("Prepare evidence again", started=1950, completed=1990)])
+        jobs = self.api.get_json(f"{self.prefix}/actions/runs/4401/attempts/1/jobs")["jobs"]
+        self.assertEqual([job["name"] for job in jobs], ["Prepare evidence again", "Reuse the tested source"])
+        self.assertEqual((jobs[1]["status"], jobs[1]["conclusion"], jobs[1]["run_id"]), ("completed", "success", 4401))
+        with self.assertRaisesRegex(ValueError, "repeats a job name"):
+            self.api.add_jobs(4401, 1, [{"name": "Prepare evidence again"}])
+        for bad in ([], [{"name": ""}], [{"name": "x", "id": 1}], [{"status": "completed"}]):
+            with self.subTest(jobs=bad), self.assertRaises(ValueError):
+                self.api.add_jobs(4401, 1, bad)
+        for run_id, attempt in ((4402, 1), (4401, 2), (True, 1)):
+            with self.subTest(run=run_id, attempt=attempt), self.assertRaises(ValueError):
+                self.api.add_jobs(run_id, attempt, [{"name": "y"}])
+
+    def test_a_run_of_another_workflow_is_assigned_its_identity(self) -> None:
+        run = self.api.add_run({"path": ".github/workflows/feature-coverage.yml", "event": "workflow_run",
+                                "head_branch": "master", "head_sha": "a" * 40, "display_title": "Coverage"})
+        self.assertGreater(run["id"], 700_000)
+        self.assertEqual((run["run_attempt"], run["status"], run["conclusion"], run["created_at"]),
+                         (1, "completed", "success", self.handoff["created_at"]))
+        self.assertEqual(self.api.get_json(f"{self.prefix}/actions/runs/{run['id']}")["display_title"], "Coverage")
+        workflow = self.api.get_json(f"{self.prefix}/actions/workflows/feature-coverage.yml")
+        self.assertEqual((workflow["id"], workflow["path"]), (run["workflow_id"], run["path"]))
+        record = self.api.add_artifact(run["id"], "feature-coverage-certificate",
+                                       zip_bytes({"certificate.json": b"{}"}))
+        self.assertEqual(record["workflow_run"], {"id": run["id"], "head_branch": "master", "head_sha": "a" * 40})
+        base = {"path": ".github/workflows/other.yml", "event": "push", "head_branch": "master", "head_sha": "a" * 40}
+        for label, change in (("the source workflow", {"path": self.config.source["workflow"]}),
+                               ("pages.yml", {"path": ".github/workflows/pages.yml"}),
+                               ("a family producer", {"path": self.config.families[0]["producer"]["workflow"]}),
+                               ("an assigned id", {"id": 1}), ("a foreign repository", {"repository": "x/y"}),
+                               ("no commit", {"head_sha": "main"}), ("no workflow path", {"path": "x.yml"}),
+                               ("a bad time", {"created_at": "yesterday"}), ("a bad status", {"status": "done"})):
+            with self.subTest(label), self.assertRaises((ValueError, MbError)):
+                self.api.add_run({**base, **change})
+
+    def test_seeding_never_shadows_or_forges_what_the_simulation_owns(self) -> None:
+        archive = zip_bytes({"a.json": b"{}"})
+        for name in ("mb-handoff--mc1.20.1--a1", "mb-anything", "MB-x", "github-pages", "conformance-foreign",
+                     "../x", "a b", ""):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.api.add_artifact(4400, name, archive)
+        for label, data in (("not bytes", "zip"), ("not a zip", b"PK\x03\x04 not really"), ("empty", b""),
+                            ("oversized", b"0" * (MAX_FIXTURE_ARCHIVE_BYTES + 1))):
+            with self.subTest(label), self.assertRaises(ValueError):
+                self.api.add_artifact(4400, "x", data)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            self.api.add_artifact(9999, "x", archive)
+        self.api.add_response(f"{self.prefix}/pulls/12", {"number": 12})
+        self.assertEqual(self.api.get_json(f"{self.prefix}/pulls/12"), {"number": 12})
+        for path in (f"{self.prefix}/actions/runs/4401", f"{self.prefix}/branches/master", f"{self.prefix}",
+                     f"{self.prefix}/contents/site/mod-base.json", "/repos/x/y/pulls/1",
+                     f"{self.prefix}/git/commits/{'a' * 40}", f"{self.prefix}/pulls/12"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.api.add_response(path, {})
+        with self.assertRaises(ReadOnlyViolation):
+            self.api.post_json(f"{self.prefix}/actions/workflows/x.yml/dispatches", {})
+        with self.assertRaises(ReadOnlyViolation):
+            self.api.delete(f"{self.prefix}/actions/artifacts/1")
+        self.assertFalse(self.api.writable)
+
+    def test_reads_are_bounded(self) -> None:
+        for _ in range(MAX_FIXTURE_READS):
+            self.api.get_json("/rate_limit")
+        with self.assertRaisesRegex(ValueError, "at most"):
+            self.api.get_json("/rate_limit")
+
+
+class ScratchTest(unittest.TestCase):
+    """``run_conformance``'s scratch directory never replaces the simulation's own error."""
+
+    def test_a_cleanup_failure_after_an_error_leaves_the_error(self) -> None:
+        def failing_cleanup(path: Path) -> None:
+            shutil.rmtree(path)
+            raise OSError(16, "Device or resource busy")
+
+        real_run = subprocess.run
+
+        def child_fails(argv: Any, **options: Any) -> Any:
+            if conformance_run.PROGRAM in argv:  # the simulation child; the snapshot's git calls run
+                return subprocess.CompletedProcess(argv, 2, b"", b"mod_base.conformance.run: error: the real failure\n")
+            return real_run(argv, **options)
+
+        with mock.patch.object(conformance_run, "_remove_tree", failing_cleanup), \
+                mock.patch.object(conformance_run.subprocess, "run", child_fails):
+            with self.assertRaises(MbError) as caught:
+                conformance(CANARY)
+        self.assertIn("the simulation failed: error: the real failure", str(caught.exception))
+        with mock.patch.object(conformance_run, "_remove_tree", failing_cleanup):
+            with self.assertRaises(MbError) as caught:
+                with conformance_run._scratch("mb-scratch-test-"):
+                    pass
+        self.assertIn("cannot remove the conformance scratch directory", str(caught.exception))
+
+    def test_read_only_trees_are_removed(self) -> None:
+        with conformance_run._scratch("mb-scratch-test-") as path:
+            nested = path / "objects" / "ab"
+            nested.mkdir(parents=True)
+            (nested / "cd").write_bytes(b"x")
+            os.chmod(nested / "cd", 0o400)
+            os.chmod(nested, 0o500)
+            os.chmod(path / "objects", 0o500)
+            (path / "link").symlink_to(nested / "cd")
+            kept = path
+        self.assertFalse(os.path.lexists(kept))
 
 
 class RotationOracleTest(unittest.TestCase):

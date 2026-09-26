@@ -7,3 +7,19 @@
 # `cr-at-eol` adds to git's default rules rather than replacing them, so genuine trailing
 # whitespace before the carriage return is still reported.
 *.bat whitespace=cr-at-eol
+
+# mod-base manages the files below: `template check` compares the managed ones (the caller's
+# managed region included) byte for byte with the kit's template and reads the others line by
+# line. Git for Windows' default `core.autocrlf=true` would check them out with CRLF line endings
+# and fail that check on a clean clone, so they are always checked out with LF, whatever the local
+# setting. The list is exactly the template manifest's managed and fragment paths.
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+/.github/CODEOWNERS text eol=lf
+/.github/dependabot.yml text eol=lf
+/.github/pull_request_template.md text eol=lf
+/.github/workflows/pages.yml text eol=lf
+/AGENTS.md text eol=lf
+/docs/ai/shared/PUBLIC-EVIDENCE.md text eol=lf
+/docs/ai/shared/REPOSITORY.md text eol=lf
+/scripts/ci/mod_base_kit.py text eol=lf

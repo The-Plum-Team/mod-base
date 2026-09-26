@@ -1243,10 +1243,12 @@ def _gallery_evidence(invocation: Invocation, bundle: Mapping[str, Any], rank: i
     key = manifest["key"]
     handoff = manifest["provenance"]["handoff"]
     tested_run = selection["source"]["tested_run"]
+    # A composed lane's record is the selected execution when the selection re-tested it (it holds
+    # a selected frame or records the baseline_run of its baseline frames), else the baseline's.
     epochs: dict[str, str] = {}
     for frame in manifest["frames"]:
-        if "epoch" in frame:
-            epochs.setdefault(frame["lane_id"], frame["epoch"])
+        if "epoch" in frame and epochs.get(frame["lane_id"]) != "selected":
+            epochs[frame["lane_id"]] = frame["epoch"]
     lanes = []
     for lane in manifest["lanes"]:
         record = {"lane_id": lane["lane_id"], "key": key, "artifact_node": lane["artifact_node"],
@@ -1255,6 +1257,12 @@ def _gallery_evidence(invocation: Invocation, bundle: Mapping[str, Any], rank: i
                   "roles": list(lane["roles"]), "status": lane["status"], "jars": dict(lane["jars"])}
         if "elapsed_s" in lane:
             record["elapsed_s"] = lane["elapsed_s"]
+        if "baseline_run" in lane:
+            baseline_run = lane["baseline_run"]
+            record["baseline_run"] = {"status": baseline_run["status"], "jars": dict(baseline_run["jars"])}
+            if "elapsed_s" in baseline_run:
+                record["baseline_run"]["elapsed_s"] = baseline_run["elapsed_s"]
+            epochs[lane["lane_id"]] = "selected"
         if lane["lane_id"] in epochs:
             record["epoch"] = epochs[lane["lane_id"]]
         lanes.append(((rank, lane["lane_id"]), record))

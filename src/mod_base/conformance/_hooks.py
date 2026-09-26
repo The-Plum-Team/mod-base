@@ -79,11 +79,13 @@ class InProcessHooks:
         function = getattr(self.module(invocation, "fixtures_path"), name, None)
         return function if callable(function) else None
 
-    def call_fixture(self, invocation: Invocation, name: str, **arguments: Any) -> Any:
-        """Call the optional fixture function ``name`` with a fresh ``ctx`` (no API)."""
+    def call_fixture(self, invocation: Invocation, name: str, *, fixture_api: Any = None, **arguments: Any) -> Any:
+        """Call the optional fixture function ``name`` with a fresh ``ctx`` whose ``api`` is
+        ``fixture_api`` (the extension fixtures' :class:`mod_base.conformance._fixture_api.FixtureGitHub`;
+        ``None`` for ``family_bundle``)."""
 
         function = self.optional_fixture(invocation, name)
         if function is None:
             raise ValueError(f"the fixtures module defines no {name}")
         with tempfile.TemporaryDirectory(prefix="fixture-", dir=self.scratch) as directory:
-            return function(context(invocation, Path(directory)), **arguments)
+            return function(context(invocation, Path(directory), fixture_api), **arguments)

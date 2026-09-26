@@ -30,6 +30,9 @@ from tests.fixtures.mods import support
 KEY = "mc1.20.1"
 BP_KEY = hashlib.sha256(b"master").hexdigest()[:24]
 SELECTION = {"quick-skin.feature_selection": {"scenarios": ["full"], "baseline_artifact_id": 501}}
+#: A selection that re-captures one of the two ``session`` checkpoints: the session lanes mix epochs.
+PARTIAL_SELECTION = {"quick-skin.feature_selection": {"captures": ["session.client_b.player_list"],
+                                                      "baseline_artifact_id": 501}}
 
 
 def sha256(data: bytes) -> str:
@@ -55,7 +58,9 @@ def edit_bundle(root: Path, change: Callable[[dict[str, Any]], None], **files: b
 
 class ReverificationFlow(unittest.TestCase):
     """qs-like: a complete handoff (run 4242), its compact as the ``mb-baseline`` of a successful
-    Pages run, and a ``selected`` handoff (run 4343) naming that baseline."""
+    Pages run, a ``selected`` handoff (run 4343) re-testing the whole ``full`` scenario and a
+    ``selected`` handoff (run 4344) re-capturing one ``session`` checkpoint, both naming that
+    baseline."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -87,6 +92,22 @@ class ReverificationFlow(unittest.TestCase):
                 support.invocation(cls.mod, cls.selected_env, implementation_sha=cls.mod.commit), e2e_root=e2e,
                 key=KEY, output=cls.directory / "selected", subject=cls.mod.subject, tested=tested, handoff=handoff,
                 extensions_path=extensions)
+            partial_env = support.environment(cls.mod, run_id=4344)
+            partial_extensions = cls.directory / "partial-extensions.json"
+            partial_extensions.write_text(json.dumps(PARTIAL_SELECTION))
+            handoff, tested = support.claims(partial_env, subject=cls.mod.subject)
+            # The re-capturing run tested another JAR for as long as it took.
+            partial_e2e = cls.directory / "e2e-partial"
+            shutil.copytree(e2e, partial_e2e)
+            for result in partial_e2e.glob("profiles/*/result.json"):
+                record = json.loads(result.read_bytes())
+                record.update(jar_sha256=sha256(f"retested:{record['artifact_node']}".encode()),
+                              elapsed_s=record["elapsed_s"] + 100)
+                result.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            cls.partial = prepare.prepare_handoff(
+                support.invocation(cls.mod, partial_env, implementation_sha=cls.mod.commit), e2e_root=partial_e2e,
+                key=KEY, output=cls.directory / "partial", subject=cls.mod.subject, tested=tested, handoff=handoff,
+                extensions_path=partial_extensions)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -426,6 +447,120 @@ class ComposeRuleTest(ReverificationFlow):
             manifest, {"verified": ["a.b", "c.d"], "reuse_verified": True}), ["a.b", "c.d"])
         self.assertEqual(validate.check_extensions_verified(
             {"extensions": None, "provenance": {"reuse": "none"}}, {"verified": [], "reuse_verified": False}), [])
+
+
+class PartialCompositionTest(ReverificationFlow):
+    """A selection that re-captures only some frames of a lane (Quick Skin's hud-preview: 2 of 63
+    ``full`` captures) composes per frame, as Quick Skin's schema-7 view did (defect of v0.9.0/1)."""
+
+    def compose_partial(self) -> dict[str, Any]:
+        return self.compose(selected=self.directory / "partial")
+
+    def test_a_partially_recaptured_lane_passes_r3(self) -> None:
+        manifest = self.compose_partial()
+        baseline = json.loads((self.directory / "baseline/manifest.json").read_bytes())
+        baseline_lanes = {lane["lane_id"]: lane for lane in baseline["lanes"]}
+        partial_lanes = {lane["lane_id"]: lane for lane in self.partial.manifest["lanes"]}
+        by_lane: dict[str, set[str]] = {}
+        for frame in manifest["frames"]:
+            by_lane.setdefault(frame["lane_id"], set()).add(frame["epoch"])
+            source = partial_lanes if frame["epoch"] == "selected" else baseline_lanes
+            self.assertEqual(frame["tested"]["run_id"], 4344 if frame["epoch"] == "selected" else 4242)
+            self.assertEqual(frame["tested"]["jar_sha256"], source[frame["lane_id"]]["jars"]["production_sha256"])
+        self.assertEqual({frame["frame_id"] for frame in manifest["frames"] if frame["epoch"] == "selected"},
+                         {frame["frame_id"] for frame in self.partial.manifest["frames"]})
+        self.assertEqual(4, sum(frame["epoch"] == "selected" for frame in manifest["frames"]) * 2)
+        for lane in manifest["lanes"]:
+            lane_id = lane["lane_id"]
+            if lane_id.endswith("/session"):
+                self.assertEqual(by_lane[lane_id], {"baseline", "selected"})
+                self.assertEqual(partial_lanes[lane_id]["roles"], ["client_a", "client_b"])
+                self.assertEqual({name: value for name, value in lane.items() if name != "baseline_run"},
+                                 partial_lanes[lane_id], "the lane record is the selected source lane")
+                self.assertEqual(lane["jars"], partial_lanes[lane_id]["jars"])
+                self.assertNotEqual(lane["jars"], baseline_lanes[lane_id]["jars"])
+                self.assertEqual(lane["baseline_run"], {name: baseline_lanes[lane_id][name]
+                                                        for name in ("profile", "status", "elapsed_s", "jars")})
+            else:
+                self.assertEqual(by_lane[lane_id], {"baseline"})
+                self.assertEqual(lane, baseline_lanes[lane_id])
+        self.assertEqual(manifest["comparisons"], baseline["comparisons"])
+        validate.validate_compact_dir(self.pages(), self.work / "composed", key=KEY,
+                                      bind_raw=self.directory / "partial")
+
+    def test_r3_rejects_a_partial_lane_that_hides_an_epoch(self) -> None:
+        def session_lanes(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+            return [lane for lane in manifest["lanes"] if lane["lane_id"].endswith("/session")]
+
+        def dropped_baseline_run(output: Path) -> None:
+            edit_bundle(output, lambda manifest: [lane.pop("baseline_run") for lane in session_lanes(manifest)])
+
+        def selected_run_as_baseline_run(output: Path) -> None:
+            def change(manifest: dict[str, Any]) -> None:
+                for lane in session_lanes(manifest):
+                    lane["baseline_run"]["jars"] = dict(lane["jars"])
+                for frame in manifest["frames"]:
+                    if frame["lane_id"].endswith("/session") and frame["epoch"] == "baseline":
+                        frame["tested"]["jar_sha256"] = next(lane["jars"]["production_sha256"]
+                                                             for lane in session_lanes(manifest)
+                                                             if lane["lane_id"] == frame["lane_id"])
+            edit_bundle(output, change)
+
+        def baseline_record_for_retested_lane(output: Path) -> None:
+            def change(manifest: dict[str, Any]) -> None:
+                for lane in session_lanes(manifest):
+                    run = lane.pop("baseline_run")
+                    lane.update(run)
+                for frame in manifest["frames"]:
+                    if frame["lane_id"].endswith("/session"):
+                        frame["tested"]["jar_sha256"] = next(lane["jars"]["production_sha256"]
+                                                             for lane in session_lanes(manifest)
+                                                             if lane["lane_id"] == frame["lane_id"])
+                        frame["epoch"] = "baseline"
+            edit_bundle(output, change)
+
+        def selected_roles_only(output: Path) -> None:
+            edit_bundle(output, lambda manifest: [lane.update(roles=["client_b"]) for lane in session_lanes(manifest)])
+
+        for tamper in (dropped_baseline_run, selected_run_as_baseline_run, baseline_record_for_retested_lane,
+                       selected_roles_only):
+            with self.subTest(tamper.__name__):
+                shutil.rmtree(self.work / "composed", ignore_errors=True)
+                self.patch_host(TamperingHost(api=self.fake, tamper=tamper))
+                with self.assertRaises(MbError):
+                    self.compose_partial()
+                self.assertFalse((self.work / "composed").exists())
+
+    def test_r3_refuses_a_retested_lane_whose_selection_ran_only_some_roles(self) -> None:
+        """Every published lane record is one an authenticated source holds: a selected run of only
+        some of a lane's roles cannot be published under the complete lane's roles."""
+
+        baseline = json.loads((self.directory / "baseline/manifest.json").read_bytes())
+        baseline_lanes = {lane["lane_id"]: lane for lane in baseline["lanes"]}
+        partial_lanes = {lane["lane_id"]: lane for lane in self.partial.manifest["lanes"]}
+        lane_id = next(lane_id for lane_id in partial_lanes if lane_id.endswith("/session"))
+        run_fields = ("profile", "status", "elapsed_s", "jars")
+        composed = {**partial_lanes[lane_id],
+                    "baseline_run": {name: baseline_lanes[lane_id][name] for name in run_fields}}
+        compose._check_lane(composed, partial_lanes, baseline_lanes, {"baseline", "selected"})
+        one_role = {**partial_lanes[lane_id], "roles": ["client_b"]}
+        with self.assertRaisesRegex(MbError, "must run every role"):
+            compose._check_lane(composed, {**partial_lanes, lane_id: one_role}, baseline_lanes,
+                                {"baseline", "selected"})
+        with self.assertRaisesRegex(MbError, "must run every role"):
+            compose._check_lane({**composed, "roles": ["client_b"]}, partial_lanes, baseline_lanes,
+                                {"baseline", "selected"})
+
+    def test_the_selection_captures_both_partners_of_a_comparison(self) -> None:
+        one_partner = {"quick-skin.feature_selection": {"captures": ["full.client_a.skin_apply"],
+                                                        "baseline_artifact_id": 501}}
+        with self.assertRaises(MbError) as caught:
+            support.run_in_process(self.pages(), "expectation", {
+                "target": {"key": KEY, "label": "Minecraft 1.20.1", "subject": self.mod.subject,
+                           "matrix_sha256": self.partial.manifest["matrix_sha256"],
+                           "contract_sha256": self.partial.manifest["contract_sha256"]},
+                "tested_run": None, "extensions": one_partner})
+        self.assertIn("one partner of comparison", str(caught.exception))
 
 
 class TamperingHost(support.InProcessHost):

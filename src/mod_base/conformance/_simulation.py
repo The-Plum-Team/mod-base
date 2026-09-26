@@ -75,6 +75,7 @@ import mod_base
 from mod_base.adapter import host
 from mod_base.adapter.protocol import HookFailed
 from mod_base.conformance import _site
+from mod_base.conformance._fixture_api import MAX_FIXTURE_RESPONSES, FixtureGitHub
 from mod_base.conformance._generations import Generation, Generations
 from mod_base.conformance._hooks import InProcessHooks
 from mod_base.conformance._rotation import expected_retirements
@@ -145,8 +146,6 @@ PRODUCER_JOB = "conformance-producer"
 FAMILY_PRODUCER_JOB = "conformance-family-producer"
 #: Admission reasons that publish, per admission mode.
 PUBLISHING = {"always": {"always"}, "progress": {"initial-ordinary", "final-complete"}}
-#: Bound of the fixtures module's optional ``responses`` (exact API bodies it may seed).
-MAX_FIXTURE_RESPONSES = 64
 
 
 def _fail(message: str) -> MbError:
@@ -288,9 +287,9 @@ class Simulation(Generations):
                                 check_repository=False)
         return display_title(pages, commit) or "Conformance packaged E2E"
 
-    def fixture_call(self, invocation: Invocation, name: str, **arguments: Any) -> Any:
+    def fixture_call(self, invocation: Invocation, name: str, *, fixture_api: Any = None, **arguments: Any) -> Any:
         try:
-            return self.hooks.call_fixture(invocation, name, **arguments)
+            return self.hooks.call_fixture(invocation, name, fixture_api=fixture_api, **arguments)
         except MbError:
             raise
         except Exception as exc:  # noqa: BLE001 - the fixture's own failure is a conformance failure
@@ -931,11 +930,18 @@ class Simulation(Generations):
         skipped = action()
         self.report.variants[name] = "passed" if skipped is None else f"skipped: {skipped}"
 
-    def fixture_extensions(self, invocation: Invocation, name: str, **arguments: Any) -> dict[str, Any]:
-        """The optional fixture function ``name``: extension objects, or ``{"extensions": ...,
-        "responses": [...]}`` whose exact API bodies are seeded into the simulated GitHub."""
+    def fixture_extensions(self, invocation: Invocation, name: str, handoff_run: Mapping[str, Any],
+                           **arguments: Any) -> dict[str, Any]:
+        """The optional fixture function ``name``, called with a :class:`FixtureGitHub` for the handoff
+        run ``handoff_run`` as ``ctx.api``: extension objects, or ``{"extensions": ...,
+        "responses": [...]}`` whose exact API bodies are seeded like ``ctx.api.add_response``."""
 
-        value = self.fixture_call(invocation, name, **arguments)
+        world = self.world
+        assert world is not None
+        protected = frozenset({self.source["workflow"], *(family["producer"]["workflow"]
+                                                          for family in self.config.families)})
+        fixture_api = FixtureGitHub(world, handoff_run=handoff_run, protected_workflows=protected)
+        value = self.fixture_call(invocation, name, fixture_api=fixture_api, **arguments)
         if isinstance(value, dict) and set(value) <= {"extensions", "responses"} and "extensions" in value:
             responses = value.get("responses", [])
             if not isinstance(responses, list) or len(responses) > MAX_FIXTURE_RESPONSES:
@@ -945,7 +951,10 @@ class Simulation(Generations):
                         and isinstance(response.get("path"), str)
                         and response["path"].startswith(f"/repos/{self.repository}/")):
                     raise _fail(f"fixtures {name} returned a response outside this repository")
-                self.api.add_response(response["path"], response.get("payload"), params=response.get("params"))
+                try:
+                    fixture_api.add_response(response["path"], response.get("payload"), params=response.get("params"))
+                except ValueError as exc:
+                    raise _fail(f"fixtures {name} returned an invalid response: {single_line(exc, limit=300)}") from exc
             value = value["extensions"]
         if not isinstance(value, dict) or not value:
             raise _fail(f"fixtures {name} must return extension objects")
@@ -969,7 +978,7 @@ class Simulation(Generations):
         tested = {**run_claim_from_environment(environ), "run_id": DELEGATED_TESTED_RUN}
         target = target_for_key(invocation, key, subject=self.subject)
         facts = {field: tested_run[field] for field in ("id", "run_attempt", "path", "event", "head_branch", "head_sha")}
-        extensions = self.fixture_extensions(invocation, DELEGATED_EXTENSIONS, target=target, tested_run=facts)
+        extensions = self.fixture_extensions(invocation, DELEGATED_EXTENSIONS, run, target=target, tested_run=facts)
         self.check(name in extensions, f"fixtures {DELEGATED_EXTENSIONS} returned no {name}")
         produced = self.produce(world, run, key, tested=tested, extensions=extensions, label=f"{key}-delegated")
         self.check(produced.manifest["provenance"]["reuse"] == "delegated", "the delegated handoff is not delegated")
@@ -994,7 +1003,7 @@ class Simulation(Generations):
         reference = ({"id": baseline.id, "name": baseline.name, "digest": baseline.digest}
                      if isinstance(baseline, artifacts.Artifact)
                      else {"id": baseline["id"], "name": baseline["name"], "digest": baseline["digest"]})
-        extensions = self.fixture_extensions(invocation, SELECTED_EXTENSIONS, target=target, baseline=reference)
+        extensions = self.fixture_extensions(invocation, SELECTED_EXTENSIONS, run, target=target, baseline=reference)
         produced = self.produce(world, run, key, extensions=extensions, label=f"{key}-{label}")
         self.check(produced.manifest["scope"]["kind"] == "selected", "the selected extensions did not select a scope")
         self.source_jobs(world, run, {key: produced})
@@ -1021,9 +1030,11 @@ class Simulation(Generations):
             raise _fail("compact accepted a selected handoff without composition (R3)")
         _, collected = self.collect_key(key, nomination=produced.handoff["id"], raw=produced.handoff_dir,
                                         run_id=VARIANT_PAGES_RUN + 1, compose=True)
-        self.check(collected["manifest"]["scope"]["kind"] == "composed", "compose did not write composed evidence")
-        epochs = {frame.get("epoch") for frame in collected["manifest"]["frames"]}
+        manifest = collected["manifest"]
+        self.check(manifest["scope"]["kind"] == "composed", "compose did not write composed evidence")
+        epochs = {frame.get("epoch") for frame in manifest["frames"]}
         self.check("selected" in epochs, "the composed bundle holds no selected frame")
+        self.report.site["composed_lanes"] = _composed_lanes(manifest)
         # R3 authenticates the baseline's owner itself: the same bytes under the baseline's name are
         # refused when a source run uploaded them, or when a successful Pages run uploaded them
         # outside its refresh job's retention step.
@@ -1189,6 +1200,20 @@ def _declared_outcomes(hooks: InProcessHooks, invocation: Invocation) -> tuple[s
             or any(outcome not in FAMILY_OUTCOME_VALUES for outcome in declared)):
         raise _fail(f"the fixtures module's {FAMILY_OUTCOMES} must list outcomes of {FAMILY_OUTCOME_VALUES}")
     return tuple(declared)
+
+
+def _composed_lanes(manifest: Mapping[str, Any]) -> dict[str, int]:
+    """How many lanes of a composed bundle hold only baseline, only selected, or both epochs' frames
+    (``mixed``: a partially re-captured lane, whose record then carries ``baseline_run``)."""
+
+    epochs: dict[str, set[str]] = {lane["lane_id"]: set() for lane in manifest["lanes"]}
+    for frame in manifest["frames"]:
+        epochs[frame["lane_id"]].add(frame["epoch"])
+    counts = {"baseline": 0, "mixed": 0, "selected": 0}
+    for held in epochs.values():
+        if held:
+            counts["mixed" if len(held) == 2 else next(iter(held))] += 1
+    return counts
 
 
 def _derivatives(manifest: Mapping[str, Any]) -> list[tuple[str, str]]:

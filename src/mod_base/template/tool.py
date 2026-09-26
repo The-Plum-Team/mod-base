@@ -46,6 +46,14 @@ Detailed rules (``docs/OPERATIONS.md`` and ``docs/ONBOARDING.md`` describe the p
   ``](`` whose destination the rule cannot parse is refused too.
 * Every repository path is reached component by component without following symlinks; a
   symlinked managed or fragment file is a drift, and ``sync``/``init`` refuse to write through one.
+* Line endings are compared, never normalized: GitHub reads a workflow, and the bootstrap runs,
+  from the committed bytes, and a CRLF blob committed with ``core.autocrlf=false`` must fail in CI.
+  Checkouts are deterministic instead: the managed ``.gitattributes`` pins ``text eol=lf`` for every
+  managed and fragment path, so ``core.autocrlf=true`` (Git for Windows' default) checks them out
+  with LF. A managed file (or caller) with CRLF line endings, a checkout made before that rule, is
+  reported with that advice (:data:`CRLF_ADVICE`), plus the diff of its LF form when that still
+  differs, instead of a whole-file diff; ``sync --write`` rewrites it with LF, and a CRLF caller
+  keeps its extension region (read with LF line endings).
 * ``init`` renders ``{{name}}``-style seed placeholders from the config it seeds (``project.name``,
   ``license_label``, ``canonical_branch`` and the Modrinth/CurseForge slugs of ``project.links``)
   and leaves every other placeholder for the maintainer. ``LICENSE`` is seeded only for a known
@@ -104,6 +112,9 @@ VERSION_PLACEHOLDER = "{{VERSION}}"
 
 MAX_FILE_BYTES = 1024 * 1024
 MAX_DETAIL_CHARS = 20000
+CRLF_ADVICE = ("has CRLF line endings: this checkout converted them (core.autocrlf) before the managed "
+               ".gitattributes pinned eol=lf; delete the file and check it out again (git checkout -- <path>) "
+               "or run template sync --write, never commit CRLF")
 SEED_PLACEHOLDER = re.compile(r"\{\{([a-z_]+)\}\}")
 
 _EXTENSION_JOB = re.compile(r"^  (ext-[a-z0-9-]+):\s*$")
@@ -556,7 +567,32 @@ def extension_violations(body: tuple[str, ...] | list[str]) -> list[str]:
     return list(dict.fromkeys(problems))
 
 
+def _managed_drifts(path: str, expected: bytes, actual: bytes) -> list[Drift]:
+    """The drifts of the managed file ``path``: none when byte-identical; CRLF line endings are
+    reported with :data:`CRLF_ADVICE`, and whatever else differs as the diff of the LF form."""
+
+    if actual == expected:
+        return []
+    if b"\r\n" not in actual:
+        return [Drift(path, "changed", _diff(path, expected, actual))]
+    normalized = actual.replace(b"\r\n", b"\n")
+    drifts = [Drift(path, "changed", CRLF_ADVICE)]
+    if normalized != expected:
+        drifts.append(Drift(path, "changed", _diff(path, expected, normalized)))
+    return drifts
+
+
 def _check_caller(repo: Path, entry: dict[str, Any], kit_root: Path, actual: bytes) -> list[Drift]:
+    """The caller's drifts; CRLF line endings are reported with :data:`CRLF_ADVICE` and the rest is
+    checked on the LF form, since no region marker matches a CRLF line."""
+
+    if b"\r\n" not in actual:
+        return _caller_drifts(repo, entry, kit_root, actual)
+    return [Drift(entry["path"], "changed", CRLF_ADVICE),
+            *_caller_drifts(repo, entry, kit_root, actual.replace(b"\r\n", b"\n"))]
+
+
+def _caller_drifts(repo: Path, entry: dict[str, Any], kit_root: Path, actual: bytes) -> list[Drift]:
     path = entry["path"]
     template = _caller_template(kit_root, entry["source"])
     try:
@@ -578,10 +614,13 @@ def _check_caller(repo: Path, entry: dict[str, Any], kit_root: Path, actual: byt
 
 
 def _render_caller(repo: Path, template: _Caller, pin: Pin) -> bytes:
+    """The caller ``sync`` writes: the managed region rendered for ``pin`` and the current caller's
+    extension region, read with LF line endings (a CRLF checkout is rewritten with LF)."""
+
     body: tuple[str, ...] = ()
     if _state(repo, CALLER_PATH) == "file":
         try:
-            body = _split_caller(_read(repo, CALLER_PATH, "caller").decode("utf-8")).body
+            body = _split_caller(_read(repo, CALLER_PATH, "caller").decode("utf-8").replace("\r\n", "\n")).body
         except (UnicodeDecodeError, ValueError) as exc:
             raise MbError(f"cannot preserve the extension region of {CALLER_PATH}: {exc}; repair it by hand",
                           reason="template") from None
@@ -844,9 +883,7 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
             if path == CALLER_PATH:
                 drifts.extend(_check_caller(repo, entry, kit_root, actual))
             else:
-                expected = _template_bytes(kit_root, entry["source"])
-                if actual != expected:
-                    drifts.append(Drift(path, "changed", _diff(path, expected, actual)))
+                drifts.extend(_managed_drifts(path, _template_bytes(kit_root, entry["source"]), actual))
             if path in documents:
                 drifts.extend(Drift(path, "links", problem)
                               for problem in link_violations(path, actual.decode("utf-8", errors="replace"), documents))

@@ -67,7 +67,15 @@ Argument details:
   `mod-base.evidence.compact` with `scope.kind: "selected"` (`validate_compact(intermediate=True)`),
   its selected expectation and the selection draft embedded; the hook writes a `composed` bundle
   into `output_dir`, which the core re-verifies (R3, including the full-use rule) and re-emits with
-  the final selection (see `SCHEMAS.md`, "The collect flow"). The composed bundle embeds the
+  the final selection (see `SCHEMAS.md`, "The collect flow"). It composes **per frame**: a frame
+  the selection re-captured comes from the selected compaction, every other frame from the
+  baseline, each with its `epoch` and `tested` run (that epoch's run record plus its lane's
+  production JAR); a lane the selection did not re-test is the baseline's lane; a re-tested lane is
+  the selected compaction's lane record, plus `baseline_run` (the baseline lane's `profile`,
+  `status`, `elapsed_s` and `jars`) when some of its frames were not re-captured, so a selection must
+  run every role of a lane it re-tests (Quick Skin's selections retain every authored role); a
+  comparison comes from the generation that holds both its frames (a selection must capture both
+  partners). See `SCHEMAS.md`, "Composed lanes and epochs". The composed bundle embeds the
   **complete** expectation, exactly what the adapter re-derives from the composed bundle's own
   extensions (R2 with both run projections, above); it is written as the kit writes bundles
   (every JSON file its `canonical_json` bytes, `images/<sha256>.webp`). An extension object that
@@ -182,8 +190,9 @@ generation's legs, and the `carried` variant, fail.
 
 Besides `synthesize`, the simulation looks these names up in the fixtures module (loaded afresh for
 every call). They are called directly as `function(ctx, **arguments)`, by keyword, with a fresh
-`Context` (a private `tmpdir`, `api` `None`), not through `run_hook`'s hook schemas; anything they
-raise, or a result of the wrong shape, fails the run.
+`Context` (a private `tmpdir`), not through `run_hook`'s hook schemas; anything they raise, or a
+result of the wrong shape, fails the run. `family_bundle` gets `api` `None`; the two extension
+fixtures get the seeding API below as `ctx.api`.
 
 | Name | Signature or value | Result | Required |
 |---|---|---|---|
@@ -215,8 +224,27 @@ raise, or a result of the wrong shape, fails the run.
 * Each extension function returns either the extension objects themselves (a non-empty object, each
   name a declared extension, as in `extensions.json`) or `{"extensions": {...}, "responses": [...]}`.
   `responses` (at most 64) are exact API bodies `{path, params?, payload}` the simulated GitHub serves
-  to the adapter's network hooks (`authenticate_extensions`, `compose`); every `path` must be one of
-  this repository's (`/repos/<repository>/...`), anything else fails the run.
+  to the adapter's network hooks (`authenticate_extensions`, `compose`); each is seeded exactly as
+  `ctx.api.add_response` does, so every `path` must be one of this repository's
+  (`/repos/<repository>/...`) under its rules below, and anything else fails the run.
+* **The seeding API (v0.9.2).** A real adapter's network hooks read more than JSON bodies (Quick
+  Skin's `runtime_source` downloads the tested run's `tested-source` seal and the handoff run's
+  `reused-source` descriptor, its feature selection a coverage certificate: ZIP artifacts bound to
+  their runs and jobs). So `delegated_extensions` and `selected_extensions` receive as `ctx.api` a
+  `mod_base.conformance._fixture_api.FixtureGitHub` over the simulated GitHub. It reads like a
+  read-only `GitHubApi` (`repository`, `get_json`, `paginate`, `read_listing`, `download`; at most
+  160 requests per call; `post_json`/`delete` raise `ReadOnlyViolation`) and names
+  `handoff_run`, `{id, run_attempt, path, event, head_branch, head_sha}` of the run whose handoff
+  the extensions will prove (already seeded; its jobs are seeded after the call). Its typed,
+  bounded seeders add exactly the evidence the simulation does not hold (per call; a seeding
+  mistake raises `ValueError` and fails the run):
+
+  | Seeder | Rules |
+  |---|---|
+  | `add_artifact(run_id, name, archive, *, created_at=None) -> record` | an artifact of any seeded run (the handoff run, the delegated tested run, or a run from `add_run`) with its ZIP bytes (a readable ZIP of at most 16 MiB, 64 MiB and 32 artifacts per call); `name` matches `[A-Za-z0-9][A-Za-z0-9._+-]{0,127}` and is never a kit (`mb-...`), `github-pages` or simulation (`conformance-...`) name; `created_at` defaults to the run's `updated_at`. It returns the API record (`id`, `name`, `digest`, `size_in_bytes`, `created_at`, `expired`, `workflow_run`), so an extension object can name the artifact's id and digest. |
+  | `add_run(run) -> record` | a run of another workflow of this repository: `run` gives `path` (never `pages.yml`, `source.workflow` or a family producer, whose runs the simulation owns), `event`, `head_branch`, `head_sha` and optionally `created_at` (default: the handoff run's), `status`/`conclusion` (default `completed`/`success`), `display_title` or any other JSON field; `id`, attempt 1, `workflow_id` and `head_repository` are assigned (and the workflow's `/actions/workflows/<file>` record). At most 16 runs. |
+  | `add_jobs(run_id, run_attempt, jobs)` | jobs (JSON objects with a `name`; `status`/`conclusion` default to `completed`/`success`; `id`, `run_id` and `run_attempt` assigned) appended to an attempt of any seeded run, after the jobs the simulation seeds for it before or after this call; a name never repeats one of that attempt. At most 128 jobs. They count in the attempt's job graph (`source.require_job_graph`). |
+  | `add_response(path, payload, *, params=None)` | the exact JSON body of one GET of this repository that nothing answers yet (a pull request, a synthetic commit): never a kit-owned route (`/actions/...`, `/branches...`, `/contents/...`, the repository itself: use the typed seeders) and never a path the simulated GitHub already answers. At most 64. |
 
 ### The conformance report
 
@@ -233,7 +261,7 @@ the parent refuses a report of any other shape:
 | `variants` | `{attested, delegated, selected, family-outcomes, newest-run, carried}`, each `"passed"` or `"skipped: <reason>"` |
 | `admission` | the admission results observed, in order, as `"<operation>:<reason>"` |
 | `hooks` | the sorted names of every adapter hook that answered |
-| `site` | facts about the first generation's site (`files`, `frames`, `node_check`, `rotation_planned`), `max_job_reads` (the most API reads one simulated Pages job made, at most 160), `listing_rereads` (the inconsistent artifact listings the refresh jobs read again: every refresh after a sibling's upload sees one `total_count` one row off and must re-read it exactly once) and `generations`: one entry per later generation, `{generation, head, pages_run, key_routes, family_legs, rotation_planned}` (`key_routes` counts the keys selected as `handoff` or `cache`; `family_legs` counts the legs collected `carried`, `fresh` or `unavailable`) |
+| `site` | facts about the first generation's site (`files`, `frames`, `node_check`, `rotation_planned`), `composed_lanes` (when the `selected` variant ran: how many lanes of its composed bundle hold only `baseline`, only `selected` or `mixed` frames; a partially re-captured lane is `mixed`), `max_job_reads` (the most API reads one simulated Pages job made, at most 160), `listing_rereads` (the inconsistent artifact listings the refresh jobs read again: every refresh after a sibling's upload sees one `total_count` one row off and must re-read it exactly once) and `generations`: one entry per later generation, `{generation, head, pages_run, key_routes, family_legs, rotation_planned}` (`key_routes` counts the keys selected as `handoff` or `cache`; `family_legs` counts the legs collected `carried`, `fresh` or `unavailable`) |
 
 A mod's own conformance test (Quick Skin's `test_mod_base_conformance.py` runs `conformance --keys
 mc1.20.1,mc26.3 --families`) should assert the variants it expects to pass, since a skipped variant
@@ -250,7 +278,7 @@ does not fail the run.
 | `read_blob(commit, path, max_bytes)` | bounded `git cat-file` of objects already fetched as inert objects; never a checkout |
 | `runtime_tree(root)` | a bounded, regular-file-only, symlink-refusing `RuntimeTree` view |
 | `image_metrics(path, size_policy)` | the kit's PixelMetrics (`imaging.metrics.inspect_png`) |
-| `api` | a read-only `GitHubApi`, present only for a declared network hook in a token job (below); otherwise `None`. It is capped at `limits.MAX_PAGES_API_READS` (160) requests per call, retries included (also the re-reads of a listing GitHub serves inconsistently: `paginate` and `read_listing` read one again from page 1, at most `limits.LISTING_READ_ATTEMPTS` times); a further request raises `RequestBudgetExhausted` in the hook |
+| `api` | a read-only `GitHubApi`, present only for a declared network hook in a token job (below); otherwise `None` (the conformance extension fixtures get the seeding API instead, above). It is capped at `limits.MAX_PAGES_API_READS` (160) requests per call, retries included (also the re-reads of a listing GitHub serves inconsistently: `paginate` and `read_listing` read one again from page 1, at most `limits.LISTING_READ_ATTEMPTS` times); a further request raises `RequestBudgetExhausted` in the hook |
 
 ## Where hooks run (SPEC §4.3)
 
@@ -347,9 +375,11 @@ exactly when `ok`, `error` (one line, <= 1000 characters) exactly when `error`.
   `baseline` frame to equal the baseline, every `selected` frame to equal the core's own
   compaction, the composed frames to equal the complete expectation, and every `tested` record to
   equal its source. **Full use:** the `epoch: selected` frames are exactly the selected
-  compaction's frames, every selected lane is present and composed only from selected frames, every
-  selected comparison is present, and every other lane equals its baseline lane, so a hook can
-  never publish older baseline evidence for what the selection re-tested.
+  compaction's frames, every selected lane is present and is exactly the selected lane record (its
+  roles included, so they are the complete lane's), with exactly `baseline_run` = the baseline
+  lane's execution when it still holds baseline frames, every selected comparison is present, no comparison spans the two
+  epochs, and every other lane equals its baseline lane, so a hook can never publish older baseline
+  evidence for what the selection re-tested.
 * **R4 `family_validate`:** envelope inventory, then the projection schema, then every image
   re-inspected (dimensions equal `thumbnail(recorded source, derivative_box)`, pixels match), no
   unclean pair, `coverage_sha == expected_coverage_sha`, and the projection bound to the envelope

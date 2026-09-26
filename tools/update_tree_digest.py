@@ -4,19 +4,20 @@
 Every job of ``publish.yml``, ``finalize.yml`` and ``rotate.yml`` recomputes kit-digest-v1 over its
 kit checkout (``src/``, ``site/`` and ``requirements/``) and requires it to equal the workflow-level
 literal. The callee YAML is not part of the digested tree, so rewriting the literal never changes
-the digest (no fixed point). Stage every change under those directories and under ``template/`` and
-``tools/``, then run from the kit clone and commit the rewritten workflows with it::
+the digest (no fixed point). Stage every change under those directories and under ``template/``,
+``tools/`` and ``actions/``, then run from the kit clone and commit the rewritten workflows with it::
 
     python3 tools/update_tree_digest.py --write    # rewrite every stale literal in place
     python3 tools/update_tree_digest.py --check    # exit 1 and name the stale workflows
 
-The digested ``src/`` carries the staged-file lock ``src/mod_base/template/staged_files.sha256``,
-the listing of every ``template/`` and ``tools/`` file (see ``mod_base.template.lock``), so a change
-there changes the lock and therefore the digest. Both modes first require the lock the index
-records to list exactly the indexed ``template/`` and ``tools/`` (:func:`staged_lock_current`):
-``--check`` exits 1 naming the stale lock; ``--write`` regenerates it through
-``mod_base.template.lock`` and exits 1 without touching a literal, because the regenerated lock
-must be staged before the index can be digested (stage it and run ``--write`` again).
+The digested ``src/`` carries the staged-file locks ``src/mod_base/template/staged_files.sha256``
+and ``src/mod_base/template/staged_actions.sha256``, the listings of every ``template/`` and
+``tools/`` file and of every ``actions/`` file (see ``mod_base.template.lock``), so a change there
+changes a lock and therefore the digest. Both modes first require the locks the index records to
+list exactly the indexed ``template/``, ``tools/`` and ``actions/`` (:func:`staged_lock_current`):
+``--check`` exits 1 naming the stale locks; ``--write`` regenerates them through
+``mod_base.template.lock`` and exits 1 without touching a literal, because the regenerated locks
+must be staged before the index can be digested (stage them and run ``--write`` again).
 
 The literal must equal what a fresh ``actions/checkout`` of the commit produces, so
 :func:`tree_digest` hashes the Git index (the content the commit records), never whatever else lies
@@ -31,8 +32,8 @@ in the working tree. It refuses (exit 2, naming the paths):
 
 The one tolerated difference is a ``__pycache__`` directory outside the index, which a local
 interpreter writes; once staged, it is refused as the prologue refuses it. The staged-file lock
-check likewise refuses (exit 2) ``template/`` and ``tools/`` whose working tree differs from the
-index, since the lock is regenerated from the working tree. ``tools/kit_digest.sh`` and
+check likewise refuses (exit 2) ``template/``, ``tools/`` and ``actions/`` whose working tree differs
+from the index, since the locks are regenerated from the working tree. ``tools/kit_digest.sh`` and
 ``mod_base.pin.kit_tree_digest`` compute the same value over a checkout
 (``tests/test_tree_digest_literal.py`` pins the parity). Stdlib, plus this script's own kit package
 (``src/mod_base``) for the staged-file lock, imported without writing bytecode into the digested
@@ -50,7 +51,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 DIGESTED_DIRS = ("src", "site", "requirements")
@@ -274,6 +275,32 @@ def _import_kit() -> None:
         raise DigestError(f"cannot import the staged-file lock helpers from {KIT_SOURCE}: {exc}") from None
 
 
+def _indexed_listing(root: Path, tops: Sequence[str], listing: Callable[[Path], bytes]) -> bytes:
+    """The listing of the indexed blobs below ``tops``, in the format of the kit's ``listing``
+    function, which must list exactly those bytes from the working tree."""
+
+    _import_kit()
+    from mod_base import errors
+
+    names = " and ".join(f"{top}/" for top in tops)
+    indexed = _index_digests(root, tops, tops=tops, modes=LOCKED_MODES)
+    try:
+        listed = listing(root)
+    except errors.MbError as exc:
+        raise DigestError(f"{names} cannot be listed: {errors.describe(exc)}") from None
+    on_disk: dict[str, str] = {}
+    for line in listed.decode("ascii").splitlines():
+        match = LOCK_LINE.fullmatch(line)
+        if match is None:
+            raise DigestError("the kit's staged-file listing printed a malformed line")
+        on_disk[match.group(2)] = match.group(1)
+    differences = _differences(indexed, on_disk)
+    if differences:
+        raise DigestError(f"{names} {'differs' if len(tops) == 1 else 'differ'} from the Git index, so the "
+                          f"staged-file lock cannot describe the commit; stage or remove: {_named(differences)}")
+    return _listing(indexed).encode("ascii")
+
+
 def indexed_staged_listing(root: Path) -> bytes:
     """The staged-file lock the Git index of ``root`` implies: the listing of its indexed
     ``template/`` and ``tools/`` blobs, in ``mod_base.pin.staged_listing``'s format.
@@ -285,57 +312,61 @@ def indexed_staged_listing(root: Path) -> bytes:
     """
 
     _import_kit()
-    from mod_base import errors, pin
+    from mod_base import pin
 
-    indexed = _index_digests(root, pin.LOCKED_DIRS, tops=pin.LOCKED_DIRS, modes=LOCKED_MODES)
-    try:
-        listing = pin.staged_listing(root)
-    except errors.MbError as exc:
-        raise DigestError(f"template/ and tools/ cannot be listed: {errors.describe(exc)}") from None
-    on_disk: dict[str, str] = {}
-    for line in listing.decode("ascii").splitlines():
-        match = LOCK_LINE.fullmatch(line)
-        if match is None:
-            raise DigestError("mod_base.pin.staged_listing printed a malformed line")
-        on_disk[match.group(2)] = match.group(1)
-    differences = _differences(indexed, on_disk)
-    if differences:
-        raise DigestError("template/ or tools/ differs from the Git index, so the staged-file lock cannot "
-                          f"describe the commit; stage or remove: {_named(differences)}")
-    return _listing(indexed).encode("ascii")
+    return _indexed_listing(root, pin.LOCKED_DIRS, pin.staged_listing)
 
 
-def staged_lock_current(root: Path) -> bool:
-    """Whether the staged-file lock the Git index of ``root`` records equals
-    :func:`indexed_staged_listing` (``False`` when the index holds no lock)."""
+def indexed_actions_listing(root: Path) -> bytes:
+    """The actions lock the Git index of ``root`` implies: the listing of its indexed ``actions/``
+    blobs, in ``mod_base.pin.actions_listing``'s format, checked as :func:`indexed_staged_listing`."""
 
     _import_kit()
     from mod_base import pin
 
-    expected = hashlib.sha256(indexed_staged_listing(root)).hexdigest()
-    return _index_digests(root, (pin.STAGED_LOCK,)).get(pin.STAGED_LOCK) == expected
+    return _indexed_listing(root, (pin.ACTIONS_DIR,), pin.actions_listing)
 
 
-def _stale_lock(root: Path, *, write: bool) -> int:
-    """Report a stale staged-file lock (exit 1). ``write`` first regenerates the working-tree lock
-    through ``mod_base.template.lock``; no literal is written until the regenerated lock is staged,
-    because only an index that records it can be digested."""
+def stale_locks(root: Path) -> list[str]:
+    """The staged-file locks whose bytes the Git index of ``root`` records differ from what its
+    indexed ``template/``, ``tools/`` and ``actions/`` imply (a lock the index lacks is stale)."""
 
     _import_kit()
-    from mod_base import errors, pin
+    from mod_base import pin
+
+    recorded = _index_digests(root, (pin.STAGED_LOCK, pin.ACTIONS_LOCK))
+    wanted = ((pin.STAGED_LOCK, indexed_staged_listing(root)), (pin.ACTIONS_LOCK, indexed_actions_listing(root)))
+    return [lock for lock, listing in wanted if recorded.get(lock) != hashlib.sha256(listing).hexdigest()]
+
+
+def staged_lock_current(root: Path) -> bool:
+    """Whether every staged-file lock the Git index of ``root`` records is current
+    (:func:`stale_locks` is empty)."""
+
+    return not stale_locks(root)
+
+
+def _stale_lock(root: Path, stale: Sequence[str], *, write: bool) -> int:
+    """Report stale staged-file locks (exit 1). ``write`` first regenerates the working-tree locks
+    through ``mod_base.template.lock``; no literal is written until the regenerated locks are
+    staged, because only an index that records them can be digested."""
+
+    _import_kit()
+    from mod_base import errors
     from mod_base.template import lock
 
+    names = " and ".join(stale)
     if not write:
-        print(f"update_tree_digest: stale {pin.STAGED_LOCK}: it does not list the staged template/ and tools/; "
-              "run python3 tools/update_tree_digest.py --write, stage the lock and run it again", file=sys.stderr)
+        print(f"update_tree_digest: stale {names}: they must list the staged template/, tools/ and actions/; "
+              "run python3 tools/update_tree_digest.py --write, stage the locks and run it again", file=sys.stderr)
         return 1
     try:
         regenerated = lock.write(root)
     except errors.MbError as exc:
-        raise DigestError(f"cannot regenerate {pin.STAGED_LOCK}: {errors.describe(exc)}") from None
+        raise DigestError(f"cannot regenerate {names}: {errors.describe(exc)}") from None
     state = "regenerated" if regenerated else "the working-tree copy is current but not staged:"
-    print(f"update_tree_digest: {state} {pin.STAGED_LOCK}; stage it and run python3 tools/update_tree_digest.py "
-          "--write again (no literal was written)", file=sys.stderr)
+    print(f"update_tree_digest: {state} {names}; stage {'it' if len(stale) == 1 else 'them'} and run "
+          "python3 tools/update_tree_digest.py --write again (no literal was written)", file=sys.stderr)
     return 1
 
 
@@ -383,15 +414,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true",
-                      help="regenerate a stale staged-file lock (exit 1: stage it and rerun), else rewrite every "
+                      help="regenerate stale staged-file locks (exit 1: stage them and rerun), else rewrite every "
                            "stale literal")
-    mode.add_argument("--check", action="store_true", help="exit 1 when the staged-file lock or any literal is stale")
+    mode.add_argument("--check", action="store_true", help="exit 1 when a staged-file lock or any literal is stale")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1],
                         help="the kit clone (default: this script's kit)")
     args = parser.parse_args(argv)
     try:
-        if not staged_lock_current(args.root):
-            return _stale_lock(args.root, write=args.write)
+        stale_lock_paths = stale_locks(args.root)
+        if stale_lock_paths:
+            return _stale_lock(args.root, stale_lock_paths, write=args.write)
         digest = tree_digest(args.root)
         stale = stale_workflows(args.root, digest)
         if args.write:
