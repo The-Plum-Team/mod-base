@@ -1878,6 +1878,119 @@
       ]
     },
     {
+      "expect": "valid",
+      "fixture": "template-manifest",
+      "name": "template-dependabot-ignores-caller-actions",
+      "set": [
+        [
+          "/files/5/path",
+          ".github/dependabot.yml"
+        ],
+        [
+          "/files/5/source",
+          "seed/.github/dependabot.yml.tmpl"
+        ],
+        [
+          "/files/5/ignore_actions_of",
+          [
+            ".github/workflows/pages.yml"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.files[4].ignore_actions_of: only the .github/dependabot.yml fragment may list ignore_actions_of",
+      "expect": "invalid",
+      "fixture": "template-manifest",
+      "name": "template-ignore-actions-on-another-fragment",
+      "set": [
+        [
+          "/files/4/ignore_actions_of",
+          [
+            ".github/workflows/pages.yml"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.files[1].ignore_actions_of: only the .github/dependabot.yml fragment may list ignore_actions_of",
+      "expect": "invalid",
+      "fixture": "template-manifest",
+      "name": "template-ignore-actions-on-a-managed-file",
+      "set": [
+        [
+          "/files/1/ignore_actions_of",
+          [
+            ".github/workflows/pages.yml"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.files[5].ignore_actions_of[0]: must name a managed workflow of this manifest",
+      "expect": "invalid",
+      "fixture": "template-manifest",
+      "name": "template-ignore-actions-of-a-managed-script",
+      "set": [
+        [
+          "/files/5/path",
+          ".github/dependabot.yml"
+        ],
+        [
+          "/files/5/source",
+          "seed/.github/dependabot.yml.tmpl"
+        ],
+        [
+          "/files/5/ignore_actions_of",
+          [
+            "scripts/ci/mod_base_kit.py"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.files[5].ignore_actions_of[0]: must name a managed workflow of this manifest",
+      "expect": "invalid",
+      "fixture": "template-manifest",
+      "name": "template-ignore-actions-of-an-unmanaged-workflow",
+      "set": [
+        [
+          "/files/5/path",
+          ".github/dependabot.yml"
+        ],
+        [
+          "/files/5/source",
+          "seed/.github/dependabot.yml.tmpl"
+        ],
+        [
+          "/files/5/ignore_actions_of",
+          [
+            ".github/workflows/e2e.yml"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "$.files[5].ignore_actions_of: must hold between 1 and 8 items",
+      "expect": "invalid",
+      "fixture": "template-manifest",
+      "name": "template-ignore-actions-of-nothing",
+      "set": [
+        [
+          "/files/5/path",
+          ".github/dependabot.yml"
+        ],
+        [
+          "/files/5/source",
+          "seed/.github/dependabot.yml.tmpl"
+        ],
+        [
+          "/files/5/ignore_actions_of",
+          []
+        ]
+      ]
+    },
+    {
       "error": "$.tree_digest: does not match the required grammar",
       "expect": "invalid",
       "fixture": "kit-stamp",

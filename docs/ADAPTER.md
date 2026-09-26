@@ -165,10 +165,11 @@ the first generation's caches), dry-run rotations across the anchor successor gr
 same-head publication interleaved with the second generation's real rotation. Every Pages job of
 every generation must stay within its 160-read budget and change nothing, and every rotation plan
 must equal an independent oracle's (cut only by the deletion budget). The stages are listed in
-`mod_base.conformance._simulation` and `_generations`. Then come the variants below, each run only
-when the configuration and the fixtures module make it applicable and otherwise reported as
-skipped with its reason. A skipped variant never fails the run; every failed check exits 2 (reason
-`conformance`).
+`mod_base.conformance._simulation` and `_generations`. The variants below run among them, each
+only when the configuration and the fixtures module make it applicable and otherwise reported as
+skipped with its reason: `carried` after the later generations and `selected` last, because it
+moves the protected head once more. A skipped variant never fails the run; every failed check
+exits 2 (reason `conformance`).
 
 **The documentation-commit contract.** Each later head adds exactly one new file,
 `docs/mod-base-conformance/head-<n>.md`, on top of the previous head (first-parent). A family with
@@ -177,11 +178,19 @@ generation forward across such a commit (the Quick Skin-like fixture and the can
 any commit that leaves their release matrix and scenario contract unchanged), or the second
 generation's legs, and the `carried` variant, fail.
 
+**The selected head (v1.0.1).** A selection re-tests what changed since its baseline, and a mod may
+recompute it as the Git diff from the baseline's commit to the tested head (Quick Skin's protected
+admission does, and finds nothing to select at one commit). So the `selected` variant runs last:
+it adds one more commit on top of the newest head, holding the one new file the fixtures module
+names as `SELECTED_CHANGE` (default `docs/mod-base-conformance/selected.md`), and produces the
+selected generation there, one commit after the newest `mb-baseline` the simulation retained for
+the key (the baseline of that head). No family generation or publication follows it.
+
 | Variant | Runs when | Proves |
 |---|---|---|
 | `attested` | `source.attestation_job` is set | `authenticate` binds the attestation job of a re-published tested run; no anchor is cut |
 | `delegated` | `source.delegated_reuse_extension` is set and the fixtures define `delegated_extensions` | a `delegated` handoff whose extensions `authenticate_extensions` verifies with `reuse_verified` |
-| `selected` | `baseline_archive.enabled` and the fixtures define `selected_extensions` | `compact` refuses a `selected` handoff (R3); `compose` completes it with the published `mb-baseline` |
+| `selected` | `baseline_archive.enabled` and the fixtures define `selected_extensions` | on the selected head, one commit after the newest published baseline's: `compact` refuses a `selected` handoff (R3); `compose` completes it with that `mb-baseline`; a baseline uploaded at its commit by a source run, or by a Pages run outside its refresh job's retention step, is refused by R3 or by the adapter's own `compose` hook, never accepted |
 | `family-outcomes` | `--families`, at least one family, `family_bundle`, and `FAMILY_OUTCOMES` lists `superseded` or `unavailable` | `family collect` reports exactly each listed absence and writes no output |
 | `newest-run` | `source.require_newest_run` | a newer failed source run refuses the older evidence, nominated or searched |
 | `carried` | `--families` and at least one family with `carry_forward` | a third head: every family leg walks the first-parent history back to the second head's generations (a family cache whose envelope still covers the first head, or the woken leg's own), `family collect` carries it (R5), `build` checks the recorded selection by id, refresh, `current` and a dry-run rotation |
@@ -200,6 +209,7 @@ fixtures get the seeding API below as `ctx.api`.
 | `FAMILY_OUTCOMES` | a non-empty tuple or list of outcomes among `available`, `superseded`, `unavailable` (absent means `("available",)`) | | optional: enables the `family-outcomes` variant |
 | `delegated_extensions` | `delegated_extensions(ctx, target, tested_run)` | extensions | optional: enables the `delegated` variant |
 | `selected_extensions` | `selected_extensions(ctx, target, baseline)` | extensions | optional: enables the `selected` variant |
+| `SELECTED_CHANGE` | a repository path (not below `.github/`) absent at every simulated head (absent means `docs/mod-base-conformance/selected.md`) | | optional: the new file of the `selected` head, for a mod whose selection must see a change it owns (v1.0.1) |
 
 * `family_bundle` writes the mod's **native** family bundle of `key` (what the family's producer
   workflow would hand to the `publish-family` composite) into the existing empty directory `out_root`
@@ -216,11 +226,22 @@ fixtures get the seeding API below as `ctx.api`.
   `outcome`). With `--families`, every configured family gets an `available` bundle per selected key.
 * `delegated_extensions` returns the extension objects that prove the handoff reuses the tested run
   `tested_run` = `{id, run_attempt, path, event, head_branch, head_sha}` (a `pull_request` run of
-  `source.workflow` on another branch). They must include `config.source.delegated_reuse_extension`,
-  and `authenticate_extensions` must answer `reuse_verified: true` for them.
+  `source.workflow` on the branch `conformance/reused-pull-request`). They must include
+  `config.source.delegated_reuse_extension`, and `authenticate_extensions` must answer
+  `reuse_verified: true` for them. The handoff's tested claim names that run: its `run_id`,
+  `run_attempt`, `branch` (`head_branch`) and `commit` (`head_sha`); its controller is the handoff
+  run's (from v1.0.1: earlier kits took the claim's branch and commit from the handoff run, so a
+  reuse record that names the reused pull request's branch must now do so).
 * `selected_extensions` returns the extension objects that make the adapter's expectation
-  `scope.kind: "selected"`, to be completed by the `compose` hook with the `mb-baseline` artifact the
-  simulated generation published for `key`: `baseline` = `{id, name, digest}`.
+  `scope.kind: "selected"`, to be completed by the `compose` hook with the newest `mb-baseline`
+  artifact the simulation retained for `key`: `baseline` = `{id, name, digest}`. `target` names the
+  selected head, a child of that baseline's commit (the commit in its name); see "The selected
+  head". The same function is called again with two forged baselines, the same bytes under that
+  name uploaded at the baseline's commit by a successful source run and by a successful Pages run
+  outside its refresh job's retention step, so each differs from the genuine baseline only in its
+  owner's workflow or upload window: R3 refuses them, but an adapter's own `compose` hook may
+  refuse them first (Quick Skin's authenticates the owner its coverage certificate names). Either
+  refusal fails closed; an exception from any other hook, or an accepted forgery, fails the run.
 * Each extension function returns either the extension objects themselves (a non-empty object, each
   name a declared extension, as in `extensions.json`) or `{"extensions": {...}, "responses": [...]}`.
   `responses` (at most 64) are exact API bodies `{path, params?, payload}` the simulated GitHub serves
@@ -243,8 +264,9 @@ fixtures get the seeding API below as `ctx.api`.
   |---|---|
   | `add_artifact(run_id, name, archive, *, created_at=None) -> record` | an artifact of any seeded run (the handoff run, the delegated tested run, or a run from `add_run`) with its ZIP bytes (a readable ZIP of at most 16 MiB, 64 MiB and 32 artifacts per call); `name` matches `[A-Za-z0-9][A-Za-z0-9._+-]{0,127}` and is never a kit (`mb-...`), `github-pages` or simulation (`conformance-...`) name; `created_at` defaults to the run's `updated_at`. It returns the API record (`id`, `name`, `digest`, `size_in_bytes`, `created_at`, `expired`, `workflow_run`), so an extension object can name the artifact's id and digest. |
   | `add_run(run) -> record` | a run of another workflow of this repository: `run` gives `path` (never `pages.yml`, `source.workflow` or a family producer, whose runs the simulation owns), `event`, `head_branch`, `head_sha` and optionally `created_at` (default: the handoff run's), `status`/`conclusion` (default `completed`/`success`), `display_title` or any other JSON field; `id`, attempt 1, `workflow_id` and `head_repository` are assigned (and the workflow's `/actions/workflows/<file>` record). At most 16 runs. |
-  | `add_jobs(run_id, run_attempt, jobs)` | jobs (JSON objects with a `name`; `status`/`conclusion` default to `completed`/`success`; `id`, `run_id` and `run_attempt` assigned) appended to an attempt of any seeded run, after the jobs the simulation seeds for it before or after this call; a name never repeats one of that attempt. At most 128 jobs. They count in the attempt's job graph (`source.require_job_graph`). |
+  | `add_jobs(run_id, run_attempt, jobs)` | jobs (JSON objects with a `name`; `status`/`conclusion` default to `completed`/`success` and, from v1.0.1, `head_sha`/`head_branch` to the run's, as GitHub's jobs API reports every job, the simulation's own included; `id`, `run_id` and `run_attempt` assigned) appended to an attempt of any seeded run, after the jobs the simulation seeds for it before or after this call; a name never repeats one of that attempt. At most 128 jobs. They count in the attempt's job graph (`source.require_job_graph`). |
   | `add_response(path, payload, *, params=None)` | the exact JSON body of one GET of this repository that nothing answers yet (a pull request, a synthetic commit): never a kit-owned route (`/actions/...`, `/branches...`, `/contents/...`, the repository itself: use the typed seeders) and never a path the simulated GitHub already answers. At most 64. |
+  | `retained_baseline(key) -> record` | `selected_extensions` only (v1.0.1): the API record of the `mb-baseline` of `key` (a key the adapter declares) at the composed baseline's commit, the same record for every call with that key. A simulated key gets the baseline its newest generation retained; a key outside `--keys` gets a stand-in the simulation retains itself: the same commit and tested run, uploaded inside the retention step of a successful `pages.yml` run whose build, deploy and refresh jobs succeeded (one such run per call), with a placeholder archive that is not a compact bundle. It serves a mod whose certificate names every release's baseline (Quick Skin's healthy-baseline certificate) while `--keys` simulates fewer; R3 composes a key only with its own baseline, so a stand-in never completes the composed key. At most 64 keys. |
 
 ### The conformance report
 

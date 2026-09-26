@@ -54,6 +54,9 @@
     },
     {
       "class": "fragment",
+      "ignore_actions_of": [
+        ".github/workflows/pages.yml"
+      ],
       "path": ".github/dependabot.yml",
       "source": "seed/.github/dependabot.yml.tmpl"
     },

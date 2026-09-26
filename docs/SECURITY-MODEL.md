@@ -174,8 +174,10 @@ sandbox against a malicious adapter:
   repositories and required on mod-base, whose Actions policy allows GitHub-owned actions only.
 - Pillow is installed only from the 86-hash lock (`--require-hashes --only-binary=:all:`), kept in
   lockstep with the mods' own locks by tests.
-- Dependabot ignores `The-Plum-Team/mod-base*`; the only bump path is the bootstrap's `bump`, which
-  verifies the release before editing and re-synchronizes the managed files.
+- Dependabot ignores `The-Plum-Team/mod-base*` and every third-party action the caller's managed
+  region pins (`actions/deploy-pages`), which `template check` requires from the kit's own template;
+  the only bump path is the bootstrap's `bump`, which verifies the release before editing and
+  re-synchronizes the managed files.
 
 ### The published site
 

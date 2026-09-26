@@ -13,13 +13,19 @@ The optional ``conformance`` fixtures make every Quick Skin variant run on the u
   ``quick-skin.runtime_source``, as Quick Skin does: through ``ctx.api`` (the conformance seeding
   seam) it uploads the tested run's ``tested-source`` seal and the handoff run's ``reused-source``
   descriptor as ZIP artifacts and adds the handoff run's reuse job, and the reference names the
-  seal by id and digest (the adapter's ``authenticate_extensions`` downloads and binds both);
+  seal by id and digest (the adapter's ``authenticate_extensions`` downloads and binds both). The
+  seal names the tested run's own branch and commit, the reused pull request's, which the kit's
+  tested claim carries too;
 * ``selected_extensions`` narrows the expectation to one capture of the ``session`` scenario (the
   second client's player list) through ``quick-skin.feature_selection``: the session lanes are
   re-captured only partly, so the adapter's ``compose`` completes them per frame from the named
   ``mb-baseline`` artifact, a mixed-epoch composition. Like Quick Skin's coverage certificate, the
   selection names a ZIP certificate that a seeded successful ``feature-coverage`` run issued for
-  that baseline and the selective runtime (``ctx.api.handoff_run``);
+  that baseline and the selective runtime (``ctx.api.handoff_run``) and, like Quick Skin's
+  healthy-baseline certificate, names the retained baseline of every matrix target
+  (``ctx.api.retained_baseline``: a stand-in for a key outside ``--keys``); like Quick Skin's Git
+  admission, it records the diff from the baseline's commit to the tested head, which the kit's
+  ``selected`` head makes :data:`SELECTED_CHANGE`;
 * ``family_bundle`` writes the ``mod-compatibility`` family's native ``qs-like.compatibility`` v1
   bundle: per artifact node of the key one Ears lane pairing a clean reference with a modded
   candidate for every capture of the ``full`` scenario (Ears publishes no Forge build, so a Forge
@@ -33,6 +39,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -56,6 +64,8 @@ PAIRED_SCENARIO = "full"
 FAMILY_SEED = 100
 #: The capture a selective generation re-captures: one of the two ``session`` checkpoints.
 SELECTED_CAPTURES = ("session.client_b.player_list",)
+#: The new file the conformance ``selected`` head adds, the change that selection re-tests.
+SELECTED_CHANGE = "e2e/conformance-selected-change.md"
 #: The ZIP artifacts the adapter's network hooks authenticate (see its module docstring).
 SEAL_ARTIFACT = "tested-source-e2e"
 DESCRIPTOR_ARTIFACT = "reused-source-e2e"
@@ -125,7 +135,8 @@ def _zip(name: str, value) -> bytes:
 
 def delegated_extensions(ctx, target, tested_run):
     matrix = json.loads(ctx.read_blob(target["subject"]["commit"], MATRIX, MAX_DOCUMENT))
-    reference = {"repository": matrix["repository"], "run_id": tested_run["id"], "tested_sha": tested_run["head_sha"]}
+    reference = {"repository": matrix["repository"], "run_id": tested_run["id"], "tested_sha": tested_run["head_sha"],
+                 "head_branch": tested_run["head_branch"]}
     seal = ctx.api.add_artifact(tested_run["id"], SEAL_ARTIFACT, _zip("tested-source.json", reference))
     reference["seal_artifact"] = {"id": seal["id"], "name": seal["name"], "digest": seal["digest"]}
     handoff = ctx.api.handoff_run
@@ -135,15 +146,33 @@ def delegated_extensions(ctx, target, tested_run):
     return {RUNTIME_SOURCE: reference}
 
 
+def _changed_paths(ctx, base: str, head: str) -> list[str]:
+    """The paths of the Git diff from ``base`` to ``head`` in the simulated repository."""
+
+    environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(ctx.tmpdir), "LC_ALL": "C",
+                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0"}
+    listed = subprocess.run(["git", "-C", str(ctx.repo_root), "diff", "--name-only", "--no-renames", "-z", base, head,
+                             "--"], check=True, capture_output=True, env=environment, timeout=60).stdout
+    return sorted(path for path in listed.decode("utf-8").split("\0") if path)
+
+
 def selected_extensions(ctx, target, baseline):
-    selection = {"captures": list(SELECTED_CAPTURES), "baseline_artifact_id": baseline["id"]}
     subject = target["subject"]
+    base = baseline["name"].split("--")[2]
+    selection = {"captures": list(SELECTED_CAPTURES), "baseline_artifact_id": baseline["id"], "base_commit": base,
+                 "changed_paths": _changed_paths(ctx, base, subject["commit"])}
     owner = ctx.api.add_run({"path": CERTIFICATE_WORKFLOW, "event": "workflow_run", "head_branch": subject["branch"],
                              "head_sha": subject["commit"], "display_title": "Feature coverage"})
     ctx.api.add_jobs(owner["id"], owner["run_attempt"], [{"name": CERTIFICATE_JOB, "status": "completed",
                                                          "conclusion": "success"}])
+    matrix = json.loads(ctx.read_blob(subject["commit"], MATRIX, MAX_DOCUMENT))
+    public = {}
+    for row in matrix["targets"]:
+        key = f"mc{row['minecraft']}"
+        record = dict(baseline) if key == target["key"] else ctx.api.retained_baseline(key)
+        public[key] = {name: record[name] for name in ("id", "name", "digest")}
     certificate = {"kind": CERTIFICATE_KIND, "baseline_artifact": dict(baseline),
-                   "runtime_run_id": ctx.api.handoff_run["id"],
+                   "runtime_run_id": ctx.api.handoff_run["id"], "public_baselines": public,
                    "selection_sha256": hashlib.sha256(_canonical(selection)).hexdigest()}
     record = ctx.api.add_artifact(owner["id"], CERTIFICATE_ARTIFACT, _zip("certificate.json", certificate))
     return {FEATURE_SELECTION: {**selection, "certificate_artifact_id": record["id"]}}

@@ -602,8 +602,12 @@ every pair is publishable.
 ## `mod-base.template-manifest` (`template/manifest.json`)
 
 `{files: [{path: repo path, class: "managed"|"fragment"|"seeded", source: bundle path, markers?:
-[text <= 200], lines?: [text <= 200]}]}` — unique paths; managed sources live under `managed/`;
-fragment and seeded sources under `seed/`; only fragments may list required `markers`/`lines`.
+[text <= 200], lines?: [text <= 200], ignore_actions_of?: [repo path] (1..8)}]}` — unique paths;
+managed sources live under `managed/`; fragment and seeded sources under `seed/`; only fragments may
+list required `markers`/`lines`. Only the `.github/dependabot.yml` fragment may list
+`ignore_actions_of` (optional, from v1.0.1): managed workflows of the same manifest, each of whose
+managed region's third-party actions every `github-actions` update must ignore for all versions,
+beside `The-Plum-Team/mod-base*` (`template check` derives the names from the kit's own template).
 
 ## `mod-base.kit-stamp` (`out/mod-base-kit/MOD_BASE_KIT.json`)
 

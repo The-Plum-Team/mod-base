@@ -26,8 +26,9 @@ adoption has to be split across pull requests.
   shared agent documents `docs/ai/shared/REPOSITORY.md` and `docs/ai/shared/PUBLIC-EVIDENCE.md`;
 - **fragment** files are seeded once and must keep listed lines, markers or structure:
   `.gitignore`, `.github/CODEOWNERS`, `.github/dependabot.yml` (every `github-actions` update ignores
-  `The-Plum-Team/mod-base*`), `.github/pull_request_template.md` and `AGENTS.md` (the two shared
-  imports first, then `template.agents_local`);
+  `The-Plum-Team/mod-base*` and, from v1.0.1, every third-party action the caller's managed region
+  pins, `actions/deploy-pages`: both move only with a kit bump), `.github/pull_request_template.md`
+  and `AGENTS.md` (the two shared imports first, then `template.agents_local`);
 - **seeded** files are copied once by `template init --seed` and never checked: `CONTRIBUTING.md`,
   `LICENSE` (All Rights Reserved or the LGPL-2.1 notice, chosen by `license_label`),
   `site/mod-base.json`, the adapter stub, `docs/ai/PROJECT.md` and the decisions index;

@@ -17,11 +17,13 @@ Like Quick Skin, a feature selection names whole ``scenarios`` or single ``captu
 generation can re-capture only some frames of a lane; ``compose`` then composes that lane per frame
 (its baseline frames keep the baseline execution as ``baseline_run``). Like Quick Skin's
 ``runtime_source`` and coverage certificate, the network hooks may also authenticate ZIP artifacts:
-a reference naming a ``seal_artifact`` binds the tested run's ``tested-source`` seal and the handoff
+a reference naming a ``seal_artifact`` binds the tested run's ``tested-source`` seal (which names the
+tested run's branch, the reused pull request's, as the manifest's tested claim must) and the handoff
 run's ``reused-source`` descriptor (and its ``Reuse the tested source`` job), and a selection naming
 a ``certificate_artifact_id`` binds a coverage certificate that a successful ``feature-coverage``
 run issued for this baseline and runtime (the conformance fixtures seed them through
-``ctx.api``).
+``ctx.api``). Like Quick Skin's Git admission, a selection naming a ``base_commit`` is the non-empty
+diff (``changed_paths``) from that baseline commit, a strict ancestor, to the tested head.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from pathlib import Path
 from mod_base.io.bounded_zip import LIMITS_BY_KIND, extract
 from mod_base.model.canonical import canonical_json
 from mod_base.model.documents import compact_identity_sha256
+from mod_base.workflow import api_job_name, caller_job_name
 
 ADAPTER_API = 1
 
@@ -71,12 +74,35 @@ def _document(ctx, commit: str, path: str) -> tuple[dict, bytes]:
     return json.loads(data), data
 
 
-def _tree(ctx, commit: str) -> str:
+def _git(ctx, *arguments: str, check: bool = True) -> subprocess.CompletedProcess:
     environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(ctx.tmpdir), "LC_ALL": "C",
                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0"}
-    completed = subprocess.run(["git", "-C", str(ctx.repo_root), "rev-parse", "--verify", f"{commit}^{{tree}}"],
-                               check=True, capture_output=True, env=environment, timeout=60)
-    return completed.stdout.decode("ascii").strip()
+    return subprocess.run(["git", "-C", str(ctx.repo_root), *arguments], check=check, capture_output=True,
+                          env=environment, timeout=60)
+
+
+def _tree(ctx, commit: str) -> str:
+    return _git(ctx, "rev-parse", "--verify", f"{commit}^{{tree}}").stdout.decode("ascii").strip()
+
+
+def _changed_paths(ctx, base: str, head: str) -> list[str]:
+    """The paths the Git diff from ``base`` to ``head`` changes (Quick Skin's selection input)."""
+
+    listed = _git(ctx, "diff", "--name-only", "--no-renames", "-z", base, head, "--").stdout.decode("utf-8")
+    return sorted(path for path in listed.split("\0") if path)
+
+
+def _verify_admission(ctx, selection: dict, manifest: dict, baseline: dict) -> None:
+    """Quick Skin's Git admission: a selection re-tests the non-empty diff from its baseline's commit,
+    a strict ancestor of the tested head, to that head."""
+
+    base, head = selection["base_commit"], manifest["subject"]["commit"]
+    if baseline["name"].split("--")[2] != base:
+        raise ValueError("the feature selection was admitted against another baseline commit")
+    if base == head or _git(ctx, "merge-base", "--is-ancestor", base, head, check=False).returncode != 0:
+        raise ValueError("the selection's baseline commit is not a strict ancestor of the tested head")
+    if not selection["changed_paths"] or _changed_paths(ctx, base, head) != selection["changed_paths"]:
+        raise ValueError("the feature selection is not the Git diff from its baseline commit")
 
 
 def targets(ctx, branches):
@@ -252,18 +278,21 @@ def _successful_job(ctx, run: dict, name: str) -> None:
         raise ValueError(f"run {run['id']} has no successful job {name!r}")
 
 
-def _verify_seal(ctx, manifest, reference) -> None:
+def _verify_seal(ctx, manifest, reference, run) -> None:
     """Quick Skin's reuse proof: the tested run's ``tested-source`` seal names exactly this reference,
-    and the handoff run uploaded the same reference as its ``reused-source`` descriptor in a
-    successful reuse job."""
+    whose ``head_branch`` is the tested run's branch (the reused pull request's) and the manifest's
+    tested claim's, and the handoff run uploaded the same reference as its ``reused-source``
+    descriptor in a successful reuse job."""
 
     seal = _artifact(ctx, reference["seal_artifact"]["id"])
     if ({name: seal[name] for name in ("id", "name", "digest")} != reference["seal_artifact"]
             or seal["name"] != SEAL_ARTIFACT or seal["workflow_run"]["id"] != reference["run_id"]):
         raise ValueError("the seal artifact is not the tested run's tested-source seal")
     sealed = _zip_document(ctx, seal, "tested-source.json")
-    if sealed != {name: reference[name] for name in ("repository", "run_id", "tested_sha")}:
+    if sealed != {name: reference.get(name) for name in ("repository", "run_id", "tested_sha", "head_branch")}:
         raise ValueError("the tested-source seal names another tested run")
+    if run.get("head_branch") != reference["head_branch"] or manifest["provenance"]["tested"]["branch"] != run["head_branch"]:
+        raise ValueError("the tested claim does not name the sealed tested run's branch")
     handoff = manifest["provenance"]["handoff"]
     descriptor = _run_artifact(ctx, handoff["run_id"], DESCRIPTOR_ARTIFACT)
     if _zip_document(ctx, descriptor, "reused-source.json") != reference:
@@ -284,7 +313,7 @@ def authenticate_extensions(ctx, manifest, extensions):
                 or tested["run_id"] != reference["run_id"] or tested["commit"] != reference["tested_sha"]):
             raise ValueError("the runtime_source reference is not the tested run")
         if "seal_artifact" in reference:
-            _verify_seal(ctx, manifest, reference)
+            _verify_seal(ctx, manifest, reference, run)
         reuse_verified = True
     if FEATURE_SELECTION in extensions:
         if manifest["scope"].get("detail_sha256") != _sha256(canonical_json(extensions[FEATURE_SELECTION])):
@@ -312,8 +341,36 @@ def _verify_certificate(ctx, selection: dict, manifest: dict, baseline: dict) ->
               "runtime_run_id": manifest["provenance"]["handoff"]["run_id"],
               "selection_sha256": _sha256(canonical_json({name: value for name, value in selection.items()
                                                           if name != "certificate_artifact_id"}))}
+    if "public_baselines" in certificate:
+        wanted["public_baselines"] = _public_baselines(ctx, certificate["public_baselines"], manifest, baseline)
     if certificate != wanted:
         raise ValueError("the coverage certificate names another baseline, runtime or selection")
+
+
+def _public_baselines(ctx, public: dict, manifest: dict, baseline: dict) -> dict:
+    """Like Quick Skin's healthy-baseline certificate, the retained baseline of every matrix target at
+    the composed baseline's commit: the composed key's is ``baseline`` itself (R3 authenticates its
+    owner), every other key's a ``mb-baseline`` that a successful ``pages.yml`` run built, deployed
+    and retained for that key."""
+
+    matrix, _ = _document(ctx, manifest["subject"]["commit"], MATRIX)
+    keys = {f"mc{row['minecraft']}" for row in matrix["targets"]}
+    commit = baseline["name"].split("--")[2]
+    if not isinstance(public, dict) or set(public) != keys or public[manifest["key"]] != baseline:
+        raise ValueError("the certificate names no retained baseline of every target")
+    for key in sorted(keys - {manifest["key"]}):
+        record = _artifact(ctx, public[key]["id"])
+        if ({name: record[name] for name in ("id", "name", "digest")} != public[key] or record["expired"]
+                or record["name"].split("--")[1:3] != [key, commit] or not record["name"].startswith("mb-baseline--")):
+            raise ValueError(f"the certificate's baseline of {key} is not that target's retained baseline")
+        owner = ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/runs/{record['workflow_run']['id']}")
+        if (owner["path"] != ".github/workflows/pages.yml" or owner["conclusion"] != "success"
+                or owner["head_sha"] != commit or record["workflow_run"]["head_sha"] != commit):
+            raise ValueError(f"the baseline of {key} lacks a successful Pages owner at {commit}")
+        for job in (api_job_name("publish", "build"), caller_job_name("deploy"),
+                    api_job_name("finalize", "refresh", key=key)):
+            _successful_job(ctx, owner, job)
+    return public
 
 
 def compose(ctx, key, selected_compact_dir, output_dir):
@@ -335,6 +392,8 @@ def compose(ctx, key, selected_compact_dir, output_dir):
     reference = {"id": record["id"], "name": record["name"], "digest": record["digest"]}
     if "certificate_artifact_id" in selection:
         _verify_certificate(ctx, selection, manifest, reference)
+    if "base_commit" in selection:
+        _verify_admission(ctx, selection, manifest, reference)
     archive = ctx.api.download(f"/repos/{ctx.api.repository}/actions/artifacts/{baseline_id}/zip",
                                max_bytes=record["size_in_bytes"])
     baseline_root = Path(ctx.tmpdir) / "baseline"

@@ -20,11 +20,19 @@ own world does not hold:
   ``id``, attempt 1, ``workflow_id`` and ``head_repository`` assigned; the record is returned;
 * :meth:`FixtureGitHub.add_jobs`: jobs added to an attempt of any seeded run, the handoff run
   included; they are appended to the jobs the simulation seeds for it (before or after this call)
-  and never share a name with one of them;
+  and never share a name with one of them, and like every simulated job they name the run's
+  ``head_sha`` and ``head_branch`` unless they give their own;
 * :meth:`FixtureGitHub.add_artifact`: an artifact of any seeded run with its ZIP bytes (a readable
   ZIP of at most :data:`MAX_FIXTURE_ARCHIVE_BYTES`), never a kit (``mb-``), ``github-pages`` or
   simulation (``conformance-``) name; its API record, id and digest included, is returned, so the
-  extension objects can name it.
+  extension objects can name it;
+* :meth:`FixtureGitHub.retained_baseline` (``selected_extensions`` only, v1.0.1): the ``mb-baseline``
+  API record of any key the adapter declares, at the composed baseline's commit. A mod's certificate
+  may name one per release (Quick Skin's names every matrix target's), while ``--keys`` simulates
+  fewer: a simulated key gets the baseline its generation retained, any other key a stand-in the
+  simulation retains itself (a successful ``pages.yml`` run's retention-step upload whose archive is
+  only a placeholder). A fixture never seeds a kit artifact or a Pages run, and R3 composes a key
+  only with its own baseline, so a stand-in can never complete the composed key.
 
 :attr:`FixtureGitHub.handoff_run` names the run whose handoff the extensions will be proven for
 (``{id, run_attempt, path, event, head_branch, head_sha}``); it is already seeded when the fixture
@@ -57,6 +65,7 @@ MAX_FIXTURE_ARCHIVE_BYTES = 16 * 1024 * 1024
 MAX_FIXTURE_ARCHIVES_BYTES = 64 * 1024 * 1024
 MAX_FIXTURE_ARCHIVE_ENTRIES = 1024
 MAX_FIXTURE_RECORD_BYTES = 64 * 1024
+MAX_FIXTURE_BASELINES = lim.MAX_KEYS
 #: Artifact names a fixture may upload (a conservative subset of GitHub's).
 ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 _RESERVED_PREFIXES = (grammar.ARTIFACT_PREFIX, "conformance-")
@@ -103,10 +112,13 @@ def _check_archive(archive: Any) -> bytes:
 class FixtureGitHub:
     """The fixture-call view of the simulated GitHub (see the module docstring)."""
 
-    def __init__(self, world: World, *, handoff_run: Mapping[str, Any], protected_workflows: frozenset[str]) -> None:
+    def __init__(self, world: World, *, handoff_run: Mapping[str, Any], protected_workflows: frozenset[str],
+                 baselines: Callable[[str], dict[str, Any]] | None = None) -> None:
         self._world = world
         self._api = world.api
         self._protected = frozenset(protected_workflows) | {PAGES_WORKFLOW_PATH}
+        self._baselines = baselines
+        self._retained: dict[str, dict[str, Any]] = {}
         self._handoff = {field: handoff_run[field]
                          for field in ("id", "run_attempt", "path", "event", "head_branch", "head_sha")}
         self._reads_spent = 0
@@ -221,6 +233,20 @@ class FixtureGitHub:
             records.append(record)
         self._world.add_fixture_jobs(run, run_attempt, records)
         self._jobs += len(records)
+
+    def retained_baseline(self, key: str) -> dict[str, Any]:
+        """The ``mb-baseline`` API record of ``key`` at the composed baseline's commit (see the module
+        docstring): ``selected_extensions`` only, a key the adapter declares, the same record for
+        every call with that key."""
+
+        _require(self._baselines is not None, "retained_baseline serves only selected_extensions")
+        _require(grammar.is_match(grammar.KEY, key), "retained_baseline needs a key")
+        if key not in self._retained:
+            _require(len(self._retained) < MAX_FIXTURE_BASELINES,
+                     f"a fixture may ask for at most {MAX_FIXTURE_BASELINES} retained baselines")
+            assert self._baselines is not None
+            self._retained[key] = self._baselines(key)
+        return dict(self._retained[key])
 
     def add_artifact(self, run_id: int, name: str, archive: bytes, *, created_at: str | None = None) -> dict[str, Any]:
         """Seed an artifact ``name`` of the seeded run ``run_id`` with its ZIP bytes; return its API

@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -240,6 +241,9 @@ class KitTemplateTest(unittest.TestCase):
                          ["/.github/", "/site/", "/scripts/pages/", "/scripts/ci/", "/AGENTS.md", "/docs/ai/"])
         self.assertEqual(entries[".github/pull_request_template.md"]["markers"],
                          ["CONTRIBUTING.md", "AGENTS.md", "## Summary", "## Validation", "## AI assistance"])
+        self.assertEqual(entries[".github/dependabot.yml"]["ignore_actions_of"], [".github/workflows/pages.yml"])
+        self.assertEqual([path for path, entry in entries.items() if "ignore_actions_of" in entry],
+                         [".github/dependabot.yml"])
         for path, entry in entries.items():
             if entry["class"] == "managed":
                 self.assertEqual(entry["source"], f"managed/{path}")
@@ -293,6 +297,24 @@ class KitTemplateTest(unittest.TestCase):
             caller.write_text(text.replace("# <<< mod-local extensions\n", QS_EXTENSION + "# <<< mod-local extensions\n"))
             self.assertEqual(tool.check(repo, kit_root=KIT_ROOT), [])
             self.assertEqual(tool.sync(repo, kit_root=KIT_ROOT, write=False), [])
+
+    @unittest.skipUnless(CALLER_TEMPLATE.is_file(), "the managed caller (MB8) is not present in this tree yet")
+    def test_the_seeded_dependabot_ignores_every_third_party_action_of_the_managed_caller(self) -> None:
+        # Derived independently of the tool, as Quick Skin's repository guidance does: every action
+        # the managed region pins moves only with a kit bump, so a Dependabot bump would be drift.
+        managed = CALLER_TEMPLATE.read_text(encoding="utf-8").split(tool.MANAGED_END, 1)[0]
+        pinned = sorted(set(re.findall(r"^\s*(?:-\s+)?uses:\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/[^@\s]*)?@",
+                                       managed, re.MULTILINE)) - {"The-Plum-Team/mod-base"})
+        self.assertIn("actions/deploy-pages", pinned)
+        manifest = tool.load_manifest(KIT_ROOT)
+        entry = next(item for item in manifest["files"] if item["path"] == tool.DEPENDABOT_PATH)
+        self.assertEqual(tool.pinned_actions(KIT_ROOT, manifest, entry),
+                         tuple((name, ".github/workflows/pages.yml") for name in pinned))
+        seeded = (TEMPLATE_ROOT / "seed" / ".github" / "dependabot.yml.tmpl").read_text(encoding="utf-8")
+        self.assertIn("\n    ignore:\n"
+                      f'      - dependency-name: "{tool.DEPENDABOT_IGNORE}"\n'
+                      + "".join(f'      - dependency-name: "{name}"\n' for name in pinned)
+                      + "    groups:\n", seeded)
 
     def test_the_staged_file_lock_is_maintained_by_its_module(self) -> None:
         with tempfile.TemporaryDirectory(prefix="mb-lock-") as directory:
@@ -625,6 +647,61 @@ class CheckTest(TemplateCase):
             "other dependency": original.replace("The-Plum-Team/mod-base*", "The-Plum-Team/other*"),
             "second actions update": second,
             "no actions update": "version: 2\nupdates:\n  - package-ecosystem: gradle\n    directory: /\n",
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                dependabot.write_text(text)
+                self.assertIn((".github/dependabot.yml", "fragment"), self.kinds())
+
+    def test_dependabot_must_ignore_every_third_party_action_the_managed_caller_pins(self) -> None:
+        managed, marker, rest = SYNTHETIC_CALLER.partition(tool.MANAGED_END)
+        pinned = ("  deploy:\n    needs: publish\n    runs-on: ubuntu-24.04\n    steps:\n"
+                  f"      - uses: actions/deploy-pages@{OTHER_SHA} # v5.0.0\n"
+                  f"      - uses: \"github/codeql-action/upload-sarif@{OTHER_SHA}\" # v4.0.0\n"
+                  "      - uses: ./actions/local\n")
+        write(self.kit, "template/managed/.github/workflows/pages.yml", managed + pinned + marker + rest)
+        self.make_clean_mod()
+        write(self.repo, ".github/workflows/pages.yml",
+              (self.repo / ".github/workflows/pages.yml").read_text().replace(
+                  "# <<< mod-local extensions\n",
+                  f"  ext-lint:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@{OTHER_SHA} # v6\n"
+                  "# <<< mod-local extensions\n"))
+        manifest = tool.load_manifest(self.kit)
+        entry = next(item for item in manifest["files"] if item["path"] == tool.DEPENDABOT_PATH)
+        self.assertEqual(tool.pinned_actions(self.kit, manifest, entry),
+                         (("actions/deploy-pages", ".github/workflows/pages.yml"),
+                          ("github/codeql-action", ".github/workflows/pages.yml")))
+        # The seed ignores the kit and actions/deploy-pages, not the new managed pin (an extension
+        # job's own actions stay Dependabot's).
+        drifts = self.check()
+        self.assertEqual([(drift.path, drift.kind) for drift in drifts], [(".github/dependabot.yml", "fragment")])
+        self.assertIn("must ignore github/codeql-action, which the managed region of .github/workflows/pages.yml pins",
+                      drifts[0].detail)
+        dependabot = self.repo / ".github/dependabot.yml"
+        original = dependabot.read_text()
+        complete = original.replace('      - dependency-name: "actions/deploy-pages"\n',
+                                    '      - dependency-name: "actions/deploy-pages"\n'
+                                    "      - dependency-name: github/codeql-action\n")
+        dependabot.write_text(complete)
+        self.assertEqual(self.check(), [])
+        flow = complete.replace('    ignore:\n      - dependency-name: "The-Plum-Team/mod-base*"\n'
+                                '      - dependency-name: "actions/deploy-pages"\n'
+                                "      - dependency-name: github/codeql-action\n",
+                                '    ignore: [{dependency-name: "The-Plum-Team/mod-base*"}, '
+                                '{dependency-name: actions/deploy-pages}, {dependency-name: "github/codeql-action"}]\n')
+        self.assertNotEqual(flow, complete)
+        dependabot.write_text(flow)
+        self.assertEqual(self.check(), [])
+        cases = {
+            "no deploy-pages": complete.replace('      - dependency-name: "actions/deploy-pages"\n', ""),
+            "only some versions": complete.replace("github/codeql-action\n",
+                                                   'github/codeql-action\n        versions: [">=5"]\n'),
+            "only some update types": complete.replace(
+                "github/codeql-action\n", "github/codeql-action\n        update-types: [version-update:semver-major]\n"),
+            "a different path of the repository": complete.replace("github/codeql-action", "github/codeql-action/init"),
+            "a second actions update": complete + ("  - package-ecosystem: github-actions\n    directory: /.github/claude\n"
+                                                    "    schedule:\n      interval: monthly\n    ignore:\n"
+                                                    '      - dependency-name: "The-Plum-Team/mod-base*"\n'),
         }
         for label, text in cases.items():
             with self.subTest(label):

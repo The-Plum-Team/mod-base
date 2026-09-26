@@ -10,8 +10,11 @@ updates:
       - ci
     # mod-base is pinned by SHA and bumped only with `scripts/ci/mod_base_kit.py bump --to vX.Y.Z`,
     # which also re-synchronizes the managed files. A Dependabot bump would fail `template check`.
+    # The managed region of pages.yml also pins actions/deploy-pages, so it moves only with a kit
+    # bump as well.
     ignore:
       - dependency-name: "The-Plum-Team/mod-base*"
+      - dependency-name: "actions/deploy-pages"
     groups:
       github-actions:
         patterns:
