@@ -22,6 +22,7 @@ from typing import Any
 
 from mod_base.adapter import host, host_child
 from mod_base.adapter.api import Context
+from mod_base.adapter.protocol import HookFailed
 from mod_base.imaging.png import pattern_png
 from mod_base.runtime import Invocation
 
@@ -39,21 +40,27 @@ def context(invocation: Invocation, tmpdir: Path, api: Any = None) -> Context:
 
 class InProcessHooks:
     """A stand-in for ``host.call`` (see the module docstring); ``calls`` records ``(hook, network)``
-    of every call the adapter answered (an unsupported hook is not recorded)."""
+    of every call the adapter answered (an unsupported hook is not recorded) and ``refusals`` the
+    hook of every call the adapter refused (``HookFailed``), in order."""
 
     def __init__(self, *, keys: frozenset[str] | None, scratch: Path) -> None:
         self.keys = keys
         self.scratch = scratch
         self.api: Any = None
         self.calls: list[tuple[str, bool]] = []
+        self.refusals: list[str] = []
 
     def __call__(self, invocation: Invocation, hook: str, arguments: Mapping[str, Any], *,
                  network: bool = False) -> Any:
         host.check_placement(invocation, hook, network=network)
         adapter = self.module(invocation, "path")
         with tempfile.TemporaryDirectory(prefix="hook-", dir=self.scratch) as directory:
-            result = host_child.run_hook(context(invocation, Path(directory), self.api if network else None),
-                                         adapter, hook, arguments)
+            try:
+                result = host_child.run_hook(context(invocation, Path(directory), self.api if network else None),
+                                             adapter, hook, arguments)
+            except HookFailed:
+                self.refusals.append(hook)
+                raise
         self.calls.append((hook, network))
         if hook == "targets" and self.keys is not None:
             result = [target for target in result if target["key"] in self.keys]

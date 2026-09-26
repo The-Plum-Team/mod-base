@@ -253,10 +253,13 @@ opens a `controller-upgrade/*` pull request with the `controller-upgrade` label 
 `/controller-upgrade approve <sha>`. Every bump runs the mod's complete gates. The release notes
 list every managed-file change; a mod test that pins the bytes of a managed file moves to the new
 kit's bytes in the same pull request (Quick Skin's `gradlew.bat` test checks the `cr-at-eol`
-attribute, not the file's bytes, so it needs no change). A Block Pops bump is staged by the
-controller's bootstrap, the base branch's: one older than `v0.9.2` stages the new kit without its
-`actions/`, so a gate step that reads the staged `actions/` can only follow once the controller's
-own pin is `v0.9.2` or later.
+attribute, not the file's bytes, so it needs no change). A release can also tighten a fragment
+rule, which `bump` does not rewrite (fragments are the mod's): `v1.0.1` requires every
+`github-actions` update of `.github/dependabot.yml` to ignore `actions/deploy-pages`, pinned in the
+caller's managed region. Add what `template check` reports in the same pull request. A Block Pops
+bump is staged by the controller's bootstrap, the base branch's: one older than `v0.9.2` stages the
+new kit without its `actions/`, so a gate step that reads the staged `actions/` can only follow
+once the controller's own pin is `v0.9.2` or later.
 
 ## Canary procedure
 
@@ -416,8 +419,8 @@ controller upgrade cannot change. `template check` then accepts their absence, s
 present deferred `.gitattributes` to be byte-identical, and prints only the required lines Block
 Pops' existing `.gitignore` lacks (`_site/`, `public-evidence/`, `/.architectury-transformer/`) as
 `pending` without failing; every other rule of a present deferred file (the `AGENTS.md` grammar,
-the pull-request template markers, the Dependabot ignore) fails, so PR B must add those files
-complete. PR A must still bring its own `.github/CODEOWNERS`
+the pull-request template markers, the Dependabot ignores of the kit and, from `v1.0.1`, of
+`actions/deploy-pages`) fails, so PR B must add those files complete. PR A must still bring its own `.github/CODEOWNERS`
 (a protected path) up to the fragment rules (`/AGENTS.md` and `/docs/ai/` owned), because
 `CODEOWNERS` can never be deferred.
 

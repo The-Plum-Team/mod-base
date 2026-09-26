@@ -252,6 +252,35 @@ Integration-round amendments:
     line endings with `tool.CRLF_ADVICE` (plus the diff of the LF form when that still differs);
     `template sync --write`, and so `bump`, rewrites a CRLF managed file or caller with LF, keeping the
     caller's extension region.
+* **Quick Skin adoption fixes (v1.0.1).** Found while Quick Skin adopted `v1.0.0`:
+  * *Dependabot rule.* `template/manifest.json` (`mod-base.template-manifest` v1) gains the optional
+    field `ignore_actions_of`: only on the `.github/dependabot.yml` fragment, 1..8 managed workflows
+    of the same manifest (`documents.validate_template_manifest`). The new
+    `template.tool.pinned_actions(kit_root, manifest, entry)` derives from the kit's template every
+    third-party action pinned in the managed region of those workflows (the kit's own references
+    excluded), and `template check` requires every `github-actions` update to ignore each of them,
+    beside `The-Plum-Team/mod-base*`, with no `versions` or `update-types`; the private
+    `_ignores_kit`/`_flow_entry_ignores_kit` became `_ignored`/`_flow_entry_name`. The seeded
+    `.github/dependabot.yml` ignores `actions/deploy-pages`.
+  * *Selected variant.* The conformance `selected` variant runs last, on a new head one commit after
+    the newest baseline the simulation retained for the key (`_simulation.Simulation.latest_baselines`),
+    adding the fixtures module's new optional `SELECTED_CHANGE` (`_simulation.SELECTED_CHANGE`,
+    default `SELECTED_DOCUMENT`); `_generations.Generations.push` now goes through the new
+    `commit_on_head(relative, data, *, label)`. `_fixture_api.FixtureGitHub(..., baselines=None)`
+    and its new `retained_baseline(key)` serve `selected_extensions` only
+    (`Simulation.baseline_provider`: the simulated key's own newest baseline, or a stand-in retained
+    by a successful Pages run for a declared key outside `--keys`); `Simulation.fixture_extensions`
+    takes that provider as a fourth positional argument. `_hooks.InProcessHooks.refusals` records
+    the hook of every `HookFailed`, so the forged-baseline sub-checks accept a refusal by `compose`
+    (never by another hook) as well as R3's; both forged baselines are uploaded at the baseline's
+    commit (by a successful source run, and by a successful Pages run outside its retention step),
+    so each differs from the genuine one only in its owner's workflow or upload window.
+    `_world.World` jobs carry their run's `head_sha` and `head_branch`, as GitHub's jobs API does.
+    `docs/ADAPTER.md` records the contract ("The selected head", the `SELECTED_CHANGE` row and the
+    `retained_baseline` seeder).
+  * *Delegated variant.* Its tested claim takes `run_id`, `run_attempt`, `branch` and `commit` from
+    the tested run (`conformance/reused-pull-request` at its `head_sha`); the controller stays the
+    handoff run's.
 * **Checked document.** `tests/test_internal_api.py` also checks every class's documented dataclass
   `fields` (names, order and each default's `repr`, `<factory>` for a default factory) and
   properties, every name of a described name list, and every documented constant value written in
@@ -683,7 +712,7 @@ Field tables (`{field: Validator}` objects that documents compose with `Obj`):
 * `def validate_build(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.build`` v1 (SPEC §3.8): ``run_url`` is built from the repository and run id, and ``workflow_ref`` is this repository's ``pages.yml`` on a branch.
 * `def validate_site(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.site`` v1 (SPEC §3.9 ``site-data.json``): unique release keys and families, ``loader_names`` parallel to ``loaders``, ``short_sha`` a prefix of ``subject_commit``.
 * `def validate_gallery(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.gallery`` v1 (SPEC §3.9 ``e2e/gallery-data.json``, with the per-key family amendment documented in ``docs/SCHEMAS.md``).
-* `def validate_template_manifest(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.template-manifest`` v1 (SPEC §8.1): unique paths; ``managed`` sources live under ``managed/`` and carry no markers/lines; ``fragment`` and ``seeded`` sources live under ``seed/``; only ``fragment`` entries may list required ``markers``/``lines``.
+* `def validate_template_manifest(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.template-manifest`` v1 (SPEC §8.1): unique paths; ``managed`` sources live under ``managed/`` and carry no markers/lines; ``fragment`` and ``seeded`` sources live under ``seed/``; only ``fragment`` entries may list required ``markers``/``lines``; only the ``.github/dependabot.yml`` fragment may list ``ignore_actions_of``, each a managed workflow of the same manifest (v1.0.1, optional).
 * `def validate_kit_stamp(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.kit-stamp`` v1 (``out/mod-base-kit/MOD_BASE_KIT.json``, SPEC §1.5).
 * `def validate_document(document: Any, *, kind: str | None = None, **context: Any) -> dict[str, Any]`: Validate ``document`` as its declared ``kind`` (which must equal ``kind`` when given).
 * `def load_document(data: bytes, *, kind: str, label: str | None = None, max_bytes: int | None = None, **context: Any) -> dict[str, Any]`: Strictly decode ``data`` and validate it as ``kind``.
@@ -1505,6 +1534,7 @@ Frozen for other units (integration round):
 * `def pending(repo: Path, *, kit_root: Path) -> list[Drift]`: The required lines a present fragment in ``template.deferred`` still lacks: reported, never failing, until the adoption completes and ``deferred`` is emptied.
 * `def extension_violations(body: tuple[str, ...] | list[str]) -> list[str]`: Every extension-region rule (SPEC §5.2) the extension ``body`` lines break.
 * `def link_violations(document: str, text: str, managed_documents: frozenset[str] | set[str]) -> list[str]`: Links of the managed Markdown ``document`` that point anywhere but a managed document or an absolute ``https://`` URL.
+* `def pinned_actions(kit_root: Path, manifest: dict[str, Any], entry: dict[str, Any]) -> tuple[tuple[str, str], ...]`: ``(dependency name, workflow)`` of every third-party action pinned in the managed region of each managed workflow the fragment ``entry`` lists in ``ignore_actions_of``, read from the kit's template (v1.0.1).
 
 ## `mod_base.template.commands`
 
@@ -1540,8 +1570,9 @@ Owner: MB10.
 
 The report's nine keys, the variants and the optional fixture functions of
 `config.adapter.fixtures_path` (`family_bundle`, `FAMILY_OUTCOMES`, `delegated_extensions`,
-`selected_extensions`) are the adapter contract in `docs/ADAPTER.md` ("Optional conformance
-fixtures", "The conformance report"), which `tests/test_adapter_protocol.py` binds to the simulation.
+`selected_extensions` and, from v1.0.1, `SELECTED_CHANGE`) are the adapter contract in
+`docs/ADAPTER.md` ("Optional conformance fixtures", "The conformance report"), which
+`tests/test_adapter_protocol.py` binds to the simulation.
 
 * `def run_conformance(*, repo: Path, keys: Sequence[str] | None, all_keys: bool, kit_root: Path, families: bool) -> dict[str, Any]`: Run the simulation and return its nine-key report (``docs/ADAPTER.md`` "The conformance report"); any failed check raises :class:`mod_base.errors.MbError` (exit 2).
 * `def main(argv: Sequence[str] | None = None) -> int`: The simulation child (see module docstring): ``python3 -P -m mod_base.conformance.run`` with the same flags as the ``conformance`` command; writes the canonical JSON report to stdout and returns an exit code through ``errors.run_main``.

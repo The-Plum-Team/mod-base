@@ -42,7 +42,8 @@ first head (carried from the first head). R5 again, build re-authenticates each 
 selection (``selected.json``) by id with no walk, refresh, ``current`` and a dry-run rotation.
 
 Every publication job keeps the 160-read budget and changes nothing (``Simulation.budget``) at the
-mod's configured scale: all its keys and family legs, carried legs included.
+mod's configured scale: all its keys and family legs, carried legs included. The ``selected``
+variant, which runs after all of this, moves the head once more through :meth:`Generations.commit_on_head`.
 """
 
 from __future__ import annotations
@@ -142,13 +143,18 @@ class Generations:
     def push(self, number: int) -> None:
         """Move the protected head by one documentation-only commit on top of it."""
 
-        previous = self.head
-        relative = CONFORMANCE_DOCUMENT.format(number=number)
         text = (f"# mod-base conformance head {number}\n\nA documentation-only commit of a synthetic "
                 "conformance run.\n")
-        head, tree = commit_file(self.repo, relative, text.encode("utf-8"), branch=self.branch)
+        self.commit_on_head(CONFORMANCE_DOCUMENT.format(number=number), text.encode("utf-8"), label=f"head {number}")
+
+    def commit_on_head(self, relative: str, data: bytes, *, label: str) -> None:
+        """Move the protected head by one commit adding the new file ``relative`` on top of it, as a
+        push would (the later heads and the ``selected`` variant's head)."""
+
+        previous = self.head
+        head, tree = commit_file(self.repo, relative, data, branch=self.branch)
         parent = git(self.repo, "rev-parse", f"{head}^").decode("ascii").strip()
-        self.check(parent == previous, f"head {number} is not a child of the previous head")
+        self.check(parent == previous, f"{label} is not a child of the previous head")
         self.head, self.tree = head, tree
         self.subject = {"branch": self.branch, "commit": head, "tree": tree}
         self.world.advance(head, tree)

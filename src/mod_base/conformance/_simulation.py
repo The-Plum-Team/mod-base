@@ -44,19 +44,28 @@ Stages, in order (a failed check raises ``MbError`` with reason ``conformance``)
 8. **Variants**, each only when the configuration and fixtures make it applicable (otherwise it is
    reported as skipped with the reason): ``attested`` reuse (``source.attestation_job``),
    ``delegated`` reuse (``source.delegated_reuse_extension`` plus the fixtures module's
-   ``delegated_extensions``), ``selected`` evidence composed with the published baseline
-   (``compose`` plus the fixtures module's ``selected_extensions``; R3 refuses a selected handoff
-   compacted without composition and a baseline that is not the retained upload of a successful
-   Pages refresh job: one owned by a source run, one uploaded outside its retention step), the
-   ``superseded``/``unavailable`` family outcomes (listed in the fixtures module's
-   ``FAMILY_OUTCOMES``) and the newest-run rule (``source.require_newest_run``: a newer failed
-   source run refuses the older evidence, nominated or searched).
+   ``delegated_extensions``; the tested claim names the tested pull-request run itself: its run,
+   attempt, branch and commit), the ``superseded``/``unavailable`` family outcomes (listed in the
+   fixtures module's ``FAMILY_OUTCOMES``) and the newest-run rule (``source.require_newest_run``: a
+   newer failed source run refuses the older evidence, nominated or searched).
 9. **Later generations** (:mod:`mod_base.conformance._generations`): a real rotation of the first
    generation, a documentation-only push, a second generation at the new head (family legs carried
    forward from the first generation's caches, or absent without ``carry_forward``), dry-run
    rotations across the anchor successor grace, and a same-head publication interleaved with the
    real rotation of the second generation; then the ``carried`` variant, a third head whose family
    legs walk back to the carried cache.
+10. **The ``selected`` variant**, last because it moves the protected head once more (``compose``
+    plus the fixtures module's ``selected_extensions``): a mod may recompute a selection as the Git
+    diff from its baseline's commit to the tested head (Quick Skin does), so the selected
+    generation lies on a new head, one commit adding the fixtures module's ``SELECTED_CHANGE``
+    (default :data:`SELECTED_DOCUMENT`) on top of the newest published baseline's commit. R3
+    refuses the selected handoff compacted without composition; ``compose`` completes it with that
+    baseline; and a baseline that is not the retained upload of a successful Pages refresh job (the
+    same bytes under its name, uploaded at its commit by a source run or outside a Pages run's
+    retention step) is refused, by R3 or by the adapter's own ``compose`` hook, never accepted.
+    ``selected_extensions`` may ask ``ctx.api.retained_baseline`` for the retained baseline of any
+    declared key at that commit (a stand-in for a key outside ``--keys``:
+    :meth:`Simulation.baseline_provider`).
 """
 
 from __future__ import annotations
@@ -121,6 +130,9 @@ DELEGATED_RUN = 4401
 SELECTED_RUN = 4402
 FORGED_OWNER_RUN = 4403
 FORGED_WINDOW_RUN = 4404
+#: The source run of the published baseline's commit that uploads the ``selected`` variant's
+#: source-run forgery (``FORGED_OWNER_RUN``, at the selected head, only produces its handoff).
+FORGED_SOURCE_RUN = 4405
 ATTESTED_TESTED_RUN = 4500
 ATTESTED_RUN = 4501
 ACTIVE_RUN = 4600
@@ -135,10 +147,23 @@ ROTATION_RUN = 9100
 RECOVERY_RUN = 9900
 #: The (never uploaded) artifact id the ``family-outcomes`` variant's selections record.
 OUTCOME_ARTIFACT = 900001
+#: The Pages runs that retain the stand-in baselines of keys outside ``--keys`` (one per
+#: ``selected_extensions`` call that asks for one; see :meth:`Simulation.baseline_provider`).
+STAND_IN_PAGES_RUNS = range(9500, 9600)
+#: The new file the ``selected`` head adds when the fixtures module names no ``SELECTED_CHANGE``.
+SELECTED_DOCUMENT = "docs/mod-base-conformance/selected.md"
+#: Seconds between the last event of the later generations and the ``selected`` variant's head.
+SELECTED_DELAY = 1000
+#: The bytes of the ``selected`` head's new file.
+SELECTED_TEXT = b"mod-base conformance: a synthetic change that the selected generation re-tests.\n"
+#: The archive of a stand-in baseline (:meth:`Simulation.baseline_provider`): never a compact bundle.
+STAND_IN_ARCHIVE = zip_files({"conformance-stand-in.txt": b"A stand-in baseline of a key outside --keys, not a "
+                                                          b"compact bundle.\n"})
 #: Optional conformance functions of the fixtures module (``config.adapter.fixtures_path``).
 FAMILY_BUNDLE = "family_bundle"
 DELEGATED_EXTENSIONS = "delegated_extensions"
 SELECTED_EXTENSIONS = "selected_extensions"
+SELECTED_CHANGE = "SELECTED_CHANGE"
 FAMILY_OUTCOMES = "FAMILY_OUTCOMES"
 FAMILY_OUTCOME_VALUES = ("available", "superseded", "unavailable")
 #: The producer and Pages job ids of the simulation (placement: a mod job is ``prepare-evidence``).
@@ -214,8 +239,13 @@ class Simulation(Generations):
         #: The producer run of every family leg's newest generation (carried legs keep theirs).
         self.family_producers: dict[tuple[str, str], int] = {}
         self.anchored: set[str] = set()
-        #: Every ``mb-baseline`` name a successful simulated refresh retained.
+        #: Every ``mb-baseline`` name a successful simulated refresh retained, and the newest such
+        #: artifact record of each key.
         self.retained_baselines: set[str] = set()
+        self.latest_baselines: dict[str, dict[str, Any]] = {}
+        #: Every key the adapter declares at the first head (``--keys`` may simulate fewer).
+        self.declared_keys: frozenset[str] = frozenset()
+        self._stand_in_runs = iter(STAND_IN_PAGES_RUNS)
         self.first = Generation(number=1, run_id=PAGES_RUN, start=1000, head=self.head, tree=self.tree)
         self._invocations: dict[tuple[tuple[tuple[str, str], ...], str | None, bool], Invocation] = {}
 
@@ -305,6 +335,7 @@ class Simulation(Generations):
         targets = self.hooks(local, "targets", {"branches": branches})
         keys = [target["key"] for target in targets]
         self.check(bool(keys), "the adapter declares no target for the protected head")
+        self.declared_keys = frozenset(keys)
         projection = tested_run_projection({"branch": self.branch}, self.source["events"]["canonical"][0])
         expectation = self.hooks(local, "expectation", {"target": targets[0], "tested_run": projection,
                                                         "extensions": {}})
@@ -822,6 +853,7 @@ class Simulation(Generations):
             if wanted is not None:
                 seeded["baselines"].append(world.artifact(wanted, pages, created=generation.at(365), archive=archive))
                 self.retained_baselines.add(wanted)
+                self.latest_baselines[key] = seeded["baselines"][-1]
         for family in self.config.families:
             for key in self.keys:
                 output = self.work / f"refresh-family-{generation.run_id}-{family['id']}-{key}"
@@ -931,16 +963,17 @@ class Simulation(Generations):
         self.report.variants[name] = "passed" if skipped is None else f"skipped: {skipped}"
 
     def fixture_extensions(self, invocation: Invocation, name: str, handoff_run: Mapping[str, Any],
-                           **arguments: Any) -> dict[str, Any]:
+                           baselines: Callable[[str], dict[str, Any]] | None, **arguments: Any) -> dict[str, Any]:
         """The optional fixture function ``name``, called with a :class:`FixtureGitHub` for the handoff
-        run ``handoff_run`` as ``ctx.api``: extension objects, or ``{"extensions": ...,
-        "responses": [...]}`` whose exact API bodies are seeded like ``ctx.api.add_response``."""
+        run ``handoff_run`` as ``ctx.api`` (serving ``retained_baseline`` through ``baselines`` for
+        ``selected_extensions`` only): extension objects, or ``{"extensions": ..., "responses": [...]}``
+        whose exact API bodies are seeded like ``ctx.api.add_response``."""
 
         world = self.world
         assert world is not None
         protected = frozenset({self.source["workflow"], *(family["producer"]["workflow"]
                                                           for family in self.config.families)})
-        fixture_api = FixtureGitHub(world, handoff_run=handoff_run, protected_workflows=protected)
+        fixture_api = FixtureGitHub(world, handoff_run=handoff_run, protected_workflows=protected, baselines=baselines)
         value = self.fixture_call(invocation, name, fixture_api=fixture_api, **arguments)
         if isinstance(value, dict) and set(value) <= {"extensions", "responses"} and "extensions" in value:
             responses = value.get("responses", [])
@@ -975,10 +1008,15 @@ class Simulation(Generations):
                                title=self.title(self.head))
         run = self.source_run(world, DELEGATED_RUN, created=1900)
         invocation, environ = self.producer(run)
-        tested = {**run_claim_from_environment(environ), "run_id": DELEGATED_TESTED_RUN}
+        # The tested claim names the tested run itself: its run, attempt, branch and commit (the
+        # reused pull request's branch and tested commit); the controller is the handoff's.
+        tested = {**run_claim_from_environment(environ), "run_id": tested_run["id"],
+                  "run_attempt": tested_run["run_attempt"], "branch": tested_run["head_branch"],
+                  "commit": tested_run["head_sha"]}
         target = target_for_key(invocation, key, subject=self.subject)
         facts = {field: tested_run[field] for field in ("id", "run_attempt", "path", "event", "head_branch", "head_sha")}
-        extensions = self.fixture_extensions(invocation, DELEGATED_EXTENSIONS, run, target=target, tested_run=facts)
+        extensions = self.fixture_extensions(invocation, DELEGATED_EXTENSIONS, run, None, target=target,
+                                             tested_run=facts)
         self.check(name in extensions, f"fixtures {DELEGATED_EXTENSIONS} returned no {name}")
         produced = self.produce(world, run, key, tested=tested, extensions=extensions, label=f"{key}-delegated")
         self.check(produced.manifest["provenance"]["reuse"] == "delegated", "the delegated handoff is not delegated")
@@ -991,9 +1029,11 @@ class Simulation(Generations):
         return None
 
     def selected_handoff(self, key: str, run_id: int, created: float, baseline: artifacts.Artifact | Mapping[str, Any],
-                         label: str) -> Produced:
-        """A handoff of ``key`` whose extensions (the fixtures module's ``selected_extensions``) make
-        it ``selected`` evidence to be composed with ``baseline``."""
+                         label: str, *, composed: Mapping[str, Any]) -> Produced:
+        """A handoff of ``key`` at the protected head whose extensions (the fixtures module's
+        ``selected_extensions``) make it ``selected`` evidence to be composed with ``baseline``;
+        ``composed`` is the baseline the simulation retained, whose commit and tested run the stand-in
+        baselines of :meth:`baseline_provider` share."""
 
         world = self.world
         assert world is not None
@@ -1003,13 +1043,77 @@ class Simulation(Generations):
         reference = ({"id": baseline.id, "name": baseline.name, "digest": baseline.digest}
                      if isinstance(baseline, artifacts.Artifact)
                      else {"id": baseline["id"], "name": baseline["name"], "digest": baseline["digest"]})
-        extensions = self.fixture_extensions(invocation, SELECTED_EXTENSIONS, run, target=target, baseline=reference)
+        extensions = self.fixture_extensions(invocation, SELECTED_EXTENSIONS, run, self.baseline_provider(composed),
+                                             target=target, baseline=reference)
         produced = self.produce(world, run, key, extensions=extensions, label=f"{key}-{label}")
         self.check(produced.manifest["scope"]["kind"] == "selected", "the selected extensions did not select a scope")
         self.source_jobs(world, run, {key: produced})
         return produced
 
+    def baseline_provider(self, composed: Mapping[str, Any]) -> Callable[[str], dict[str, Any]]:
+        """``ctx.api.retained_baseline`` of one ``selected_extensions`` call. ``composed`` is the newest
+        ``mb-baseline`` the simulation retained for the composed key. A simulated key gets its own
+        newest retained baseline (which must share ``composed``'s commit). Any other key the adapter
+        declares (outside ``--keys``) gets a stand-in: an ``mb-baseline`` of that key at the same
+        commit and tested run, uploaded inside the retention step of a successful ``pages.yml`` run
+        whose build, deploy and refresh jobs succeeded, but whose archive is only a placeholder (no
+        simulated generation holds that key's evidence; R3 composes a key only with its own
+        baseline, never a stand-in). One such Pages run per call holds every stand-in it asks for."""
+
+        world = self.world
+        assert world is not None
+        parsed = grammar.require_artifact_name(composed["name"], "baseline")
+        base = grammar.parse_timestamp(composed["created_at"]).timestamp() - timestamp(0) - 365
+        stand_ins: dict[str, dict[str, Any]] = {}
+        owner: list[dict[str, Any]] = []
+
+        def provide(key: str) -> dict[str, Any]:
+            if key in self.keys:
+                record = self.latest_baselines.get(key)
+                if record is None or grammar.require_artifact_name(record["name"], "baseline").commit != parsed.commit:
+                    raise ValueError(f"the simulation retained no baseline of {key} at {parsed.commit}")
+                return dict(record)
+            if key not in self.declared_keys:
+                raise ValueError(f"the adapter declares no key {key!r}"[:200])
+            if key not in stand_ins:
+                if not owner:
+                    run_id = next(self._stand_in_runs, None)
+                    if run_id is None:
+                        raise ValueError("the simulation has no Pages run left for stand-in baselines")
+                    owner.append(world.run(run_id, path=PAGES_WORKFLOW_PATH, event="workflow_dispatch", created=base,
+                                           updated=base + 500, head_sha=parsed.commit, title="Project site",
+                                           pages=True))
+                keys = [*stand_ins, key]
+                jobs = [world.job(caller_job_name("verify_kit"), started=base, completed=base + 10),
+                        world.job(api_job_name("publish", "admit"), started=base + 10, completed=base + 20)]
+                jobs += [world.job(api_job_name("publish", "collect", key=item), started=base + 20, completed=base + 100)
+                         for item in keys]
+                jobs += [world.job(api_job_name("publish", "build"), started=base + 100, completed=base + 200),
+                         world.job(caller_job_name("deploy"), started=base + 200, completed=base + 300)]
+                jobs += [world.job(api_job_name("finalize", "refresh", key=item), started=base + 300, completed=base + 400,
+                                   steps=((step_name("cache_upload"), base + 350, base + 360),
+                                          (step_name("baseline_upload"), base + 360, base + 370)))
+                         for item in keys]
+                world.jobs(owner[0], jobs)
+                stand_ins[key] = world.artifact(grammar.baseline_name(key, parsed.commit, parsed.run_id), owner[0],
+                                                created=base + 365, archive=STAND_IN_ARCHIVE)
+            return dict(stand_ins[key])
+
+        return provide
+
+    def latest_offset(self) -> float:
+        """The simulation offset of the newest run or artifact event so far."""
+
+        world = self.world
+        assert world is not None
+        moments = [run[field] for run in world.runs.values() for field in ("created_at", "updated_at") if run.get(field)]
+        moments += [record["created_at"] for record in world.records.values()]
+        return max(grammar.parse_timestamp(moment).timestamp() for moment in moments) - timestamp(0)
+
     def selected(self) -> str | None:
+        """The last variant: selected evidence one commit after the newest published baseline,
+        composed with it; then R3 (or the adapter's own ``compose``) refuses forged baselines."""
+
         key = self.keys[0]
         probe = self.pages("collect")
         if self.hooks.optional_fixture(probe, SELECTED_EXTENSIONS) is None:
@@ -1018,10 +1122,20 @@ class Simulation(Generations):
             return "config.baseline_archive is disabled, so no baseline can complete selected evidence"
         world = self.world
         assert world is not None
-        baselines = artifacts.list_named(self.api, grammar.baseline_name(key, self.head, SOURCE_RUN))
-        self.check(len(baselines) == 1, f"{key}: the published generation retained no single baseline")
+        newest = self.latest_baselines.get(key)
+        self.check(newest is not None and grammar.require_artifact_name(newest["name"], "baseline").commit == self.head,
+                   f"{key}: the published generations retained no baseline of the protected head")
+        assert newest is not None
+        baselines = artifacts.list_named(self.api, newest["name"])
+        self.check(len(baselines) == 1 and baselines[0].id == newest["id"],
+                   f"{key}: the protected head's baseline is not retained exactly once")
         baseline = baselines[0]
-        produced = self.selected_handoff(key, SELECTED_RUN, 2000, baseline, "selected")
+        # A selection re-tests what changed since its baseline, and a mod may recompute it as the Git
+        # diff between the two commits (Quick Skin does): so the selected generation lies on a new
+        # protected head, one commit (SELECTED_CHANGE) after the baseline's.
+        self.commit_on_head(_selected_change(self.hooks, probe), SELECTED_TEXT, label="the selected head")
+        start = self.latest_offset() + SELECTED_DELAY
+        produced = self.selected_handoff(key, SELECTED_RUN, start, baseline, "selected", composed=newest)
         try:
             self.collect_key_refused(key, produced, self.work / "selected-compact", VARIANT_PAGES_RUN + 2)
         except MbError:
@@ -1032,29 +1146,45 @@ class Simulation(Generations):
                                         run_id=VARIANT_PAGES_RUN + 1, compose=True)
         manifest = collected["manifest"]
         self.check(manifest["scope"]["kind"] == "composed", "compose did not write composed evidence")
+        self.check(manifest["scope"]["components"]["baseline"]["artifact_id"] == baseline.id,
+                   "compose did not complete the selection with the published baseline")
         epochs = {frame.get("epoch") for frame in manifest["frames"]}
         self.check("selected" in epochs, "the composed bundle holds no selected frame")
         self.report.site["composed_lanes"] = _composed_lanes(manifest)
-        # R3 authenticates the baseline's owner itself: the same bytes under the baseline's name are
-        # refused when a source run uploaded them, or when a successful Pages run uploaded them
-        # outside its refresh job's retention step.
+        # The same bytes under the baseline's name are refused when a successful source run of the
+        # baseline's commit uploaded them, or when a successful Pages run of that commit uploaded them
+        # outside its refresh job's retention step: each forgery differs from the genuine baseline in
+        # one property of its owner only (its workflow, its upload window). R3 authenticates the owner
+        # itself; the adapter's own compose hook may refuse first (Quick Skin's authenticates the
+        # owner its coverage certificate names).
         archive = world.archives[baseline.id]
-        forged_run = self.source_run(world, FORGED_OWNER_RUN, created=2010)
-        window_run = world.run(FORGED_PAGES_RUN, path=PAGES_WORKFLOW_PATH, event="workflow_dispatch", created=2040,
-                               updated=2150, title="Project site", pages=True)
-        world.jobs(window_run, [world.job(api_job_name("finalize", "refresh", key=key), started=2050, completed=2140,
-                                          steps=((step_name("baseline_upload"), 2100, 2110),))])
-        forgeries = (("a source run's upload", FORGED_OWNER_RUN, 2010,
-                      world.artifact(baseline.name, forged_run, created=2300, archive=archive)),
-                     ("an upload outside the retention step", FORGED_WINDOW_RUN, 2030,
-                      world.artifact(baseline.name, window_run, created=2120, archive=archive)))
+        forged_run = world.run(FORGED_SOURCE_RUN, path=self.source["workflow"],
+                               event=self.source["events"]["canonical"][0], created=start + 5, updated=start + 405,
+                               head_sha=baseline.head_sha, title=self.title(baseline.head_sha))
+        window_run = world.run(FORGED_PAGES_RUN, path=PAGES_WORKFLOW_PATH, event="workflow_dispatch", created=start + 40,
+                               updated=start + 150, head_sha=baseline.head_sha, title="Project site", pages=True)
+        world.jobs(window_run, [world.job(api_job_name("publish", "build"), started=start + 42, completed=start + 45),
+                                world.job(caller_job_name("deploy"), started=start + 45, completed=start + 48),
+                                world.job(api_job_name("finalize", "refresh", key=key), started=start + 50,
+                                          completed=start + 140,
+                                          steps=((step_name("baseline_upload"), start + 100, start + 110),))])
+        forgeries = (("a source run's upload", FORGED_OWNER_RUN, start + 10,
+                      world.artifact(baseline.name, forged_run, created=start + 300, archive=archive)),
+                     ("an upload outside the retention step", FORGED_WINDOW_RUN, start + 30,
+                      world.artifact(baseline.name, window_run, created=start + 120, archive=archive)))
         for position, (what, run_id, created, forged) in enumerate(forgeries):
-            forged_handoff = self.selected_handoff(key, run_id, created, forged, f"forged-baseline-{position}")
+            forged_handoff = self.selected_handoff(key, run_id, created, forged, f"forged-baseline-{position}",
+                                                   composed=newest)
+            refused = len(self.hooks.refusals)
             try:
                 self.collect_key(key, nomination=forged_handoff.handoff["id"], raw=forged_handoff.handoff_dir,
                                  run_id=VARIANT_PAGES_RUN + 4 + position, compose=True)
             except HookFailed as exc:
-                raise _fail(f"compose failed in the adapter, not in R3, for {what}: {single_line(exc, limit=200)}") from exc
+                hooks = self.hooks.refusals[refused:]
+                if hooks != ["compose"]:
+                    raise _fail(f"the adapter's {', '.join(hooks) or 'unknown'} hook, not compose or R3, refused "
+                                f"{what}: {single_line(exc, limit=200)}") from exc
+                self.report.checks += 1
             except MbError:
                 self.report.checks += 1
             else:
@@ -1177,11 +1307,12 @@ class Simulation(Generations):
             self.rotate_first(seeded)
             self.variant("attested", self.attested)
             self.variant("delegated", self.delegated)
-            self.variant("selected", self.selected)
             self.variant("family-outcomes", self.family_outcomes)
             self.variant("newest-run", self.newest_run)
             self.later_generations()
             self.variant("carried", self.carried)
+            # Last: it moves the protected head to a descendant of the newest baseline's commit.
+            self.variant("selected", self.selected)
         finally:
             host.call = previous  # type: ignore[assignment]
         hooks = sorted({hook for hook, _network in self.hooks.calls})
@@ -1190,6 +1321,17 @@ class Simulation(Generations):
                 "keys": self.report.keys, "families": self.report.families, "checks": self.report.checks,
                 "variants": dict(sorted(self.report.variants.items())), "admission": self.report.admission,
                 "hooks": hooks, "site": self.report.site}
+
+
+def _selected_change(hooks: InProcessHooks, invocation: Invocation) -> str:
+    """The new file the ``selected`` head adds: the fixtures module's ``SELECTED_CHANGE``, a
+    repository path absent at the protected head (for example a path a mod's selection owns), or
+    :data:`SELECTED_DOCUMENT`."""
+
+    change = getattr(hooks.module(invocation, "fixtures_path"), SELECTED_CHANGE, SELECTED_DOCUMENT)
+    if not grammar.is_repo_path(change) or change.split("/", 1)[0].lower() == ".github":
+        raise _fail(f"the fixtures module's {SELECTED_CHANGE} must be a repository path outside .github")
+    return change
 
 
 def _declared_outcomes(hooks: InProcessHooks, invocation: Invocation) -> tuple[str, ...]:

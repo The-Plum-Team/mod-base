@@ -3,9 +3,9 @@ bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/man
 ade9b6115b6045f0ac1640a51118c117470b85d2ec315787c4ce2e6182491ff8  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
 0b9fcb0dd4368b16aaaa5611a92e9909aa9e803ebe8440e33590cc9376a911a9  ./template/managed/docs/ai/shared/REPOSITORY.md
 e6f34a8144e19a60d645663cf9698881d3af57da356abaf3965c7417f479f806  ./template/managed/scripts/ci/mod_base_kit.py
-77802c6324cdb83ce2480d45b0d2203e84c962586b5bdb0554173aaecf5518b8  ./template/manifest.json
+da20b92010d9b9f083cf88d84ffad931d391336dfbfb0154d66f0be8d38c945b  ./template/manifest.json
 f52062f61bc044645c13ecbe926b672253834dfaca3c03dfb14d3682d78a88eb  ./template/seed/.github/CODEOWNERS.tmpl
-3aeadc6738a13c93bb3173d7eae0fac101316ecb0493dd56e2ccbd44fc099874  ./template/seed/.github/dependabot.yml.tmpl
+0e6bfc5a7783036fb43a585b5222f5a752b86695c255fa3ece3bc5d4e2f5d5c4  ./template/seed/.github/dependabot.yml.tmpl
 a23e56ed234d6f38c630966561dfb8e95541c9eb9d2cf0b1ff278f379ac73cd8  ./template/seed/.github/pull_request_template.md.tmpl
 cdab786ca1430ec68e7b6c7dde71bd669367189805fb9a37381ee1c33be9eb0e  ./template/seed/.gitignore.base
 557fee3e0ffc0c8495f37276aaca2c9255e971fe8baf12dabb7aeba22339576e  ./template/seed/AGENTS.md.tmpl

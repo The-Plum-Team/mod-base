@@ -41,7 +41,10 @@ Detailed rules (``docs/OPERATIONS.md`` and ``docs/ONBOARDING.md`` describe the p
   ``template.agents_local`` (each an existing regular file) with a trailing newline;
   ``.github/CODEOWNERS`` gives every listed pattern at least one owner and has no owner-less rule
   (an owner-less rule removes ownership); ``.github/dependabot.yml`` makes every ``github-actions``
-  update ignore ``The-Plum-Team/mod-base*`` for all versions.
+  update ignore, for all versions, ``The-Plum-Team/mod-base*`` and every third-party action the
+  managed region of a workflow in its manifest entry's ``ignore_actions_of`` pins (derived from the
+  kit's template, :func:`pinned_actions`: ``actions/deploy-pages`` for the caller), since a
+  Dependabot bump of either would be managed-file drift.
 * Managed Markdown may link only to other managed documents or absolute ``https://`` URLs; a
   ``](`` whose destination the rule cannot parse is refused too.
 * Every repository path is reached component by component without following symlinks; a
@@ -148,6 +151,9 @@ _IGNORE_KEY = re.compile(r"^(\s*)ignore\s*:\s*(?:#.*)?$")
 _IGNORE_FLOW = re.compile(r"^\s*ignore\s*:\s*\[(.*)\]\s*(?:#.*)?$")
 _FLOW_ENTRY = re.compile(r"\{([^{}]*)\}")
 _ENTRY_KEY = re.compile(r"^\s*(?:-\s+)?[\"']?([A-Za-z0-9_-]+)[\"']?\s*:\s*(.*?)\s*(?:#.*)?$")
+#: A ``uses:`` reference to a remote action or reusable workflow, ``owner/repo[/path]@ref``: group 1
+#: is its Dependabot ``dependency-name`` (local ``./`` actions and ``docker://`` images never match).
+_USES = re.compile(r"^\s*(?:-\s+)?uses:\s*[\"']?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/[^@\s\"']*)?@")
 
 _INLINE_LINK = re.compile(r"\]\(\s*<?([^)\s>]*)>?(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
 _ANGLE_LINK = re.compile(r"\]\(\s*<([^>\n]*)>")
@@ -683,7 +689,31 @@ def _block_items(lines: list[str]) -> list[list[str]]:
     return items
 
 
-def _dependabot(path: str, lines: list[str]) -> list[Drift]:
+def pinned_actions(kit_root: Path, manifest: dict[str, Any], entry: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """``(dependency name, workflow)`` of every third-party action pinned in the managed region of
+    each managed workflow the fragment ``entry`` lists in ``ignore_actions_of`` (the whole template
+    for a managed workflow without a caller region), read from the kit's template; the kit's own
+    references are excluded. Sorted and unique by name, the first listing workflow kept."""
+
+    sources = {item["path"]: item["source"] for item in _entries(manifest, "managed")}
+    found: dict[str, str] = {}
+    for workflow in entry.get("ignore_actions_of", ()):
+        if workflow == CALLER_PATH:
+            text = _caller_template(kit_root, sources[workflow]).managed
+        else:
+            try:
+                text = _template_bytes(kit_root, sources[workflow]).decode("utf-8")
+            except UnicodeDecodeError:
+                raise MbError(f"the kit's template of {workflow} is not UTF-8", reason="template") from None
+        for line in text.split("\n"):
+            match = _USES.match(line)
+            if match is not None and match.group(1).lower() != mod_base.KIT_REPOSITORY.lower():
+                found.setdefault(match.group(1), workflow)
+    return tuple(sorted(found.items()))
+
+
+def _dependabot(path: str, lines: list[str], actions: tuple[tuple[str, str], ...]) -> list[Drift]:
+    names = (DEPENDABOT_IGNORE, *(name for name, _workflow in actions))
     starts = [index for index, line in enumerate(lines) if _UPDATES_KEY.match(line)]
     if len(starts) != 1:
         return [Drift(path, "fragment", "expected exactly one top-level updates: list")]
@@ -695,34 +725,40 @@ def _dependabot(path: str, lines: list[str]) -> list[Drift]:
     updates = [item for item in _block_items(block)
                if any((match := _ECOSYSTEM.match(line)) and match.group(1) == "github-actions" for line in item)]
     if not updates:
-        return [Drift(path, "fragment", "no github-actions update: its ignore list must hold The-Plum-Team/mod-base*")]
+        return [Drift(path, "fragment", f"no github-actions update: its ignore list must hold {', '.join(names)}")]
     drifts = []
     for item in updates:
-        if not _ignores_kit(item):
+        ignored = _ignored(item)
+        if DEPENDABOT_IGNORE not in ignored:
             drifts.append(Drift(path, "fragment", f"every github-actions update must ignore {DEPENDABOT_IGNORE} "
                                                   "(a dependency-name entry with no versions or update-types)"))
+        for name, workflow in actions:
+            if name not in ignored:
+                drifts.append(Drift(path, "fragment", f"every github-actions update must ignore {name}, which the "
+                                                      f"managed region of {workflow} pins (a dependency-name entry "
+                                                      "with no versions or update-types)"))
     return drifts
 
 
-def _flow_entry_ignores_kit(entry: str) -> bool:
+def _flow_entry_name(entry: str) -> str | None:
     keys: dict[str, str] = {}
     for part in entry.split(","):
         key, separator, value = part.partition(":")
         if not separator:
-            return False
+            return None
         keys[key.strip().strip("\"'")] = value.strip().strip("\"'")
-    return keys == {"dependency-name": DEPENDABOT_IGNORE}
+    return keys["dependency-name"] if set(keys) == {"dependency-name"} else None
 
 
-def _ignores_kit(item: list[str]) -> bool:
-    """True when the update ``item`` ignores every version of the kit: an ``ignore`` entry that is
-    exactly ``{dependency-name: The-Plum-Team/mod-base*}``, in block or single-line flow style."""
+def _ignored(item: list[str]) -> set[str]:
+    """The dependencies the update ``item`` ignores for every version: each ``ignore`` entry that is
+    exactly ``{dependency-name: <name>}``, in block or single-line flow style."""
 
+    names: set[str] = set()
     for index, line in enumerate(item):
         flow = _IGNORE_FLOW.match(line)
         if flow is not None:
-            if any(_flow_entry_ignores_kit(entry) for entry in _FLOW_ENTRY.findall(flow.group(1))):
-                return True
+            names.update(name for name in map(_flow_entry_name, _FLOW_ENTRY.findall(flow.group(1))) if name)
             continue
         match = _IGNORE_KEY.match(line)
         if match is None:
@@ -740,9 +776,9 @@ def _ignores_kit(item: list[str]) -> bool:
                 key = _ENTRY_KEY.match(entry_line)
                 if key is not None:
                     keys[key.group(1)] = key.group(2).strip("\"'")
-            if keys == {"dependency-name": DEPENDABOT_IGNORE}:
-                return True
-    return False
+            if set(keys) == {"dependency-name"} and keys["dependency-name"]:
+                names.add(keys["dependency-name"])
+    return names
 
 
 def _agents(repo: Path, text: str, config: Config) -> list[Drift]:
@@ -760,8 +796,10 @@ def _agents(repo: Path, text: str, config: Config) -> list[Drift]:
     return drifts
 
 
-def _check_fragment(repo: Path, entry: dict[str, Any], data: bytes, config: Config) -> tuple[list[Drift], list[Drift]]:
-    """``(missing required lines, every other drift)`` of a present fragment file."""
+def _check_fragment(repo: Path, entry: dict[str, Any], data: bytes, config: Config,
+                    actions: tuple[tuple[str, str], ...] = ()) -> tuple[list[Drift], list[Drift]]:
+    """``(missing required lines, every other drift)`` of a present fragment file (``actions``: the
+    :func:`pinned_actions` of the Dependabot fragment)."""
 
     path = entry["path"]
     try:
@@ -779,7 +817,7 @@ def _check_fragment(repo: Path, entry: dict[str, Any], data: bytes, config: Conf
             if marker not in text:
                 drifts.append(Drift(path, "fragment", f"missing the required marker {marker!r}"))
     if path == DEPENDABOT_PATH:
-        drifts.extend(_dependabot(path, lines))
+        drifts.extend(_dependabot(path, lines, actions))
     if path == AGENTS_PATH:
         drifts.extend(_agents(repo, text, config))
     return missing, drifts
@@ -888,7 +926,8 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
                 drifts.extend(Drift(path, "links", problem)
                               for problem in link_violations(path, actual.decode("utf-8", errors="replace"), documents))
         else:
-            missing, other = _check_fragment(repo, entry, actual, config)
+            actions = pinned_actions(kit_root, manifest, entry) if path == DEPENDABOT_PATH else ()
+            missing, other = _check_fragment(repo, entry, actual, config, actions)
             (pending if path in staged else drifts).extend(missing)
             drifts.extend(other)
     for path in FORBIDDEN_PATHS:

@@ -4,8 +4,8 @@ The simulation runs for real, in its credential-free child process, against the 
 kit's fixture mods: the canary with its synthetic family (every family outcome, carried across three
 heads), the Block Pops-like fixture (job graph, display title, attested reuse, anchor successor
 grace) and the unmodified Quick Skin-like fixture with its own optional conformance fixtures
-(delegated reuse, selected evidence composed with the published baseline, family outcomes,
-carry-forward). A
+(delegated reuse whose tested claim names the reused pull request, selected evidence one commit
+after the published baseline composed with it, family outcomes, carry-forward). A
 lying adapter and an unknown key fail closed, and the mod's own checkout is never modified. Injected
 kit defects (a same-head publication racing the rotation, a rotation missing the parent commit's
 generation or ignoring the anchor grace) fail the in-process simulation. The canary's files are
@@ -35,13 +35,14 @@ import mod_base
 from mod_base.config import load_config
 from mod_base.adapter import host_child
 from mod_base.adapter.api import Context
-from mod_base.conformance import _generations, _rotation, _simulation, _world
+from mod_base.conformance import _fixture_api, _generations, _rotation, _simulation, _world
 from mod_base.conformance import run as conformance_run
 from mod_base.conformance._fixture_api import MAX_FIXTURE_ARCHIVE_BYTES, MAX_FIXTURE_READS, FixtureGitHub
 from mod_base.conformance._snapshot import commit_file, make_snapshot, require_snapshot
 from mod_base.conformance.run import _child_environment, run_conformance
 from mod_base.errors import MbError
 from mod_base.github.api import ReadOnlyViolation
+from mod_base.github import artifacts as github_artifacts
 from mod_base.github.fake import FakeGitHub
 from mod_base.model import grammar
 from mod_base.pages import rotate, select
@@ -223,16 +224,17 @@ class FixtureModConformanceTest(unittest.TestCase):
         self.assertTrue(Path(environment["HOME"]).is_relative_to(self.work))
 
 
-def simulate_in_process(source: Path, work: Path, *, families: bool) -> dict[str, Any]:
+def simulate_in_process(source: Path, work: Path, *, families: bool,
+                        keys: tuple[str, ...] | None = None) -> dict[str, Any]:
     """The simulation in this process (so a test can alter the kit under it) over a snapshot of
-    ``source``."""
+    ``source`` (every key, or ``keys``)."""
 
     snapshot = work / "repo"
     config = load_config(source)
     make_snapshot(source, snapshot, branch=config.canonical_branch, replace=_world.pinned_workflows(config))
     scratch = work / "simulation"
     scratch.mkdir()
-    return _simulation.simulate(_simulation.Settings(repo=snapshot, kit_root=ROOT, keys=None, families=families,
+    return _simulation.simulate(_simulation.Settings(repo=snapshot, kit_root=ROOT, keys=keys, families=families,
                                                      work=scratch))
 
 
@@ -350,6 +352,156 @@ class SimulationPartsTest(unittest.TestCase):
         self.assertFalse((self.work / "x.md").exists())
 
 
+    def test_the_selected_change_is_one_new_file_outside_github(self) -> None:
+        def hooks(module: Any) -> Any:
+            return mock.Mock(module=lambda invocation, field: module)
+
+        self.assertEqual(_simulation._selected_change(hooks(object()), None), "docs/mod-base-conformance/selected.md")
+        change = "modules/hud-preview/src/main/java/example/Feature.java"
+        self.assertEqual(_simulation._selected_change(hooks(mock.Mock(SELECTED_CHANGE=change)), None), change)
+        for bad in (".github/workflows/x.yml", ".GitHub/x", "../x.md", "a/.git/x", "/abs.md", "", None, 3):
+            with self.subTest(change=bad), self.assertRaises(MbError):
+                _simulation._selected_change(hooks(mock.Mock(SELECTED_CHANGE=bad)), None)
+
+
+#: The Quick Skin-like adapter, and the lines after which a test adds its own baseline check.
+QS_ADAPTER = Path("scripts") / "pages" / "mod_base_adapter.py"
+COMPOSE_ANCHOR = '    reference = {"id": record["id"], "name": record["name"], "digest": record["digest"]}\n'
+SELECTION_ANCHOR = "    if FEATURE_SELECTION in extensions:\n"
+#: A ``compose`` that authenticates its baseline's owner itself, as Quick Skin's does: the upload of
+#: a successful ``pages.yml`` run's refresh job, inside its retention step.
+COMPOSE_OWNER_CHECK = '''    from mod_base.workflow import step_name
+    owner = ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/runs/{record['workflow_run']['id']}")
+    if owner["path"] != ".github/workflows/pages.yml" or owner["conclusion"] != "success":
+        raise ValueError("the baseline's owner is not a successful Pages run")
+    runs = f"/repos/{ctx.api.repository}/actions/runs"
+    jobs = ctx.api.get_json(f"{runs}/{owner['id']}/attempts/{owner['run_attempt']}/jobs")
+    if not any(step["name"] == step_name("baseline_upload")
+               and step["started_at"] <= record["created_at"] <= step["completed_at"]
+               for job in jobs["jobs"] if job["name"] == api_job_name("finalize", "refresh", key=key)
+               for step in job["steps"]):
+        raise ValueError("the baseline was not uploaded in its Pages run's retention step")
+'''
+#: A ``compose`` that checks only that its baseline's owner ran at the commit the baseline names.
+COMPOSE_COMMIT_CHECK = '''    if record["workflow_run"]["head_sha"] != record["name"].split("--")[2]:
+        raise ValueError("the baseline's owner ran at another commit")
+'''
+#: An ``authenticate_extensions`` that refuses a selection whose baseline a source run uploaded.
+SELECTION_OWNER_CHECK = '''        record = _artifact(ctx, extensions[FEATURE_SELECTION]["baseline_artifact_id"])
+        owner = ctx.api.get_json(f"/repos/{ctx.api.repository}/actions/runs/{record['workflow_run']['id']}")
+        if owner["path"] != ".github/workflows/pages.yml":
+            raise ValueError("the selection's baseline is not a Pages run's upload")
+'''
+
+
+class SelectedAndDelegatedClaimTest(unittest.TestCase):
+    """v1.0.1: the ``selected`` generation lies one commit after the newest published baseline's
+    commit (a mod recomputes a selection as that Git diff), and a ``delegated`` handoff's tested
+    claim names the tested pull-request run's own branch and commit. The Quick Skin-like adapter
+    refuses a selection at its baseline's own commit, as Quick Skin's admission does. A forged
+    baseline must be refused, by R3 or by the adapter's own ``compose``: a refusal by any other hook,
+    or an accepted forgery, fails the run; each forgery differs from the genuine baseline only in its
+    owner's workflow or upload window, never in its owner's commit."""
+
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="mb-conformance-claims-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, True)
+
+    def test_the_selected_head_is_a_child_of_the_baseline_and_the_tested_claim_is_the_tested_runs(self) -> None:
+        produced: dict[str, Any] = {}
+        original = _simulation.Simulation.produce
+
+        def produce(simulation: Any, world: Any, run: Any, key: str, **arguments: Any) -> Any:
+            item = original(simulation, world, run, key, **arguments)
+            produced[arguments["label"]] = (simulation, item)
+            return item
+
+        with mock.patch.object(_simulation.Simulation, "produce", produce):
+            report = simulate_in_process(support.MODS / "qs_like", self.work, families=False)
+        self.assertEqual((report["variants"]["delegated"], report["variants"]["selected"]), ("passed", "passed"))
+        simulation, delegated = produced["mc1.20.1-delegated"]
+        tested_run = simulation.world.runs[_simulation.DELEGATED_TESTED_RUN]
+        self.assertEqual({field: delegated.manifest["provenance"]["tested"][field]
+                          for field in ("run_id", "run_attempt", "branch", "commit")},
+                         {"run_id": tested_run["id"], "run_attempt": 1, "branch": "conformance/reused-pull-request",
+                          "commit": tested_run["head_sha"]})
+        simulation, selected = produced["mc1.20.1-selected"]
+        head = selected.manifest["subject"]["commit"]
+        name = simulation.latest_baselines["mc1.20.1"]["name"]
+        base = grammar.require_artifact_name(name, "baseline").commit
+        snapshot = self.work / "repo"
+        self.assertEqual(support.git(snapshot, "rev-parse", f"{head}^"), base)
+        self.assertEqual(support.git(snapshot, "diff", "--name-only", base, head), "e2e/conformance-selected-change.md")
+        self.assertEqual(support.git(snapshot, "rev-parse", "HEAD"), head)
+
+    def test_a_selection_at_its_baselines_own_commit_is_refused(self) -> None:
+        original = _generations.Generations.commit_on_head
+
+        def at_the_baseline(simulation: Any, relative: str, data: bytes, *, label: str) -> None:
+            if label != "the selected head":
+                original(simulation, relative, data, label=label)
+
+        with mock.patch.object(_simulation.Simulation, "commit_on_head", at_the_baseline):
+            with self.assertRaises(MbError) as caught:
+                simulate_in_process(support.MODS / "qs_like", self.work, families=False)
+        self.assertIn("not a strict ancestor of the tested head", str(caught.exception))
+
+    def qs_like_with(self, anchor: str, addition: str) -> Path:
+        """A copy of the Quick Skin-like fixture whose adapter runs ``addition`` after ``anchor``."""
+
+        source = self.work / "source"
+        shutil.copytree(support.MODS / "qs_like", source, ignore=shutil.ignore_patterns("__pycache__"))
+        adapter = source / QS_ADAPTER
+        text = adapter.read_text(encoding="utf-8")
+        self.assertEqual(text.count(anchor), 1)
+        adapter.write_text(text.replace(anchor, anchor + addition), encoding="utf-8")
+        return source
+
+    def selected_refusals(self, source: Path) -> tuple[dict[str, Any], list[str]]:
+        """The report of ``source``'s simulation (one key, no families) and the hooks the adapter
+        refused (``HookFailed``) during its ``selected`` variant."""
+
+        refused: list[str] = []
+        original = _simulation.Simulation.selected
+
+        def selected(simulation: Any) -> str | None:
+            before = len(simulation.hooks.refusals)
+            try:
+                return original(simulation)
+            finally:
+                refused.extend(simulation.hooks.refusals[before:])
+
+        with mock.patch.object(_simulation.Simulation, "selected", selected):
+            report = simulate_in_process(source, self.work, families=False, keys=("mc1.20.1",))
+        return report, refused
+
+    def test_a_compose_that_refuses_both_forged_baselines_passes(self) -> None:
+        report, refused = self.selected_refusals(self.qs_like_with(COMPOSE_ANCHOR, COMPOSE_OWNER_CHECK))
+        self.assertEqual(report["variants"]["selected"], "passed")
+        self.assertEqual(refused, ["compose", "compose"])
+
+    def test_each_forged_baseline_shares_the_genuine_owners_commit(self) -> None:
+        # A compose that checks only its owner's commit accepts both forgeries, so R3 refuses them.
+        report, refused = self.selected_refusals(self.qs_like_with(COMPOSE_ANCHOR, COMPOSE_COMMIT_CHECK))
+        self.assertEqual(report["variants"]["selected"], "passed")
+        self.assertEqual(refused, [])
+
+    def test_a_forged_baseline_refused_by_another_hook_fails(self) -> None:
+        with self.assertRaises(MbError) as caught:
+            self.selected_refusals(self.qs_like_with(SELECTION_ANCHOR, SELECTION_OWNER_CHECK))
+        self.assertIn("the adapter's authenticate_extensions hook, not compose or R3, refused a source run's upload",
+                      str(caught.exception))
+
+    def test_an_accepted_forged_baseline_fails(self) -> None:
+        def accept(invocation: Any, api: Any, *, key: str, baseline: Any) -> Any:
+            return github_artifacts.get_artifact(api, baseline["id"])
+
+        with mock.patch("mod_base.evidence.compose.authenticate_baseline", accept):
+            with self.assertRaises(MbError) as caught:
+                self.selected_refusals(support.MODS / "qs_like")
+        self.assertIn("compose accepted a source run's upload as the baseline (R3)", str(caught.exception))
+
+
 def zip_bytes(files: dict[str, bytes]) -> bytes:
     return _world.zip_files(files)
 
@@ -393,6 +545,8 @@ class FixtureApiTest(unittest.TestCase):
         jobs = self.api.get_json(f"{self.prefix}/actions/runs/4401/attempts/1/jobs")["jobs"]
         self.assertEqual([job["name"] for job in jobs], ["Prepare evidence again", "Reuse the tested source"])
         self.assertEqual((jobs[1]["status"], jobs[1]["conclusion"], jobs[1]["run_id"]), ("completed", "success", 4401))
+        # As GitHub's jobs API does, every job names its run's head (Quick Skin binds jobs to it).
+        self.assertEqual({(job["head_sha"], job["head_branch"]) for job in jobs}, {("a" * 40, "master")})
         with self.assertRaisesRegex(ValueError, "repeats a job name"):
             self.api.add_jobs(4401, 1, [{"name": "Prepare evidence again"}])
         for bad in ([], [{"name": ""}], [{"name": "x", "id": 1}], [{"status": "completed"}]):
@@ -454,6 +608,33 @@ class FixtureApiTest(unittest.TestCase):
             self.api.get_json("/rate_limit")
         with self.assertRaisesRegex(ValueError, "at most"):
             self.api.get_json("/rate_limit")
+
+    def test_retained_baselines_serve_only_selected_extensions_once_per_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "only selected_extensions"):
+            self.api.retained_baseline("mc1.20.1")
+        asked: list[str] = []
+
+        def provide(key: str) -> dict[str, Any]:
+            asked.append(key)
+            if key == "mc9.9":
+                raise ValueError("the adapter declares no key 'mc9.9'")
+            return {"id": len(asked), "name": f"mb-baseline--{key}--{'a' * 40}--4242"}
+
+        protected = frozenset({self.config.source["workflow"]})
+        api = FixtureGitHub(self.world, handoff_run=self.handoff, protected_workflows=protected, baselines=provide)
+        first = api.retained_baseline("mc26.3")
+        first["id"] = 99
+        self.assertEqual(api.retained_baseline("mc26.3"), {"id": 1, "name": f"mb-baseline--mc26.3--{'a' * 40}--4242"})
+        self.assertEqual(asked, ["mc26.3"])
+        for key in ("mc9.9", "not a key", 3):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                api.retained_baseline(key)  # type: ignore[arg-type]
+        bounded = FixtureGitHub(self.world, handoff_run=self.handoff, protected_workflows=protected,
+                                baselines=lambda key: {"key": key})
+        for position in range(_fixture_api.MAX_FIXTURE_BASELINES):
+            bounded.retained_baseline(f"mc1.{position}")
+        with self.assertRaisesRegex(ValueError, "at most"):
+            bounded.retained_baseline("mc2.0")
 
 
 class ScratchTest(unittest.TestCase):

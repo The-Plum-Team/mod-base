@@ -5,6 +5,45 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.0.1
+
+A fix release for three defects the Quick Skin adoption found at `v1.0.0`. Schema versions (all 1;
+the template manifest gains one optional field), `pixel_metrics_version` 1 and `ADAPTER_API` 1 are
+unchanged, and so is every managed file: mods move their pin with `bump --to v1.0.1`. Two fixes can
+need a mod change in that same pull request, marked **Action** below.
+
+### Fixed
+
+- **Dependabot and the caller's managed pins.** The managed region of `.github/workflows/pages.yml`
+  pins `actions/deploy-pages`, which only a kit bump may move, yet `template check` required only
+  the `The-Plum-Team/mod-base*` ignore and the seeded `.github/dependabot.yml` lacked one for it, so
+  a Dependabot bump of it would have been managed-file drift. The Dependabot fragment rule now also
+  requires, in every `github-actions` update, an ignore entry with no `versions` or `update-types`
+  for every third-party action pinned in the managed region of each workflow its manifest entry
+  lists in the new optional `template/manifest.json` field `ignore_actions_of`; `template check`
+  derives the names from the kit's own template (today `actions/deploy-pages`), and the seed
+  carries the entry. **Action:** a `.github/dependabot.yml` without
+  `- dependency-name: "actions/deploy-pages"` in its `github-actions` ignore list fails
+  `template check` at `v1.0.1`, deferred or not; add the line beside the kit's ignore.
+- **Conformance runs a real selection.** The `selected` variant composed its handoff with a
+  baseline of the same commit, while Quick Skin recomputes a selection as the Git diff from the
+  baseline's commit to the tested head, which is empty there. The variant now runs last, on a new
+  head one commit after the newest published baseline's commit, adding the new file the fixtures
+  module names as `SELECTED_CHANGE` (new, optional; default
+  `docs/mod-base-conformance/selected.md`). `selected_extensions` gets the new seeder
+  `ctx.api.retained_baseline(key)`, the retained baseline of any declared key at that commit (a
+  stand-in retained by a successful Pages run for a key outside `--keys`), for a certificate that
+  names every release's baseline, as Quick Skin's does; simulated jobs name their run's `head_sha`
+  and `head_branch`, as GitHub's do. A forged baseline may now be refused by the adapter's own
+  `compose` hook as well as by R3; any other hook's failure, or accepting it, still fails. Both
+  forgeries are uploaded at the baseline's commit, so each differs from the genuine baseline only
+  in its owner's workflow or upload window.
+- **Conformance delegated claim.** The `delegated` variant's tested claim took its branch and
+  commit from the handoff run while naming the tested run. It now names the tested run's own
+  branch (`conformance/reused-pull-request`) and commit. **Action:** a `delegated_extensions`
+  fixture whose reuse record copied the handoff's branch (Quick Skin's `tested-source` seal) must
+  record the tested run's `head_branch` and `head_sha`.
+
 ## v1.0.0
 
 The first stable release: the same code as `v0.9.3`, released after the canary proved every

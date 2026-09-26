@@ -2050,7 +2050,8 @@ _TEMPLATE_MANIFEST = Obj(
             Obj(
                 {"path": REPO_PATH, "class": Str(choices=("managed", "fragment", "seeded")), "source": BUNDLE_PATH},
                 {"markers": List(Str(max_len=200, text="evidence"), min_items=1, max_items=64, unique=True),
-                 "lines": List(Str(max_len=200, text="evidence"), min_items=1, max_items=64, unique=True)},
+                 "lines": List(Str(max_len=200, text="evidence"), min_items=1, max_items=64, unique=True),
+                 "ignore_actions_of": List(REPO_PATH, min_items=1, max_items=8, unique=True)},
             ),
             min_items=1,
             max_items=128,
@@ -2058,14 +2059,20 @@ _TEMPLATE_MANIFEST = Obj(
         ),
     }
 )
+#: The one fragment that may list ``ignore_actions_of``, and where the workflows it names live.
+_DEPENDABOT_FRAGMENT = ".github/dependabot.yml"
+_WORKFLOW_DIRECTORY = ".github/workflows/"
 
 
 def validate_template_manifest(document: Any, *, path: str = "$") -> dict[str, Any]:
     """``mod-base.template-manifest`` v1 (SPEC §8.1): unique paths; ``managed`` sources live under
     ``managed/`` and carry no markers/lines; ``fragment`` and ``seeded`` sources live under
-    ``seed/``; only ``fragment`` entries may list required ``markers``/``lines``."""
+    ``seed/``; only ``fragment`` entries may list required ``markers``/``lines``; only the
+    ``.github/dependabot.yml`` fragment may list ``ignore_actions_of``, each a managed workflow of
+    the same manifest (v1.0.1, optional)."""
 
     _TEMPLATE_MANIFEST(document, path)
+    managed = {entry["path"] for entry in document["files"] if entry["class"] == "managed"}
     for position, entry in enumerate(document["files"]):
         here = f"{path}.files[{position}]"
         klass = entry["class"]
@@ -2074,6 +2081,12 @@ def validate_template_manifest(document: Any, *, path: str = "$") -> dict[str, A
         if klass != "fragment":
             check("markers" not in entry and "lines" not in entry, here,
                   "only fragment files may list required markers or lines")
+        if "ignore_actions_of" in entry:
+            check(klass == "fragment" and entry["path"] == _DEPENDABOT_FRAGMENT, f"{here}.ignore_actions_of",
+                  f"only the {_DEPENDABOT_FRAGMENT} fragment may list ignore_actions_of")
+            for index, workflow in enumerate(entry["ignore_actions_of"]):
+                check(workflow in managed and workflow.startswith(_WORKFLOW_DIRECTORY) and workflow.endswith(".yml"),
+                      f"{here}.ignore_actions_of[{index}]", "must name a managed workflow of this manifest")
     return document
 
 

@@ -192,11 +192,16 @@ class World:
         self._seed_jobs(attempt)
 
     def _seed_jobs(self, attempt: tuple[int, int]) -> None:
+        """Serve the attempt's jobs as GitHub's jobs API does: each also names its run's ``head_sha``
+        and ``head_branch`` (unless a fixture's job gives its own)."""
+
         seeded, added = self._seeded_jobs.get(attempt, []), self._fixture_jobs.get(attempt, [])
         names = [job["name"] for job in seeded + added]
         if len(names) != len(set(names)):
             raise ValueError(f"a fixture job repeats a job name of run {attempt[0]} attempt {attempt[1]}")
-        self.api.add_jobs(attempt[0], attempt[1], seeded + added)
+        run = self.runs[attempt[0]]
+        self.api.add_jobs(attempt[0], attempt[1], [{"head_sha": run["head_sha"], "head_branch": run["head_branch"], **job}
+                                                   for job in seeded + added])
 
     # -- the fixtures' own evidence ------------------------------------------------------------------
 
