@@ -5,6 +5,14 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.0.0
+
+The first stable release: the same code as `v0.9.3`, released after the canary proved every
+behaviour that cannot be verified locally (G1–G7) in one green cycle at `v0.9.3` from a separate
+repository (`docs/OPERATIONS.md#canary-evidence`). Schema versions (all 1),
+`pixel_metrics_version` 1, `ADAPTER_API` 1 and every managed file are unchanged from `v0.9.3`; mods
+pin it with `bump --to v1.0.0`.
+
 ## v0.9.3
 
 A fix release for a false rejection the canary found at `v0.9.2`. Schema versions,
