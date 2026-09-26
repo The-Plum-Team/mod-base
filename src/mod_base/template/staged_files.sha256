@@ -1,8 +1,8 @@
-1998b31604e8a626e7b04f4ab9152c3e1fedc27789f90fdd5b47f56064fcea87  ./template/managed/.gitattributes
+a2762dc1f34d57b2f7be02c0cc46c26518ce7a6850fe409c047769496a0ec9a3  ./template/managed/.gitattributes
 bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/managed/.github/workflows/pages.yml
 ade9b6115b6045f0ac1640a51118c117470b85d2ec315787c4ce2e6182491ff8  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
 0b9fcb0dd4368b16aaaa5611a92e9909aa9e803ebe8440e33590cc9376a911a9  ./template/managed/docs/ai/shared/REPOSITORY.md
-1909b59690a20ed03201d804eb55dbc6b41e4c0fc292592b1df6c15b8aaec206  ./template/managed/scripts/ci/mod_base_kit.py
+e6f34a8144e19a60d645663cf9698881d3af57da356abaf3965c7417f479f806  ./template/managed/scripts/ci/mod_base_kit.py
 77802c6324cdb83ce2480d45b0d2203e84c962586b5bdb0554173aaecf5518b8  ./template/manifest.json
 f52062f61bc044645c13ecbe926b672253834dfaca3c03dfb14d3682d78a88eb  ./template/seed/.github/CODEOWNERS.tmpl
 3aeadc6738a13c93bb3173d7eae0fac101316ecb0493dd56e2ccbd44fc099874  ./template/seed/.github/dependabot.yml.tmpl
@@ -20,5 +20,5 @@ b8ff67de7b7c91a95a0a5f4aeec37cb61d55649560adce8d6c648f0c20b70f32  ./template/see
 46be023b1463c235074b881cb9bfefea0ebdd239c0c805446eb2b834c98c5e58  ./tools/github_api_retry.sh
 e76682a038da8e09118a2bae4b9d2c7f7868ab9b05abf7d4c0f8852775395855  ./tools/kit_digest.sh
 574db48179908fefcf5d654586fa0b49c2e9561aaf382fc9a27d8acf0ac34ee8  ./tools/parallel_unittest.py
-111ef0742bfe437ab7bf3fef9e3469fb3f095e86329a670ece2be039d6d2799d  ./tools/update_tree_digest.py
+bf528de2c329cd921b13a596c1dc8f21abd99703873de6b9b1ee4c1f236b77a5  ./tools/update_tree_digest.py
 020bd17f6c52f05922d99b8e4f85b04b209bf05a5c47d91560957cdd1fc68d8f  ./tools/verify_action_tree.py

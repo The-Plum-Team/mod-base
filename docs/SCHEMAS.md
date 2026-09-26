@@ -266,6 +266,7 @@ The handoff fields, plus:
 | `frames[].source` | `{sha256, size, width, height, format: "png", pixel}` (no path: the PNG is not shipped) |
 | `frames[].derivative` | `{path: "images/<sha256>.webp", sha256, size, width, height, format: "webp", pixel}` |
 | `frames[].epoch`, `frames[].tested` | only in `composed` bundles, then mandatory: `"baseline"\|"selected"` and `RunRecord + {jar_sha256}` |
+| `lanes[].baseline_run` | only in `composed` bundles, optional (v0.9.2): `{profile, status: "pass", elapsed_s?, jars}`, the baseline execution of a re-tested lane's `epoch: baseline` frames (below) |
 | `comparisons[].derivative` | `CompareMetrics` re-measured on the derivatives (same minimum rule) |
 
 Rules: `files` is exactly `expectation.json`, `selection.json`, `extensions.json` (iff set) and the
@@ -277,6 +278,25 @@ the adapter re-derives the complete expectation, R2), while the intermediate emb
 expectation. `manifest.json`'s selection-independent identity is `compact_identity_sha256`: the
 canonical manifest without its `selection` member and without the `selection.json` record of
 `files`.
+
+**Composed lanes and epochs (amendment, v0.9.2; only an optional field is added).** A selection
+may re-capture only some frames of a lane (Quick Skin re-captures 2 of the 63 `full` checkpoints
+for a HUD change), so a composed bundle is composed per frame, as Quick Skin's schema-7 view was:
+each frame keeps the `epoch` and `tested` run its pixels came from, and each lane is one record.
+A lane the selection did not re-test is exactly the baseline's lane. A re-tested lane is exactly the
+selected source's lane record, whose lane fields (`roles` included) must also be the complete
+expectation's, so a selection that ran only some of a lane's roles cannot be composed; when some of
+its frames were not re-captured it also records the baseline execution of those frames (the baseline
+lane's `profile`, `status`, `elapsed_s`, `jars`) as `baseline_run` (Quick Skin's schema 7 split the
+lane into `<lane>/baseline` and `<lane>/selected` records instead, each its source's record; lane ids
+here stay the expectation's, and every lane record apart from `baseline_run` is still one a source
+holds). Structurally (`documents.validate_compact`): `baseline_run` exists only on
+a lane holding an `epoch: baseline` frame, and a lane holding frames of both epochs must carry it;
+every frame's `tested.jar_sha256` is the production JAR of the run its epoch used (`baseline_run`
+for a baseline frame of a lane that carries one, else the lane's own `jars`); all frames of one
+epoch record one tested run (apart from `jar_sha256`), the selected one being `provenance.tested`;
+and a comparison never spans the two epochs. R3 (`compose`) proves the rest against the sources. A
+v0.9.0/v0.9.1 composed bundle, whose lanes were never mixed, satisfies every rule unchanged.
 
 ## `mod-base.evidence.anchor` (`manifest.json`, lossless, durable)
 
@@ -424,8 +444,9 @@ composed selection (build) must expect exactly these differences.
    (`binding`, `composition` with the authenticated baseline `owner_run_id`, `manifest_sha256`) and
    writes the final composed bundle. Step 5 is skipped for it. R3 includes the **full-use rule**:
    the `epoch: selected` frames are exactly the intermediate's frames, every selected lane is
-   present and composed only from selected frames, every selected comparison is present and every
-   other lane equals its baseline lane, so older baseline evidence can never stand in for what the
+   present and records the selected execution (with the `baseline_run` of its baseline frames, if
+   any: "Composed lanes and epochs" above), every selected comparison is present and every other
+   lane equals its baseline lane, so older baseline evidence can never stand in for what the
    selection re-tested. The hook's output must be canonical bytes and its complete expectation
    must pass R2 (both run projections) and its extensions R6.
 5. Otherwise `compact --input DIR --selection selection.json --output DIR` re-encodes a `complete`
@@ -544,7 +565,7 @@ prefix of `subject_commit`; release keys and family ids are unique.
 | `labels` | `{scenarios, roles, tiers, loaders: {id: display}, release_prefix, search_placeholder}` |
 | `copy` | `{gallery_lead, methodology: [display], family_notes: {family: display}}` |
 | `releases` | `[{key, label, minecraft, loaders, loader_names, frame_count, lane_count, scenarios, contract_sha256, contract_url, matrix_sha256, subject, coverage_sha, short_sha, handoff: {run_id, run_url, created_at}, tested: {run_id, run_url, created_at, commit}, scope: "complete"\|"composed", reuse}]`, 1..64 |
-| `lanes` | `[{lane_id, key, artifact_node, minecraft, loader, loader_name, scenario, roles, status: "pass", elapsed_s?, jars, epoch?}]` |
+| `lanes` | `[{lane_id, key, artifact_node, minecraft, loader, loader_name, scenario, roles, status: "pass", elapsed_s?, jars, epoch?, baseline_run?: {status: "pass", elapsed_s?, jars}}]`; `epoch` is the epoch of the lane's own record (`selected` for a re-tested lane) |
 | `frames` | `[{frame_id, key, capture_id, capture_order, title, expectation, runtime_evidence, review_tier, lane_id, artifact_node, minecraft, loader, loader_name, scenario, role, step, image, width, height, alt, source: {width, height, file_sha256, pixel}, published: {file_sha256, format: "webp", pixel}, provenance: {handoff_run_url, handoff_commit, tested_run_url, tested_commit, tested_created_at, coverage_sha}, epoch?}]`, at least one |
 | `comparisons` | `[{comparison_id, key, lane_id, role, first_frame_id, second_frame_id, source: CompareMetrics, published: CompareMetrics}]` |
 | `families` | `[{family, title, description, available, status, releases: [FamilyRelease], lanes: [paired lane + key], not_applicable: [entry + key]}]`, one entry per family; `[]` is valid |
@@ -557,7 +578,10 @@ run of that repository (release `handoff`/`tested` URLs are exactly `run_url(rep
 lanes unique per `(key, lane_id)` and owned by a release; frames unique per `(key, frame_id)`,
 consistent with their lane, `image == images/<key>/<published.file_sha256>.webp` and
 `width/height` equal to the published metrics; `frame_count`/`lane_count` match; comparisons
-reference same-key, same-lane, same-role frames; `family_notes` name listed families.
+reference same-key, same-lane, same-role frames; a lane's `baseline_run` (a composed lane's, v0.9.2)
+exists exactly when a lane with `epoch: "selected"` holds an `epoch: "baseline"` frame, whose
+validation record then shows that execution's JAR, result and wall time; `family_notes` name
+listed families.
 
 **Families (announced amendment of SPEC §3.9).** The SPEC's family entry `{family, title,
 description, available, status, lanes, not_applicable}` has one status for all keys, but

@@ -145,8 +145,9 @@ matching `MOD_BASE_KIT_SHA` (exported by the `setup` composite), a user cache ou
 repository, and an anonymous shallow fetch of the pin into that cache. It also implements
 `verify --network`, `stage` (Block Pops' controller-to-sandbox handoff) and `bump`. An overlay's
 `template/` and `tools/`, outside kit-digest-v1, must match the listing
-`src/mod_base/template/staged_files.sha256` inside the digested tree, and a verified kit never
-holds bytecode.
+`src/mod_base/template/staged_files.sha256` inside the digested tree, and its `actions/` (staged
+from v0.9.2 when the kit carries it) the listing `src/mod_base/template/staged_actions.sha256`
+there, and a verified kit never holds bytecode.
 
 ## Front end
 

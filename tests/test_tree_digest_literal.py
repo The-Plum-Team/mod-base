@@ -25,7 +25,7 @@ from unittest import mock
 
 from mod_base import workflow
 from mod_base.errors import MbError
-from mod_base.pin import STAGED_LOCK, kit_tree_digest, staged_listing
+from mod_base.pin import ACTIONS_LOCK, STAGED_LOCK, actions_listing, kit_tree_digest, staged_listing
 from tests.test_workflow_policy import (CALLEE_PATHS, PROLOGUE, ROOT, ShellHarness, callee, outputs,
                                         require_tools, step)
 
@@ -104,6 +104,7 @@ def make_kit(root: Path) -> Path:
         "template/managed/.github/workflows/pages.yml": b"name: Project site\n",
         "template/manifest.json": b"{}\n",
         "tools/helper.sh": b"#!/bin/sh\nexit 0\n",
+        "actions/setup/action.yml": b"name: Setup\n",
     }
     for relative, data in files.items():
         path = root / relative
@@ -115,10 +116,11 @@ def make_kit(root: Path) -> Path:
 
 
 def write_lock(root: Path) -> None:
-    """Write the staged-file lock of ``root``'s current ``template/`` and ``tools/``."""
+    """Write the staged-file locks of ``root``'s current ``template/``, ``tools/`` and ``actions/``."""
 
     (root / STAGED_LOCK).parent.mkdir(parents=True, exist_ok=True)
     (root / STAGED_LOCK).write_bytes(staged_listing(root))
+    (root / ACTIONS_LOCK).write_bytes(actions_listing(root))
 
 
 class DigestParityTests(unittest.TestCase):
@@ -413,6 +415,32 @@ class StagedLockTests(unittest.TestCase):
         self.assertEqual(written.stdout, reference_digest(self.root) + "\n")
         self.assertNotEqual(self.snapshot(), current)
         self.assertEqual(self.tool("--check").returncode, 0)
+
+    def test_the_actions_lock_is_gated_like_the_staged_lock(self) -> None:
+        self.assertEqual(update_tree_digest.indexed_actions_listing(self.root), actions_listing(self.root))
+        self.assertIn(b"  ./actions/setup/action.yml\n", actions_listing(self.root))
+        self.assertNotIn(b"./actions/", update_tree_digest.indexed_staged_listing(self.root))
+        self.assertEqual(self.tool("--write").returncode, 0)
+        current = self.snapshot()
+        (self.root / "actions/setup/action.yml").write_bytes(b"name: Changed\n")
+        stage(self.root)
+        self.assertEqual(update_tree_digest.stale_locks(self.root), [ACTIONS_LOCK])
+        checked = self.tool("--check")
+        self.assertEqual(checked.returncode, 1)
+        self.assertIn(f"stale {ACTIONS_LOCK}", checked.stderr)
+        written = self.tool("--write")
+        self.assertEqual(written.returncode, 1)
+        self.assertIn(f"regenerated {ACTIONS_LOCK}; stage it", written.stderr)
+        self.assertEqual((self.root / ACTIONS_LOCK).read_bytes(), actions_listing(self.root))
+        self.assertEqual(self.snapshot(), current, "no literal is written over a stale index")
+        stage(self.root)
+        self.assertEqual(self.tool("--write").returncode, 0)
+        self.assertEqual(self.tool("--check").returncode, 0)
+        (self.root / "actions/new").mkdir()
+        (self.root / "actions/new/action.yml").write_bytes(b"name: New\n")
+        refused = self.tool("--check")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("actions/new/action.yml (untracked or ignored)", refused.stderr)
 
     def test_a_missing_lock_is_stale(self) -> None:
         git(self.root, "rm", "-q", "-f", STAGED_LOCK)

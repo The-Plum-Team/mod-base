@@ -330,6 +330,34 @@ class QuickSkinSiteTest(RenderFixture):
                          {"baseline", "selected"})
         self.assertEqual(gallery["releases"][0]["scope"], "composed")
 
+    def test_a_partially_recaptured_lane_publishes_both_executions(self) -> None:
+        bundles = self.publication.bundles()
+        manifest = bundles[0]["manifest"]
+        tested_run = bundles[0]["selection"]["source"]["tested_run"]
+        baseline_run = {**tested_run, "run_id": 3131, "created_at": "2026-08-01T10:00:00Z", "commit": "d" * 40}
+        lane = manifest["lanes"][0]
+        lane["baseline_run"] = {"profile": lane["profile"], "status": "pass", "elapsed_s": 99.5,
+                                "jars": {"production_sha256": "e" * 64}}
+        first = True
+        for frame in manifest["frames"]:
+            if frame["lane_id"] == lane["lane_id"] and first:
+                frame["epoch"], frame["tested"], first = "baseline", {**baseline_run, "jar_sha256": "e" * 64}, False
+            else:
+                jars = next(item for item in manifest["lanes"] if item["lane_id"] == frame["lane_id"])["jars"]
+                frame["epoch"], frame["tested"] = "selected", {**tested_run, "jar_sha256": jars["production_sha256"]}
+        manifest["scope"] = {"kind": "composed"}
+        self.render(bundles=bundles, families=[bs.load_family(None, key=key) for key in bs.QS_KEYS])
+        gallery = json.loads((self.work / "site" / "e2e" / "gallery-data.json").read_bytes())
+        published = next(item for item in gallery["lanes"] if item["lane_id"] == lane["lane_id"]
+                         and item["key"] == "mc1.20.1")
+        self.assertEqual(published["epoch"], "selected")
+        self.assertEqual(published["baseline_run"], {"status": "pass", "elapsed_s": 99.5,
+                                                     "jars": {"production_sha256": "e" * 64}})
+        self.assertEqual(published["jars"], lane["jars"])
+        epochs = [frame["epoch"] for frame in gallery["frames"] if frame["lane_id"] == lane["lane_id"]
+                  and frame["key"] == "mc1.20.1"]
+        self.assertEqual(sorted(epochs), ["baseline", "selected"])
+
     def test_the_quick_skin_golden_text(self) -> None:
         site = self.work / "golden"
         invocation = self.publication.invocation(

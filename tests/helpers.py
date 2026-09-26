@@ -324,6 +324,15 @@ def _derivative(frame_id: str) -> dict[str, Any]:
             "format": "webp", "pixel": pixel}
 
 
+BASELINE_ARTIFACT_ID = 8001
+BASELINE_COMMIT = h("baseline-commit", 40)
+BASELINE_NAME = grammar.baseline_name(KEY, BASELINE_COMMIT, 77)
+BASELINE_OWNER_RUN_ID = 450
+#: The tested run of a composed fixture's ``epoch: baseline`` frames (the baseline generation's).
+BASELINE_RUN = {**run_claim(77, commit=BASELINE_COMMIT), "event": "workflow_dispatch",
+                "created_at": "2026-09-20T10:00:00Z", "conclusion": "success", "head_sha": BASELINE_COMMIT}
+
+
 def _compact_without_selection(*, composed: bool) -> dict[str, Any]:
     """The compact manifest before its selection is embedded (no ``selection`` member and no
     ``selection.json`` record): exactly what ``compact_identity_sha256`` hashes."""
@@ -337,8 +346,13 @@ def _compact_without_selection(*, composed: bool) -> dict[str, Any]:
         item = {**{key: value for key, value in frame.items() if key != "source"}, "source": source,
                 "derivative": derivative}
         if composed:
-            item["epoch"] = "baseline" if position % 2 == 0 else "selected"
-            item["tested"] = {**run_record(HANDOFF_RUN_ID), "jar_sha256": h(f"jar:{frame['loader']}")}
+            # The Fabric lane was not re-tested (the baseline's), the Forge lane was (the selection's).
+            if frame["loader"] == "fabric":
+                item["epoch"] = "baseline"
+                item["tested"] = {**BASELINE_RUN, "jar_sha256": h(f"jar:{frame['loader']}")}
+            else:
+                item["epoch"] = "selected"
+                item["tested"] = {**run_record(HANDOFF_RUN_ID), "jar_sha256": h(f"jar:{frame['loader']}")}
         frames.append(item)
         files.append({"path": derivative["path"], "sha256": derivative["sha256"], "size": derivative["size"]})
     comparisons = [
@@ -369,9 +383,6 @@ def _compact_without_selection(*, composed: bool) -> dict[str, Any]:
     return document
 
 
-BASELINE_ARTIFACT_ID = 8001
-BASELINE_NAME = grammar.baseline_name(KEY, h("baseline-commit", 40), 77)
-BASELINE_OWNER_RUN_ID = 450
 
 
 def _selection_for(document: dict[str, Any]) -> dict[str, Any]:

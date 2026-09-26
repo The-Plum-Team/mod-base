@@ -7,7 +7,9 @@ producer and ``pages.yml`` (their ids bind every run), the pin line of each prod
 every head (the kit binding of SPEC §1.8), source and producer runs with their attempt jobs and
 upload steps, Pages runs with ``referenced_workflows`` naming the simulated kit, and every artifact
 as the ZIP bytes the kit downloads by id. Times are offsets in seconds from :data:`BASE`; every
-upload lies inside the step window that produced it.
+upload lies inside the step window that produced it. The conformance extension fixtures add their
+own runs, jobs and artifacts through :mod:`mod_base.conformance._fixture_api` (:meth:`World.fixture_run`,
+:meth:`World.add_fixture_jobs`, :meth:`World.fixture_artifact`).
 
 The fake accepts ``DELETE`` (a rotation that is not a dry run retires artifacts for real); the
 simulation requires every other job to leave :attr:`FakeGitHub.mutations` unchanged.
@@ -38,6 +40,9 @@ SOURCE_WORKFLOW_ID = 101
 #: The read-only token the simulated Pages jobs hold (never a real credential).
 TOKEN = "conformance-read-only-token"
 MAX_ZIP_FILES = 20000
+#: Run and workflow ids of the fixtures' own runs, far from every run id the simulation uses.
+FIXTURE_RUN_IDS = range(700_001, 800_000)
+FIXTURE_WORKFLOW_IDS = range(300, 400)
 
 
 def at(offset: float) -> str:
@@ -115,6 +120,12 @@ class World:
         #: Every seeded run's latest record, by id.
         self.runs: dict[int, dict[str, Any]] = {}
         self._job_ids = iter(range(70001, 1_000_000))
+        #: Per attempt, the jobs the simulation seeded and the jobs a fixture added after them.
+        self._seeded_jobs: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        self._fixture_jobs: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        self._fixture_run_ids = iter(FIXTURE_RUN_IDS)
+        self._fixture_workflow_ids = iter(FIXTURE_WORKFLOW_IDS)
+        self.fixture_workflows: dict[str, int] = {}
         self.workflow_ids = {PAGES_WORKFLOW_PATH: PAGES_WORKFLOW_ID, config.source["workflow"]: SOURCE_WORKFLOW_ID}
         for position, family in enumerate(config.families):
             self.workflow_ids.setdefault(family["producer"]["workflow"], 200 + position)
@@ -174,7 +185,54 @@ class World:
                           for position, (step, first, last) in enumerate(steps)]}
 
     def jobs(self, run: dict[str, Any], jobs: list[dict[str, Any]]) -> None:
-        self.api.add_jobs(run["id"], run["run_attempt"], jobs)
+        """Seed the jobs of ``run``'s attempt; a fixture's jobs of that attempt stay after them."""
+
+        attempt = (run["id"], run["run_attempt"])
+        self._seeded_jobs[attempt] = list(jobs)
+        self._seed_jobs(attempt)
+
+    def _seed_jobs(self, attempt: tuple[int, int]) -> None:
+        seeded, added = self._seeded_jobs.get(attempt, []), self._fixture_jobs.get(attempt, [])
+        names = [job["name"] for job in seeded + added]
+        if len(names) != len(set(names)):
+            raise ValueError(f"a fixture job repeats a job name of run {attempt[0]} attempt {attempt[1]}")
+        self.api.add_jobs(attempt[0], attempt[1], seeded + added)
+
+    # -- the fixtures' own evidence ------------------------------------------------------------------
+
+    def fixture_run(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Seed a fixture's run (attempt 1) of a workflow the simulation does not own; return it."""
+
+        path = record["path"]
+        if path not in self.fixture_workflows:
+            self.fixture_workflows[path] = next(self._fixture_workflow_ids)
+            self.api.add_response(f"/repos/{self.repository}/actions/workflows/{path.rsplit('/', 1)[1]}",
+                                  {"id": self.fixture_workflows[path], "path": path, "state": "active"})
+        seeded = {**record, "id": next(self._fixture_run_ids), "run_attempt": 1,
+                  "workflow_id": self.fixture_workflows[path], "head_repository": {"full_name": self.repository}}
+        seeded.setdefault("updated_at", seeded["created_at"])
+        self.api.add_run(seeded)
+        self.runs[seeded["id"]] = seeded
+        return dict(seeded)
+
+    def add_fixture_jobs(self, run: dict[str, Any], run_attempt: int, jobs: list[dict[str, Any]]) -> None:
+        """Append a fixture's ``jobs`` (ids assigned) to attempt ``run_attempt`` of ``run``."""
+
+        attempt = (run["id"], run_attempt)
+        added = [{**job, "id": next(self._job_ids)} for job in jobs]
+        self._fixture_jobs[attempt] = self._fixture_jobs.get(attempt, []) + added
+        self._seed_jobs(attempt)
+
+    def fixture_artifact(self, name: str, run: dict[str, Any], *, created_at: str, archive: bytes) -> dict[str, Any]:
+        """Seed a fixture's (non-kit) artifact of ``run``; return its API record."""
+
+        record = {"id": next(self._artifact_ids), "name": name, "created_at": created_at, "expired": False,
+                  "size_in_bytes": len(archive), "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+                  "workflow_run": {"id": run["id"], "head_branch": run["head_branch"], "head_sha": run["head_sha"]}}
+        self.api.add_artifact(record, archive)
+        self.records[record["id"]] = record
+        self.archives[record["id"]] = archive
+        return record
 
     def artifact(self, name: str, run: dict[str, Any], *, created: float, archive: bytes,
                  artifact_id: int | None = None) -> dict[str, Any]:

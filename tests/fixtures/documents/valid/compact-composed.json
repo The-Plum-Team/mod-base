@@ -108,7 +108,7 @@
     },
     {
       "path": "selection.json",
-      "sha256": "bcc3029a665da487aa98719fbc9a116a7d3a12ee96ccdb5a7fbf0b8d371a2a09",
+      "sha256": "7c2e743e6b3cc925628882de06f34fc20a4c4c872651f5bfffc3d39d0cb6c953",
       "size": 2511
     }
   ],
@@ -165,16 +165,16 @@
       "step": "title_screen",
       "tested": {
         "branch": "master",
-        "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "commit": "b14ea3e8a8a23ac679621cfe87cf8ee6a6e376e9",
         "conclusion": "success",
         "controller_branch": "master",
-        "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
-        "created_at": "2026-09-25T10:00:00Z",
+        "controller_sha": "b14ea3e8a8a23ac679621cfe87cf8ee6a6e376e9",
+        "created_at": "2026-09-20T10:00:00Z",
         "event": "workflow_dispatch",
-        "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "head_sha": "b14ea3e8a8a23ac679621cfe87cf8ee6a6e376e9",
         "jar_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1",
         "run_attempt": 1,
-        "run_id": 101,
+        "run_id": 77,
         "workflow_path": ".github/workflows/on-demand-e2e.yml"
       },
       "title": "Title screen"
@@ -201,7 +201,7 @@
         "size": 98765,
         "width": 1600
       },
-      "epoch": "selected",
+      "epoch": "baseline",
       "expectation": "The plaid local skin renders on the player model.",
       "frame_id": "1.20.1-fabric/full/client_a/skin_apply",
       "lane_id": "1.20.1-fabric/full",
@@ -231,16 +231,16 @@
       "step": "skin_apply",
       "tested": {
         "branch": "master",
-        "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "commit": "b14ea3e8a8a23ac679621cfe87cf8ee6a6e376e9",
         "conclusion": "success",
         "controller_branch": "master",
-        "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
-        "created_at": "2026-09-25T10:00:00Z",
+        "controller_sha": "b14ea3e8a8a23ac679621cfe87cf8ee6a6e376e9",
+        "created_at": "2026-09-20T10:00:00Z",
         "event": "workflow_dispatch",
-        "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+        "head_sha": "b14ea3e8a8a23ac679621cfe87cf8ee6a6e376e9",
         "jar_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1",
         "run_attempt": 1,
-        "run_id": 101,
+        "run_id": 77,
         "workflow_path": ".github/workflows/on-demand-e2e.yml"
       },
       "title": "Applied local skin"
@@ -267,7 +267,7 @@
         "size": 98765,
         "width": 1600
       },
-      "epoch": "baseline",
+      "epoch": "selected",
       "expectation": "The Quick Skin title-screen button is visible.",
       "frame_id": "1.20.1-forge/full/client_a/title_screen",
       "lane_id": "1.20.1-forge/full",
@@ -462,7 +462,7 @@
   },
   "selection": {
     "path": "selection.json",
-    "sha256": "bcc3029a665da487aa98719fbc9a116a7d3a12ee96ccdb5a7fbf0b8d371a2a09",
+    "sha256": "7c2e743e6b3cc925628882de06f34fc20a4c4c872651f5bfffc3d39d0cb6c953",
     "size": 2511
   },
   "source_artifact": {

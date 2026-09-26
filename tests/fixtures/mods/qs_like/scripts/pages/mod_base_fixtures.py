@@ -10,10 +10,16 @@ every contracted comparison changes enough.
 The optional ``conformance`` fixtures make every Quick Skin variant run on the unmodified fixture:
 
 * ``delegated_extensions`` proves reuse of a tested pull-request run through
-  ``quick-skin.runtime_source`` (the adapter's ``authenticate_extensions`` reads that run);
-* ``selected_extensions`` narrows the expectation to the ``full`` scenario through
-  ``quick-skin.feature_selection``, completed by the adapter's ``compose`` from the named
-  ``mb-baseline`` artifact;
+  ``quick-skin.runtime_source``, as Quick Skin does: through ``ctx.api`` (the conformance seeding
+  seam) it uploads the tested run's ``tested-source`` seal and the handoff run's ``reused-source``
+  descriptor as ZIP artifacts and adds the handoff run's reuse job, and the reference names the
+  seal by id and digest (the adapter's ``authenticate_extensions`` downloads and binds both);
+* ``selected_extensions`` narrows the expectation to one capture of the ``session`` scenario (the
+  second client's player list) through ``quick-skin.feature_selection``: the session lanes are
+  re-captured only partly, so the adapter's ``compose`` completes them per frame from the named
+  ``mb-baseline`` artifact, a mixed-epoch composition. Like Quick Skin's coverage certificate, the
+  selection names a ZIP certificate that a seeded successful ``feature-coverage`` run issued for
+  that baseline and the selective runtime (``ctx.api.handoff_run``);
 * ``family_bundle`` writes the ``mod-compatibility`` family's native ``qs-like.compatibility`` v1
   bundle: per artifact node of the key one Ears lane pairing a clean reference with a modded
   candidate for every capture of the ``full`` scenario (Ears publishes no Forge build, so a Forge
@@ -25,7 +31,9 @@ The optional ``conformance`` fixtures make every Quick Skin variant run on the u
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import zipfile
 from pathlib import Path
 
 from mod_base.imaging.compare import compare
@@ -46,6 +54,16 @@ UNSUPPORTED_LOADER = "forge"
 #: The scenario whose captures are paired, and the first image seed of the family's pairs.
 PAIRED_SCENARIO = "full"
 FAMILY_SEED = 100
+#: The capture a selective generation re-captures: one of the two ``session`` checkpoints.
+SELECTED_CAPTURES = ("session.client_b.player_list",)
+#: The ZIP artifacts the adapter's network hooks authenticate (see its module docstring).
+SEAL_ARTIFACT = "tested-source-e2e"
+DESCRIPTOR_ARTIFACT = "reused-source-e2e"
+REUSE_JOB = "Reuse the tested source"
+CERTIFICATE_WORKFLOW = ".github/workflows/feature-coverage.yml"
+CERTIFICATE_JOB = "Certify complete feature coverage"
+CERTIFICATE_ARTIFACT = "feature-coverage-certificate"
+CERTIFICATE_KIND = "qs-like.coverage-certificate"
 
 
 def _sha256(data: bytes) -> str:
@@ -92,14 +110,43 @@ def synthesize(ctx, target, expectation, out_root, image_factory):
         (profile / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _canonical(value) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _zip(name: str, value) -> bytes:
+    """A one-document ZIP artifact, as ``actions/upload-artifact`` stores it."""
+
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(zipfile.ZipInfo(name, date_time=(2026, 9, 1, 12, 0, 0)), _canonical(value))
+    return stream.getvalue()
+
+
 def delegated_extensions(ctx, target, tested_run):
     matrix = json.loads(ctx.read_blob(target["subject"]["commit"], MATRIX, MAX_DOCUMENT))
-    return {RUNTIME_SOURCE: {"repository": matrix["repository"], "run_id": tested_run["id"],
-                             "tested_sha": tested_run["head_sha"]}}
+    reference = {"repository": matrix["repository"], "run_id": tested_run["id"], "tested_sha": tested_run["head_sha"]}
+    seal = ctx.api.add_artifact(tested_run["id"], SEAL_ARTIFACT, _zip("tested-source.json", reference))
+    reference["seal_artifact"] = {"id": seal["id"], "name": seal["name"], "digest": seal["digest"]}
+    handoff = ctx.api.handoff_run
+    ctx.api.add_artifact(handoff["id"], DESCRIPTOR_ARTIFACT, _zip("reused-source.json", reference))
+    ctx.api.add_jobs(handoff["id"], handoff["run_attempt"], [{"name": REUSE_JOB, "status": "completed",
+                                                             "conclusion": "success"}])
+    return {RUNTIME_SOURCE: reference}
 
 
 def selected_extensions(ctx, target, baseline):
-    return {FEATURE_SELECTION: {"scenarios": [PAIRED_SCENARIO], "baseline_artifact_id": baseline["id"]}}
+    selection = {"captures": list(SELECTED_CAPTURES), "baseline_artifact_id": baseline["id"]}
+    subject = target["subject"]
+    owner = ctx.api.add_run({"path": CERTIFICATE_WORKFLOW, "event": "workflow_run", "head_branch": subject["branch"],
+                             "head_sha": subject["commit"], "display_title": "Feature coverage"})
+    ctx.api.add_jobs(owner["id"], owner["run_attempt"], [{"name": CERTIFICATE_JOB, "status": "completed",
+                                                         "conclusion": "success"}])
+    certificate = {"kind": CERTIFICATE_KIND, "baseline_artifact": dict(baseline),
+                   "runtime_run_id": ctx.api.handoff_run["id"],
+                   "selection_sha256": hashlib.sha256(_canonical(selection)).hexdigest()}
+    record = ctx.api.add_artifact(owner["id"], CERTIFICATE_ARTIFACT, _zip("certificate.json", certificate))
+    return {FEATURE_SELECTION: {**selection, "certificate_artifact_id": record["id"]}}
 
 
 def _pair_side(png: bytes, policy: dict, source_size: list[int]) -> tuple[dict, bytes]:

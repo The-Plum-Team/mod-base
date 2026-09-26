@@ -2464,6 +2464,284 @@
           1073741825
         ]
       ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "compact-composed",
+      "name": "composed-partially-recaptured-lane",
+      "set": [
+        [
+          "/frames/1/epoch",
+          "selected"
+        ],
+        [
+          "/frames/1/tested",
+          {
+            "branch": "master",
+            "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "conclusion": "success",
+            "controller_branch": "master",
+            "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "created_at": "2026-09-25T10:00:00Z",
+            "event": "workflow_dispatch",
+            "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "jar_sha256": "98337de0d7eb58c8ff87e19d11f5ac54d3633da54c69c7d431b6ffcd825b2f16",
+            "run_attempt": 1,
+            "run_id": 101,
+            "workflow_path": ".github/workflows/on-demand-e2e.yml"
+          }
+        ],
+        [
+          "/lanes/0/jars",
+          {
+            "harness_sha256": "32f726f0475f32347de8ac8010bad51bd874ed3a03b824988c9d528caac32da6",
+            "production_sha256": "98337de0d7eb58c8ff87e19d11f5ac54d3633da54c69c7d431b6ffcd825b2f16"
+          }
+        ],
+        [
+          "/lanes/0/baseline_run",
+          {
+            "elapsed_s": 280.0,
+            "jars": {
+              "harness_sha256": "32f726f0475f32347de8ac8010bad51bd874ed3a03b824988c9d528caac32da6",
+              "production_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1"
+            },
+            "profile": "pr",
+            "status": "pass"
+          }
+        ],
+        [
+          "/comparisons",
+          []
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[0]: a lane holding frames of both epochs requires baseline_run",
+      "expect": "invalid",
+      "fixture": "compact-composed",
+      "name": "composed-mixed-lane-without-baseline-run",
+      "set": [
+        [
+          "/frames/1/epoch",
+          "selected"
+        ],
+        [
+          "/frames/1/tested",
+          {
+            "branch": "master",
+            "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "conclusion": "success",
+            "controller_branch": "master",
+            "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "created_at": "2026-09-25T10:00:00Z",
+            "event": "workflow_dispatch",
+            "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "jar_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1",
+            "run_attempt": 1,
+            "run_id": 101,
+            "workflow_path": ".github/workflows/on-demand-e2e.yml"
+          }
+        ],
+        [
+          "/comparisons",
+          []
+        ]
+      ]
+    },
+    {
+      "error": "$.comparisons[0]: must compare two frames of one epoch",
+      "expect": "invalid",
+      "fixture": "compact-composed",
+      "name": "composed-comparison-spans-epochs",
+      "set": [
+        [
+          "/frames/1/epoch",
+          "selected"
+        ],
+        [
+          "/frames/1/tested",
+          {
+            "branch": "master",
+            "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "conclusion": "success",
+            "controller_branch": "master",
+            "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "created_at": "2026-09-25T10:00:00Z",
+            "event": "workflow_dispatch",
+            "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+            "jar_sha256": "98337de0d7eb58c8ff87e19d11f5ac54d3633da54c69c7d431b6ffcd825b2f16",
+            "run_attempt": 1,
+            "run_id": 101,
+            "workflow_path": ".github/workflows/on-demand-e2e.yml"
+          }
+        ],
+        [
+          "/lanes/0/jars",
+          {
+            "harness_sha256": "32f726f0475f32347de8ac8010bad51bd874ed3a03b824988c9d528caac32da6",
+            "production_sha256": "98337de0d7eb58c8ff87e19d11f5ac54d3633da54c69c7d431b6ffcd825b2f16"
+          }
+        ],
+        [
+          "/lanes/0/baseline_run",
+          {
+            "elapsed_s": 280.0,
+            "jars": {
+              "harness_sha256": "32f726f0475f32347de8ac8010bad51bd874ed3a03b824988c9d528caac32da6",
+              "production_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1"
+            },
+            "profile": "pr",
+            "status": "pass"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[1].baseline_run: exists only for a lane holding epoch: baseline frames",
+      "expect": "invalid",
+      "fixture": "compact-composed",
+      "name": "composed-baseline-run-without-baseline-frame",
+      "set": [
+        [
+          "/lanes/1/baseline_run",
+          {
+            "elapsed_s": 280.0,
+            "jars": {
+              "harness_sha256": "32f726f0475f32347de8ac8010bad51bd874ed3a03b824988c9d528caac32da6",
+              "production_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1"
+            },
+            "profile": "pr",
+            "status": "pass"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[0].baseline_run: exists only in a composed bundle",
+      "expect": "invalid",
+      "fixture": "compact",
+      "name": "complete-baseline-run",
+      "set": [
+        [
+          "/lanes/0/baseline_run",
+          {
+            "elapsed_s": 280.0,
+            "jars": {
+              "harness_sha256": "32f726f0475f32347de8ac8010bad51bd874ed3a03b824988c9d528caac32da6",
+              "production_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1"
+            },
+            "profile": "pr",
+            "status": "pass"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].tested.jar_sha256: must be the production JAR of the lane run its epoch used",
+      "expect": "invalid",
+      "fixture": "compact-composed",
+      "name": "composed-foreign-jar",
+      "set": [
+        [
+          "/frames/0/tested/jar_sha256",
+          "73cf1cf6182fa558bd9aeab0a4a672dba1667d2e3e36cdd1a0e2c272b3fb0a4a"
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[1].tested: every baseline frame must record the same tested run",
+      "expect": "invalid",
+      "fixture": "compact-composed",
+      "name": "composed-two-baseline-runs",
+      "set": [
+        [
+          "/frames/1/tested/run_id",
+          78
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[2].tested: the selected epoch's tested run must be provenance.tested",
+      "expect": "invalid",
+      "fixture": "compact-composed",
+      "name": "composed-selected-foreign-tested-run",
+      "set": [
+        [
+          "/frames/2/tested/run_id",
+          999
+        ],
+        [
+          "/frames/3/tested/run_id",
+          999
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "gallery",
+      "name": "gallery-partially-recaptured-lane",
+      "set": [
+        [
+          "/lanes/0/epoch",
+          "selected"
+        ],
+        [
+          "/frames/0/epoch",
+          "baseline"
+        ],
+        [
+          "/frames/1/epoch",
+          "selected"
+        ],
+        [
+          "/lanes/0/baseline_run",
+          {
+            "elapsed_s": 280.0,
+            "jars": {
+              "production_sha256": "a5edaf991105d94b5b6bc8a6e6e20b69feac9f945a7783bd3b65b6e96efef47e"
+            },
+            "status": "pass"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.frames[0].epoch: a baseline frame of a re-tested lane needs its lane's baseline_run",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-retested-lane-without-baseline-run",
+      "set": [
+        [
+          "/lanes/0/epoch",
+          "selected"
+        ],
+        [
+          "/frames/0/epoch",
+          "baseline"
+        ]
+      ]
+    },
+    {
+      "error": "$.lanes[0].baseline_run: exists only for a re-tested lane with baseline frames",
+      "expect": "invalid",
+      "fixture": "gallery",
+      "name": "gallery-baseline-run-without-baseline-frame",
+      "set": [
+        [
+          "/lanes/0/epoch",
+          "selected"
+        ],
+        [
+          "/lanes/0/baseline_run",
+          {
+            "jars": {
+              "production_sha256": "a5edaf991105d94b5b6bc8a6e6e20b69feac9f945a7783bd3b65b6e96efef47e"
+            },
+            "status": "pass"
+          }
+        ]
+      ]
     }
   ]
 }

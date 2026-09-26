@@ -46,7 +46,9 @@ kit-digest-v1 hashes the listing ``"<sha256>  ./<path>\\n"``, sorted bytewise, o
 file under ``src/``, ``site/`` and ``requirements/`` of a kit root, refusing symlinks, special
 files, executable files, ``__pycache__`` and paths outside ``[A-Za-z0-9._/-]``, and prints
 ``sha256:<hex>`` of that listing. A staged overlay's ``template/`` and ``tools/``, which the digest
-does not cover, must equal the listing :data:`STAGED_LOCK` inside its digested ``src/``. Bytecode
+does not cover, must equal the listing :data:`STAGED_LOCK` inside its digested ``src/``, and its
+``actions/`` the listing :data:`ACTIONS_LOCK` there; a kit older than v0.9.2 carries no
+:data:`ACTIONS_LOCK`, and :func:`copy_kit` then stages no ``actions/``. Bytecode
 is never tolerated in a verified kit, because Python loads a planted ``__pycache__`` file in place
 of the verified source: :func:`kit_path` turns bytecode writing off for the importing process and
 ``run`` sets ``PYTHONDONTWRITEBYTECODE=1``.
@@ -111,9 +113,13 @@ KIT_PATH_NAME = re.compile(r"[A-Za-z0-9._/-]+", re.ASCII)
 LINE_BREAK = re.compile(r"\r\n|\r|\n")
 
 DIGESTED_DIRS = ("src", "site", "requirements")
-STAGED_DIRS = ("src", "site", "requirements", "template", "tools")
 LOCKED_DIRS = ("template", "tools")
 STAGED_LOCK = "src/mod_base/template/staged_files.sha256"
+#: Staged from v0.9.2 under its own lock, so :data:`STAGED_LOCK` still lists exactly
+#: :data:`LOCKED_DIRS` and an older bootstrap can stage a newer kit.
+ACTIONS_DIR = "actions"
+ACTIONS_LOCK = "src/mod_base/template/staged_actions.sha256"
+STAGED_DIRS = DIGESTED_DIRS + LOCKED_DIRS + (ACTIONS_DIR,)
 STAMP_NAME = "MOD_BASE_KIT.json"
 STAMP_KIND = "mod-base.kit-stamp"
 OVERLAY_PATH = ("out", "mod-base-kit")
@@ -449,12 +455,29 @@ def staged_listing(root: Path) -> bytes:
     return _listing(root, LOCKED_DIRS, locked=True).encode("ascii")
 
 
-def verify_staged_files(root: Path) -> None:
-    """Require ``template/`` and ``tools/`` of ``root`` to equal its :data:`STAGED_LOCK` listing."""
+def actions_listing(root: Path) -> bytes:
+    """The listing of ``actions/`` of ``root``: what :data:`ACTIONS_LOCK` holds."""
 
-    expected = _read_bounded(Path(root).joinpath(*STAGED_LOCK.split("/")), MAX_LOCK_BYTES, STAGED_LOCK)
+    return _listing(root, (ACTIONS_DIR,), locked=True).encode("ascii")
+
+
+def _lock_path(root: Path, lock: str) -> Path:
+    return Path(root).joinpath(*lock.split("/"))
+
+
+def verify_staged_files(root: Path) -> None:
+    """Require ``template/`` and ``tools/`` of ``root`` to equal its :data:`STAGED_LOCK` listing and
+    a present ``actions/`` its :data:`ACTIONS_LOCK` listing (an absent one binds nothing)."""
+
+    expected = _read_bounded(_lock_path(root, STAGED_LOCK), MAX_LOCK_BYTES, STAGED_LOCK)
     if staged_listing(root) != expected:
         raise KitError(f"the kit's template/ and tools/ do not match its {STAGED_LOCK}")
+    if _directory_state(Path(root) / ACTIONS_DIR) is None:
+        return
+    if not os.path.lexists(_lock_path(root, ACTIONS_LOCK)):
+        raise KitError(f"the kit's {ACTIONS_DIR}/ is not bound by an {ACTIONS_LOCK}")
+    if actions_listing(root) != _read_bounded(_lock_path(root, ACTIONS_LOCK), MAX_LOCK_BYTES, ACTIONS_LOCK):
+        raise KitError(f"the kit's {ACTIONS_DIR}/ does not match its {ACTIONS_LOCK}")
 
 
 # -- Strict JSON -----------------------------------------------------------------------------------
@@ -901,7 +924,8 @@ def _write_new(target: Path, data: bytes) -> None:
 
 
 def copy_kit(source: Path, output: Path) -> None:
-    """Copy the kit directories of ``source`` into the new directory ``output``.
+    """Copy the kit directories of ``source`` into the new directory ``output``: the digested
+    ones, ``template/`` and ``tools/``, and ``actions/`` when ``source`` carries :data:`ACTIONS_LOCK`.
 
     Only regular files are copied, each read bounded and written exclusively as mode 0644;
     ``__pycache__`` directories are skipped, and any symlink or special file is an error.
@@ -911,9 +935,10 @@ def copy_kit(source: Path, output: Path) -> None:
         raise KitError(f"{output} already exists")
     if _directory_state(output.parent) is not False:
         raise KitError(f"the parent of {output} must be an existing real directory")
+    tops = STAGED_DIRS if os.path.lexists(_lock_path(source, ACTIONS_LOCK)) else DIGESTED_DIRS + LOCKED_DIRS
     output.mkdir(mode=0o755)
     files = total = 0
-    for top in STAGED_DIRS:
+    for top in tops:
         base = source / top
         state = _directory_state(base)
         if state is None and top not in DIGESTED_DIRS:
@@ -954,7 +979,7 @@ def stage(controller_repo: Path, candidate_repo: Path, output: Path, environ: Ma
     the controller-verified kit (``MOD_BASE_KIT_PATH`` from ``setup``, or the verified cache) is
     copied. With a different pin, which only a controller upgrade can carry, that pin must first
     pass :func:`verify_released`; it is then fetched anonymously and re-verified before the copy.
-    The copy's ``template/`` and ``tools/`` must match its staged-file lock. Any failure, including
+    The copy's staged directories must match its staged-file locks. Any failure, including
     an operating-system error, removes a partial ``output`` and raises the :data:`UNAVAILABLE`
     message.
     """

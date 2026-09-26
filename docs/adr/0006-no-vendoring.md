@@ -22,8 +22,8 @@ sandbox's generated directories fails its seal, so a kit overlay must live under
 - Mod code finds the kit only through the managed, stdlib-only bootstrap
   `scripts/ci/mod_base_kit.py`, which resolves and verifies, first match wins:
   1. `out/mod-base-kit/` with a `mod-base.kit-stamp` whose SHA equals the pin and whose
-     kit-digest-v1 matches the tree, and whose `template/` and `tools/` match the staged-file lock
-     inside the digested `src/` (staged by Block Pops' controller);
+     kit-digest-v1 matches the tree, and whose `template/`, `tools/` and (when staged) `actions/`
+     match the staged-file locks inside the digested `src/` (staged by Block Pops' controller);
   2. `MOD_BASE_KIT_PATH` with `MOD_BASE_KIT_SHA` equal to the pin (exported by the `setup`
      composite after verifying its tree against the Git trees API);
   3. a clean git checkout of the pin in the user cache, outside the repository;

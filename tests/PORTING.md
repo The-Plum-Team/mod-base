@@ -75,7 +75,7 @@ tests that stay in (or move within) that mod; `retired: <reason>` ends a row wit
 | 5 | Compatibility contract drift means unavailable, exit 3 (QS) | CORE `superseded` status | SPEC §3.5 |
 | 6 | Compatibility `coverage_sha` carry-forward behind a non-impact proof (QS) | HOOK (impact) + CORE ancestry re-proof R5 | SPEC §4.4 |
 | 7 | 2/5/7-checkpoint compatibility product and `reviewed_frame_count` (QS) | Native (QS adapter) to `review.reviewed_frame_count` | SPEC §4.5 |
-| 8 | Selected/composed feature evidence, schemas 5/6/7 (QS) | CORE `scope`/`epoch`/`tested` + HOOK `compose`/`verify_publication` + CORE R3 | SPEC §3.3, §4.4 |
+| 8 | Selected/composed feature evidence, schemas 5/6/7 (QS) | CORE `scope`/`epoch`/`tested` (per frame; a partially re-captured lane records `baseline_run`, v0.9.2) + HOOK `compose`/`verify_publication` + CORE R3 | SPEC §3.3, §4.4 |
 | 9 | PR runtime reuse, `runtime_source`/`ci_reuse` (QS) | CORE `reuse:"delegated"` + HOOK `authenticate_extensions` | SPEC §4.8 |
 | 10 | Attested reuse, BP `attest_run_id` / `Verify exact tested tree` | CORE `reuse:"attested"`, exact job name | SPEC §4.8 |
 | 11 | `pages-full-baseline-*` archives (QS) | CORE `baseline_archive` to `mb-baseline--` | SPEC §5.4 |

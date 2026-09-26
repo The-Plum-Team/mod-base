@@ -20,11 +20,13 @@ decisions behind them.
   changes the `MB_KIT_TREE_DIGEST` literal of the callee workflows: run
   `python3 tools/update_tree_digest.py --write` and commit the result in the same change;
   `tests/test_tree_digest_literal.py` fails when the literal is stale.
-- `template/` and `tools/` are staged into the Block Pops sandbox overlay but are not part of
-  kit-digest-v1; the digested `src/mod_base/template/staged_files.sha256` binds them instead. After
-  any change below `template/` or `tools/`, run
+- `template/`, `tools/` and `actions/` are staged into the Block Pops sandbox overlay but are not
+  part of kit-digest-v1; the digested `src/mod_base/template/staged_files.sha256` (`template/` and
+  `tools/`, the exact bytes a pre-v0.9.2 bootstrap checks, so never add a directory to it) and
+  `staged_actions.sha256` (`actions/`) bind them instead. After any change below `actions/`,
+  `template/` or `tools/`, run
   `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m mod_base.template.lock --write` first, then
-  refresh the digest literal (the lock lives in `src/`); `tests/test_pin.py` fails when the lock is
+  refresh the digest literal (the locks live in `src/`); `tests/test_pin.py` fails when a lock is
   stale.
 - `template/managed/` is copied byte-for-byte into every mod and drift-checked there. A change to it
   is a mod-visible change: record it in `CHANGELOG.md` under the next tag, keep the managed

@@ -385,6 +385,13 @@ EVIDENCE_LANE = Obj(
     {**LANE_FIELDS, "profile": PROFILE, "status": Const("pass"), "jars": JARS},
     {"elapsed_s": Num(0.0, 10_000_000.0)},
 )
+#: The run fields of one lane execution, the lane fields of ``EVIDENCE_LANE`` aside: what a composed
+#: lane's optional ``baseline_run`` records for the ``epoch: baseline`` frames of a re-tested lane.
+_LANE_RUN = Obj({"profile": PROFILE, "status": Const("pass"), "jars": JARS}, {"elapsed_s": Num(0.0, 10_000_000.0)})
+_COMPACT_LANE = Obj(
+    {**LANE_FIELDS, "profile": PROFILE, "status": Const("pass"), "jars": JARS},
+    {"elapsed_s": Num(0.0, 10_000_000.0), "baseline_run": _LANE_RUN},
+)
 CAPTURE_FIELDS: dict[str, Validator] = {
     "frame_id": IDENT,
     "capture_id": IDENT,
@@ -828,7 +835,7 @@ _COMPACT = Obj(
             }
         ),
         "selection": SELECTION_REF,
-        "lanes": List(EVIDENCE_LANE, min_items=1, max_items=lim.MAX_LANES),
+        "lanes": List(_COMPACT_LANE, min_items=1, max_items=lim.MAX_LANES),
         "frames": List(
             Obj(
                 {**FRAME_FIELDS, "source": Obj(PNG_SOURCE_BASE), "derivative": _WEBP_DERIVATIVE},
@@ -846,6 +853,49 @@ _COMPACT = Obj(
 )
 
 
+def _check_composed_epochs(document: Mapping[str, Any], lanes: Mapping[str, Mapping[str, Any]],
+                           frames: Mapping[str, Mapping[str, Any]], path: str) -> None:
+    """The epoch rules of a composed bundle that need no source (R3 proves the rest against them).
+
+    A lane's own run fields describe the execution of its newest epoch; a lane re-tested by the
+    selection whose frames still include ``epoch: baseline`` ones (a partially re-captured lane,
+    Quick Skin schema 7's per-epoch lanes) carries the baseline execution of those frames as
+    ``baseline_run``. So: ``baseline_run`` exists only on a lane holding a baseline frame, and a
+    lane holding frames of both epochs must carry it; every frame's ``tested.jar_sha256`` is the
+    production JAR of the run its epoch used (``baseline_run`` for a baseline frame of a lane that
+    carries one, else the lane's own); all frames of one epoch record one tested run (one source
+    generation each), the selected one being ``provenance.tested``; and a comparison never spans
+    the two epochs (its frames are one generation's pixels)."""
+
+    lane_epochs: dict[str, set[str]] = {lane_id: set() for lane_id in lanes}
+    tested_runs: dict[str, dict[str, Any]] = {}
+    claim = document["provenance"]["tested"]
+    for position, frame in enumerate(document["frames"]):
+        here = f"{path}.frames[{position}]"
+        epoch, lane = frame["epoch"], lanes[frame["lane_id"]]
+        lane_epochs[frame["lane_id"]].add(epoch)
+        run = lane["baseline_run"] if epoch == "baseline" and "baseline_run" in lane else lane
+        check(frame["tested"]["jar_sha256"] == run["jars"]["production_sha256"], f"{here}.tested.jar_sha256",
+              "must be the production JAR of the lane run its epoch used")
+        record = {name: value for name, value in frame["tested"].items() if name != "jar_sha256"}
+        check(tested_runs.setdefault(epoch, record) == record, f"{here}.tested",
+              f"every {epoch} frame must record the same tested run")
+        if epoch == "selected":
+            check(all(record[name] == value for name, value in claim.items()), f"{here}.tested",
+                  "the selected epoch's tested run must be provenance.tested")
+    for position, lane in enumerate(document["lanes"]):
+        epochs = lane_epochs[lane["lane_id"]]
+        if "baseline_run" in lane:
+            check("baseline" in epochs, f"{path}.lanes[{position}].baseline_run",
+                  "exists only for a lane holding epoch: baseline frames")
+        else:
+            check(epochs != {"baseline", "selected"}, f"{path}.lanes[{position}]",
+                  "a lane holding frames of both epochs requires baseline_run")
+    for position, comparison in enumerate(document["comparisons"]):
+        check(frames[comparison["first_frame_id"]]["epoch"] == frames[comparison["second_frame_id"]]["epoch"],
+              f"{path}.comparisons[{position}]", "must compare two frames of one epoch")
+
+
 def validate_compact(document: Any, *, expectation: Mapping[str, Any] | None = None,
                      allowed_extensions: Collection[str] | None = None, intermediate: bool = False,
                      path: str = "$") -> dict[str, Any]:
@@ -854,7 +904,9 @@ def validate_compact(document: Any, *, expectation: Mapping[str, Any] | None = N
     Adds to the handoff rules: ``source_artifact.name`` parses as a handoff (``key`` and attempt
     bound) or a cache (``key`` and ``coverage_sha`` bound) name; ``composed`` scopes carry
     ``components`` (a baseline name for this key) and every frame an ``epoch`` plus ``tested``
-    record, while other scopes carry neither; each derivative lives at ``images/<sha256>.webp``;
+    record, while other scopes carry neither (nor any lane a ``baseline_run``), and a composed
+    bundle's epochs are consistent (:func:`_check_composed_epochs`); each derivative lives at
+    ``images/<sha256>.webp``;
     derivative comparisons meet the minimum too; ``files`` is exactly ``expectation.json``,
     ``selection.json``, ``extensions.json`` (iff extensions) and the set of derivative images.
     With ``expectation``: header equality, frames equal the expectation's captures, a ``complete``
@@ -928,6 +980,12 @@ def validate_compact(document: Any, *, expectation: Mapping[str, Any] | None = N
         expected_files.add("extensions.json")
     check(set(files) == expected_files, f"{path}.files",
           "must be exactly expectation.json, selection.json, extensions.json (iff set) and the derivatives")
+    if composed:
+        _check_composed_epochs(document, lanes, frames, path)
+    else:
+        for position, lane in enumerate(document["lanes"]):
+            check("baseline_run" not in lane, f"{path}.lanes[{position}].baseline_run",
+                  "exists only in a composed bundle")
     if expectation is not None:
         _check_same_header(document, expectation, path)
         _check_expectation_scope(document, expectation, path)
@@ -1716,7 +1774,8 @@ GALLERY_LANE = Obj(
         "status": Const("pass"),
         "jars": JARS,
     },
-    {"elapsed_s": Num(0.0, 10_000_000.0), "epoch": Str(choices=("baseline", "selected"))},
+    {"elapsed_s": Num(0.0, 10_000_000.0), "epoch": Str(choices=("baseline", "selected")),
+     "baseline_run": Obj({"status": Const("pass"), "jars": JARS}, {"elapsed_s": Num(0.0, 10_000_000.0)})},
 )
 GALLERY_FRAME = Obj(
     {
@@ -1898,7 +1957,9 @@ def validate_gallery(document: Any, *, path: str = "$") -> dict[str, Any]:
     scenario, role) with ``image == images/<key>/<published.file_sha256>.webp`` and
     ``width``/``height`` equal to the published metrics; release ``frame_count``/``lane_count`` and
     ``loader_names`` agree with the data; comparisons reference same-key, same-lane, same-role
-    frames; family notes name listed families. Families: one entry per family whose ``releases``
+    frames; a lane's ``baseline_run`` (the baseline execution of a re-tested lane's ``epoch:
+    baseline`` frames) exists exactly when a lane with ``epoch: selected`` holds a baseline frame;
+    family notes name listed families. Families: one entry per family whose ``releases``
     list its keys (each a release key; ``coverage_sha``, ``contracts``, ``links`` and
     ``image_policy`` exactly for an available key, whose coverage equals the ordinary release's);
     ``available``/``status`` summarize the releases; every lane and not-applicable entry names an
@@ -1921,6 +1982,7 @@ def validate_gallery(document: Any, *, path: str = "$") -> dict[str, Any]:
         lane_counts[lane["key"]] += 1
     frames: dict[tuple[str, str], Mapping[str, Any]] = {}
     frame_counts: dict[str, int] = {key: 0 for key in releases}
+    baseline_lanes: set[tuple[str, str]] = set()
     for position, frame in enumerate(document["frames"]):
         here = f"{path}.frames[{position}]"
         marker = (frame["key"], frame["frame_id"])
@@ -1946,6 +2008,14 @@ def validate_gallery(document: Any, *, path: str = "$") -> dict[str, Any]:
             check(frame["provenance"][field].startswith(run_prefix), f"{here}.provenance.{field}",
                   "must be a run of this repository")
         frame_counts[frame["key"]] += 1
+        if frame.get("epoch") == "baseline" and lane.get("epoch") == "selected":
+            check("baseline_run" in lane, f"{here}.epoch",
+                  "a baseline frame of a re-tested lane needs its lane's baseline_run")
+            baseline_lanes.add((frame["key"], frame["lane_id"]))
+    for position, lane in enumerate(document["lanes"]):
+        if "baseline_run" in lane:
+            check(lane.get("epoch") == "selected" and (lane["key"], lane["lane_id"]) in baseline_lanes,
+                  f"{path}.lanes[{position}].baseline_run", "exists only for a re-tested lane with baseline frames")
     for position, release in enumerate(document["releases"]):
         here = f"{path}.releases[{position}]"
         check(release["frame_count"] == frame_counts[release["key"]], f"{here}.frame_count", "must equal its frames")

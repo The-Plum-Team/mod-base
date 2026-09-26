@@ -86,7 +86,9 @@ a `synthesize` fixture hook in `adapter.fixtures_path` so `conformance` can exer
 without Minecraft. The same fixtures module may define the optional conformance fixtures
 (`family_bundle`, required with `--families` when the mod declares a family, plus
 `FAMILY_OUTCOMES`, `delegated_extensions` and `selected_extensions`); each enables a variant that is
-otherwise reported as skipped ([ADAPTER.md](ADAPTER.md#optional-conformance-fixtures)). A family
+otherwise reported as skipped ([ADAPTER.md](ADAPTER.md#optional-conformance-fixtures)). The two
+extension fixtures seed whatever their network hooks authenticate (runs, jobs, ZIP artifacts, JSON
+bodies) through the seeding API they receive as `ctx.api`. A family
 with `carry_forward` must carry across the documentation-only commits the later generations push
 ([ADAPTER.md](ADAPTER.md#conformance-in-process-no-syspath-edits)).
 

@@ -197,7 +197,7 @@ decides whether mods may pin a tag, never whether it is created.
 
 1. Merge the release change to `main` through a pull request. It sets `__version__` in
    `src/mod_base/__init__.py` to `X.Y.Z`, adds the `## vX.Y.Z` section to `CHANGELOG.md`, and
-   refreshes the staged-file lock, then the digest literal
+   refreshes the staged-file locks, then the digest literal
    (`PYTHONPATH=src python3 -m mod_base.template.lock --write`, then
    `python3 tools/update_tree_digest.py --write`).
 2. Wait for `mod-base CI` to be green on that exact merge commit:
@@ -231,10 +231,10 @@ five steps, canary included. A faulty release that mods already pin is fixed for
 or mods pin back to the previous tag with an ordinary pull request.
 
 Every tag names its own release commit. When nothing changed after the last `v0.9.x` patch tag
-(now `v0.9.1`), `v1.0.0` (stage S3) reuses its code unchanged, but its release change still sets
+(now `v0.9.2`), `v1.0.0` (stage S3) reuses its code unchanged, but its release change still sets
 `__version__` to `1.0.0`, adds the `## v1.0.0` changelog section and regenerates the digest
-literal. Tagging the `v0.9.1` commit a second time would make every handoff record kit version
-`0.9.1` under a `# v1.0.0` pin, which authentication refuses.
+literal. Tagging the `v0.9.2` commit a second time would make every handoff record kit version
+`0.9.2` under a `# v1.0.0` pin, which authentication refuses.
 
 ## Bumping the kit in a mod
 
@@ -250,7 +250,13 @@ git diff --check && git diff
 anything, then rewrites every pin and `# v` comment and re-synchronizes the managed files from the
 new kit. Quick Skin opens the bump as a draft and lands it through a batch pull request; Block Pops
 opens a `controller-upgrade/*` pull request with the `controller-upgrade` label and the owner's
-`/controller-upgrade approve <sha>`. Every bump runs the mod's complete gates.
+`/controller-upgrade approve <sha>`. Every bump runs the mod's complete gates. The release notes
+list every managed-file change; a mod test that pins the bytes of a managed file moves to the new
+kit's bytes in the same pull request (Quick Skin's `gradlew.bat` test checks the `cr-at-eol`
+attribute, not the file's bytes, so it needs no change). A Block Pops bump is staged by the
+controller's bootstrap, the base branch's: one older than `v0.9.2` stages the new kit without its
+`actions/`, so a gate step that reads the staged `actions/` can only follow once the controller's
+own pin is `v0.9.2` or later.
 
 ## Canary procedure
 
@@ -356,7 +362,9 @@ What to observe for each item:
 Record every observation in [Canary evidence](#canary-evidence) with its run URL. Stage S3 tags
 `v1.0.0` only after G1–G7 are all observed in a green canary cycle at one `v0.9.x` patch tag, and
 then runs the canary again pinned to `v1.0.0`. The `v0.9.0` cycle failed (see the Defect row), so
-that tag is now `v0.9.1`: its re-run observes G1–G7 again, and the `v0.9.0` rows stay as history.
+the patch tag under test is now `v0.9.2` (`v0.9.1` fixed that defect, `v0.9.2` the defects the mod
+migrations found before adoption): its run observes G1–G7 again, and the earlier rows stay as
+history.
 
 ## Canary evidence
 
@@ -393,8 +401,8 @@ value only as the caller-side row of G6; it never counts toward the three.
 | Stage | Action | Exit criterion |
 |---|---|---|
 | S0 | create and push mod-base; apply P2; CI green | `Test`, `Workflow policy`, `Front end` required and green on `main` |
-| S1 | tag `v0.9.0` ([Releasing mod-base](#releasing-mod-base)); then create the canary pinned to that tag (P3) and run it; a failing canary is fixed forward as the next `v0.9.x` patch tag (now `v0.9.1`), to which the canary moves with `bump` | G1–G7 recorded above in one green cycle at a `v0.9.x` tag |
-| S2 | open the mod drafts pinned to the current `v0.9.x` tag (`v0.9.0`, then `bump --to v0.9.1`) (Quick Skin `feat/mod-base`, Block Pops PR A and PR B) | every local verification green |
+| S1 | tag `v0.9.0` ([Releasing mod-base](#releasing-mod-base)); then create the canary pinned to that tag (P3) and run it; a failing canary is fixed forward as the next `v0.9.x` patch tag (now `v0.9.2`), to which the canary moves with `bump` | G1–G7 recorded above in one green cycle at a `v0.9.x` tag |
+| S2 | open the mod drafts pinned to the current `v0.9.x` tag (`v0.9.0`, then `bump --to v0.9.1` and `--to v0.9.2`) (Quick Skin `feat/mod-base`, Block Pops PR A and PR B) | every local verification green |
 | S3 | tag `v1.0.0` on its own release commit (the last `v0.9.x` code when unchanged, with `__version__` `1.0.0`); then move the canary to that tag with `bump --to v1.0.0`, run it and re-pin the drafts | canary green at `v1.0.0` |
 | S4 | Block Pops first: apply P1, mark PR A ready, record `verify --network`, owner approval, merge, dispatch E2E | the `master` key is live at `/e2e/`, a rotation run is green, visual review finds `mb-anchor--` |
 | S5 | Quick Skin: ready or batch PR; full Build and E2E; merge | all keys live as `mb-cache--`, two rotations, one family publication, one baseline consumed |
@@ -410,6 +418,14 @@ the pull-request template markers, the Dependabot ignore) fails, so PR B must ad
 complete. PR A must still bring its own `.github/CODEOWNERS`
 (a protected path) up to the fragment rules (`/AGENTS.md` and `/docs/ai/` owned), because
 `CODEOWNERS` can never be deferred.
+
+The managed `.gitattributes` also pins `text eol=lf` for every managed and fragment path, so a
+Windows clone with `core.autocrlf=true` checks them out byte-identical to the kit. Until Block Pops'
+PR B adds it, such a clone gets CRLF copies, which `template check` reports as line-ending drift
+(with its fix) rather than a whole-file diff: set `git config core.autocrlf input` in that clone and
+check the managed files out again (delete them, then `git checkout -- <path>`), or run
+`template sync --write`, which rewrites them (the caller included) with LF. The same applies to any
+clone made before the rules landed, since Git applies new attributes only at the next checkout.
 
 If P1 is not applied within 7 days of S3, S5 may run before S4 with the same exit criteria.
 
