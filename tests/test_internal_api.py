@@ -553,7 +553,7 @@ class CrossUnitUseTest(unittest.TestCase):
             "mod_base.adapter.protocol": {"HOOK_JOBS", "ImageFactory", "EXTENSION_OBJECTS", "TESTED_RUN_PROJECTION"},
             "mod_base.model.documents": {"RUN_CLAIM_FIELDS", "FRAME_FIELDS", "RUN_CLAIM", "SUBJECT", "BRANCH", "SHA1"},
             "mod_base.workflow": {"CALLER"},
-            "mod_base.adapter.host": {"check_placement", "placement", "MAX_CHILD_OUTPUT_BYTES"},
+            "mod_base.adapter.host": {"check_placement", "placement", "MAX_CHILD_OUTPUT_BYTES", "imaging_user_site"},
             "mod_base.evidence.compose": {"authenticate_baseline"},
             "mod_base.evidence.anchor": {"eligible_nodes"},
             "mod_base.github.artifacts": {"MAX_ARCHIVE_BYTES"},

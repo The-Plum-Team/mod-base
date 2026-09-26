@@ -146,6 +146,8 @@ uses:
   child whose `PYTHONPATH` is `host.adapter_pythonpath(invocation)` (the kit `src`, then each
   `config.adapter.python_path` entry inside the repository) and which holds no GitHub credentials.
   That is an environment value, exactly like the hook child's; nothing in the kit edits `sys.path`.
+  Its user site follows the hook child's rule ("Isolation" below): disabled, unless the parent
+  imports Pillow from its own user site, which the child then shares through `PYTHONUSERBASE`.
 * The child loads the adapter and the fixtures module with `host_child.load_adapter` and calls
   `host_child.run_hook(context, module, hook, arguments, image_factory=...)`, where `context` is an
   `adapter.api.Context` whose `api` is the seeded `github.fake.FakeGitHub` (duck-typed as a
@@ -341,7 +343,9 @@ The host enforces this table (`protocol.HOOK_JOBS`) at runtime, before any child
 
 ```
 env -i PATH=/usr/bin:/bin:<dirname(python3)> HOME=<tmp>/home TMPDIR=<tmp> LANG=C.UTF-8 PYTHONHASHSEED=0 \
-       PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+       PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 \
+       PYTHONNOUSERSITE=1  <- or PYTHONUSERBASE=<the host's user base> when the host imports Pillow
+                              from its own user site (below) \
        PYTHONPATH=<kit>/src:<each config.adapter.python_path entry, inside the repo, no symlink components> \
        [GH_TOKEN GITHUB_API_URL=https://api.github.com GITHUB_REPOSITORY
                                   <- only for a declared network hook, called with network,
@@ -358,6 +362,22 @@ env -i PATH=/usr/bin:/bin:<dirname(python3)> HOME=<tmp>/home TMPDIR=<tmp> LANG=C
   most 16 MiB through strict JSON and validated.
 * `python3` is the host's own interpreter (`sys.executable`, unresolved, so a virtual environment
   keeps its locked site-packages); `PATH` adds only its directory.
+* User site (v1.0.2): the private `HOME` would give the child a new, empty user site, so it runs
+  with `PYTHONNOUSERSITE=1`. The one exception is `host.imaging_user_site()`: when the host process
+  has its user site enabled (`site.ENABLE_USER_SITE` true, `sys.flags.no_user_site == 0`) and
+  `importlib.util.find_spec("PIL")` (located, never imported) is a regular package whose parent
+  directory is, after `os.path.realpath`, exactly the host's `site.getusersitepackages()` (a
+  runner that installed the hash-locked Pillow with `pip install --user`, as Block Pops' candidate
+  sandbox does), the child gets `PYTHONUSERBASE=<site.getuserbase()>` in place of
+  `PYTHONNOUSERSITE`: its user site is then the host's own, after the standard library exactly as
+  in the host. `PYTHONPATH` is never extended for it (a `PYTHONPATH` entry would precede the
+  standard library). The user base must be an absolute path of an existing directory without `:`
+  or a control character; in every other case (user site disabled, a global or
+  virtual-environment Pillow, no Pillow, an unusable user base) the environment is exactly the
+  one above with `PYTHONNOUSERSITE=1`, and a hook that needs Pillow fails closed with its
+  `ModuleNotFoundError`. The `conformance` simulation child follows the same rule, and the managed
+  bootstrap's `run` applies it to the kit process itself, whose own `PYTHONNOUSERSITE=1` would
+  otherwise hide the user site from the host before it could pass it on.
 * Call layout: a fresh `0700` call directory holds `req.json`, `resp.json`, `mod-base.json` (the
   canonical bytes of the config the parent already validated, so the child never re-reads a file
   that may have changed) and the hook's private `<tmp>` (`TMPDIR`, `ctx.tmpdir`, with

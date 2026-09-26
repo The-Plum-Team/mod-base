@@ -4,7 +4,9 @@
 directory and runs exactly::
 
     env -i PATH=/usr/bin:/bin:<dirname(python3)> HOME=<tmp>/home TMPDIR=<tmp> LANG=C.UTF-8
-           PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
+           PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1
+           PYTHONNOUSERSITE=1  <- or PYTHONUSERBASE=<this process's user base> when this process
+                                  imports Pillow from its own user site (imaging_user_site)
            PYTHONPATH=<kit>/src:<each config.adapter.python_path entry inside the repo>
            [GH_TOKEN GITHUB_API_URL GITHUB_REPOSITORY  <- only for a declared network hook called with
                                                          network, in a Pages callee job (placement
@@ -40,14 +42,22 @@ must be allowed there by ``protocol.HOOK_JOBS``. The read-only token is only eve
 in ``config.adapter.network_hooks`` whose ``call`` asked for it and which runs in a Pages callee job
 that ``protocol.HOOK_JOBS`` allows for it. The host never reads ``os.environ``: the token,
 repository and job come from the :class:`~mod_base.runtime.Invocation` snapshot.
+
+The child's private ``HOME`` would make its user site a fresh empty directory, so it is disabled
+(``PYTHONNOUSERSITE=1``), with one exception (:func:`imaging_user_site`, v1.0.2): when this process
+imports the hash-locked Pillow from its own user site (a runner that installed it with ``pip install
+--user``), the child gets exactly that user site through ``PYTHONUSERBASE``, after the standard
+library as in this process, and ``PYTHONPATH`` is never extended for it.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import selectors
 import shutil
 import signal
+import site
 import stat
 import subprocess
 import sys
@@ -85,6 +95,9 @@ _POLL_SECONDS = 0.2
 #: After the child exits (and its process group is killed), how long the parent keeps draining a
 #: pipe that an escaped descendant may still hold open.
 _DRAIN_SECONDS = 2.0
+#: The top-level package of the hash-locked Pillow (``requirements/pillow.txt``) that
+#: :func:`imaging_user_site` looks for; it is located, never imported.
+_IMAGING_PACKAGE = "PIL"
 
 
 def _fail(message: str) -> MbError:
@@ -156,6 +169,61 @@ def adapter_pythonpath(invocation: Invocation) -> str:
     return ":".join(entries)
 
 
+def _plain_path(text: str) -> bool:
+    """No ``:`` and no C0, DEL or C1 control character."""
+
+    return ":" not in text and not any(ord(character) < 32 or 127 <= ord(character) < 160 for character in text)
+
+
+def imaging_user_site() -> dict[str, str]:
+    """``{"PYTHONUSERBASE": <user base>}`` when this process imports Pillow from its own user site,
+    otherwise ``{}``.
+
+    Both isolated children, the hook child (:func:`child_environment`) and the ``conformance``
+    simulation child, get a private ``HOME``, which would make their user site a new, empty
+    directory, so they run with ``PYTHONNOUSERSITE=1``. A runner that installs the hash-locked
+    Pillow with ``pip install --user`` (Block Pops' credentialless candidate sandbox) would then
+    leave them without Pillow although this process imports it. For a non-empty result the child
+    builders omit ``PYTHONNOUSERSITE`` and set ``PYTHONUSERBASE`` instead: the child's user site is
+    then exactly this process's, placed after the standard library as it is here, never on
+    ``PYTHONPATH`` (whose entries precede the standard library).
+
+    All of these must hold, otherwise the result is ``{}`` and the child environments stay exactly
+    what they were before v1.0.2:
+
+    * this process has its user site enabled (``site.ENABLE_USER_SITE is True`` and
+      ``sys.flags.no_user_site == 0``);
+    * ``importlib.util.find_spec("PIL")`` (Pillow is located, never imported) is a regular package
+      whose parent directory is, after ``os.path.realpath``, exactly this process's
+      ``site.getusersitepackages()``; a global or virtual-environment Pillow changes nothing;
+    * ``site.getuserbase()`` is an absolute path of an existing directory holding no ``:`` and no
+      control character.
+
+    A user base that fails the last check leaves the environment unchanged rather than failing:
+    the child then lacks Pillow exactly as before, so a hook that needs it still fails closed (its
+    ``ModuleNotFoundError``) and a hook that does not is unaffected.
+    """
+
+    if site.ENABLE_USER_SITE is not True or sys.flags.no_user_site != 0:
+        return {}
+    try:
+        spec = importlib.util.find_spec(_IMAGING_PACKAGE)
+    except (ImportError, ValueError):
+        return {}
+    if spec is None or not isinstance(spec.origin, str) or spec.submodule_search_locations is None:
+        return {}
+    locations = list(spec.submodule_search_locations)
+    if len(locations) != 1 or not isinstance(locations[0], str) or os.path.dirname(spec.origin) != locations[0]:
+        return {}
+    user_site = site.getusersitepackages()
+    if not isinstance(user_site, str) or os.path.realpath(os.path.dirname(locations[0])) != os.path.realpath(user_site):
+        return {}
+    base = site.getuserbase()
+    if not isinstance(base, str) or not os.path.isabs(base) or not _plain_path(base) or not os.path.isdir(base):
+        return {}
+    return {"PYTHONUSERBASE": base}
+
+
 def _pages_job(invocation: Invocation) -> str | None:
     """``$GITHUB_JOB`` when this process is a ``publish.yml`` callee job: a ``protocol.TOKEN_JOBS``
     id under this repository's ``pages.yml`` workflow ref; otherwise ``None``."""
@@ -219,7 +287,7 @@ def _environment(invocation: Invocation, hook: str, tmpdir: Path, *, network: bo
         "PYTHONHASHSEED": "0",
         "PYTHONSAFEPATH": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONNOUSERSITE": "1",
+        **(imaging_user_site() or {"PYTHONNOUSERSITE": "1"}),
         "PYTHONPATH": adapter_pythonpath(invocation),
     }
     if network:
@@ -235,7 +303,8 @@ def _environment(invocation: Invocation, hook: str, tmpdir: Path, *, network: bo
 
 def child_environment(invocation: Invocation, hook: str, *, tmpdir: Path) -> dict[str, str]:
     """The exact ``env -i`` environment for ``hook`` (see module docstring); the token appears only
-    for a declared network hook in a token job (a Pages callee job whose SPEC §4.3 row allows it)."""
+    for a declared network hook in a token job (a Pages callee job whose SPEC §4.3 row allows it),
+    and ``PYTHONUSERBASE`` replaces ``PYTHONNOUSERSITE`` only as :func:`imaging_user_site` says."""
 
     protocol.require_hook(hook)
     return _environment(invocation, hook, tmpdir, network=_token_allowed(invocation, hook) and bool(invocation.token))

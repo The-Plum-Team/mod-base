@@ -51,7 +51,9 @@ does not cover, must equal the listing :data:`STAGED_LOCK` inside its digested `
 :data:`ACTIONS_LOCK`, and :func:`copy_kit` then stages no ``actions/``. Bytecode
 is never tolerated in a verified kit, because Python loads a planted ``__pycache__`` file in place
 of the verified source: :func:`kit_path` turns bytecode writing off for the importing process and
-``run`` sets ``PYTHONDONTWRITEBYTECODE=1``.
+``run`` sets ``PYTHONDONTWRITEBYTECODE=1``. ``run`` also disables the kit's user site
+(``PYTHONNOUSERSITE=1``) unless this interpreter imports the hash-locked Pillow from its own user
+site, which the kit then receives through ``PYTHONUSERBASE`` (:func:`imaging_user_site`).
 
 Usage::
 
@@ -71,10 +73,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import http.client
+import importlib.util
 import json
 import os
 import re
 import shutil
+import site
 import stat
 import subprocess
 import sys
@@ -124,6 +128,8 @@ STAMP_NAME = "MOD_BASE_KIT.json"
 STAMP_KIND = "mod-base.kit-stamp"
 OVERLAY_PATH = ("out", "mod-base-kit")
 BYTECODE_DIRECTORY = "__pycache__"
+#: The top-level package of the hash-locked Pillow that :func:`imaging_user_site` locates.
+IMAGING_PACKAGE = "PIL"
 ACTION_FILES = ("action.yml", "action.yaml")
 #: Lists tracked changes, untracked files and (whatever the ignore rules) ignored files.
 STATUS_ARGUMENTS = ("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching")
@@ -1042,12 +1048,62 @@ def rewrite_pin(repo: Path, target: Pin) -> list[str]:
     return changed
 
 
+def _plain_path(text: str) -> bool:
+    """No ``:`` and no C0, DEL or C1 control character."""
+
+    return ":" not in text and not any(ord(character) < 32 or 127 <= ord(character) < 160 for character in text)
+
+
+def imaging_user_site() -> dict[str, str]:
+    """``{"PYTHONUSERBASE": <user base>}`` when this interpreter imports Pillow from its own user
+    site, otherwise ``{}``; the rule of the kit's ``mod_base.adapter.host.imaging_user_site``, which
+    a kit test runs over the same inputs.
+
+    ``run`` disables the kit's user site (``PYTHONNOUSERSITE=1``) except when all of these hold:
+    this process has its user site enabled (``site.ENABLE_USER_SITE is True`` and
+    ``sys.flags.no_user_site == 0``); ``importlib.util.find_spec`` locates the hash-locked Pillow
+    (``PIL``, never imported) as a regular package whose parent directory is, after
+    ``os.path.realpath``, exactly this process's ``site.getusersitepackages()`` (a runner installed
+    it with ``pip install --user``); and ``site.getuserbase()`` is an absolute path of an existing
+    directory without ``:`` or a control character. Then the kit gets this process's own user site,
+    after the standard library, through ``PYTHONUSERBASE``, and the kit passes the same user site on
+    to its isolated children by the same rule. A global or virtual-environment Pillow changes
+    nothing.
+    """
+
+    if site.ENABLE_USER_SITE is not True or sys.flags.no_user_site != 0:
+        return {}
+    try:
+        spec = importlib.util.find_spec(IMAGING_PACKAGE)
+    except (ImportError, ValueError):
+        return {}
+    if spec is None or not isinstance(spec.origin, str) or spec.submodule_search_locations is None:
+        return {}
+    locations = list(spec.submodule_search_locations)
+    if len(locations) != 1 or not isinstance(locations[0], str) or os.path.dirname(spec.origin) != locations[0]:
+        return {}
+    user_site = site.getusersitepackages()
+    if not isinstance(user_site, str) or os.path.realpath(os.path.dirname(locations[0])) != os.path.realpath(user_site):
+        return {}
+    base = site.getuserbase()
+    if not isinstance(base, str) or not os.path.isabs(base) or not _plain_path(base) or not os.path.isdir(base):
+        return {}
+    return {"PYTHONUSERBASE": base}
+
+
 def kit_environment(resolution: Resolution) -> dict[str, str]:
-    """The environment ``run`` gives the kit: its ``src`` alone on ``PYTHONPATH``."""
+    """The environment ``run`` gives the kit: its ``src`` alone on ``PYTHONPATH`` and no user site,
+    or only this interpreter's own when Pillow lives there (:func:`imaging_user_site`)."""
 
     environment = {name: value for name, value in os.environ.items() if name not in ("PYTHONHOME", "PYTHONSTARTUP")}
     environment.update({"PYTHONPATH": str(resolution.root / "src"), "PYTHONSAFEPATH": "1",
-                        "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"})
+                        "PYTHONDONTWRITEBYTECODE": "1"})
+    user_site = imaging_user_site()
+    if user_site:
+        environment.pop("PYTHONNOUSERSITE", None)
+        environment.update(user_site)
+    else:
+        environment["PYTHONNOUSERSITE"] = "1"
     if resolution.pinned:
         environment["MOD_BASE_KIT_SHA"] = resolution.pin.sha
     return environment

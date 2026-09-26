@@ -5,6 +5,32 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.0.2
+
+A fix release for a defect Block Pops' adoption found at `v1.0.1`. Schema versions (all 1),
+`pixel_metrics_version` 1 and `ADAPTER_API` 1 are unchanged. One managed file changes, the
+bootstrap `scripts/ci/mod_base_kit.py`, which `bump --to v1.0.2` rewrites; no other mod change is
+needed.
+
+### Fixed
+
+- **Pillow installed with `pip install --user`.** Block Pops' credentialless candidate sandbox
+  installs the hash-locked Pillow into the sandbox account's user site, and its Build gate's
+  `conformance` run (run 36239090095) failed with `hook-failed: adapter hook 'synthesize' failed:
+  ModuleNotFoundError: No module named 'PIL'`: the bootstrap's `run` starts the kit with
+  `PYTHONNOUSERSITE=1`, and the kit's isolated children, the hook child and the `conformance`
+  simulation child, run with a private `HOME` and `PYTHONNOUSERSITE=1`, so none of them saw that
+  user site. The new `mod_base.adapter.host.imaging_user_site()` names this process's user base
+  only when this process has its user site enabled and the hash-locked Pillow (`PIL`, located and
+  never imported) is a package directly in that user site; then the child gets
+  `PYTHONUSERBASE=<that user base>` in place of `PYTHONNOUSERSITE=1`, so its user site is the
+  parent's own, after the standard library exactly as in the parent (`PYTHONPATH` is never
+  extended). The managed bootstrap applies the same rule when `run` starts the kit. In every other
+  case (a global or virtual-environment Pillow, as in every Pages job, a disabled user site, no
+  Pillow, or a user base that is relative, missing or holds `:` or a control character) every
+  environment is exactly the `v1.0.1` one. `docs/ADAPTER.md` ("Isolation") and
+  `docs/SECURITY-MODEL.md` record the rule.
+
 ## v1.0.1
 
 A fix release for three defects the Quick Skin adoption found at `v1.0.0`. Schema versions (all 1;

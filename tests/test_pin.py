@@ -28,8 +28,10 @@ from typing import Any
 from unittest import mock
 
 from mod_base import cli, pin
+from mod_base.adapter import host
 from mod_base.errors import MbError, Unavailable
 from mod_base.github.api import ApiNotFound
+from tests import user_site
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP_PATH = KIT_ROOT / "template" / "managed" / "scripts" / "ci" / "mod_base_kit.py"
@@ -1197,6 +1199,85 @@ class BootstrapCliTest(TempCase):
                                 env=self.environment(), capture_output=True, text=True, timeout=60, cwd=self.root,
                                 check=False)
         self.assertEqual(result.stdout, f"{SHA_A} v1.2.3\n")
+
+
+#: A fake kit entry point reporting the user-site state ``run`` gave it and which ``PIL`` it imports.
+REPORTING_MAIN = """import json, os
+try:
+    import PIL
+except ImportError:
+    PIL = None
+print(json.dumps({"nousersite": os.environ.get("PYTHONNOUSERSITE"), "userbase": os.environ.get("PYTHONUSERBASE"),
+                  "marker": getattr(PIL, "MARKER", None)}))
+"""
+
+
+class BootstrapUserSiteTest(TempCase):
+    """v1.0.2: ``run`` keeps the kit's user site disabled unless this interpreter imports the
+    hash-locked Pillow from its own user site (``imaging_user_site``, the kit's rule for its
+    isolated children too); then the kit gets exactly that user site through ``PYTHONUSERBASE``."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.root / "layout").mkdir()
+        self.layout = user_site.Layout(self.root / "layout")
+        self.resolution = BOOT.Resolution(self.root / "kit", BOOT.Pin(SHA_A, "v1.2.3", ()), "environment", True)
+
+    def test_the_bootstrap_and_the_kit_share_the_rule(self) -> None:
+        self.assertEqual(BOOT.IMAGING_PACKAGE, "PIL")
+        for scenario in user_site.ACCEPTED + user_site.REJECTED:
+            with self.subTest(scenario.label), self.layout.patched(scenario):
+                self.assertEqual(BOOT.imaging_user_site(), self.layout.expected(scenario))
+                self.assertEqual(BOOT.imaging_user_site(), host.imaging_user_site())
+
+    def test_every_other_state_keeps_the_kit_environment_byte_for_byte(self) -> None:
+        with mock.patch.dict(os.environ, {"PYTHONHOME": "/home", "PYTHONSTARTUP": "/startup", "KEPT": "1",
+                                          "PYTHONUSERBASE": "/elsewhere"}):
+            # the v1.0.1 construction
+            expected = {name: value for name, value in os.environ.items()
+                        if name not in ("PYTHONHOME", "PYTHONSTARTUP")}
+            expected.update({"PYTHONPATH": str(self.root / "kit" / "src"), "PYTHONSAFEPATH": "1",
+                             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"})
+            expected["MOD_BASE_KIT_SHA"] = SHA_A
+            for scenario in user_site.REJECTED:
+                with self.subTest(scenario.label), self.layout.patched(scenario):
+                    self.assertEqual(list(BOOT.kit_environment(self.resolution).items()), list(expected.items()))
+
+    def test_a_user_site_pillow_reaches_the_kit(self) -> None:
+        # An empty PYTHONNOUSERSITE does not disable the user site, so it can coexist with it; run drops it.
+        with mock.patch.dict(os.environ, {"PYTHONNOUSERSITE": "", "PYTHONUSERBASE": "/elsewhere"}):
+            for scenario in user_site.ACCEPTED:
+                with self.subTest(scenario.label), self.layout.patched(scenario):
+                    environment = BOOT.kit_environment(self.resolution)
+                    self.assertNotIn("PYTHONNOUSERSITE", environment)
+                    self.assertEqual(environment["PYTHONUSERBASE"], self.layout.expected(scenario)["PYTHONUSERBASE"])
+                    self.assertEqual(environment["PYTHONPATH"], str(self.root / "kit" / "src"))
+                    self.assertEqual(environment["MOD_BASE_KIT_SHA"], SHA_A)
+
+    def test_run_hands_the_kit_the_user_site_that_holds_pillow(self) -> None:
+        # A virtual environment without system site packages has no user site, so the bootstrap may
+        # run on the interpreter that environment was created from; no platform lacks one.
+        interpreter = user_site.user_site_interpreter(self.home)
+        base = self.root / "userbase"
+        base.mkdir()
+        marker = "the bootstrap's user-site Pillow"
+        user_site.fake_pillow(user_site.user_site_of(interpreter, base, self.home), marker)
+        repo = mod_repo(self.root / "mod")
+        kit = kit_tree(self.root / "kit")
+        write(kit, "src/mod_base/__main__.py", REPORTING_MAIN)
+
+        def run(**extra: str) -> dict[str, Any]:
+            environment = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "PYTHONUSERBASE": str(base),
+                           "PYTHONDONTWRITEBYTECODE": "1", "MOD_BASE_KIT_PATH": str(kit),
+                           "MOD_BASE_ALLOW_UNPINNED": "1", **extra}
+            completed = subprocess.run([interpreter, str(BOOTSTRAP_PATH), "run", "--repo", str(repo), "--", "report"],
+                                       env=environment, capture_output=True, text=True, timeout=120, check=False)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return json.loads(completed.stdout)
+
+        self.assertEqual(run(), {"nousersite": None, "userbase": str(base), "marker": marker})
+        # Without its own user site the bootstrap disables the kit's, exactly as before v1.0.2.
+        self.assertEqual(run(PYTHONNOUSERSITE="1"), {"nousersite": "1", "userbase": str(base), "marker": None})
 
 
 class BootstrapSourceTest(unittest.TestCase):
