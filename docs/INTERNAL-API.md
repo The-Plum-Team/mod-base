@@ -1362,7 +1362,7 @@ Frozen for other units (integration round):
 
 * `class BuildError(MbError)`: The Pages inputs, this run or the rendered site fail a build check (exit 2).
 * `def current_implementation(invocation: Invocation, *, jobs_allowed: Sequence[str]) -> dict[str, Any]`: SPEC §5.3.2 step 1: this process runs in this repository's ``pages.yml`` on the canonical branch, in one of ``jobs_allowed``; returns the promotion ``implementation`` of this run.
-* `def require_current_run(api: GitHubApi, invocation: Invocation, implementation: Mapping[str, Any]) -> dict[str, Any]`: SPEC §5.3.2 step 2: the API default branch is the canonical branch and this run and its exact attempt are the ``in_progress`` ``pages.yml`` run of the canonical head; returns the run.
+* `def require_current_run(api: GitHubApi, invocation: Invocation, implementation: Mapping[str, Any]) -> dict[str, Any]`: SPEC §5.3.2 step 2: the API default branch is the canonical branch and this run and its exact attempt are the unfinished (no conclusion yet) ``pages.yml`` run of the canonical head; returns the run.
 * `def check_checkouts(invocation: Invocation, *, kit_root: Path, environ: Mapping[str, str]) -> None`: The host facts of SPEC §5.3.2 step 1: no inherited ``GIT_*`` variable in ``environ``, the mod checkout clean at ``GITHUB_SHA`` and the kit checkout ``kit_root`` clean at ``MOD_BASE_KIT_SHA``.
 * `FAMILY_SELECTED_NAME = 'selected.json'`: the recorded selection of a collected family artifact (`family.paired.SELECTED_NAME`, see the recorded-selection amendment).
 * `def collected_family_selection(root: Path, *, family: str, key: str, reason: str) -> Selected`: The layout of a downloaded collected family artifact and its recorded ``Selected`` generation (``refresh`` checks the same layout).

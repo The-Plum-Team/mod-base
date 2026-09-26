@@ -205,6 +205,19 @@ class InvocationTest(BuildFlow):
                 self.pages_run(**changes)
                 self.rejected()
 
+    def test_the_current_run_may_report_any_unfinished_status(self) -> None:
+        # GitHub reports a running workflow run as queued/waiting/pending while some of its
+        # matrix jobs wait for a runner (canary run 36210848548); only a finished run is refused.
+        for status in ("queued", "waiting", "pending", "requested"):
+            with self.subTest(status):
+                self.setUp()
+                self.pages_run(status=status)
+                self.build()
+        self.setUp()
+        self.pages_run(status="completed", conclusion="failure")
+        error = self.rejected(reason="current-run")
+        self.assertIn("status 'completed', conclusion 'failure'", str(error))
+
     def test_the_default_branch_must_be_the_canonical_branch(self) -> None:
         repository = self.pub.mod.repository
         self.world.api.add_response(f"/repos/{repository}", {"full_name": repository, "default_branch": "main"})
