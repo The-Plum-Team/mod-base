@@ -33,7 +33,7 @@ from unittest import mock
 
 import mod_base
 from mod_base.config import load_config
-from mod_base.adapter import host_child
+from mod_base.adapter import host, host_child
 from mod_base.adapter.api import Context
 from mod_base.conformance import _fixture_api, _generations, _rotation, _simulation, _world
 from mod_base.conformance import run as conformance_run
@@ -48,6 +48,7 @@ from mod_base.model import grammar
 from mod_base.pages import rotate, select
 from mod_base.pin import parse_pin_files
 from mod_base.template import tool
+from tests import user_site
 from tests.fixtures.mods import support
 from tests.test_workflow_policy import (CHECKOUT, COMPOSITES, DEPLOY_PAGES, PINNED_ACTIONS, SETUP_PYTHON, parse_yaml,
                                         require_tools)
@@ -216,12 +217,146 @@ class FixtureModConformanceTest(unittest.TestCase):
             run_conformance(repo=self.work / "absent", keys=None, all_keys=True, kit_root=ROOT, families=False)
 
     def test_the_child_environment_holds_no_credential(self) -> None:
-        with mock.patch.dict(os.environ, {"GH_TOKEN": "x", "GITHUB_TOKEN": "y", "ACTIONS_RUNTIME_TOKEN": "z"}):
+        # Every runner whose Pillow is not in its user site; ChildUserSiteTest covers the exception.
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "x", "GITHUB_TOKEN": "y", "ACTIONS_RUNTIME_TOKEN": "z"}), \
+                mock.patch.object(host, "imaging_user_site", return_value={}):
             environment = _child_environment("/kit/src", self.work)
         self.assertEqual(set(environment), {"PATH", "HOME", "TMPDIR", "LANG", "PYTHONHASHSEED", "PYTHONSAFEPATH",
                                             "PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE", "PYTHONPATH"})
         self.assertEqual(environment["PYTHONPATH"], "/kit/src")
         self.assertTrue(Path(environment["HOME"]).is_relative_to(self.work))
+
+
+#: The simulation child's variables before v1.0.2, in order.
+DEFAULT_CHILD_NAMES = ("PATH", "HOME", "TMPDIR", "LANG", "PYTHONHASHSEED", "PYTHONSAFEPATH", "PYTHONDONTWRITEBYTECODE",
+                       "PYTHONNOUSERSITE", "PYTHONPATH")
+#: A parent started with ``argv = [scratch, pythonpath, child source]``: it builds the simulation
+#: child's environment exactly as ``run_conformance`` does and runs ``child source`` in it.
+PARENT = """
+import json, subprocess, sys
+from pathlib import Path
+from mod_base.adapter import host
+from mod_base.conformance.run import _child_environment
+
+helper = host.imaging_user_site()
+located_only = "PIL" not in sys.modules
+scratch = Path(sys.argv[1])
+environment = _child_environment(sys.argv[2], scratch)
+child = subprocess.run([sys.executable, "-P", "-c", sys.argv[3]], env=environment, cwd=scratch,
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, check=False)
+print(json.dumps({"helper": helper, "located_only": located_only, "environment": environment,
+                  "returncode": child.returncode, "stdout": child.stdout, "stderr": child.stderr[-2000:]}))
+"""
+#: The child: which PIL it imports and where its user site lies on ``sys.path``.
+CHILD = """
+import json, site, sys, sysconfig
+try:
+    import PIL
+except ImportError:
+    PIL = None
+print(json.dumps({"marker": getattr(PIL, "MARKER", None), "file": getattr(PIL, "__file__", None),
+                  "path": sys.path, "stdlib": sysconfig.get_paths()["stdlib"],
+                  "user_site": site.getusersitepackages(), "enabled": site.ENABLE_USER_SITE}))
+"""
+
+
+class ChildUserSiteTest(unittest.TestCase):
+    """v1.0.2: the simulation child's environment follows ``host.imaging_user_site`` and nothing
+    else, and a child started that way really imports the Pillow of its parent's user site (Block
+    Pops installs the hash-locked Pillow with ``pip install --user``; run 36239090095 failed with
+    ``No module named 'PIL'`` in the ``synthesize`` hook)."""
+
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="mb-conformance-user-site-")).resolve()
+        self.addCleanup(shutil.rmtree, self.work, True)
+        (self.work / "layout").mkdir()
+        self.layout = user_site.Layout(self.work / "layout")
+        self.scratches = 0
+
+    def child(self, scenario: user_site.Scenario | None) -> tuple[Path, dict[str, str]]:
+        """``_child_environment`` in ``scenario`` (``None``: the helper answers ``{}``)."""
+
+        self.scratches += 1
+        scratch = self.work / f"scratch-{self.scratches}"
+        scratch.mkdir()
+        patch = (self.layout.patched(scenario) if scenario is not None
+                 else mock.patch.object(host, "imaging_user_site", return_value={}))
+        with patch:
+            return scratch, _child_environment("/kit/src:/mod/scripts/pages", scratch)
+
+    def test_every_other_process_state_keeps_the_environment_byte_for_byte(self) -> None:
+        _, reference = self.child(None)
+        self.assertEqual(tuple(reference), DEFAULT_CHILD_NAMES)
+        for scenario in user_site.REJECTED:
+            with self.subTest(scenario.label):
+                scratch, environment = self.child(scenario)
+                self.assertEqual(list(environment.items()), [
+                    ("PATH", reference["PATH"]), ("HOME", str(scratch / "home")), ("TMPDIR", str(scratch)),
+                    ("LANG", "C.UTF-8"), ("PYTHONHASHSEED", "0"), ("PYTHONSAFEPATH", "1"),
+                    ("PYTHONDONTWRITEBYTECODE", "1"), ("PYTHONNOUSERSITE", "1"),
+                    ("PYTHONPATH", "/kit/src:/mod/scripts/pages")])
+
+    def test_a_user_site_pillow_swaps_nousersite_for_the_user_base(self) -> None:
+        for scenario in user_site.ACCEPTED:
+            with self.subTest(scenario.label):
+                scratch, environment = self.child(scenario)
+                _, reference = self.child(None)
+                base = self.layout.expected(scenario)["PYTHONUSERBASE"]
+                self.assertEqual(list(environment.items()), [
+                    ("PATH", reference["PATH"]), ("HOME", str(scratch / "home")), ("TMPDIR", str(scratch)),
+                    ("LANG", "C.UTF-8"), ("PYTHONHASHSEED", "0"), ("PYTHONSAFEPATH", "1"),
+                    ("PYTHONDONTWRITEBYTECODE", "1"), ("PYTHONUSERBASE", base),
+                    ("PYTHONPATH", "/kit/src:/mod/scripts/pages")])
+
+    def parent(self, interpreter: str, base: Path, home: Path, **extra: str) -> dict[str, Any]:
+        self.scratches += 1
+        scratch = self.work / f"scratch-{self.scratches}"
+        scratch.mkdir()
+        environment = {"PATH": "/usr/bin:/bin", "HOME": str(home), "PYTHONUSERBASE": str(base),
+                       "PYTHONPATH": str(ROOT / "src"), "PYTHONSAFEPATH": "1", "PYTHONDONTWRITEBYTECODE": "1", **extra}
+        completed = subprocess.run([interpreter, "-P", "-c", PARENT, str(scratch), str(ROOT / "src"), CHILD],
+                                   env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                   timeout=300, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+        report = json.loads(completed.stdout)
+        self.assertEqual(report["returncode"], 0, report["stderr"])
+        report["child"] = json.loads(report["stdout"])
+        return report
+
+    def test_a_child_started_like_the_simulation_imports_the_parent_user_site(self) -> None:
+        home = self.work / "home"
+        home.mkdir()
+        # A virtual environment without system site packages has no user site, so the parent may
+        # be the interpreter that environment was created from; no platform lacks one.
+        interpreter = user_site.user_site_interpreter(home)
+        base = self.work / "userbase"
+        base.mkdir()
+        site_packages = user_site.user_site_of(interpreter, base, home)
+        marker = "the parent's user-site Pillow"
+        init = user_site.fake_pillow(site_packages, marker)
+
+        report = self.parent(interpreter, base, home)
+        self.assertEqual(report["helper"], {"PYTHONUSERBASE": str(base)})
+        self.assertTrue(report["located_only"], "the helper must locate Pillow without importing it")
+        environment, child = report["environment"], report["child"]
+        self.assertNotIn("PYTHONNOUSERSITE", environment)
+        self.assertEqual(environment["PYTHONUSERBASE"], str(base))
+        self.assertEqual(environment["PYTHONPATH"], str(ROOT / "src"), "PYTHONPATH is never extended")
+        self.assertNotEqual(environment["HOME"], str(home), "the child keeps its private HOME")
+        self.assertEqual((child["marker"], os.path.realpath(child["file"])), (marker, os.path.realpath(init)))
+        self.assertIs(child["enabled"], True)
+        paths = [os.path.realpath(entry) for entry in child["path"]]
+        self.assertIn(os.path.realpath(site_packages), paths)
+        self.assertGreater(paths.index(os.path.realpath(site_packages)), paths.index(os.path.realpath(child["stdlib"])),
+                           "the user site follows the standard library, as in the parent")
+        self.assertLess(paths.index(os.path.realpath(ROOT / "src")), paths.index(os.path.realpath(child["stdlib"])))
+
+        # The same parent without its user site: the child environment is the pre-v1.0.2 one.
+        control = self.parent(interpreter, base, home, PYTHONNOUSERSITE="1")
+        self.assertEqual(control["helper"], {})
+        self.assertEqual(control["environment"]["PYTHONNOUSERSITE"], "1")
+        self.assertNotIn("PYTHONUSERBASE", control["environment"])
+        self.assertNotEqual(control["child"]["marker"], marker)
 
 
 def simulate_in_process(source: Path, work: Path, *, families: bool,

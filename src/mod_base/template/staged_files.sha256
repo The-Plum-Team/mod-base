@@ -2,7 +2,7 @@ a2762dc1f34d57b2f7be02c0cc46c26518ce7a6850fe409c047769496a0ec9a3  ./template/man
 bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/managed/.github/workflows/pages.yml
 ade9b6115b6045f0ac1640a51118c117470b85d2ec315787c4ce2e6182491ff8  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
 0b9fcb0dd4368b16aaaa5611a92e9909aa9e803ebe8440e33590cc9376a911a9  ./template/managed/docs/ai/shared/REPOSITORY.md
-e6f34a8144e19a60d645663cf9698881d3af57da356abaf3965c7417f479f806  ./template/managed/scripts/ci/mod_base_kit.py
+ee44ff807cfa43df0f285a1ddf37963eeb0033e2dfbe05f05fb9b0234060c83e  ./template/managed/scripts/ci/mod_base_kit.py
 da20b92010d9b9f083cf88d84ffad931d391336dfbfb0154d66f0be8d38c945b  ./template/manifest.json
 f52062f61bc044645c13ecbe926b672253834dfaca3c03dfb14d3682d78a88eb  ./template/seed/.github/CODEOWNERS.tmpl
 0e6bfc5a7783036fb43a585b5222f5a752b86695c255fa3ece3bc5d4e2f5d5c4  ./template/seed/.github/dependabot.yml.tmpl

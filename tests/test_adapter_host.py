@@ -5,9 +5,11 @@ own hooks (the fixtures run ``conformance`` unmodified)."""
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
 import json
 import os
 import shutil
+import site
 import subprocess
 import sys
 import tempfile
@@ -36,6 +38,7 @@ from mod_base.model.validators import DocumentError, is_display_text
 from mod_base.runtime import build_invocation
 from mod_base.workflow import PAGES_WORKFLOW_PATH
 from tests import test_family_support as fs
+from tests import user_site
 from tests.fixtures.mods import support
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -190,6 +193,14 @@ class HostTestCase(unittest.TestCase):
 
 
 class ChildEnvironmentTest(HostTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # These tests pin the environment of every runner whose Pillow is not in its user site;
+        # UserSiteEnvironmentTest covers the one exception (host.imaging_user_site).
+        patcher = mock.patch.object(host, "imaging_user_site", return_value={})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_child_runs_with_exactly_the_scrubbed_environment(self) -> None:
         self.mode("ok")
         invocation = self.invocation(job="collect", token="t0ken", GITHUB_TOKEN="other")
@@ -284,6 +295,115 @@ class ChildEnvironmentTest(HostTestCase):
     def test_fixture_hooks_never_go_through_the_host(self) -> None:
         with self.assertRaises(MbError):
             host.call(self.invocation(), "synthesize", {})
+
+
+#: The hook child's variables before v1.0.2, in order; a token job's grant follows them.
+DEFAULT_CHILD_NAMES = ("PATH", "HOME", "TMPDIR", "LANG", "PYTHONHASHSEED", "PYTHONSAFEPATH", "PYTHONDONTWRITEBYTECODE",
+                       "PYTHONNOUSERSITE", "PYTHONPATH")
+TOKEN_NAMES = ("GH_TOKEN", "GITHUB_API_URL", "GITHUB_REPOSITORY")
+
+
+class ImagingUserSiteTest(unittest.TestCase):
+    """``host.imaging_user_site`` (v1.0.2) in every process state ``tests.user_site`` describes."""
+
+    def setUp(self) -> None:
+        directory = Path(tempfile.mkdtemp(prefix="mb-user-site-"))
+        self.addCleanup(shutil.rmtree, directory, True)
+        self.layout = user_site.Layout(directory)
+
+    def test_pillow_in_this_process_user_site_names_its_user_base(self) -> None:
+        self.assertEqual(self.layout.expected(user_site.ACCEPTED[0]), {"PYTHONUSERBASE": str(self.layout.base)})
+        self.assertEqual(self.layout.expected(user_site.ACCEPTED[1]),
+                         {"PYTHONUSERBASE": str(self.layout.root / "alias")},
+                         "the user base is passed as this process reports it, not resolved")
+        for scenario in user_site.ACCEPTED:
+            with self.subTest(scenario.label), self.layout.patched(scenario):
+                self.assertEqual(host.imaging_user_site(), self.layout.expected(scenario))
+
+    def test_every_other_process_state_names_nothing(self) -> None:
+        self.assertGreaterEqual(len(user_site.REJECTED), 20)
+        for scenario in user_site.REJECTED:
+            with self.subTest(scenario.label), self.layout.patched(scenario):
+                self.assertEqual(host.imaging_user_site(), {})
+
+    def test_each_rejected_user_base_fails_exactly_one_path_check(self) -> None:
+        # Otherwise a scenario would pass with one of the checks deleted (a relative user base that
+        # does not exist from here would be rejected by the existence check alone).
+        for scenario in user_site.REJECTED:
+            if scenario.base == "real":
+                continue
+            base = self.layout.bases[scenario.base]
+            plain = ":" not in base and not any(ord(c) < 32 or 127 <= ord(c) < 160 for c in base)
+            with self.subTest(scenario.label):
+                self.assertEqual([os.path.isabs(base), plain, os.path.isdir(base)].count(False), 1)
+
+    def test_the_patches_are_undone(self) -> None:
+        before = (site.ENABLE_USER_SITE, sys.flags, importlib.util.find_spec, site.getuserbase())
+        with self.layout.patched(user_site.REJECTED[2]):
+            self.assertEqual(sys.flags.no_user_site, 1)
+        self.assertEqual((site.ENABLE_USER_SITE, sys.flags, importlib.util.find_spec, site.getuserbase()), before)
+
+
+class UserSiteEnvironmentTest(HostTestCase):
+    """The hook child's environment follows ``host.imaging_user_site`` and nothing else: with
+    Pillow in this process's user site ``PYTHONUSERBASE`` takes the place of ``PYTHONNOUSERSITE``
+    (``PYTHONPATH`` unchanged); in every other process state it is byte-for-byte the pre-v1.0.2 one."""
+
+    CASES = ((None, None, "targets"), ("collect", "t", "authenticate_extensions"), ("build", "t", "targets"))
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.directory / "layout").mkdir()
+        self.layout = user_site.Layout(self.directory / "layout")
+        self.tmp = self.directory / "tmp"
+
+    def child(self, invocation, hook: str, scenario: user_site.Scenario) -> dict[str, str]:
+        with self.layout.patched(scenario):
+            return host.child_environment(invocation, hook, tmpdir=self.tmp)
+
+    def test_every_other_process_state_keeps_the_environment_byte_for_byte(self) -> None:
+        for job, token, hook in self.CASES:
+            invocation = self.invocation(job=job, token=token)
+            granted = token is not None and hook in protocol.NETWORK_HOOKS and job in protocol.HOOK_JOBS[hook]
+            expected = {"PATH": f"/usr/bin:/bin:{os.path.dirname(sys.executable)}", "HOME": str(self.tmp / "home"),
+                        "TMPDIR": str(self.tmp), "LANG": "C.UTF-8", "PYTHONHASHSEED": "0", "PYTHONSAFEPATH": "1",
+                        "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
+                        "PYTHONPATH": host.adapter_pythonpath(invocation)}
+            if granted:
+                expected.update({"GH_TOKEN": "t", "GITHUB_API_URL": "https://api.github.com",
+                                 "GITHUB_REPOSITORY": invocation.repository})
+            for scenario in user_site.REJECTED:
+                with self.subTest(job=job, hook=hook, scenario=scenario.label):
+                    self.assertEqual(list(self.child(invocation, hook, scenario).items()), list(expected.items()))
+            self.assertEqual(tuple(expected), DEFAULT_CHILD_NAMES + (TOKEN_NAMES if granted else ()))
+
+    def test_a_user_site_pillow_swaps_nousersite_for_the_user_base(self) -> None:
+        for job, token, hook in self.CASES:
+            invocation = self.invocation(job=job, token=token)
+            default = self.child(invocation, hook, user_site.REJECTED[0])
+            for scenario in user_site.ACCEPTED:
+                with self.subTest(job=job, hook=hook, scenario=scenario.label):
+                    environment = self.child(invocation, hook, scenario)
+                    base = self.layout.expected(scenario)["PYTHONUSERBASE"]
+                    self.assertEqual(list(environment.items()),
+                                     [("PYTHONUSERBASE", base) if name == "PYTHONNOUSERSITE" else (name, value)
+                                      for name, value in default.items()])
+                    self.assertNotIn("PYTHONNOUSERSITE", environment)
+                    self.assertEqual(environment["PYTHONPATH"], host.adapter_pythonpath(invocation),
+                                     "the user site is never put on PYTHONPATH, ahead of the standard library")
+
+    def test_the_call_hands_the_child_the_user_base(self) -> None:
+        self.mode("ok")
+        base = self.directory / "userbase"
+        base.mkdir()
+        invocation = self.invocation()
+        with mock.patch.object(host, "imaging_user_site", return_value={"PYTHONUSERBASE": str(base)}):
+            host.call(invocation, "targets", {"branches": None})
+        environ = self.reported()["environ"]
+        self.assertEqual(set(environ) - {"__CF_USER_TEXT_ENCODING", "LC_CTYPE"},
+                         set(DEFAULT_CHILD_NAMES) - {"PYTHONNOUSERSITE"} | {"PYTHONUSERBASE"})
+        self.assertEqual(environ["PYTHONUSERBASE"], str(base))
+        self.assertEqual(environ["PYTHONPATH"], host.adapter_pythonpath(invocation))
 
 
 class TokenGatingTest(HostTestCase):

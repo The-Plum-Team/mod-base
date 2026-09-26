@@ -281,6 +281,25 @@ Integration-round amendments:
   * *Delegated variant.* Its tested claim takes `run_id`, `run_attempt`, `branch` and `commit` from
     the tested run (`conformance/reused-pull-request` at its `head_sha`); the controller stays the
     handoff run's.
+* **User-site Pillow (v1.0.2).** Block Pops' credentialless candidate sandbox installs the
+  hash-locked Pillow with `pip install --user`, and its `conformance` run failed (run 36239090095,
+  `hook-failed: adapter hook 'synthesize' failed: ModuleNotFoundError: No module named 'PIL'`):
+  both isolated children, the hook child (`host._environment`) and the simulation child
+  (`conformance.run._child_environment`), get a private `HOME` and `PYTHONNOUSERSITE=1`, and the
+  managed bootstrap's `run` starts the kit itself with `PYTHONNOUSERSITE=1`. The new public
+  `adapter.host.imaging_user_site() -> dict[str, str]` returns `{"PYTHONUSERBASE": site.getuserbase()}`
+  only when this process has its user site enabled (`site.ENABLE_USER_SITE is True`,
+  `sys.flags.no_user_site == 0`), `importlib.util.find_spec("PIL")` (never an import) is a regular
+  package whose parent directory equals, after `os.path.realpath`, this process's
+  `site.getusersitepackages()`, and the user base is an absolute, existing directory without `:` or
+  a control character; otherwise `{}`. For a non-empty result both child builders omit
+  `PYTHONNOUSERSITE` and set `PYTHONUSERBASE` in its place (the child's user site is the parent's,
+  after the standard library; `PYTHONPATH` is never extended); for `{}` both environments are
+  byte-for-byte the v1.0.1 ones. `conformance.run` (MB10) uses the name, so it is frozen under the
+  host's section. The managed bootstrap gains the same rule as its own stdlib copy
+  (`imaging_user_site`, `IMAGING_PACKAGE`), which `kit_environment` applies to the kit process,
+  whose disabled user site would otherwise hide Pillow from the host before it could pass it on;
+  `tests/test_pin.py` runs both copies over the same process states (`tests/user_site.py`).
 * **Checked document.** `tests/test_internal_api.py` also checks every class's documented dataclass
   `fields` (names, order and each default's `repr`, `<factory>` for a default factory) and
   properties, every name of a described name list, and every documented constant value written in
@@ -1080,7 +1099,7 @@ Constants:
 * `BASE_PATH = '/usr/bin:/bin'`
 
 * `def adapter_pythonpath(invocation: Invocation) -> str`: The child's ``PYTHONPATH``: ``<kit>/src`` then each ``config.adapter.python_path`` entry resolved inside the repository (no ``..``, no symlink component), joined with ``:``.
-* `def child_environment(invocation: Invocation, hook: str, *, tmpdir: Path) -> dict[str, str]`: The exact ``env -i`` environment for ``hook`` (see module docstring); the token appears only for a declared network hook in a token job.
+* `def child_environment(invocation: Invocation, hook: str, *, tmpdir: Path) -> dict[str, str]`: The exact ``env -i`` environment for ``hook`` (see module docstring); the token appears only for a declared network hook in a token job, and ``PYTHONUSERBASE`` replaces ``PYTHONNOUSERSITE`` only as :func:`imaging_user_site` says.
 * `def child_argv(invocation: Invocation, hook: str, *, request: Path, response: Path) -> list[str]`: The exact child argv: ``[python3, -P, -m, host_child, --adapter, A, --hook, H, --request, R, --response, S]``.
 * `def call(invocation: Invocation, hook: str, arguments: Mapping[str, Any], *, network: bool = False) -> Any`: Run ``hook`` with ``arguments`` in the isolated child and return its validated result.
 
@@ -1089,6 +1108,10 @@ Frozen for other units (integration round):
 * `MAX_CHILD_OUTPUT_BYTES = 4194304`
 * `def placement(invocation: Invocation) -> str`: Where this process runs in SPEC §4.3 terms: a Pages callee job id, or ``protocol.PREPARE_EVIDENCE`` for every mod-owned job (and a local run).
 * `def check_placement(invocation: Invocation, hook: str, *, network: bool = False) -> None`: Refuse ``hook`` where SPEC §4.3 does not allow it: in a ``protocol.FORBIDDEN_JOBS`` job, in a job outside its ``protocol.HOOK_JOBS`` row (see :func:`placement`), or with ``network`` where the read-only token may not be granted. Runs before any child starts; the in-process test host applies the same check.
+
+Frozen for other units (v1.0.2):
+
+* `def imaging_user_site() -> dict[str, str]`: ``{"PYTHONUSERBASE": <user base>}`` when this process imports Pillow from its own user site, otherwise ``{}``. The hook child and `conformance.run`'s simulation child then omit ``PYTHONNOUSERSITE`` and set ``PYTHONUSERBASE`` instead; see the v1.0.2 amendment.
 
 ## `mod_base.adapter.host_child`
 

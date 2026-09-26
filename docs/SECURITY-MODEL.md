@@ -102,6 +102,16 @@ sandbox against a malicious adapter:
 - each hook runs in an `env -i` child with a fixed argument list, a timeout and a bounded,
   schema-validated response; only declared network hooks receive a read-only token, and only in
   those jobs;
+- the child's user site is disabled (`PYTHONNOUSERSITE=1`), with one narrow exception
+  (`host.imaging_user_site`, v1.0.2): when the parent itself runs with its user site enabled and
+  the hash-locked Pillow resolves, without being imported, to a package directly in that user site
+  (a `pip install --user` runner), the child gets the parent's own user site through
+  `PYTHONUSERBASE`. No new code is trusted by it: that user site, `.pth` files included, is already
+  on the parent's `sys.path` and has run in the parent, and the child places it after the standard
+  library as the parent does, never on `PYTHONPATH`. A global or virtual-environment Pillow, a
+  disabled user site or an unusable user base (relative, missing, holding `:` or a control
+  character) leaves the child environment exactly as before. The `conformance` simulation child
+  and the managed bootstrap's `run` (for the kit process) apply the same rule;
 - the kit re-verifies every hook result (R1–R6) before publishing, and a missing hook fails closed
   wherever it is required;
 - other branches are fetched only as inert Git objects and read through bounded blob reads; they
@@ -173,7 +183,9 @@ sandbox against a malicious adapter:
 - Every action is pinned to a full commit SHA; `sha_pinning_required` is recommended on the mod
   repositories and required on mod-base, whose Actions policy allows GitHub-owned actions only.
 - Pillow is installed only from the 86-hash lock (`--require-hashes --only-binary=:all:`), kept in
-  lockstep with the mods' own locks by tests.
+  lockstep with the mods' own locks by tests. The kit's Pages jobs install it globally; a runner
+  that installs it with `pip install --user` (Block Pops' credentialless sandbox) reaches the kit's
+  isolated children only through the user-site rule of "The mod adapter" above.
 - Dependabot ignores `The-Plum-Team/mod-base*` and every third-party action the caller's managed
   region pins (`actions/deploy-pages`), which `template check` requires from the kit's own template;
   the only bump path is the bootstrap's `bump`, which verifies the release before editing and

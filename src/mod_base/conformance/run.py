@@ -23,7 +23,9 @@ simulation as ``python3 -P -m mod_base.conformance.run ...`` in a child whose en
 ``config.adapter.python_path``) and no GitHub credentials: it is built from scratch (``PATH`` limited
 to the system directories plus those of this interpreter, ``git`` and ``node``, a private ``HOME``
 and ``TMPDIR``, ``PYTHONHASHSEED=0``, ``PYTHONSAFEPATH``, ``PYTHONDONTWRITEBYTECODE`` and
-``PYTHONNOUSERSITE``). The child (:func:`main`) loads the adapter and fixtures modules with
+``PYTHONNOUSERSITE``, or instead of the last, from v1.0.2, ``PYTHONUSERBASE`` naming this process's
+user base when this process imports Pillow from its own user site: ``host.imaging_user_site``, the
+rule the hook child follows too). The child (:func:`main`) loads the adapter and fixtures modules with
 ``host_child.load_adapter`` and drives every hook, network hooks included, in-process through
 ``host_child.run_hook`` with a ``Context`` whose ``api`` is the seeded ``FakeGitHub``.
 
@@ -124,7 +126,8 @@ def _child_environment(pythonpath: str, scratch: Path) -> dict[str, str]:
     home = scratch / "home"
     home.mkdir(mode=0o700)
     return {"PATH": path, "HOME": str(home), "TMPDIR": str(scratch), "LANG": "C.UTF-8", "PYTHONHASHSEED": "0",
-            "PYTHONSAFEPATH": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1", "PYTHONPATH": pythonpath}
+            "PYTHONSAFEPATH": "1", "PYTHONDONTWRITEBYTECODE": "1",
+            **(host.imaging_user_site() or {"PYTHONNOUSERSITE": "1"}), "PYTHONPATH": pythonpath}
 
 
 def _remove_tree(path: Path) -> None:
