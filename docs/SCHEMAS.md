@@ -583,6 +583,18 @@ exists exactly when a lane with `epoch: "selected"` holds an `epoch: "baseline"`
 validation record then shows that execution's JAR, result and wall time; `family_notes` name
 listed families.
 
+**Capture URLs (v1.0.3).** Because a frame is unique per `(key, frame_id)`, every validated capture
+has its own address on the gallery page: `e2e/#capture/<key>/<frame_id>`, with the key and each
+`/`-separated segment of the frame id percent-encoded, for example
+`e2e/#capture/mc1.21.1/fabric-1.21.1/full/client_a/cape_import_standard`. Opening such an address
+shows that frame's validation record over the gallery of its release, Minecraft version, loader,
+scenario and role. Opening a record from the page writes its address without adding a history
+entry, and closing it restores the gallery address. Each card and each record carries a "Link to
+this capture" link, and each record a "Copy link to this capture" button. An address naming no
+published frame, for example one from an earlier generation, opens nothing and says so in the
+status line. The address is only ever looked up in the inventory and never reaches the page as
+markup. Family pairs have no address of their own.
+
 **Families (announced amendment of SPEC §3.9).** The SPEC's family entry `{family, title,
 description, available, status, lanes, not_applicable}` has one status for all keys, but
 promotions and family artifacts are per `(family, key)` and Quick Skin publishes 17 keys, each with

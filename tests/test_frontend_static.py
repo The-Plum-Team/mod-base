@@ -254,6 +254,49 @@ class AccessibilityTest(unittest.TestCase):
         self.assertIn("@media (prefers-reduced-motion: reduce)", styles)
 
 
+class CapturePermalinkTest(unittest.TestCase):
+    """Every validated capture has its own URL, ``#capture/<key>/<frame id>``, that opens its record."""
+
+    def test_the_gallery_names_the_open_capture_in_the_address(self) -> None:
+        script = read("assets/gallery.js")
+        for fragment in ('const CAPTURE_FRAGMENT = "#capture/";', 'window.addEventListener("hashchange"',
+                         "window.history.replaceState(null, \"\", url)", "this.revealFromLocation();",
+                         "this.forgetCapture();", 'this.captureLink(frame, "Link to this capture")',
+                         "navigator.clipboard.writeText(url)", "const swapped = this.dialog.open;",
+                         "this.recordTitle.focus();", '"aria-label",'):
+            self.assertIn(fragment, script)
+        # The address never reaches the DOM or a URL sink except through the frame inventory lookup.
+        self.assertIn("this.frameById.get(this.identity(target.key, target.frameId))", script)
+        self.assertNotIn("location.hash =", script)
+
+    def test_fragments_round_trip_and_reject_anything_else(self) -> None:
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for the front-end checks (kit CI 'Front end')")
+        script = read("assets/gallery.js")
+        constant = re.search(r'^const CAPTURE_FRAGMENT = .*;$', script, re.MULTILINE)
+        functions = re.search(r"^function captureFragment\(.*?^}\n\n.*?^function parseCaptureFragment\(.*?^}\n",
+                              script, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(constant)
+        self.assertIsNotNone(functions)
+        harness = constant.group(0) + "\n" + functions.group(0) + r"""
+const assert = require("node:assert/strict");
+const frame = "fabric-1.21.1/full/client_a/cape_import_standard";
+assert.equal(captureFragment("mc1.21.1", frame), "#capture/mc1.21.1/fabric-1.21.1/full/client_a/cape_import_standard");
+assert.deepEqual(parseCaptureFragment(captureFragment("mc1.21.1", frame)), { key: "mc1.21.1", frameId: frame });
+for (const [key, id] of [["release/1.20", "a b/c#d/e?f"], ["é", "x%2Fy/%"], ["k", "only"]]) {
+  assert.deepEqual(parseCaptureFragment(captureFragment(key, id)), { key, frameId: id });
+}
+for (const hash of ["", "#", "#capture/", "#capture/key", "#capture/key/", "#capture//frame", "#other/key/frame",
+                    "#capture/%E0%A4%A/frame", "#capture/key/%E0%A4%A", null, 7]) {
+  assert.equal(parseCaptureFragment(hash), null, String(hash));
+}
+console.log("ok");
+"""
+        completed = subprocess.run([node, "-e", harness], capture_output=True, timeout=60, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8", "replace"))
+        self.assertEqual(completed.stdout.decode().strip(), "ok")
+
+
 class StylesheetTest(unittest.TestCase):
     def test_no_colour_literal_survives(self) -> None:
         styles = read("assets/styles.css")
