@@ -5,6 +5,28 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.0.3
+
+A front-end release: every validated capture of the E2E gallery has its own URL. Schema versions
+(all 1), `pixel_metrics_version` 1, `ADAPTER_API` 1 and every managed file are unchanged; mods move
+with `python3 scripts/ci/mod_base_kit.py bump --to v1.0.3`, and the new gallery reaches a site with
+its next publication.
+
+### Added
+
+- **Capture URLs.** `e2e/#capture/<key>/<frame_id>` (both percent-encoded per segment) opens that
+  capture's validation record over the gallery of its release, version, loader, scenario and role.
+  Opening a record from the page writes its address with `history.replaceState` (no new history
+  entry), and closing it restores the gallery address. A pasted or edited address is followed on
+  `hashchange`. Every card has a "Link to this capture" link, and every record has the link plus a
+  "Copy link to this capture" button, which falls back to showing the URL where the clipboard is
+  unavailable. Each link's accessible name also names its capture. A record replaced in place starts
+  at its top with focus on its title, and a record's own link only rewrites the address. An address
+  naming no published frame, such as one from an earlier generation, opens nothing and says so in
+  the status line. The fragment is only looked up in the frame inventory. It
+  never reaches the page as markup, and every `href` still passes `sameOriginPath`.
+  `docs/SCHEMAS.md` ("Capture URLs") records the format.
+
 ## v1.0.2
 
 A fix release for a defect Block Pops' adoption found at `v1.0.1`. Schema versions (all 1),

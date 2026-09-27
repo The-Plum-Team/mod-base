@@ -889,9 +889,44 @@ input[type="search"] {
 }
 
 .record-figure figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  align-items: center;
   margin-top: 0.5rem;
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+.capture-permalink {
+  display: inline-block;
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+}
+
+.record-figure .capture-permalink {
+  margin-top: 0;
+  font-size: inherit;
+}
+
+.copy-link-button {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.copy-link-status {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.copy-link-button:hover {
+  border-color: rgb(var(--accent-rgb) / 55%);
+  color: var(--accent);
 }
 
 .record-section {

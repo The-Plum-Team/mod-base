@@ -92,8 +92,12 @@ class ElementNode extends BaseNode {
     return event;
   }
   focus() { state.focused = this; }
-  showModal() { this.open = true; }
-  close() { this.open = false; this.fire("close"); }
+  showModal() {
+    if (this.open) throw new Error("InvalidStateError: showModal() on an open dialog");
+    this.open = true;
+  }
+  // Browsers queue the close event; so does the stub, so tests see the real ordering.
+  close() { this.open = false; queueMicrotask(() => this.fire("close")); }
   get value() {
     if (this._value !== undefined) return this._value;
     if (this.tagName === "SELECT") {
@@ -105,7 +109,7 @@ class ElementNode extends BaseNode {
   set value(value) { this._value = String(value); }
 }
 
-const state = { focused: null };
+const state = { focused: null, addressWrites: 0, clipboard: null };
 const pageLocation = new URL(config.url);
 function guardedUrl(value, kind) {
   const text = String(value);
@@ -143,9 +147,35 @@ const document = {
     return byId.get(selector.slice(1)) || null;
   }
 };
-const location = new URL(config.url);
+// The page address: the gallery reads it, writes it only through history.replaceState, and follows
+// hashchange (navigate() stands in for a pasted or edited address).
+const address = new URL(config.url);
+const windowListeners = {};
+const windowObject = {
+  location: {
+    get href() { return address.href; },
+    get origin() { return address.origin; },
+    get pathname() { return address.pathname; },
+    get search() { return address.search; },
+    get hash() { return address.hash; }
+  },
+  history: {
+    replaceState(data, unused, url) {
+      const next = new URL(url, address.href);
+      if (next.origin !== address.origin) throw new Error(`cross-origin address ${next.href}`);
+      address.href = next.href;
+      state.addressWrites += 1;
+    }
+  },
+  addEventListener(type, listener) { (windowListeners[type] = windowListeners[type] || []).push(listener); }
+};
+function navigate(hash) {
+  address.hash = hash;
+  for (const listener of windowListeners.hashchange || []) listener({ type: "hashchange" });
+}
 const context = vm.createContext({
-  window: { location: { href: location.href, origin: location.origin } },
+  window: windowObject,
+  navigator: config.clipboard === false ? {} : { clipboard: { writeText: async (text) => { state.clipboard = text; } } },
   document,
   Node: BaseNode,
   URL,
@@ -229,7 +259,33 @@ async function gallery() {
   result.dialogLinks = elements(body, (node) => node.tagName === "A").map((node) => node.href);
   result.raw = elements(body, (node) => node.tagName === "PRE").map((node) => Object.keys(JSON.parse(node.textContent)));
   dialog.fire("click", { target: dialog });
+  await settle();
   result.dialogClosed = !dialog.open && body.children.length === 0;
+
+  // Capture URLs: a card link opens its record and names it in the address; closing restores it.
+  result.addressBefore = windowObject.location.href;
+  const writesBefore = state.addressWrites;
+  const permalinks = byClass(panels[0], "capture-permalink");
+  result.permalinkHref = permalinks[0].href;
+  result.permalinkCount = permalinks.length;
+  result.permalinkPrevented = permalinks[0].fire("click", { button: 0 }).defaultPrevented;
+  result.permalinkOpened = Boolean(dialog.open);
+  result.addressWhileOpen = windowObject.location.href;
+  result.recordPermalinks = byClass(body, "capture-permalink").map((node) => node.href);
+  result.permalinkLabel = permalinks[0].getAttribute("aria-label");
+  const header = body.children[0];
+  byClass(body, "capture-permalink")[0].fire("click", { button: 0 });
+  result.inRecordKept = Boolean(dialog.open) && body.children[0] === header;
+  byClass(body, "copy-link-button")[0].fire("click");
+  await settle();
+  result.copyStatus = texts(body, "copy-link-status");
+  result.clipboard = state.clipboard;
+  dialog.close();
+  await settle();
+  result.addressAfterClose = windowObject.location.href;
+  result.addressWrites = state.addressWrites - writesBefore;
+  const modified = permalinks[1].fire("click", { button: 0, metaKey: true });
+  result.modifiedClickKept = !modified.defaultPrevented && !dialog.open;
 
   id("compare-view-button").fire("click");
   result.compareVisible = !id("compare-view").hidden && id("gallery-view").hidden;
@@ -265,12 +321,67 @@ async function gallery() {
   return result;
 }
 
+// A gallery opened at a capture address, then a pasted unknown, malformed and plain address.
+async function deeplink() {
+  const dialog = id("capture-dialog");
+  const body = id("capture-dialog-body");
+  const selectedTab = () => id("release-tabs").children.filter((tab) => tab.getAttribute("aria-selected") === "true")
+    .map((tab) => tab.textContent);
+  const filters = () => ["minecraft-filter", "loader-filter", "scenario-filter", "role-filter", "capture-search"]
+    .map((name) => id(name).value);
+  const result = { error: id("gallery-status").dataset.error || null };
+  result.opened = Boolean(dialog.open);
+  result.title = elements(body, (node) => node.id === "capture-dialog-title").map((node) => node.textContent);
+  result.facts = elements(body, (node) => node.tagName === "DT").map((node) => {
+    const siblings = node.parentNode.childNodes;
+    const value = siblings[siblings.indexOf(node) + 1];
+    return [node.textContent, value ? value.textContent : null];
+  });
+  result.tab = selectedTab();
+  result.filters = filters();
+  result.address = windowObject.location.href;
+  result.recordPermalinks = byClass(body, "capture-permalink").map((node) => node.href);
+  result.cards = byClass(id("release-panels"), "capture-card").length;
+  dialog.scrollTop = 500;
+  navigate(config.other);
+  result.swapped = [Boolean(dialog.open), elements(body, (node) => node.id === "capture-dialog-title").map((node) => node.textContent),
+    dialog.scrollTop, state.focused ? state.focused.id : null];
+  navigate(new URL(config.url).hash);
+  byClass(body, "copy-link-button")[0].fire("click");
+  await settle();
+  result.copyStatus = texts(body, "copy-link-status");
+  navigate(config.unknown);
+  result.unknownOpen = Boolean(dialog.open);
+  result.unknownStatus = id("gallery-status").textContent;
+  navigate(config.malformed);
+  result.malformedOpen = Boolean(dialog.open);
+  navigate(new URL(config.url).hash);
+  result.reopened = Boolean(dialog.open);
+  const shown = body.children[0];
+  navigate(new URL(config.url).hash);
+  result.sameKept = body.children[0] === shown;
+  // A record reopened before the queued close event arrives is kept, with its address.
+  dialog.close();
+  navigate(config.other);
+  await settle();
+  result.raceKept = [Boolean(dialog.open), body.children.length > 0, windowObject.location.hash === new URL(config.other, config.url).hash];
+  navigate("");
+  await settle();
+  result.plainOpen = Boolean(dialog.open);
+  // Closing a record drops only the fragment, whatever the page path looks like.
+  navigate(new URL(config.url).hash);
+  dialog.close();
+  await settle();
+  result.closedAddress = windowObject.location.href;
+  return result;
+}
+
 (async () => {
   let result;
   try {
     vm.runInContext(fs.readFileSync(config.script, "utf8"), context, { filename: config.script });
     await settle();
-    result = config.kind === "landing" ? await landing() : await gallery();
+    result = config.kind === "landing" ? await landing() : config.kind === "deeplink" ? await deeplink() : await gallery();
   } catch (error) {
     result = { crash: String(error && error.stack || error) };
   }
@@ -279,8 +390,11 @@ async function gallery() {
 '''
 
 
-def run_page(site: Path, kind: str, *, data: Path | None = None) -> dict[str, Any]:
-    """Run the published script of ``kind`` (``landing``/``gallery``) of ``site`` under node."""
+def run_page(site: Path, kind: str, *, data: Path | None = None, fragment: str = "",
+             base: str = "https://the-plum-team.github.io/qs-like/", **extra: Any) -> dict[str, Any]:
+    """Run the published script of ``kind`` (``landing``/``gallery``/``deeplink``) of ``site`` under node.
+
+    ``fragment`` is the address fragment the page opens at; ``extra`` goes to the harness config."""
 
     node = shutil.which("node")
     if node is None:
@@ -290,11 +404,11 @@ def run_page(site: Path, kind: str, *, data: Path | None = None) -> dict[str, An
         (root / "harness.js").write_text(HARNESS, encoding="utf-8")
         page = site / ("index.html" if kind == "landing" else "e2e/index.html")
         config = {
-            "kind": kind, "page": str(page),
+            **extra, "kind": kind, "page": str(page),
             "script": str(site / "assets" / ("site.js" if kind == "landing" else "gallery.js")),
             "data": str(data or (site / ("site-data.json" if kind == "landing" else "e2e/gallery-data.json"))),
             "fetch": "site-data.json" if kind == "landing" else "gallery-data.json",
-            "url": "https://the-plum-team.github.io/qs-like/" + ("" if kind == "landing" else "e2e/"),
+            "url": base + ("" if kind == "landing" else "e2e/") + fragment,
         }
         (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
         completed = subprocess.run([node, str(root / "harness.js"), str(root / "config.json")], capture_output=True,
@@ -429,6 +543,78 @@ class FrontEndTest(unittest.TestCase):
         self.assertTrue(any(link.startswith(f"{self.repository_url}/blob/") for link in result["dialogLinks"]))
         self.assertEqual(result["raw"], [["frame", "lane", "comparisons"]])
         self.assertTrue(result["dialogClosed"])
+
+    def test_every_capture_has_its_own_address(self) -> None:
+        gallery = json.loads((self.qs / "e2e" / "gallery-data.json").read_bytes())
+        result = run_page(self.qs, "gallery")
+        page = "https://the-plum-team.github.io/qs-like/e2e/"
+        self.assertEqual(result["addressBefore"], page)
+        self.assertEqual(result["permalinkCount"], 8)
+        prefix = f"{page}#capture/"
+        self.assertTrue(result["permalinkHref"].startswith(prefix), result["permalinkHref"])
+        key, _, frame_id = result["permalinkHref"][len(prefix):].partition("/")
+        self.assertIn((key, frame_id), {(frame["key"], frame["frame_id"]) for frame in gallery["frames"]})
+        self.assertTrue(result["permalinkPrevented"])
+        self.assertTrue(result["permalinkOpened"])
+        self.assertEqual(result["addressWhileOpen"], result["permalinkHref"])
+        self.assertEqual(result["recordPermalinks"], [result["permalinkHref"]])
+        self.assertTrue(result["permalinkLabel"].startswith("Link to this capture: "), result["permalinkLabel"])
+        frame = next(item for item in gallery["frames"] if (item["key"], item["frame_id"]) == (key, frame_id))
+        self.assertIn(frame["title"], result["permalinkLabel"])
+        self.assertTrue(result["inRecordKept"])
+        self.assertEqual(result["copyStatus"], ["Link copied"])
+        self.assertEqual(result["clipboard"], result["permalinkHref"])
+        self.assertEqual(result["addressAfterClose"], page)
+        self.assertEqual(result["addressWrites"], 2)
+        self.assertTrue(result["modifiedClickKept"])
+
+    def test_a_capture_address_opens_its_record_in_its_own_context(self) -> None:
+        gallery = json.loads((self.qs / "e2e" / "gallery-data.json").read_bytes())
+        # A frame of the second release, so the page must leave its default first tab.
+        frame = next(item for item in gallery["frames"] if item["key"] == gallery["releases"][1]["key"])
+        other = next(item for item in gallery["frames"] if item["key"] == gallery["releases"][0]["key"])
+        fragment = f"#capture/{frame['key']}/{frame['frame_id']}"
+        result = run_page(self.qs, "deeplink", fragment=fragment, other=f"#capture/{other['key']}/{other['frame_id']}",
+                          unknown=f"#capture/{frame['key']}/unpublished/frame", malformed="#capture/%E0%A4%A/x")
+        self.assertIsNone(result["error"])
+        self.assertTrue(result["opened"])
+        self.assertEqual(result["title"], [frame["title"]])
+        self.assertEqual(dict(result["facts"])["Lane"], frame["lane_id"])
+        self.assertEqual(result["tab"], [gallery["releases"][1]["label"]])
+        self.assertEqual(result["filters"], [frame["minecraft"], frame["loader"], frame["scenario"], frame["role"], ""])
+        self.assertEqual(result["address"], f"https://the-plum-team.github.io/qs-like/e2e/{fragment}")
+        self.assertEqual(result["recordPermalinks"], [result["address"]])
+        self.assertGreater(result["cards"], 0)
+        # Following another capture address while a record is open swaps the record in place.
+        self.assertEqual(result["swapped"], [True, [other["title"]], 0, "capture-dialog-title"])
+        self.assertEqual(result["copyStatus"], ["Link copied"])
+        self.assertFalse(result["unknownOpen"])
+        self.assertEqual(result["unknownStatus"], "The linked capture is not part of this publication.")
+        self.assertFalse(result["malformedOpen"])
+        self.assertTrue(result["reopened"])
+        self.assertTrue(result["sameKept"])
+        self.assertEqual(result["raceKept"], [True, True, True])
+        self.assertFalse(result["plainOpen"])
+        self.assertEqual(result["closedAddress"], "https://the-plum-team.github.io/qs-like/e2e/")
+
+    def test_closing_a_record_keeps_an_unusual_page_path_same_origin(self) -> None:
+        gallery = json.loads((self.qs / "e2e" / "gallery-data.json").read_bytes())
+        frame = gallery["frames"][0]
+        fragment = f"#capture/{frame['key']}/{frame['frame_id']}"
+        base = "https://the-plum-team.github.io//evil.example/"
+        result = run_page(self.qs, "deeplink", fragment=fragment, base=base, other=fragment,
+                          unknown="#capture/x/y", malformed="#capture/%/x")
+        self.assertTrue(result["opened"])
+        self.assertEqual(result["closedAddress"], f"{base}e2e/")
+
+    def test_without_a_clipboard_the_record_shows_its_address(self) -> None:
+        gallery = json.loads((self.qs / "e2e" / "gallery-data.json").read_bytes())
+        frame = gallery["frames"][0]
+        fragment = f"#capture/{frame['key']}/{frame['frame_id']}"
+        result = run_page(self.qs, "deeplink", fragment=fragment, clipboard=False, other=fragment,
+                          unknown="#capture/x/y", malformed="#capture/%/x")
+        self.assertEqual(result["copyStatus"],
+                         [f"Copy this link: https://the-plum-team.github.io/qs-like/e2e/{fragment}"])
 
     def test_a_baseline_capture_of_a_partially_recaptured_lane_shows_its_own_execution(self) -> None:
         gallery = json.loads((self.qs / "e2e" / "gallery-data.json").read_bytes())

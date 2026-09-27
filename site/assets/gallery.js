@@ -10,6 +10,8 @@ const PERCENT = new Intl.NumberFormat(undefined, {
 });
 const KIT_REPOSITORY_URL = "https://github.com/The-Plum-Team/mod-base";
 const COMMIT = /^[0-9a-f]{40}$/;
+// A capture's own URL: "#capture/<release key>/<frame id>", one segment per frame-id segment.
+const CAPTURE_FRAGMENT = "#capture/";
 
 function node(tag, className, text) {
   const value = document.createElement(tag);
@@ -36,6 +38,27 @@ function externalLink(href, text) {
   link.target = "_blank";
   link.rel = "noopener";
   return link;
+}
+
+// Percent-encodes every segment, so the fragment only ever names a (key, frame id) pair.
+function captureFragment(key, frameId) {
+  return `${CAPTURE_FRAGMENT}${encodeURIComponent(key)}/${frameId.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+// The (key, frame id) a capture fragment names, or null for any other or malformed fragment.
+function parseCaptureFragment(hash) {
+  if (typeof hash !== "string" || !hash.startsWith(CAPTURE_FRAGMENT)) return null;
+  const rest = hash.slice(CAPTURE_FRAGMENT.length);
+  const separator = rest.indexOf("/");
+  if (separator <= 0 || separator === rest.length - 1) return null;
+  try {
+    return {
+      key: decodeURIComponent(rest.slice(0, separator)),
+      frameId: rest.slice(separator + 1).split("/").map(decodeURIComponent).join("/")
+    };
+  } catch {
+    return null;
+  }
 }
 
 function option(select, value, label) {
@@ -148,7 +171,12 @@ class Gallery {
     this.panels = [];
     this.familyViews = [];
     this.dialog = document.querySelector("#capture-dialog");
-    this.openCapture = (frame) => this.showRecord(frame);
+    this.setView = null;
+    this.shownFrame = null;
+    this.openCapture = (frame) => {
+      this.showRecord(frame);
+      this.rememberCapture(frame);
+    };
     this.runPrefix = `${data.project.repository_url}/actions/runs/`;
     this.releaseByKey = new Map(data.releases.map((release) => [release.key, release]));
     this.laneById = new Map(data.lanes.map((lane) => [this.identity(lane.key, lane.lane_id), lane]));
@@ -216,6 +244,8 @@ class Gallery {
     this.bindDialog();
     this.renderComparison();
     this.renderGallery();
+    window.addEventListener("hashchange", () => this.revealFromLocation());
+    this.revealFromLocation();
   }
 
   renderSummary() {
@@ -355,6 +385,7 @@ class Gallery {
       }
     };
     for (const [name, button] of views) button.addEventListener("click", () => setView(name));
+    this.setView = setView;
   }
 
   bindDialog() {
@@ -362,8 +393,88 @@ class Gallery {
       if (event.target === this.dialog) this.dialog.close();
     });
     this.dialog.addEventListener("close", () => {
+      // The close event is queued: a record reopened before it arrives must stay as it is.
+      if (this.dialog.open) return;
       document.querySelector("#capture-dialog-body").replaceChildren();
+      this.shownFrame = null;
+      this.forgetCapture();
     });
+  }
+
+  // -- Capture URLs ------------------------------------------------------------------------------
+
+  captureUrl(frame) {
+    return sameOriginPath(captureFragment(frame.key, frame.frame_id));
+  }
+
+  // The address bar names the open capture; replacing the entry keeps Back leaving the gallery.
+  rememberCapture(frame) {
+    const url = this.captureUrl(frame);
+    if (window.location.href !== url) window.history.replaceState(null, "", url);
+  }
+
+  forgetCapture() {
+    if (window.location.hash.startsWith(CAPTURE_FRAGMENT)) {
+      const url = new URL(window.location.href);
+      url.hash = "";
+      window.history.replaceState(null, "", url.href);
+    }
+  }
+
+  // Opens the capture the address names, behind it the gallery of its release, version and lane.
+  revealFromLocation() {
+    const hash = window.location.hash;
+    if (!hash.startsWith(CAPTURE_FRAGMENT)) {
+      if (this.dialog.open) this.dialog.close();
+      return;
+    }
+    const target = parseCaptureFragment(hash);
+    const frame = target && this.frameById.get(this.identity(target.key, target.frameId));
+    if (!frame) {
+      if (this.dialog.open) this.dialog.close();
+      document.querySelector("#gallery-status").textContent = "The linked capture is not part of this publication.";
+      return;
+    }
+    if (this.dialog.open && this.shownFrame === frame) return;
+    if (this.setView) this.setView("gallery");
+    const index = this.tabs.findIndex((tab) => tab.key === frame.key);
+    this.activateTab(index >= 0 ? index : this.tabs.length - 1, false);
+    document.querySelector("#minecraft-filter").value = frame.minecraft;
+    document.querySelector("#loader-filter").value = frame.loader;
+    document.querySelector("#scenario-filter").value = frame.scenario;
+    document.querySelector("#role-filter").value = frame.role;
+    document.querySelector("#capture-search").value = "";
+    this.renderGallery();
+    this.showRecord(frame);
+  }
+
+  captureLink(frame, text) {
+    const link = node("a", "capture-permalink", text);
+    link.href = sameOriginPath(captureFragment(frame.key, frame.frame_id));
+    // The visible text stays part of the name (WCAG 2.5.3); the rest tells hundreds of links apart.
+    link.setAttribute(
+      "aria-label",
+      `${text}: ${frame.title}, ${this.scopeLabel(frame.key, frame.minecraft)}, ${frame.loader_name}, ${this.roleLabel(frame.role)}`
+    );
+    link.addEventListener("click", (event) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      // The open record's own link only names it in the address; rebuilding it would drop focus.
+      if (this.dialog.open && this.shownFrame === frame) this.rememberCapture(frame);
+      else this.openCapture(frame);
+    });
+    return link;
+  }
+
+  async copyCaptureLink(frame, status) {
+    const url = this.captureUrl(frame);
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(url);
+      status.textContent = "Link copied";
+    } catch {
+      status.textContent = `Copy this link: ${url}`;
+    }
   }
 
   filteredFrames() {
@@ -417,6 +528,7 @@ class Gallery {
     const record = node("button", "record-button", "Full validation record");
     record.type = "button";
     record.addEventListener("click", () => this.openCapture(frame));
+    const permalink = this.captureLink(frame, "Link to this capture");
     const provenance = node("div", "provenance-line");
     const origin = frame.provenance;
     if (origin.tested_run_url === origin.handoff_run_url) {
@@ -432,7 +544,7 @@ class Gallery {
         node("span", "", origin.handoff_commit.slice(0, 12))
       );
     }
-    caption.append(titleRow, metadata, details, record, provenance);
+    caption.append(titleRow, metadata, details, record, permalink, provenance);
     figure.append(trigger, caption);
     return figure;
   }
@@ -695,6 +807,8 @@ class Gallery {
     const titleRow = node("div", "capture-title-row");
     const title = node("h2", "", frame.title);
     title.id = "capture-dialog-title";
+    title.tabIndex = -1;
+    this.recordTitle = title;
     titleRow.append(title, node("span", "verified-badge", "Gate passed"));
     const metadata = node("div", "capture-meta");
     for (const text of [
@@ -724,7 +838,12 @@ class Gallery {
     link.href = sameOriginPath(frame.image);
     link.target = "_blank";
     link.rel = "noopener";
-    caption.append(link);
+    const copy = node("button", "copy-link-button", "Copy link to this capture");
+    copy.type = "button";
+    const copied = node("span", "copy-link-status");
+    copied.setAttribute("role", "status");
+    copy.addEventListener("click", () => this.copyCaptureLink(frame, copied));
+    caption.append(link, this.captureLink(frame, "Link to this capture"), copy, copied);
     figure.append(image, caption);
     return figure;
   }
@@ -909,6 +1028,14 @@ class Gallery {
       this.provenanceSection(frame, release),
       this.rawSection(frame)
     );
+    const swapped = this.dialog.open;
+    this.shownFrame = frame;
+    if (swapped) {
+      // A record replaced in place starts at its top, and focus moves to its title.
+      this.dialog.scrollTop = 0;
+      this.recordTitle.focus();
+      return;
+    }
     if (typeof this.dialog.showModal === "function") this.dialog.showModal();
     else this.dialog.setAttribute("open", "");
   }
