@@ -15,6 +15,20 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   subject and writes the private identity record, pure plan construction with the policy digest,
   and a synthetic mod (`tests/fixtures/ci_mod`) that implements every hook. Planned output paths
   accept the mods' real file names (single inner spaces and `+`).
+- The unreleased Build kinds describe what Block Pops and Quick Skin really stage.
+  `mod-base.build.plan`: an output's `lane_id` may be `null` for a file of the target as a whole
+  (its staged manifest, a report, a log, one SBOM for all its lanes). Every lane has exactly one
+  production and one harness output, an SBOM is optional (at most one per lane and one per
+  target) and every target has a native report. Paths stay unique in the whole plan, so an adapter
+  stages a file every target writes below `targets/<target id>/`. The plan gains `plan_inputs`
+  (`[{name, sha256}]`). `mod-base.build.config` gains the required `plan_inputs`
+  (`[{name, path}]`, 0..8): more candidate files a plan is derived from, staged for the protected
+  hooks next to the inventory and the scenario contract (Quick Skin lists `gradle.properties`,
+  which holds the version in its JAR names). `mod-base.build.envelope`: `lane_id` is nullable in
+  the same way, a file path is an export path and an `sbom` file is at most 16 MiB.
+  `mod-base.ci.runtime-envelope`: a file path is an export path. Sealed Build and runtime
+  archives keep the mods' own file names when they are encoded and extracted; Pages archives are
+  unchanged.
 - Managed files: the bootstrap `scripts/ci/mod_base_kit.py` changes. `bump` now refuses, before it
   edits anything, a kit that does not read the mod's `site/mod-base-build-activation.json` while a
   mode other than `disabled` is active there (a rollback to v1.0.3 or older first returns the mod
