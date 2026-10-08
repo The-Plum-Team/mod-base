@@ -1825,7 +1825,8 @@ Owner: MB10 (register() implemented by MB0; handlers dispatch to the entry point
 ## `mod_base.build_ci.protocol`
 
 Owner: MB11. The Build adapter API version and pure identity and plan validation; see
-BUILD-PROTOCOL.md. The hook contract itself is `mod_base.build_ci.adapter`.
+BUILD-PROTOCOL.md ("Identity" and "Document kinds"). The hook contract itself is
+`mod_base.build_ci.adapter`.
 
 * `BUILD_ADAPTER_API = 1`
 * `BUILD_GRAPH_VERSION = 1`

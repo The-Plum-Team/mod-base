@@ -15,8 +15,8 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   gate authenticates its own running attempt (source, run, every earlier job as its graph expects,
   every sealed artifact) and writes the `mod-base.ci.gate` receipt that the existing readers
   accept once the run has finished. Add the new kind `mod-base.ci.results` (v1): the complete
-  packaged results as an index of the lane artifacts, which the packaged gate reads. A reuse run
-  cannot seal yet.
+  packaged results as an index of the lane artifacts, which the packaged gate reads. In a reuse
+  run the gate seals the reuse reference `ci-reuse.json` instead.
 - Add `ci assemble`, the fan-in step of the Build's assembling job: it describes the target
   partitions of its own running attempt from the API (`build_ci.describe`: exactly one unexpired
   artifact per planned target, bound to the upload step of the job that sealed it; a job or an

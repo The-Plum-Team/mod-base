@@ -10,157 +10,45 @@ describes the design, [SECURITY-MODEL.md](../SECURITY-MODEL.md) the trust bounda
 [OPERATIONS.md](../OPERATIONS.md) the owner and release procedures, and [docs/adr](../adr/) the
 decisions behind them.
 
-The protected Build/packaged-runtime implementation is tracked by
-[BUILD-E2E-PROGRESS.md](../BUILD-E2E-PROGRESS.md), against the complete
-[BUILD-E2E-DESIGN.md](../BUILD-E2E-DESIGN.md). [BUILD-PROTOCOL.md](../BUILD-PROTOCOL.md) owns the
-inactive foundational protocol; `src/mod_base/build_ci/` owns its common mechanisms (MB11).
-Pages building stays in `pages.build`. Structural plan/graph validation alone never authorizes
-candidate execution, consumer activation, an App success or a merge. The Linux boundary and real
-hosted canary remain mandatory before release/adoption.
+## The protected Build and packaged-E2E pipeline
 
-A batch lands several open pull requests of the same repository through one pull request, so
-that the complete gates run once for all of them. `ci batch-prepare` squashes each member, in the
-order given, onto the live head of the default branch in a private Git store (`build_ci.batch_git`),
-pushes the stack as a new `batch/<name>` branch and opens one ready pull request whose body
-carries the manifest in a marker line. Nobody believes that marker: `batch.rebuild_batch` builds
-the stack again from the base and member heads it names and requires every commit id to be the
-same. After the batch pull request has merged, `ci batch-settle` rebuilds the stack, reads both
-original gates through `transport.download_merged_gate_pair`, and only then comments on and
-closes the members that are still at their batched head.
+`src/mod_base/build_ci/`, the kit workflows `build.yml`, `select-build.yml`, `packaged-e2e.yml` and
+`gate-status.yml`, the managed callers `template/managed/.github/workflows/mod-base-*.yml` and the
+`ci` command are one unreleased pipeline that no mod runs yet. Before touching any of it, read
+[BUILD-PROTOCOL.md](../BUILD-PROTOCOL.md) (the reference: identity, records, job graphs, the steps
+of a job, root operations), [BUILD-E2E-PROGRESS.md](../BUILD-E2E-PROGRESS.md) (what exists, what
+remains, what is still moving), [BUILD-ADAPTER.md](../BUILD-ADAPTER.md) (what a mod provides) and
+[ADR 0007](../adr/0007-protected-build-and-packaged-runtime.md) (the decisions and their reasons).
+These rules are specific to this code and add to the sections below:
 
-`authenticate.authenticate_merged_pr_identity` separately binds original synthetic parents/tree
-to the actual merged PR/final tree and original/current protected history. Final merge parents
-may differ for merge/squash/rebase; never replace the original tested identity with the final
-SHA or relax the existing live open/ready path. Its observation grants no full historical gate,
-native policy/pin, reuse or settlement approval. Those readers and their complete admission
-remain required before effects. Inactive reuse-v1 data retains separate original PR and current
-non-PR bindings even when the actual final merged SHA equals the original synthetic tested SHA.
-Do not require unequal SHAs or erase original provenance to make that case fit. Both direct seals,
-ordered original parents, tree/policy/pin equality and full K6 admission remain mandatory.
-selection.select_latest_merged_pr_build separately admits historical source around original
-controller newest-attempt/full-graph/bundle metadata selection. Never substitute the current
-default SHA, select only successful runs or fall back after failed/pending/corrupt newer evidence.
-Retain original plan bytes in both source routes and original descriptor bytes during historical
-revalidation. Public inputs supply no admission callback. Both gates/native payloads/policy/pin/
-chronology/consumer/writer admission remain separate; this read grants no reuse or execution.
-`transport.download_merged_gate_receipt` separately reads an original full tested PR seal after
-merge, retaining original producer head/kit/attempt and repeated historical source observations.
-It shares the full live transport's graph, upload, canonical ZIP/JSON and source availability
-checks, including independently enrolled owning Build. No public input supplies an admission
-callback. Both coherent gates, native payloads, original/current policy/pin, newest-run selection
-and actual later consumer chronology remain required; this activates no reuse or settlement.
-`transport.download_merged_gate_pair` reads both original full seals with retained historical
-source/caller snapshots and requires packaged's exact whole owning Build descriptor to equal
-the Build seal's actual complete bundle. Reject independently valid but mixed generations;
-repeat both full readers before returning the pair. Native payloads, newest eligible runs,
-policy/pin equivalence, later consumer chronology and authority remain mandatory. Observation
-never reserves artifacts or activates partial reuse, fallback, statuses or settlement.
-`transport.download_merged_build` materializes only that coherent pair's exact original complete
-bundle through shared bounded ZIP/envelope/inventory/byte checks and private atomic copying.
-Retained source, original caller and the whole pair are rechecked inside final publication;
-staged bytes are verified again afterward. Private writer-excluded parent provenance, complete
-native Build/runtime validity, newest eligible sources, policy/pin and consumer/writer admission
-remain required. Copying authenticated generic bytes is not native or reuse success authority.
-
-`transport.download_merged_runtime` copies only the original coherent pair's complete results.
-Retain original producer/attempt/kit/ZIP/owning Build identity and recheck pair/source/caller
-inside final runtime publication. Original extracted inventory must still match after final API
-admission; a self-consistent replacement is not original payload proof. Actual owning Build
-bytes, native domain validation, newest source/policy/pin/consumer/writer admission remain open.
-
-`transport.download_merged_inputs` stages original complete Build/runtime readers beneath one
-private parent and publishes only the fixed build/runtime pair together. Repeat whole original
-seal/source/caller admission and both byte inventories after both children complete. No partial
-caller output or native/effect authority is produced. Later native/current-policy/consumer and
-writer rechecks remain mandatory; observations never reserve source artifact availability.
-
-`build_ci.runtime_schema` owns initial runtime inventory data with original lane limits retained
-inside the aggregate. Its labels/hashes are not native output mapping or complete byte proof.
-Independently admitted plan, producer, exact owning Build and actual native validators remain
-required before runtime transport or success. No second authored scenario catalog is permitted.
-`runtime_exports` reads complete actual frozen data, including empty logs, and independently
-copies it through existing MB1 no-follow/atomic primitives. Recheck source and stage after final
-internal transport admission. Generic byte equality remains separate from native E2E authority.
-
-MB11 runtime_inputs binds the tool-fenced verify_runtime hook (`execute_frozen_runtime_validator`,
-the same second-account route as Build verification) to three fixed frozen
-roots and retained canonical plan/complete owning Build/exact lane bytes. Recheck metadata,
-inventories, directory identities and original caller snapshots; always terminate the admitted
-validator. Context/execution data grant no native validity, Root receipt or status authority.
-Private reclaimed read-only input preparation and actual source/API/tool/runtime/native admission
-remain independent prerequisites. Preserve cross-run owning Build identity rather than replacing
-it with the runtime producer. Root-only freeze_frozen_runtime_validation binds genuinely retained
-successful execution/context to the existing independent frozen validation export, preserving
-three-root pre/post checks and rejecting original caller drift. Constructible values grant no
-provenance. Root-only prepare_runtime_validation grants exact runtime reads through MB1 bounded
-regular-data handoff, preserving empty logs, original private copy and all three input identities
-and snapshots. Failed admission restores admitted runtime root traversal when cleanup succeeds;
-late close failure may leave a granted copy. Never consume a failed handoff; restage before retry.
-Actual candidate reclamation/privilege handoff and real hosted lifecycle remain open; never
-consume a private frozen copy left by a failed closing check.
-
-Required hosted Linux runtime candidate-copy/read-grant cases preserve actual empty log/crash
-data, source/owning Build binding, distinct inode/private transfer, validator-only reads and
-candidate original ownership. Real hardlinks reject before publication. Keep fresh hosted/sudo/
-account prerequisites; never execute these account tests on Windows or fake hosted environment
-flags. These synthetic physical fixtures do not enroll complete tools or a native runtime.
-
-MB11 runtime_freeze binds Root-only candidate runtime copying to original successful execution,
-complete tracked-source witnesses, independently selected whole owning Build and actual lane bytes.
-Close original source/plan/Build/caller admission inside publication and after private transfer;
-recheck named-copy identity as well as the retained FD. MB1 privatize_regular_data_copy preserves
-empty data through the existing protected ACL/owner/root-last 0700/0600 transfer. Only an independent
-copy changes owner. Native second-UID validation/receipt and actual provenance/hosted/workflow
-admission remain mandatory; no failed private copy may be consumed or uploaded.
-
-MB11 runtime_handoff uses the existing closed execution-v1 private channel for original lane
-execution/context with a fresh retained nonce, preserving field/bound compatibility. Shared
-publication rereads staged bytes after closing admission. Runtime writer/Root reader bind exact
-three-input snapshots and source-config identity before and after publication/freezing; Root
-rereads the private original record afterward. No record chooses a program/path/hook. Actual
-protected provenance and independently enrolled runtime Root process/request remain required;
-constructible channel data grant no native/status authority and failed receipts are never consumed.
-
-MB1 bounded_zip.extract_runtime is the fixed runtime-only empty-data ZIP route. Closed lane/
-complete scope derives native payload caps centrally, with bounded central directory before
-allocation, file count before inflation, compressed cap and shared hostile ZIP validation.
-Pages/Build stay nonempty. Exact runtime envelope/native mapping/API admission is still required.
-
-Root work has one process model. Each workflow step runs one `ci` command as the runner; work
-that needs root runs in a child started as `/usr/bin/sudo -n -- <python> -I -B -S
-<kit>/tools/ci_privileged_bootstrap.py --operation <name> --kit <kit> --kit-digest <digest>
---nonce <nonce>` (`build_ci.root_request.run_root_operation`). The bootstrap is stdlib-only until
-it has re-computed kit-digest-v1 of that prologue-verified checkout and compared it with the
-digest it was given; it then loads `mod_base` from the checkout's exact files, without editing
-`sys.path`, and calls `build_ci.root_request_operations.execute_root_operation`. Never add a kit
-import above that point, and keep its mirrored constants equal to `model/grammar.py` and
-`model/limits.py` (`tests/test_ci_privileged_bootstrap.py`). There is no private kit copy, no
-private interpreter and no byte digest of the tool trees: the prologue establishes kit integrity
-and the host fence plus the metadata scan protect the tools.
-
-Parent and child exchange data only through `mod-base.ci.root-request` records: one canonical
-request per operation in its own runner-owned 0700 directory below the worker root (0600
-single-link file, never replaced), read with the private record reader. The operation is one of
-`grammar.CI_ROOT_OPERATIONS`; the request's closed `arguments` never select code, a hook or a
-destination. Root derives the runner from the fixed home and passwd, admits the live host fence,
-rebuilds controller sources from the protected copy on disk and re-reads the request after the
-operation. Root never calls the GitHub API: anything that needs it happens in the runner before
-the request is written. Adding an operation means adding it to `CI_ROOT_OPERATIONS`, the
-bootstrap's mirror, `root_request_schema` (closed arguments), `root_request` (the runner's typed
-request function) and `root_request_operations` (the handler), with a hosted test in
-`tests/ci_linux_worker.py` that runs it through the real bootstrap.
-
-`host-fence` is the first root operation of a job: it runs after the runner closed its home and
-before any worker account exists, and refuses afterwards (`build_ci.host.fence_worker_host`). A
-hosted `ubuntu-24.04` image ships `/opt` with the tool cache, `/usr/share`, `/usr/local` and the
-JDKs world-writable, the `/opt` trees with default ACLs. The fence removes group/other write
-permission and default ACLs from `HOST_FENCE_TREES`, then fails unless no world-writable
-non-sticky directory and no world-writable regular file is left reachable on the root
-filesystem outside the worker boundary. When a new image leaves another tree writable the fence
-fails and names the first path: add the tree to `HOST_FENCE_TREES`, never an exception to the
-proof. Do not give a tool location a special case in `build_ci.toolchain` either: after the
-fence a tool root is admitted by ownership, mode and the absence of default ACLs, wherever it
-lives.
+- Compose. Every function is reachable from a `ci` verb (`build_ci/commands_*.py`, listed in
+  `commands.VERB_MODULES`) and every verb from a workflow step, one verb to a step, or from a
+  documented operator entry. Do not add a primitive that nothing calls.
+- A mod never writes a kit-format document. Its hooks write native files at the paths of the
+  adapter contract; protected kit code inventories, hashes and binds them.
+- Read immutable objects once and budget every command. A commit, tree or blob named by SHA and
+  the job list of a completed attempt are read once per command (`reads.CommandReads`); mutable
+  state is read at the start and again immediately before the effect (`reads.Watch`). A command
+  builds its client with `commands.api_client(..., max_requests=...)` from a limit of
+  `model/limits.py`, and a test pins the request count of a typical case.
+- Root work goes through the closed operations only: one entry of `grammar.CI_ROOT_OPERATIONS`,
+  requested by a private `mod-base.ci.root-request` and run by `tools/ci_privileged_bootstrap.py`,
+  which mirrors the list without importing the kit. The only other `sudo` command lines are the
+  fixed ones in `build_ci.worker` that create, lock, kill and enter an account. Root never calls
+  the GitHub API, and a request never names a program, a hook or a destination.
+- Account, `sudo` and root behaviour is tested only in `tests/ci_linux_worker.py`, which the suite
+  does not collect and CI runs on a GitHub-hosted runner in every Python leg. Its account classes
+  refuse any other host (`GITHUB_ACTIONS`, `RUNNER_ENVIRONMENT=github-hosted`, passwordless `sudo`,
+  `/home/runner`), create real accounts and change the modes of system trees for good: run it in
+  CI or on a disposable Linux machine laid out like a hosted runner, never on a workstation. A
+  suite test may fake the GitHub API (`mod_base.github.fake.FakeGitHub`) and nothing else this
+  code owns.
+- Every `...CI_...` constant of `model/limits.py` needs a row in `tests/test_ci_limits.py` saying
+  what it bounds, and kit code must use it. No bound is raised because a pipeline fails.
+- The workflows are policed through the registry tables of `workflow.py` (the `CI_CALLEE_*` and
+  `CI_JOB_*` tables: workflows, callers, jobs, verbs, artifacts, permissions), to which
+  `tests/test_workflow_ci_policy.py` holds the YAML: change a table and its workflow together.
+  Job names are part of the graph contract (`build_ci/graph.py`, `tests/fixtures/ci_graphs/`).
 
 ## What a kit change reaches
 
@@ -229,26 +117,25 @@ version decision, never a silent edit:
 
 ## Workflows and composites
 
-`template.tool.RENDERED_CALLERS` is a closed protected-code destination/source/renderer registry.
-Manifest/profile data cannot choose a renderer, remap an enrolled caller or confer an extension
-policy. Pages is currently the sole entry. Unregistered workflow PIN/VERSION placeholders reject
-before template writes in every manifest class. New Build/E2E entries require actual protected
-templates, closed profile/transition admission and their native prerequisites; never route them
-through Pages extensions or template deferral.
-The new mod-base.ci.activation v1 parser validates closed data only at the prospective fixed
-site/mod-base-build-activation.json path. Bind it to original native configuration and exact
-protected transitions before wiring profiles. A mode label, including reviewed-rollback, is not
-owner approval or execution/status authority; legacy consumers are not activated by parsing it.
-controller.authenticate_controller_activation reads the fixed manifest from the original
-API-authenticated controller tree under native protected-path policy, binds repository/profile
-to its genuine config and repeats source/manifest/live identity admission. Retain that genuine
-provenance; a constructed sources/manifest receipt is not approval or a protected transition.
-Template check/sync/init now preflight any present activation against bounded regular native
-config before writes. Legacy absence and bound disabled state remain supported; other modes
-reject until fixed active templates/native admission exist. Do not call that guard complete
-profile activation or removed-marker/rollback protection; pin/bootstrap parity is still required.
-Bootstrap bump now runs the verified target kit's non-writing sync plan before rewriting pins.
-Do not treat this error preflight as transactional rollback or complete profile/pin parity.
+The workflows the kit renders with a mod's pin are enrolled in `template.tool.RENDERED_CALLERS`, a
+closed registry in code: neither `template/manifest.json` nor a mod's data can enrol a caller, move
+one or choose its renderer. The Pages caller is a manifest entry, always managed, and keeps its
+region of mod-local `ext-` jobs. The four Build/E2E callers (`mod-base-guard.yml`,
+`mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`) are enrolled in code
+alone and rendered whole from `{{PIN}}`, `{{VERSION}}` and `{{BRANCH}}` (the mod's
+`canonical_branch`): they have no extension region and `template.deferred` cannot name them. Which
+of them a mod has is decided by the mode of its activation manifest alone
+(`site/mod-base-build-activation.json`, `build_ci.activation.MANAGED_CALLERS`). `template check`,
+`sync` and `init` read it first, check a managed caller like any managed file and report a caller
+outside its mode as `forbidden`; a Build configuration without a manifest is an error, and a mod
+with neither is not checked for these callers at all. A mode changes only along
+`activation.TRANSITIONS`, in a pull request of its own at an unchanged pin (`build_ci.transition`,
+`template transition`), and a mode is data, not owner approval. While a mode manages callers,
+`.github/dependabot.yml` must ignore the third-party actions they pin. The bootstrap's `bump`
+refuses a target kit that cannot read the manifest while a mode other than `disabled` is active,
+requires that kit's `template sync` plan to raise no error before it rewrites any pin, and
+restores every workflow and action file when its write phase fails.
+[OPERATIONS.md](../OPERATIONS.md#builde2e-activation-and-rollback) has the procedure.
 
 - Every `uses:` is pinned to a full commit SHA with its `# vX.Y.Z` comment. The kit never
   references itself (`uses: The-Plum-Team/mod-base...`) outside `canary/`, which is copied into the

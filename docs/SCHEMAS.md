@@ -1,9 +1,14 @@
 # Schemas (v1)
 
-The inactive Build config/plan/envelope and CI selection/gate/reuse/validation/execution/root-request/activation/batch/runtime-envelope v1 kinds have their exact
-field/reference rules in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md). They are separate from `mod-base.build`, the Pages publication
-record. The exhaustive per-kind compatibility ledger and immutable predecessor-reader fixtures
-are described there. Existing Pages document shapes remain unchanged.
+The thirteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
+`mod-base.build.envelope` and the `mod-base.ci.*` kinds, all new at version 1 and unreleased) are
+listed in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the
+validator that defines it. This page has the field tables of four of them, in its last four
+sections: the Build config, the batch manifest, the results index and the activation manifest.
+These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
+document shape changes. The compatibility decision of every kind against the previous release is
+`tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
+with the archived reader in `tests/fixtures/previous_release/`.
 
 Every document the kit reads or writes, its exact fields and the structural rules
 `mod_base.model.documents` (and `mod_base.config` for the config) enforce. The validators are
