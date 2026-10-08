@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import stat
 from contextlib import ExitStack
-from pathlib import Path
+from pathlib import Path, PurePath
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -148,6 +148,24 @@ class ControllerSourceTests(unittest.TestCase):
             (Path(directory) / ".git").write_bytes(b"inert forbidden metadata")
             with self.assertRaises(MbError):
                 controller.verify_controller_source_copy(Path(directory), sources=sources, identity=plan["identity"])
+
+    def test_pure_fixed_layout_root_is_inspected_like_a_concrete_copy(self):
+        # The handoff passes CONTROLLER_VALIDATION_ROOT, a pure path, straight to these checks.
+        self.assertNotIsInstance(controller.CONTROLLER_VALIDATION_ROOT, Path)
+        plan, api, _, protected = self.fixture()
+        sources = controller.authenticate_controller_sources(api, identity=plan["identity"], protected_paths=protected)
+        records = [{"path": file.path, "mode": file.mode, "size": len(file.data),
+                    "git_blob": file.git_blob, "sha256": file.sha256}
+                   for file in sorted((sources.config, *sources.files), key=lambda file: file.path)]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(controller, "verify_source_copy", return_value=records) as verify:
+            root = PurePath(directory)
+            self.assertEqual(controller.verify_controller_source_copy(root, sources=sources,
+                                                                      identity=plan["identity"]), ci_config_with(sources))
+            self.assertEqual(verify.call_args.args, (root,))
+            (Path(directory) / ".git").write_bytes(b"inert forbidden metadata")
+            with self.assertRaisesRegex(MbError, "omit Git metadata"):
+                controller.verify_controller_source_copy(root, sources=sources, identity=plan["identity"])
 
     def test_forged_receipts_cannot_bypass_hash_mode_type_or_identity_checks(self):
         plan, api, _, protected = self.fixture()

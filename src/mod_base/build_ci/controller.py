@@ -221,7 +221,7 @@ def _verify_controller_copy(root: Path, *, sources: ControllerSources,
     config = _validate_sources(sources, identity)
     files = (sources.config, *sources.files)
     try:
-        (root / ".git").lstat()
+        Path(root, ".git").lstat()  # The fixed handoff root is a pure path constant.
     except FileNotFoundError:
         pass
     except OSError as error:

@@ -149,7 +149,8 @@ def _restore_sources(document: dict[str, Any]) -> ControllerSources:
 
 def _read(boundary: HostBoundary) -> bytes:
     root = Path(str(ROOT_REQUEST_ROOT))
-    authenticate_tree_private_access(root, owner_uid=boundary.uid, owner_gid=boundary.gid, max_entries=1)
+    authenticate_tree_private_access(root, owner_uid=boundary.uid, owner_gid=boundary.gid,
+                                     max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
     return _read_private_record(root, name=grammar.CI_ROOT_REQUEST_NAME, owner_uid=boundary.uid,
                 owner_gid=boundary.gid, max_bytes=limits.MAX_CI_ROOT_REQUEST_BYTES, label="root request")
 
@@ -181,7 +182,8 @@ def record_root_freeze_request(invocation: Invocation, *, boundary: HostBoundary
                 os.fsync(leaf)
             finally:
                 os.close(leaf)
-            authenticate_tree_private_access(stage, owner_uid=boundary.uid, owner_gid=boundary.gid, max_entries=1)
+            authenticate_tree_private_access(stage, owner_uid=boundary.uid, owner_gid=boundary.gid,
+                                             max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
             check(read_child_file(stage, grammar.CI_ROOT_REQUEST_NAME, max_bytes=limits.MAX_CI_ROOT_REQUEST_BYTES) == raw,
                   "$.request", "root request bytes changed during publication")
             check((_inspect_sources(boundary, validator, sources, plan), _inspect_inputs(boundary, validator, plan, envelope)) == initial,

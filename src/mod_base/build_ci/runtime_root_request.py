@@ -49,7 +49,8 @@ class RuntimeRootFreezeContext:
 
 def _read(boundary: HostBoundary) -> bytes:
     root = Path(str(RUNTIME_ROOT_REQUEST_ROOT))
-    authenticate_tree_private_access(root, owner_uid=boundary.uid, owner_gid=boundary.gid, max_entries=1)
+    authenticate_tree_private_access(root, owner_uid=boundary.uid, owner_gid=boundary.gid,
+                                     max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
     return _read_private_record(root, name=grammar.CI_RUNTIME_ROOT_REQUEST_NAME, owner_uid=boundary.uid,
         owner_gid=boundary.gid, max_bytes=limits.MAX_CI_RUNTIME_ROOT_REQUEST_BYTES, label='runtime Root request')
 
@@ -88,7 +89,8 @@ def record_runtime_root_freeze_request(invocation: Invocation, *, boundary: Host
                 os.fsync(leaf)
             finally:
                 os.close(leaf)
-            authenticate_tree_private_access(stage, owner_uid=boundary.uid, owner_gid=boundary.gid, max_entries=1)
+            authenticate_tree_private_access(stage, owner_uid=boundary.uid, owner_gid=boundary.gid,
+                                             max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
             check((_inspect_sources(boundary, validator, sources, retained[0]),
                    _inspect_inputs(boundary, validator, *retained)) == initial,
                   '$.request', 'original runtime Root source/input directories changed')

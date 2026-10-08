@@ -152,6 +152,8 @@ class KitInstallationTests(unittest.TestCase):
 
     def _install(self, *, snapshots=None, copied=None, role_error=None):
         state = inventory()
+        supplied = invocation()
+        sealed = []
         with ExitStack() as stack:
             guard = stack.enter_context(patch.object(installation, "authenticate_privileged_host_boundary", side_effect=role_error))
             stack.enter_context(patch.object(installation, "_layout"))
@@ -160,15 +162,25 @@ class KitInstallationTests(unittest.TestCase):
             mkdir = stack.enter_context(patch.object(installation.os, "mkdir"))
             stack.enter_context(patch.object(installation, "_open_directory", return_value=17))
             stack.enter_context(patch.object(installation.os, "close"))
+            stack.enter_context(patch.object(installation.os, "O_NOFOLLOW", 0, create=True))
+            leaf = stack.enter_context(patch.object(installation.os, "open", return_value=23))
+            mode = stack.enter_context(patch.object(installation.os, "fchmod", create=True))
+            stack.enter_context(patch.object(installation.os, "fsync"))
             stack.enter_context(patch.object(installation, "copy_source_files",
                 side_effect=lambda path, fd, **kw: state[0][path.name] if copied is None else copied))
-            metadata = stack.enter_context(patch.object(installation, "authenticate_tree_private_access"))
+            metadata = stack.enter_context(patch.object(installation, "authenticate_tree_private_access",
+                side_effect=lambda *args, **kwargs: sealed.append(mode.call_count)))
             publish = stack.enter_context(patch.object(installation, "atomic_directory",
                 side_effect=lambda path, fill: fill(Path("/tmp/private-stage"), 31)))
-            result = installation.install_privileged_kit(invocation(), boundary=BOUNDARY, expected_digest=state[1])
+            result = installation.install_privileged_kit(supplied, boundary=BOUNDARY, expected_digest=state[1])
             self.assertEqual(guard.call_count, 2)
             self.assertEqual(inspect.call_count, 3)
             self.assertEqual(metadata.call_count, 2)
+            # copy_source_files seals Git mode 0644: each leaf is tightened before private admission.
+            self.assertEqual([(entry.args[0], entry.kwargs) for entry in leaf.call_args_list],
+                             [("file.py", {"dir_fd": 17})] * 3)
+            self.assertEqual([entry.args for entry in mode.call_args_list], [(23, 0o600)] * 3)
+            self.assertEqual(sealed, [3, 3])
             for call in metadata.call_args_list:
                 self.assertEqual(call.args, (Path("/tmp/private-stage"),))
                 self.assertEqual(call.kwargs, dict(owner_uid=0, owner_gid=0,

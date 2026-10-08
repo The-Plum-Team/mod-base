@@ -150,6 +150,20 @@ class PolicyRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr+result.stdout)
         self.assertIn(b"Ran 1 test in",result.stdout)
 
+    def test_qs_safe_path_interpreter_keeps_its_first_import_root_and_working_directory_imports(self):
+        # Disposable workers always run with PYTHONSAFEPATH=1 (or -I): no script directory leads
+        # sys.path, so its first entry is the kit source every spawned worker must still import.
+        (self.base / "policy_root_fixture.py").write_text("VALUE=7\n",encoding="utf-8")
+        self.module("user","import unittest\nfrom policy_root_fixture import VALUE\n"
+                    "class User(unittest.TestCase):\n    def test_a(self): self.assertEqual(VALUE,7)\n")
+        for safe in (False,True):
+            if safe:
+                self.environment["PYTHONSAFEPATH"] = "1"
+            with self.subTest(safe=safe):
+                result = self.run_profile("quick-skin")
+                self.assertEqual(result.returncode,0,result.stderr+result.stdout)
+                self.assertIn(b"Ran 1 test in",result.stdout)
+
     def test_native_teardown_class_skip_keeps_full_method_count_in_both_profiles(self):
         self.module("teardown","import unittest\nclass CleanupSkip(unittest.TestCase):\n"
                     "    @classmethod\n    def tearDownClass(cls): raise unittest.SkipTest('native cleanup skip')\n"

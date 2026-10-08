@@ -170,7 +170,8 @@ class RuntimeRootRequestTests(unittest.TestCase):
                 patch.object(request, '_read_private_record', return_value=b'opaque') as reading:
             self.assertEqual(request._read(boundary), b'opaque')
         private.assert_called_once_with(Path(str(request.RUNTIME_ROOT_REQUEST_ROOT)),
-            owner_uid=boundary.uid, owner_gid=boundary.gid, max_entries=1)
+            owner_uid=boundary.uid, owner_gid=boundary.gid,
+            max_entries=request.limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
         reading.assert_called_once_with(Path(str(request.RUNTIME_ROOT_REQUEST_ROOT)),
             name=request.grammar.CI_RUNTIME_ROOT_REQUEST_NAME, owner_uid=boundary.uid,
             owner_gid=boundary.gid, max_bytes=request.limits.MAX_CI_RUNTIME_ROOT_REQUEST_BYTES,

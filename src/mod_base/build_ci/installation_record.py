@@ -47,12 +47,12 @@ def record_privileged_kit_installation(installation: KitInstallation, *, boundar
                 os.fsync(leaf)
             finally:
                 os.close(leaf)
-            authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0, max_entries=1)
+            authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0, max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
             check(read_child_file(stage, grammar.CI_KIT_INSTALLATION_NAME,
                     max_bytes=limits.MAX_CI_KIT_INSTALL_RECORD_BYTES) == raw,
                   "$.installation", "installation record changed during publication")
             authenticate_privileged_kit(installation, boundary=boundary)
-            authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0, max_entries=1)
+            authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0, max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
             authenticate_privileged_host_boundary(boundary)
             _layout(boundary)
 
@@ -68,7 +68,7 @@ def read_privileged_kit_installation(*, boundary: HostBoundary) -> KitInstallati
         authenticate_privileged_host_boundary(boundary)
         _layout(boundary)
         root = Path(str(PRIVILEGED_KIT_RECORD_ROOT))
-        authenticate_tree_private_access(root, owner_uid=0, owner_gid=0, max_entries=1)
+        authenticate_tree_private_access(root, owner_uid=0, owner_gid=0, max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
         raw = _read_private_record(root, name=grammar.CI_KIT_INSTALLATION_NAME, owner_uid=0, owner_gid=0,
                     max_bytes=limits.MAX_CI_KIT_INSTALL_RECORD_BYTES, label="kit installation record")
         document = loads(raw, label=grammar.CI_KIT_INSTALLATION_NAME,
@@ -79,7 +79,7 @@ def read_privileged_kit_installation(*, boundary: HostBoundary) -> KitInstallati
         installation = KitInstallation(kit["sha"], kit["version"], document["tree_digest"], document["files"],
                                        document["total_bytes"], document["device"], document["inode"])
         authenticate_privileged_kit(installation, boundary=boundary)
-        authenticate_tree_private_access(root, owner_uid=0, owner_gid=0, max_entries=1)
+        authenticate_tree_private_access(root, owner_uid=0, owner_gid=0, max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
         check(_read_private_record(root, name=grammar.CI_KIT_INSTALLATION_NAME, owner_uid=0, owner_gid=0,
                 max_bytes=limits.MAX_CI_KIT_INSTALL_RECORD_BYTES, label="kit installation record") == raw,
               "$.installation", "installation record changed during kit reauthentication")

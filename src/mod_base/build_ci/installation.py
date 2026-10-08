@@ -149,6 +149,21 @@ def _shape(root: Path) -> tuple[int, ...]:
         os.close(descriptor)
 
 
+def _seal_private(directory: int, path: str) -> None:
+    """copy_source_files leaves a tracked leaf at its Git mode (0644); the root copy must be 0600."""
+    parts = path.split("/")
+    parent = _open_directory(tuple(parts[:-1]), root=directory)
+    try:
+        leaf = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            os.fchmod(leaf, 0o600)
+            os.fsync(leaf)
+        finally:
+            os.close(leaf)
+    finally:
+        os.close(parent)
+
+
 def install_privileged_kit(invocation: Invocation, *, boundary: HostBoundary,
                             expected_digest: str) -> KitInstallation:
     """Root-only new private copy; the supplied digest/pin must already be independently admitted."""
@@ -176,6 +191,8 @@ def install_privileged_kit(invocation: Invocation, *, boundary: HostBoundary,
                         max_total_bytes=limits.MAX_CI_KIT_INSTALL_BYTES, max_file_bytes=limits.MAX_CI_KIT_INSTALL_BYTES,
                         max_link_bytes=limits.MAX_CI_SOURCE_LINK_BYTES)
                     check(copied == inventory[top], "$.kit", "kit source changed before copying")
+                    for record in copied:
+                        _seal_private(child, record["path"])
                 finally:
                     os.close(child)
             authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0,

@@ -185,7 +185,12 @@ def main(argv: list[str] | None = None) -> int:
         top_level = Path(args.starts[0]).resolve()
         if args.top_level_directory is not None and args.top_level_directory.resolve() != top_level:
             parser.error("Quick Skin policy discovery uses its start directory as import root")
-        sys.path[0] = os.getcwd()
+        # Only an unsafe-path interpreter leads sys.path with this script's directory. Under -P,
+        # -I or PYTHONSAFEPATH (every disposable worker) index 0 is a real import root to keep.
+        if sys.flags.safe_path:
+            sys.path.insert(0, os.getcwd())
+        else:
+            sys.path[0] = os.getcwd()
     else:
         top_level = (args.top_level_directory or Path(".")).resolve()
     sys.path.insert(0, str(top_level))

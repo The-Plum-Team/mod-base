@@ -97,7 +97,7 @@ def install_privileged_bootstrap(invocation: Invocation, *, boundary: HostBounda
                 os.fsync(leaf)
             finally:
                 os.close(leaf)
-            authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0, max_entries=1)
+            authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0, max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
             initial = _identity(stage)
             check(read_child_file(stage, grammar.CI_BOOTSTRAP_PROGRAM_NAME,
                     max_bytes=limits.MAX_CI_BOOTSTRAP_BYTES) == raw, "$.bootstrap", "private program bytes changed")
@@ -105,7 +105,7 @@ def install_privileged_bootstrap(invocation: Invocation, *, boundary: HostBounda
                   "$.bootstrap", "program source changed during installation")
             authenticate_privileged_kit(installation, boundary=boundary)
             check(_approved_program_digest() == digest, "$.bootstrap", "program lock changed")
-            authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0, max_entries=1)
+            authenticate_tree_private_access(stage, owner_uid=0, owner_gid=0, max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
             check(_identity(stage) == initial, "$.bootstrap", "private program root changed")
             authenticate_privileged_host_boundary(boundary)
             _layout(boundary)
@@ -131,14 +131,14 @@ def authenticate_privileged_bootstrap(program: BootstrapInstallation, *, boundar
         _layout(boundary)
         root = Path(str(PRIVILEGED_BOOTSTRAP_ROOT))
         check(_identity(root) == (program.device, program.inode), "$.bootstrap", "program root identity changed")
-        authenticate_tree_private_access(root, owner_uid=0, owner_gid=0, max_entries=1)
+        authenticate_tree_private_access(root, owner_uid=0, owner_gid=0, max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
         raw = _read_private_record(root, name=grammar.CI_BOOTSTRAP_PROGRAM_NAME, owner_uid=0, owner_gid=0,
                                   max_bytes=limits.MAX_CI_BOOTSTRAP_BYTES, label="bootstrap program")
         check((hashlib.sha256(raw).hexdigest(), len(raw)) == (program.sha256, program.size),
               "$.bootstrap", "private program bytes changed")
         authenticate_privileged_kit(installation, boundary=boundary)
         check(program.sha256 == _approved_program_digest(), "$.bootstrap", "program enrollment changed")
-        authenticate_tree_private_access(root, owner_uid=0, owner_gid=0, max_entries=1)
+        authenticate_tree_private_access(root, owner_uid=0, owner_gid=0, max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES)
         check(_identity(root) == (program.device, program.inode)
               and _read_private_record(root, name=grammar.CI_BOOTSTRAP_PROGRAM_NAME, owner_uid=0, owner_gid=0,
                     max_bytes=limits.MAX_CI_BOOTSTRAP_BYTES, label="bootstrap program") == raw,

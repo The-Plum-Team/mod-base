@@ -699,10 +699,10 @@ class LinuxWorkerTests(unittest.TestCase):
         self.assertEqual(leaf.read_bytes(), original)
         rejected("differs from protected attempt", "f" * 64 if nonce != "f" * 64 else "e" * 64)
         leaf.chmod(0o640)
-        rejected("private protected-runner-owned")
+        rejected("execution record must have private protected ownership")
         leaf.chmod(0o600)
         root.chmod(0o750)
-        rejected("private protected-runner-owned")
+        rejected("execution record must have private protected ownership")
         root.chmod(0o700)
         duplicate = self.root / "execution-hardlink-fixture"
         os.link(leaf, duplicate)
@@ -710,7 +710,7 @@ class LinuxWorkerTests(unittest.TestCase):
         duplicate.unlink()
         leaf.unlink()
         leaf.symlink_to(self.private)
-        rejected("private protected-runner-owned")
+        rejected("execution record must have private protected ownership")
         leaf.unlink()
         leaf.write_bytes(original)
         leaf.chmod(0o600)
@@ -724,7 +724,7 @@ class LinuxWorkerTests(unittest.TestCase):
         self.assertEqual(leaf.read_bytes(), original)
         candidate = authenticate_worker_account("candidate")
         command("/usr/bin/sudo", "-n", "--", "/usr/bin/chown", f"{candidate.uid}:{candidate.gid}", str(leaf), cwd=self.root)
-        rejected("private protected-runner-owned")
+        rejected("execution record must have private protected ownership")
         command("/usr/bin/sudo", "-n", "--", "/usr/bin/chown", f"{os.getuid()}:{os.getgid()}", str(leaf), cwd=self.root)
         self.assertEqual(leaf.read_bytes(), original)
 
@@ -1349,7 +1349,7 @@ class LinuxToolBytesTests(unittest.TestCase):
 
     def test_real_full_byte_fence_rejects_changes_around_mocked_dispatch(self):
         from mod_base.build_ci import toolchain
-        from mod_base.build_ci.worker import WorkerResult
+        from mod_base.build_ci.worker import WorkerAccount, WorkerResult
         from types import SimpleNamespace
         from contextlib import ExitStack
         if os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or Path.home() != Path("/home/runner"):
@@ -1370,7 +1370,8 @@ class LinuxToolBytesTests(unittest.TestCase):
                     content=data[Path(path).name]
                     row.update(type="file",size=len(content),sha256=hashlib.sha256(content).hexdigest())
                 else:
-                    self.assertIn(mode,(0o700,0o755));row.update(type="directory")
+                    # Ubuntu 24.04 creates the runner home 0750 (HOME_MODE); no fence is applied here.
+                    self.assertIn(mode,(0o700,0o750,0o755));row.update(type="directory")
                 digest.update(canonical_json(row))
             expected="sha256:"+digest.hexdigest()
             boundary=SimpleNamespace(uid=os.getuid());account=WorkerAccount("worker",2001,2001,"/fixture/private")

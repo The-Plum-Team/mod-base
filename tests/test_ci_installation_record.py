@@ -1,6 +1,7 @@
 """Closed root-record data/publication; OS seams never claim Linux origin on Windows."""
 
 import copy
+import errno
 import unittest
 import stat
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from mod_base.build_ci.installation import KitInstallation
 from mod_base.build_ci.host import HostBoundary
 from mod_base.build_ci.worker import WorkerError
 from mod_base.errors import MbError
+from mod_base.io import tree
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.documents import load_document
@@ -68,7 +70,8 @@ class KitInstallationRecordTests(unittest.TestCase):
         self.assertEqual(metadata.call_count, 2)
         self.assertEqual(guard.call_count, 2)
         for call in metadata.call_args_list:
-            self.assertEqual(call.kwargs, dict(owner_uid=0, owner_gid=0, max_entries=1))
+            self.assertEqual(call.kwargs, dict(owner_uid=0, owner_gid=0,
+                                               max_entries=limits.MAX_CI_PRIVATE_RECORD_ENTRIES))
 
     def _read(self, raw, *, final=None, copy_error=None):
         with ExitStack() as stack:
@@ -156,6 +159,30 @@ class KitInstallationRecordTests(unittest.TestCase):
                     max_bytes=limits.MAX_CI_KIT_INSTALL_RECORD_BYTES, label="kit installation record")
                 if not change: self.assertEqual(value, raw)
             self.assertIn(51, [call.args[0] for call in close.call_args_list])
+
+    def test_single_leaf_record_directory_needs_its_root_and_leaf_in_the_private_entry_cap(self):
+        # Real MB1 walk budget over a faked root holding only the record: the cap counts the root.
+        root = SimpleNamespace(st_dev=1, st_ino=10, st_mode=stat.S_IFDIR | 0o700, st_uid=0, st_gid=0, st_nlink=2)
+        leaf = SimpleNamespace(st_dev=1, st_ino=11, st_mode=stat.S_IFREG | 0o600, st_uid=0, st_gid=0, st_nlink=1)
+        class Listing:
+            def __enter__(self): return iter((SimpleNamespace(name=grammar.CI_KIT_INSTALLATION_NAME),))
+            def __exit__(self, *args): return False
+        for cap in (limits.MAX_CI_PRIVATE_RECORD_ENTRIES, limits.MAX_CI_PRIVATE_RECORD_ENTRIES - 1):
+            with self.subTest(cap=cap), ExitStack() as stack:
+                stack.enter_context(patch.object(tree.sys, "platform", "linux"))
+                stack.enter_context(patch.object(tree, "_open_root", return_value=51))
+                stack.enter_context(patch.object(tree, "_parent_descriptor", return_value=51))
+                stack.enter_context(patch.object(tree.os, "scandir", return_value=Listing()))
+                stack.enter_context(patch.object(tree.os, "stat", return_value=leaf))
+                stack.enter_context(patch.object(tree.os, "open", return_value=52))
+                stack.enter_context(patch.object(tree.os, "close"))
+                stack.enter_context(patch.object(tree.os, "fstat", side_effect=lambda fd: leaf if fd == 52 else root))
+                stack.enter_context(patch.object(tree.os, "getxattr", create=True,
+                                                 side_effect=OSError(errno.ENODATA, "no ACL")))
+                if cap < limits.MAX_CI_PRIVATE_RECORD_ENTRIES:
+                    stack.enter_context(self.assertRaisesRegex(MbError, "entry bound"))
+                tree.authenticate_tree_private_access(Path(str(record.PRIVILEGED_KIT_RECORD_ROOT)),
+                                                      owner_uid=0, owner_gid=0, max_entries=cap)
 
     def test_io_failures_normalize_and_never_publish_on_failed_copy_admission(self):
         with patch.object(record, "authenticate_privileged_host_boundary"), \
