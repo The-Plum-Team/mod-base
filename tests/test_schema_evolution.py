@@ -1,4 +1,4 @@
-﻿"""Per-kind compatibility with every current writer and immutable predecessor fixture.
+"""Per-kind compatibility with every current writer and immutable predecessor fixture.
 
 An unchanged kind/version must remain readable by the predecessor. New kinds must be
 advertised in the ledger and rejected by its reader, never omitted from testing.

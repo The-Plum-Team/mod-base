@@ -510,7 +510,7 @@
       "set": [
         [
           "/frames/0/runtime_evidence",
-          "PASS: cape frame 2 \u00e2\u2020\u2019 r\u00c3\u00a9f \u00e2\u0153\u201c \u00e2\u2014\u2039"
+          "PASS: cape frame 2 \u2192 r\u00e9f \u2713 \u25cb"
         ]
       ]
     },
@@ -521,7 +521,7 @@
       "set": [
         [
           "/frames/0/runtime_evidence",
-          "PASS \u00c2\u2026 next"
+          "PASS \u0085 next"
         ]
       ]
     },

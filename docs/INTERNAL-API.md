@@ -6,7 +6,7 @@ unit (MB1-MB10) codes against: **the names, parameters, defaults, return types a
 below are frozen**. A unit fills in the bodies of the modules it owns (every stub body raises
 `NotImplementedError("owned by MBn")`); it may add private helpers and new private modules, but
 it must not rename, remove or change the signature of anything listed here. A needed change is
-announced to MB0's owner first (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§10). A name one unit uses from a module another unit owns is
+announced to MB0's owner first (SPEC §10). A name one unit uses from a module another unit owns is
 listed here (and so frozen) before it is used: the test also runs in the other direction and fails
 when a kit module or kit tool imports, or reads as a module attribute, another unit's name that its
 module section does not list, or any private (`_name`) module or name of another unit.
@@ -110,7 +110,7 @@ Integration-round amendments:
   cache (the `family-handoff`/`family-cache` extraction total, which used to omit the envelope). So
   every generation `family envelope` accepts is collectable: `family collect` never refuses (exit 2,
   which blocks every publication) a generation its producer accepted.
-* **Artifact archive cap (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.0 "Raw bundle 1 GiB").** Every SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.0 expanded bound keeps its
+* **Artifact archive cap (SPEC §3.0 "Raw bundle 1 GiB").** Every SPEC §3.0 expanded bound keeps its
   value (`MAX_RAW_BUNDLE_BYTES`, `MAX_ANCHOR_BUNDLE_BYTES`, `MAX_COLLECTED_FAMILY_BYTES`: 1 GiB; a
   family bundle is smaller, above). The archive of a bundle is larger than its files, so the cap on
   the ZIP bytes admitted, selected and downloaded into memory is `limits.MAX_ARTIFACT_BYTES` =
@@ -125,7 +125,7 @@ Integration-round amendments:
   `handoff_max_bytes` plus `envelope.json`: in `admit`, in `select` (a family handoff over it is
   skipped, a family cache over it fails selection like an ordinary cache) and in `build` (either kind
   of a leg's recorded selection); rotation reads family caches within the `family-cache` kind's
-  limit. This replaces SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§5.3.1's `size <= 1 GiB` (`deploy`) and `size <= handoff_max_bytes`
+  limit. This replaces SPEC §5.3.1's `size <= 1 GiB` (`deploy`) and `size <= handoff_max_bytes`
   (`family`). The download caps `github.artifacts.MAX_ARCHIVE_BYTES` and `github.api.MAX_DOWNLOAD_BYTES`
   alias `MAX_ARTIFACT_BYTES`.
 * **Skipped family job.** For a mod without families `admit` outputs `families == []`, so the
@@ -136,11 +136,11 @@ Integration-round amendments:
   absence) only when the publication has no family leg and only `completed/skipped`, and every other
   `Publish / Collect ...` job outside the publication still fails closed (reason `job-graph`). The conformance
   simulation emits it (and finalize's skipped `refresh_family`) for a mod without families.
-* **Rotation budget (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§5.5).** `limits.DELETION_BUDGET` is 64, not 32: a Quick Skin generation
+* **Rotation budget (SPEC §5.5).** `limits.DELETION_BUDGET` is 64, not 32: a Quick Skin generation
   supersedes about 35 long-lived artifacts (17 caches, 17 family caches and an anchor), so 32 could
   never drain the leftovers an earlier rotation deferred. The deletion delay, exact-ID deletion and
   every owner and replacement check are unchanged; `rotate` reads `promotion.json` as canonical bytes.
-* **Staged-file lock (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§1.5 amendment).** kit-digest-v1 and the kit stamp cover `src/`, `site/`
+* **Staged-file lock (SPEC §1.5 amendment).** kit-digest-v1 and the kit stamp cover `src/`, `site/`
   and `requirements/`, but `stage` also copies `template/` and `tools/` (and, from v0.9.2, `actions/`)
   into the Block Pops overlay and `template check` reads the overlay's `template/`. So the digested
   `src/` carries `pin.STAGED_LOCK` (`src/mod_base/template/staged_files.sha256`): the
@@ -152,7 +152,7 @@ Integration-round amendments:
   change below `actions/`, `template/` or `tools/`, run `python3 -m mod_base.template.lock --write`,
   then refresh the tree-digest literal (`tools/update_tree_digest.py --write`), because the locks
   live in `src/`.
-* **Command outputs** (beyond the SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2 table): `anchor identity` prints
+* **Command outputs** (beyond the SPEC §2.2 table): `anchor identity` prints
   `canonical_json({eligible, name})` on stdout (`name` is `null` when not eligible) and writes
   `anchor_eligible` and `anchor_name` (empty when not eligible) to `$GITHUB_OUTPUT`; `family collect`
   writes `status` (`available`, `superseded` or `unavailable`) and `available` (`true`/`false`) before
@@ -176,7 +176,7 @@ Integration-round amendments:
   `families[].producer.workflow` at that run's head; `build` applies it to every collected leg after
   authenticating the producer attempt and its run record. Rotation keeps a carried leg's cache
   although its envelope coverage differs from its name (SCHEMAS.md "The family generation chain").
-* **Recorded family selection (CLI amendment to SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2).** `family collect` takes the required
+* **Recorded family selection (CLI amendment to SPEC §2.2).** `family collect` takes the required
   `--selected-json F`: the canonical `Selected` object `select --family --output F` wrote
   (`collect_family(..., selected_json)`). It binds that selection to its input before the adapter
   runs (a `family-handoff` or `family-cache` of this family and key; a handoff is the envelope
@@ -190,7 +190,7 @@ Integration-round amendments:
   `publish.yml` family job passes `--selected-json "$RUNNER_TEMP/mb/selected.json"`, the file its
   `select` step wrote.
 * **Templating.** `templating.PLACEHOLDERS` gains `color_scheme`, the `<meta name="color-scheme">`
-  value: `dark` for a dark-only theme, `dark light` when `theme.light` is set (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§6.2).
+  value: `dark` for a dark-only theme, `dark light` when `theme.light` is set (SPEC §6.2).
 * **Consistent listings (v0.9.1).** GitHub's listings are eventually consistent while the listed run
   still uploads or a rotation deletes artifacts: the canary's `Finalize / Refresh evidence cache` job
   failed closed on `listing total_count 6 disagrees with 5 listed rows` while its sibling finalize
@@ -236,10 +236,10 @@ Integration-round amendments:
   * *Conformance scratch.* `run_conformance` no longer uses `TemporaryDirectory`, whose cleanup error
     replaced the simulation's real one: a cleanup failure after an error is dropped, after a success
     it is an `MbError` (read-only trees are made writable first).
-  * *Staged set (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§1.5 amendment).* `stage` also copies `actions/`, so a mod's gate can check the
+  * *Staged set (SPEC §1.5 amendment).* `stage` also copies `actions/`, so a mod's gate can check the
     pinned composites, bound by a lock of its own, `pin.ACTIONS_LOCK` (`pin.ACTIONS_DIR`,
     `pin.actions_listing`); `pin.STAGED_LOCK` and `pin.LOCKED_DIRS` are unchanged. A second lock, not a
-    longer first one, keeps SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§1.5's controller upgrade working in both directions: a bootstrap
+    longer first one, keeps SPEC §1.5's controller upgrade working in both directions: a bootstrap
     older than v0.9.2 requires `template/` and `tools/` to equal `STAGED_LOCK` byte for byte and stages
     no `actions/`, so it still stages a v0.9.2 candidate kit (whose own verification accepts an overlay
     without `actions/`), and a v0.9.2 bootstrap stages a candidate pinned back to an older kit, which
@@ -375,12 +375,12 @@ Constants:
 
 Owner: MB0 (implemented).
 
-``python3 -P -m mod_base <command>``: the static command registry (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2, ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§10).
+``python3 -P -m mod_base <command>``: the static command registry (SPEC §2.2, §10).
 
 Constants:
 
 * `MAX_OUTPUT_VALUE_CHARS = 65536`
-* `COMMANDS`: command name -> the module whose `register(subparsers)` adds it (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§10
+* `COMMANDS`: command name -> the module whose `register(subparsers)` adds it (SPEC §10
   "Command registry"; only that module is imported for the command).
 * `OUTPUT_NAME`: the pattern of a `$GITHUB_OUTPUT` name (`^[a-z][a-z0-9_]{0,63}$`).
 
@@ -419,7 +419,7 @@ Constants:
 * `ENVIRONMENT_NAMES = ('GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_JOB', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REF', 'GIT...`
 
 * `def kit_root() -> Path`: The root of the executing kit checkout (the directory holding ``src/``, ``site/``...).
-* `def kit_ref(sha: str) -> dict[str, str]`: Return the ``KitRef`` of the executing kit at ``sha`` (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.0).
+* `def kit_ref(sha: str) -> dict[str, str]`: Return the ``KitRef`` of the executing kit at ``sha`` (SPEC §3.0).
 * `class Invocation`: Everything an entry point may know about its process. Accessors fail closed when a fact the caller needs is absent instead of inventing a default.
   * fields: `repo_root: Path, config: Config, kit_root: Path, environ: Mapping[str, str] = <factory>, implementation_sha_override: str | None = None`
   * `kit_src` (property) -> `Path`
@@ -437,7 +437,7 @@ Constants:
 
 Owner: MB0 (implemented).
 
-Strict loader and validator for ``site/mod-base.json`` (``mod-base.config`` v1, SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§4.1).
+Strict loader and validator for ``site/mod-base.json`` (``mod-base.config`` v1, SPEC §4.1).
 
 Constants:
 
@@ -475,7 +475,7 @@ Constants:
 
 Owner: MB0 (implemented).
 
-THE single source of the Pages workflow, job and step display names (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§5.9).
+THE single source of the Pages workflow, job and step display names (SPEC §5.9).
 
 Constants:
 
@@ -513,7 +513,7 @@ Constants:
 
 Owner: MB0 (implemented).
 
-Identifier grammar and the only builders/parsers of kit artifact names (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.0).
+Identifier grammar and the only builders/parsers of kit artifact names (SPEC §3.0).
 
 Constants:
 
@@ -597,7 +597,7 @@ Compiled full-match patterns (use `is_match`/`require`; the grammar is SCHEMAS.m
 
 Owner: MB0 (implemented).
 
-Every numeric bound the kit enforces (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.0 "Global limits" plus the per-field bounds).
+Every numeric bound the kit enforces (SPEC §3.0 "Global limits" plus the per-field bounds).
 
 Every bound is a module constant and every name below is frozen (values in the source;
 `tests/test_model_limits.py` pins them). Code imports a bound from here; a same-named module
@@ -606,7 +606,7 @@ an alias and must hold the same value.
 
 * `KIB`, `MIB`, `GIB`
 
-Documents (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.0 table):
+Documents (SPEC §3.0 table):
 
 * `MAX_MANIFEST_BYTES`, `MAX_EXPECTATION_BYTES`, `MAX_SELECTION_BYTES`, `MAX_EXTENSIONS_BYTES`
 * `MAX_SCOPE_DETAIL_BYTES`, `MAX_PROMOTION_BYTES`, `MAX_ENVELOPE_BYTES`, `MAX_PAIRED_BYTES`
@@ -756,7 +756,7 @@ Constants:
 
 Owner: MB0 (implemented).
 
-Strict validators for every document kind of SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3 (and the ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§4.1 config envelope).
+Strict validators for every document kind of SPEC §3 (and the §4.1 config envelope).
 
 Constants:
 
@@ -790,26 +790,26 @@ Field tables (`{field: Validator}` objects that documents compose with `Obj`):
 * `MAX_DOCUMENT_BYTES`: document kind -> its byte bound (`load_document`).
 
 * `def is_https_url(value: Any) -> bool`: https, lowercase ``[a-z0-9.-]`` host with a dot, no userinfo/port, printable ASCII only.
-* `def run_record(value: Any, path: str) -> dict[str, Any]`: A RunRecord (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.0): a RunClaim plus facts read from the run API. ``head_sha`` is the run's API head. A run that is its own controller validates with :func:`own_run_record`; a tested run of ``none``/``attested`` reuse has ``head_sha == controller_sha`` (:func:`validate_selection`); only a ``delegated`` tested run's head is unconstrained (Quick Skin PR reuse tests a merge commit that is not the PR run's head; the reuse is proven by the adapter's ``authenticate_extensions``).
-* `def own_run_record(value: Any, path: str) -> dict[str, Any]`: A RunRecord of a run that is its own controller (a handoff or family producer run): ``head_sha == commit == controller_sha`` and ``branch == controller_branch`` (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§4.8).
+* `def run_record(value: Any, path: str) -> dict[str, Any]`: A RunRecord (SPEC §3.0): a RunClaim plus facts read from the run API. ``head_sha`` is the run's API head. A run that is its own controller validates with :func:`own_run_record`; a tested run of ``none``/``attested`` reuse has ``head_sha == controller_sha`` (:func:`validate_selection`); only a ``delegated`` tested run's head is unconstrained (Quick Skin PR reuse tests a merge commit that is not the PR run's head; the reuse is proven by the adapter's ``authenticate_extensions``).
+* `def own_run_record(value: Any, path: str) -> dict[str, Any]`: A RunRecord of a run that is its own controller (a handoff or family producer run): ``head_sha == commit == controller_sha`` and ``branch == controller_branch`` (SPEC §4.8).
 * `def thumbnail_size(source: tuple[int, int] | list[int], box: tuple[int, int] | list[int]) -> tuple[int, int]`: Return the size Pillow 12.3 ``Image.thumbnail(box)`` produces for an image of ``source`` size.
 * `def inventory_sha256(records: list[Mapping[str, Any]]) -> str`: Identity of a file inventory: SHA-256 of ``canonical_json`` of ``[{path, sha256, size}]`` sorted by path. Used for ``promotion.site.inventory_sha256`` and ``build.site_inventory_sha256`` (the published site inventory excludes ``build.json`` itself).
 * `def run_claim_from_environment(environ: Mapping[str, str]) -> dict[str, Any]`: Build the handoff ``RunClaim`` of the executing job from GitHub's environment (no API call).
-* `def validate_expectation(document: Any, *, image_policy: Mapping[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: ``mod-base.evidence.expectation`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.1).
-* `def validate_handoff(document: Any, *, expectation: Mapping[str, Any] | None = None, allowed_extensions: Collection[str] | None = None, path: str = '$') -> dict[str, Any]`: ``mod-base.evidence.handoff`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.2).
-* `def validate_compact(document: Any, *, expectation: Mapping[str, Any] | None = None, allowed_extensions: Collection[str] | None = None, intermediate: bool = False, path: str = '$') -> dict[str, Any]`: ``mod-base.evidence.compact`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.3).
-* `def validate_anchor(document: Any, *, expectation: Mapping[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: ``mod-base.evidence.anchor`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.4).
-* `def validate_family_envelope(document: Any, *, max_total_bytes: int = 1048576000, path: str = '$') -> dict[str, Any]`: ``mod-base.family.envelope`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.5).
-* `def validate_family_paired(document: Any, *, image_policy: Mapping[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: ``mod-base.family.paired`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.5), the projection returned by ``family_validate``.
-* `def validate_selection(document: Any, *, draft: bool = False, path: str = '$') -> dict[str, Any]`: ``mod-base.selection`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.6).
+* `def validate_expectation(document: Any, *, image_policy: Mapping[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: ``mod-base.evidence.expectation`` v1 (SPEC §3.1).
+* `def validate_handoff(document: Any, *, expectation: Mapping[str, Any] | None = None, allowed_extensions: Collection[str] | None = None, path: str = '$') -> dict[str, Any]`: ``mod-base.evidence.handoff`` v1 (SPEC §3.2).
+* `def validate_compact(document: Any, *, expectation: Mapping[str, Any] | None = None, allowed_extensions: Collection[str] | None = None, intermediate: bool = False, path: str = '$') -> dict[str, Any]`: ``mod-base.evidence.compact`` v1 (SPEC §3.3).
+* `def validate_anchor(document: Any, *, expectation: Mapping[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: ``mod-base.evidence.anchor`` v1 (SPEC §3.4).
+* `def validate_family_envelope(document: Any, *, max_total_bytes: int = 1048576000, path: str = '$') -> dict[str, Any]`: ``mod-base.family.envelope`` v1 (SPEC §3.5).
+* `def validate_family_paired(document: Any, *, image_policy: Mapping[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: ``mod-base.family.paired`` v1 (SPEC §3.5), the projection returned by ``family_validate``.
+* `def validate_selection(document: Any, *, draft: bool = False, path: str = '$') -> dict[str, Any]`: ``mod-base.selection`` v1 (SPEC §3.6).
 * `def compact_identity_sha256(manifest: Mapping[str, Any]) -> str`: The selection-independent identity of a compact manifest: ``canonical_sha256`` of the manifest without its ``selection`` member and without the ``selection.json`` record of ``files``.
 * `def check_compact_selection(compact: Mapping[str, Any], selection: Mapping[str, Any], *, path: str = '$') -> None`: Bind a published compact manifest to the final selection embedded as its ``selection.json``.
-* `def validate_promotion(document: Any, *, draft: bool = False, path: str = '$') -> dict[str, Any]`: ``mod-base.promotion`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.7).
-* `def validate_build(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.build`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.8): ``run_url`` is built from the repository and run id, and ``workflow_ref`` is this repository's ``pages.yml`` on a branch.
-* `def validate_site(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.site`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.9 ``site-data.json``): unique release keys and families, ``loader_names`` parallel to ``loaders``, ``short_sha`` a prefix of ``subject_commit``.
-* `def validate_gallery(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.gallery`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.9 ``e2e/gallery-data.json``, with the per-key family amendment documented in ``docs/SCHEMAS.md``).
-* `def validate_template_manifest(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.template-manifest`` v1 (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§8.1): unique paths; ``managed`` sources live under ``managed/`` and carry no markers/lines; ``fragment`` and ``seeded`` sources live under ``seed/``; only ``fragment`` entries may list required ``markers``/``lines``; only the ``.github/dependabot.yml`` fragment may list ``ignore_actions_of``, each a managed workflow of the same manifest (v1.0.1, optional).
-* `def validate_kit_stamp(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.kit-stamp`` v1 (``out/mod-base-kit/MOD_BASE_KIT.json``, SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§1.5).
+* `def validate_promotion(document: Any, *, draft: bool = False, path: str = '$') -> dict[str, Any]`: ``mod-base.promotion`` v1 (SPEC §3.7).
+* `def validate_build(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.build`` v1 (SPEC §3.8): ``run_url`` is built from the repository and run id, and ``workflow_ref`` is this repository's ``pages.yml`` on a branch.
+* `def validate_site(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.site`` v1 (SPEC §3.9 ``site-data.json``): unique release keys and families, ``loader_names`` parallel to ``loaders``, ``short_sha`` a prefix of ``subject_commit``.
+* `def validate_gallery(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.gallery`` v1 (SPEC §3.9 ``e2e/gallery-data.json``, with the per-key family amendment documented in ``docs/SCHEMAS.md``).
+* `def validate_template_manifest(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.template-manifest`` v1 (SPEC §8.1): unique paths; ``managed`` sources live under ``managed/`` and carry no markers/lines; ``fragment`` and ``seeded`` sources live under ``seed/``; only ``fragment`` entries may list required ``markers``/``lines``; only the ``.github/dependabot.yml`` fragment may list ``ignore_actions_of``, each a managed workflow of the same manifest (v1.0.1, optional).
+* `def validate_kit_stamp(document: Any, *, path: str = '$') -> dict[str, Any]`: ``mod-base.kit-stamp`` v1 (``out/mod-base-kit/MOD_BASE_KIT.json``, SPEC §1.5).
 * `def validate_document(document: Any, *, kind: str | None = None, **context: Any) -> dict[str, Any]`: Validate ``document`` as its declared ``kind`` (which must equal ``kind`` when given).
 * `def load_document(data: bytes, *, kind: str, label: str | None = None, max_bytes: int | None = None, **context: Any) -> dict[str, Any]`: Strictly decode ``data`` and validate it as ``kind``.
 
@@ -838,7 +838,7 @@ Frozen for other units (integration round):
 
 * `ImageFactory`: `Callable[[int, int, int], bytes]`, `image_factory(width, height, seed)` (the
   `synthesize` argument; `imaging.png.pattern_png`).
-* `HOOK_JOBS`: hook -> the frozenset of SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§4.3 places it may run (Pages callee job ids plus
+* `HOOK_JOBS`: hook -> the frozenset of SPEC §4.3 places it may run (Pages callee job ids plus
   `PREPARE_EVIDENCE`), enforced at runtime by `adapter.host.check_placement`.
 * `TARGET`, `BRANCH_HEAD`: validators of one `targets` result entry and one `branches` argument
   entry.
@@ -1009,10 +1009,10 @@ Workflow-run reads and exact run validation (MB1).
 * `def get_run_attempt(api: GitHubApi, run_id: int, run_attempt: int) -> dict[str, Any]`: The historical attempt endpoint; its ``run_attempt`` must equal ``run_attempt``.
 * `def validate_run(run: Mapping[str, Any], *, repository: str, workflow_path: str, events: Collection[str], head_branch: str | None = None, head_sha: str | None = None, workflow_id: int | None = None, require_success: bool = True, display_title: str | None = None) -> None`: Require exact provenance: ``path``, ``event`` in ``events``, ``head_repository.full_name``, and (when given) ``head_branch``, ``head_sha``, ``workflow_id``, ``display_title``; with ``require_success`` also ``status == "completed"`` and ``conclusion == "success"``. Raises :class:`mod_base.errors.MbError` on any difference.
 * `def run_order(run: Mapping[str, Any]) -> tuple[datetime, int, int]`: ``(created_at, id, run_attempt)`` after strict shape validation (a total dispatch order).
-* `def referenced_kit_sha(run: Mapping[str, Any], *, kit_repository: str = 'The-Plum-Team/mod-base') -> str`: The single kit SHA a run resolved: every ``referenced_workflows[]`` entry whose ``path`` starts with ``<kit_repository>/.github/workflows/`` must end in ``@<sha>`` equal to its ``sha``, and exactly one distinct 40-hex SHA must result (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§1.2 step 3).
+* `def referenced_kit_sha(run: Mapping[str, Any], *, kit_repository: str = 'The-Plum-Team/mod-base') -> str`: The single kit SHA a run resolved: every ``referenced_workflows[]`` entry whose ``path`` starts with ``<kit_repository>/.github/workflows/`` must end in ``@<sha>`` equal to its ``sha``, and exactly one distinct 40-hex SHA must result (SPEC §1.2 step 3).
 * `def workflow_runs(api: GitHubApi, workflow_path: str, *, branch: str | None = None, head_sha: str | None = None, event: str | None = None, status: str | None = None, max_items: int = 1000) -> list[dict[str, Any]]`: List runs of ``workflow_path`` (by file name) newest first with the given filters; the response ``total_count`` must equal the listed rows when it is at most ``max_items``. Beyond ``max_items`` runs, or beyond the ``limits.MAX_FILTERED_RUNS_LISTED`` newest runs GitHub lists for a filtered search, the read must list exactly that many rows; otherwise only a short page ends it. A snapshot whose ``total_count`` changes between pages or disagrees with its rows, or that repeats a run, is read again through ``api.read_listing`` (``limits.LISTING_READ_ATTEMPTS`` reads at most).
 * `def wait_for_completion(api: GitHubApi, run_id: int, *, attempts: int = 30, interval: float = 2.0, sleep: Callable[[float], None] = sleep) -> dict[str, Any]`: Poll a run until ``status == "completed"`` (at most ``attempts`` reads); raise otherwise.
-* `def run_record(run: Mapping[str, Any], claim: Mapping[str, Any], *, require_controller_head: bool = True) -> dict[str, Any]`: Build the ``RunRecord`` (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.0) for an authenticated API ``run`` and its ``RunClaim``: the claim's run id/attempt/workflow path must equal the run's; ``head_sha``, ``event``, ``created_at``, ``conclusion`` (``success``) and ``display_title`` come from the run. The result validates as ``documents.run_record``.
+* `def run_record(run: Mapping[str, Any], claim: Mapping[str, Any], *, require_controller_head: bool = True) -> dict[str, Any]`: Build the ``RunRecord`` (SPEC §3.0) for an authenticated API ``run`` and its ``RunClaim``: the claim's run id/attempt/workflow path must equal the run's; ``head_sha``, ``event``, ``created_at``, ``conclusion`` (``success``) and ``display_title`` come from the run. The result validates as ``documents.run_record``.
 
 ## `mod_base.github.jobs`
 
@@ -1108,7 +1108,7 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
 
 Owner: MB1 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``download`` and ``budget`` (MB1). Flags are frozen by SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2.
+``download`` and ``budget`` (MB1). Flags are frozen by SPEC §2.2.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run_download(args: argparse.Namespace) -> int`
@@ -1194,7 +1194,7 @@ The ``ctx`` object every adapter hook receives (MB3), constructed by the child p
 
 Owner: MB3.
 
-Parent side of the adapter call (MB3, SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§1.9).
+Parent side of the adapter call (MB3, SPEC §1.9).
 
 Constants:
 
@@ -1209,8 +1209,8 @@ Constants:
 Frozen for other units (integration round):
 
 * `MAX_CHILD_OUTPUT_BYTES = 4194304`
-* `def placement(invocation: Invocation) -> str`: Where this process runs in SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§4.3 terms: a Pages callee job id, or ``protocol.PREPARE_EVIDENCE`` for every mod-owned job (and a local run).
-* `def check_placement(invocation: Invocation, hook: str, *, network: bool = False) -> None`: Refuse ``hook`` where SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§4.3 does not allow it: in a ``protocol.FORBIDDEN_JOBS`` job, in a job outside its ``protocol.HOOK_JOBS`` row (see :func:`placement`), or with ``network`` where the read-only token may not be granted. Runs before any child starts; the in-process test host applies the same check.
+* `def placement(invocation: Invocation) -> str`: Where this process runs in SPEC §4.3 terms: a Pages callee job id, or ``protocol.PREPARE_EVIDENCE`` for every mod-owned job (and a local run).
+* `def check_placement(invocation: Invocation, hook: str, *, network: bool = False) -> None`: Refuse ``hook`` where SPEC §4.3 does not allow it: in a ``protocol.FORBIDDEN_JOBS`` job, in a job outside its ``protocol.HOOK_JOBS`` row (see :func:`placement`), or with ``network`` where the read-only token may not be granted. Runs before any child starts; the in-process test host applies the same check.
 
 Frozen for other units (v1.0.2):
 
@@ -1380,7 +1380,7 @@ Constants:
 
 Owner: MB4 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``family envelope`` and ``family collect`` (MB4). Flags are frozen by SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2.
+``family envelope`` and ``family collect`` (MB4). Flags are frozen by SPEC §2.2.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run_envelope(args: argparse.Namespace) -> int`
@@ -1476,7 +1476,7 @@ Frozen for other units (integration round):
 
 Owner: MB5.
 
-Source-run authentication producing ``mod-base.selection`` (MB5, SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§4.8).
+Source-run authentication producing ``mod-base.selection`` (MB5, SPEC §4.8).
 
 * `def authenticate_selection(invocation: Invocation, *, api: GitHubApi, key: str, selected_dir: Path, selected: Selected) -> dict[str, Any]`: Authenticate the downloaded ``selected_dir`` and return the validated selection draft.
 * `def kit_binding(api: GitHubApi, invocation: Invocation, *, manifest: Mapping[str, Any], owner_run: Mapping[str, Any], selected_kind: str) -> dict[str, str]`: ``{source, sha}``: prove ``manifest.kit.sha`` belongs to the authenticated owner run.
@@ -1501,7 +1501,7 @@ Owner: MB5 (register() implemented by MB0; handlers dispatch to the entry points
 
 Owner: MB6.
 
-The atomic site renderer (MB6, SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§5.3.2): QS ``build_site`` + BP ``_current_pages_inputs``.
+The atomic site renderer (MB6, SPEC §5.3.2): QS ``build_site`` + BP ``_current_pages_inputs``.
 
 Constants:
 
@@ -1516,9 +1516,9 @@ Constants:
 Frozen for other units (integration round):
 
 * `class BuildError(MbError)`: The Pages inputs, this run or the rendered site fail a build check (exit 2).
-* `def current_implementation(invocation: Invocation, *, jobs_allowed: Sequence[str]) -> dict[str, Any]`: SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§5.3.2 step 1: this process runs in this repository's ``pages.yml`` on the canonical branch, in one of ``jobs_allowed``; returns the promotion ``implementation`` of this run.
-* `def require_current_run(api: GitHubApi, invocation: Invocation, implementation: Mapping[str, Any]) -> dict[str, Any]`: SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§5.3.2 step 2: the API default branch is the canonical branch and this run and its exact attempt are the unfinished (no conclusion yet) ``pages.yml`` run of the canonical head; returns the run.
-* `def check_checkouts(invocation: Invocation, *, kit_root: Path, environ: Mapping[str, str]) -> None`: The host facts of SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§5.3.2 step 1: no inherited ``GIT_*`` variable in ``environ``, the mod checkout clean at ``GITHUB_SHA`` and the kit checkout ``kit_root`` clean at ``MOD_BASE_KIT_SHA``.
+* `def current_implementation(invocation: Invocation, *, jobs_allowed: Sequence[str]) -> dict[str, Any]`: SPEC §5.3.2 step 1: this process runs in this repository's ``pages.yml`` on the canonical branch, in one of ``jobs_allowed``; returns the promotion ``implementation`` of this run.
+* `def require_current_run(api: GitHubApi, invocation: Invocation, implementation: Mapping[str, Any]) -> dict[str, Any]`: SPEC §5.3.2 step 2: the API default branch is the canonical branch and this run and its exact attempt are the unfinished (no conclusion yet) ``pages.yml`` run of the canonical head; returns the run.
+* `def check_checkouts(invocation: Invocation, *, kit_root: Path, environ: Mapping[str, str]) -> None`: The host facts of SPEC §5.3.2 step 1: no inherited ``GIT_*`` variable in ``environ``, the mod checkout clean at ``GITHUB_SHA`` and the kit checkout ``kit_root`` clean at ``MOD_BASE_KIT_SHA``.
 * `FAMILY_SELECTED_NAME = 'selected.json'`: the recorded selection of a collected family artifact (`family.paired.SELECTED_NAME`, see the recorded-selection amendment).
 * `def collected_family_selection(root: Path, *, family: str, key: str, reason: str) -> Selected`: The layout of a downloaded collected family artifact and its recorded ``Selected`` generation (``refresh`` checks the same layout).
 
@@ -1526,7 +1526,7 @@ Frozen for other units (integration round):
 
 Owner: MB6.
 
-Build-time templating of the kit front end (MB6, SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§6.2).
+Build-time templating of the kit front end (MB6, SPEC §6.2).
 
 Constants:
 
@@ -1555,7 +1555,7 @@ Roll the promoted bundles forward as caches (MB6): QS refresh-cache + BP ``refre
 
 Owner: MB6 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``build`` and ``refresh`` (MB6). Flags are frozen by SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2.
+``build`` and ``refresh`` (MB6). Flags are frozen by SPEC §2.2.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run_build(args: argparse.Namespace) -> int`
@@ -1580,7 +1580,7 @@ Exact-ID rotation of superseded evidence after an authenticated successful Pages
 
 Owner: MB7 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``rotate`` (MB7). Flags are frozen by SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2. Loads config data only (no repository checks, no adapter): the rotate job sparse-checks-out ``site/mod-base.json`` alone.
+``rotate`` (MB7). Flags are frozen by SPEC §2.2. Loads config data only (no repository checks, no adapter): the rotate job sparse-checks-out ``site/mod-base.json`` alone.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run_rotate(args: argparse.Namespace) -> int`
@@ -1630,7 +1630,7 @@ Frozen for other units (integration round):
 
 Owner: MB9 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``pin verify`` and ``digest`` (MB9). Flags are frozen by SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2.
+``pin verify`` and ``digest`` (MB9). Flags are frozen by SPEC §2.2.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run_verify(args: argparse.Namespace) -> int`
@@ -1650,7 +1650,7 @@ check/sync/init effects; future Build/E2E registrations require protected code/t
 separate profile/native admission. Existing CLI and public method signatures remain unchanged.
 
 
-``template check|sync|init`` (MB9, SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§8.2).
+``template check|sync|init`` (MB9, SPEC §8.2).
 
 Constants:
 
@@ -1670,7 +1670,7 @@ Frozen for other units (integration round):
   `AGENTS.md`).
 * `def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]`: ``(failing drifts, pending drifts)`` of ``repo``: a present deferred fragment's missing required lines are pending; every other drift fails.
 * `def pending(repo: Path, *, kit_root: Path) -> list[Drift]`: The required lines a present fragment in ``template.deferred`` still lacks: reported, never failing, until the adoption completes and ``deferred`` is emptied.
-* `def extension_violations(body: tuple[str, ...] | list[str]) -> list[str]`: Every extension-region rule (SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§5.2) the extension ``body`` lines break.
+* `def extension_violations(body: tuple[str, ...] | list[str]) -> list[str]`: Every extension-region rule (SPEC §5.2) the extension ``body`` lines break.
 * `def link_violations(document: str, text: str, managed_documents: frozenset[str] | set[str]) -> list[str]`: Links of the managed Markdown ``document`` that point anywhere but a managed document or an absolute ``https://`` URL.
 * `def pinned_actions(kit_root: Path, manifest: dict[str, Any], entry: dict[str, Any]) -> tuple[tuple[str, str], ...]`: ``(dependency name, workflow)`` of every third-party action pinned in the managed region of each managed workflow the fragment ``entry`` lists in ``ignore_actions_of``, read from the kit's template (v1.0.1).
 
@@ -1678,7 +1678,7 @@ Frozen for other units (integration round):
 
 Owner: MB9 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``template check|sync|init`` (MB9). Flags are frozen by SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2; exit 2 on drift.
+``template check|sync|init`` (MB9). Flags are frozen by SPEC §2.2; exit 2 on drift.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run_check(args: argparse.Namespace) -> int`
@@ -1719,7 +1719,7 @@ The report's nine keys, the variants and the optional fixture functions of
 
 Owner: MB10 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``conformance`` (MB10). Flags are frozen by SPEC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.2.
+``conformance`` (MB10). Flags are frozen by SPEC §2.2.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run(args: argparse.Namespace) -> int`
