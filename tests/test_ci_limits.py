@@ -126,6 +126,9 @@ KIT: dict[str, tuple[Any, str]] = {
                               "the inventory and the scenario contract; Quick Skin needs one (gradle.properties)"),
     "MAX_CI_IDENTITY_BYTES": (16 * KIB, "the private subject record of one job"),
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
+    "MAX_CI_GATE_REQUESTS": (60, "API requests one `ci seal-gate` may spend: 15 for a Build gate and 20 for the "
+                                 "packaged gate of a pull request, whatever the plan's size, and room for retries "
+                                 "and further listing pages"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),
     "MAX_CI_WORKER_RECORD_BYTES": (256 * KIB, "the private worker record of one job"),
     "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation without a candidate checkout may spend"),

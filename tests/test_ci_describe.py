@@ -159,12 +159,14 @@ class DescribeAttemptTests(AttemptCase):
         self.rejected(attempt, r"is not the graph of this run in that mode",
                       producer={**attempt.producer("full"), "graph_sha256": "0" * 64})
         self.rejected(attempt, r"must name distinct artifacts", expected=[("target", "target-a")] * 2)
-        self.rejected(attempt, r"must name distinct artifacts", expected=[])
         self.rejected(attempt, r"\$\.producer", producer={**attempt.producer("full"), "upload_window": {}})
         with self.assertRaises(MbError):
             self.describe(attempt, expected=[("runtime", "lane-a")])  # the Build caller runs no lane
         self.assertEqual(attempt.api.request_count, 0)
         self.rejected(attempt, r"required job is outside this graph", finished=["Shared Build / No such job"])
+        # With nothing expected only the jobs are read and required.
+        self.assertEqual(self.describe(attempt, expected=[]), [])
+        self.assertEqual(attempt.api.request_count, 2)
 
 
 class AttemptShapeTests(AttemptCase):

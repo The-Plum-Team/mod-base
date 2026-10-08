@@ -3136,6 +3136,18 @@
     {
       "error": "has unknown keys",
       "expect": "invalid",
+      "fixture": "ci-results",
+      "name": "ci-results-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
       "fixture": "ci-reuse",
       "name": "ci-reuse-unknown-authority",
       "set": [

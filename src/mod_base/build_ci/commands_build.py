@@ -1,7 +1,7 @@
-"""``ci assemble``: the fan-in step of the job that seals the complete Build.
+"""``ci assemble`` and ``ci seal-gate``: the fan-in and gate steps of a Build or packaged run.
 
-It runs after ``ci subject`` and ``ci plan`` of the same job, as the runner, inside the run whose
-target partitions it reads:
+Each runs after ``ci subject`` and ``ci plan`` of the same job, as the runner, inside the run
+whose artifacts it reads:
 
 * ``assemble`` describes the partition of every planned target of this attempt
   (``describe.describe_attempt``), downloads them by numeric id
@@ -9,17 +9,22 @@ target partitions it reads:
   ``sealed-build/`` root (``exports.assemble_build_export``), where the next step runs the
   validator. The descriptors it read and the SHA-256 of the assembled envelope are recorded in
   the state directory as ``ci-partitions.json``.
+* ``seal-gate --gate build|packaged --output DIR`` authenticates this attempt in the mode it
+  shows (``gate.authenticate_attempt``) and writes the gate receipt as the one file
+  ``ci-gate.json`` of the new directory ``DIR``, which the next step uploads as the tested
+  record. In a reuse run it seals the reuse reference instead (``gate.seal_reuse``).
 
 A command knows its job from the state directory (``identity.json`` and ``ci-plan.json``) and its
 run and attempt from ``GITHUB_RUN_ID`` and ``GITHUB_RUN_ATTEMPT``; the state must belong to the
-executing repository and controller commit and the plan to the subject of the state. Target
-partitions are downloaded into a temporary directory inside the state directory, which is private
-to the runner, and removed again.
+executing repository and controller commit and the plan to the subject of the state. Downloads
+go into a temporary directory inside the state directory, which is private to the runner, and
+are removed again. A record is written last, into a directory the command creates.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import sys
 import tempfile
@@ -28,10 +33,13 @@ from pathlib import Path
 from typing import Any
 
 from mod_base import cli, runtime
-from mod_base.build_ci import commands, describe, identity, planning, transport
+from mod_base.build_ci import commands, describe, gate, identity, planning, transport
+from mod_base.build_ci.config import load_build_config
 from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, assemble_build_export
 from mod_base.build_ci.reads import CommandReads
+from mod_base.build_ci.records import GATE_MODES
 from mod_base.errors import MbError
+from mod_base.io.atomic_directory import atomic_directory, write_new
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.model.documents import load_document
@@ -84,6 +92,13 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     commands.add_job_arguments(assemble)
     assemble.set_defaults(handler=run_assemble)
 
+    seal = verbs.add_parser("seal-gate", help="authenticate this attempt and write its gate receipt")
+    commands.add_job_arguments(seal)
+    seal.add_argument("--gate", choices=tuple(GATE_MODES), required=True, help="the gate this job seals")
+    seal.add_argument("--output", type=cli.PATH, required=True, metavar="DIR",
+                      help="the new directory that receives the one record to upload")
+    seal.set_defaults(handler=run_seal_gate)
+
 
 def run_assemble(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
@@ -109,4 +124,32 @@ def run_assemble(args: argparse.Namespace) -> int:
         {"descriptors": descriptors, "envelope_sha256": canonical_sha256(envelope)}))
     sys.stdout.write(f"assemble: {len(partitions)} target partitions of run {job.run_id} attempt {job.run_attempt} "
                      f"assembled into {len(envelope['files'])} files\n")
+    return 0
+
+
+def _config_sha256(invocation: runtime.Invocation, job: _Job) -> str:
+    """The digest of the protected Build config of the mod checkout the prologue verified."""
+
+    return load_build_config(invocation.repo_root, repository=job.record["subject"]["repository"]).sha256
+
+
+def _write_record(output: Path, name: str, document: dict[str, Any]) -> None:
+    """Create the upload directory ``output`` with ``document`` as its one canonical file."""
+
+    atomic_directory(output, lambda stage, stage_fd: write_new(stage_fd, name, canonical_json(document)))
+
+
+def run_seal_gate(args: argparse.Namespace) -> int:
+    invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
+    job = _open_job(invocation, args.state)
+    check(not os.path.lexists(args.output), "$.output", "the upload directory already exists")
+    seal = functools.partial(gate.seal_gate, config_sha256=_config_sha256(invocation, job))
+    api = commands.api_client(invocation, max_requests=limits.MAX_CI_GATE_REQUESTS)
+    attempt = gate.authenticate_attempt(api, record=job.record, plan=job.plan, gate=args.gate, run_id=job.run_id,
+                                        run_attempt=job.run_attempt)
+    with tempfile.TemporaryDirectory(prefix="mb-ci-gate-", dir=args.state) as temporary:
+        name, document = (gate.seal_reuse if attempt.mode == "reuse" else seal)(attempt, temporary_root=Path(temporary))
+    _write_record(args.output, name, document)
+    sys.stdout.write(f"seal-gate: {args.gate} gate of run {job.run_id} attempt {job.run_attempt} sealed in mode "
+                     f"{attempt.mode} as {name}\n")
     return 0

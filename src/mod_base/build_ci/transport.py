@@ -32,10 +32,12 @@ from mod_base.build_ci.graph import (authenticate_gate_timeline, authenticate_re
                                      upload_job_name)
 from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.records import bind_build_envelope, bind_gate_receipt, validate_descriptor
+from mod_base.build_ci.records import (bind_build_envelope, bind_gate_receipt, bind_results_index,
+                                       validate_descriptor)
 from mod_base.build_ci.runtime_exports import (_materialize_runtime_export, materialize_runtime_export,
                                                verify_runtime_export)
 from mod_base.build_ci.runtime_schema import bind_runtime_envelope
+from mod_base.build_ci.validation import verify_validation_export
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.artifacts import Artifact
@@ -370,6 +372,78 @@ def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], pl
         return atomic_directory(output, writer)
     except OSError as error:
         raise MbError("cannot publish private target inputs", reason="ci-transport") from error
+
+
+# -- A job's reads of its own attempt: sealed exports with their validation record, and the index -----
+
+
+def _detach_validation(root: Path, receipt: Path, plan: dict[str, Any]) -> None:
+    """Split an extracted sealed artifact into its two exactly inventoried trees.
+
+    A sealing job uploads its frozen export together with the validation record of that export:
+    ``ci-validation.json`` and the reports it inventories lie beside the outer envelope. They are
+    moved from ``root`` into the new private directory ``receipt``, so that the export left in
+    ``root`` and the validation export in ``receipt`` can each be verified against its own
+    inventory; a file that belongs to neither fails one of the two."""
+
+    raw = read_child_file(root, grammar.CI_VALIDATION_NAME, max_bytes=limits.MAX_CI_RECORD_BYTES)
+    document = load_document(raw, kind="mod-base.ci.validation", plan=plan)
+    for relative in (grammar.CI_VALIDATION_NAME, *(report["path"] for report in document["reports"])):
+        moved = receipt / relative
+        moved.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.rename(root / relative, moved)
+
+
+def _read_sealed_build(reads: CommandReads, descriptor: dict[str, Any], plan: dict[str, Any], *,
+                       source_config_sha256: str, temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Download the complete Build of the reader's own attempt by id and verify it in a private
+    temporary directory: ``(envelope, validation record)``.
+
+    The export is the complete planned union and is bound to its descriptor. The validation
+    record is the one the assembling job froze for exactly these bytes: the ``verify_build`` hook
+    of the descriptor's attempt, under the protected Build config the reader itself loaded, over
+    the canonical envelope. The caller authenticates the run, its jobs and the artifact."""
+
+    data = _download(reads, descriptor)
+    producer = descriptor["producer"]
+    try:
+        with tempfile.TemporaryDirectory(prefix="mb-ci-sealed-", dir=temporary_root) as temporary:
+            root, receipt = Path(temporary) / "export", Path(temporary) / "validation"
+            extract_build(data, root)
+            del data
+            _detach_validation(root, receipt, plan)
+            envelope = verify_build_export(root, plan=plan)
+            check((envelope["scope"], envelope["target_id"]) == ("complete", None),
+                  "$.envelope.scope", "export is not the complete Build bundle")
+            bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
+            validation = verify_validation_export(
+                receipt, plan=plan, hook="verify_build", unit_id=None, run_id=producer["run_id"],
+                run_attempt=producer["run_attempt"], source_config_sha256=source_config_sha256,
+                input_sha256=hashlib.sha256(canonical_json(envelope)).hexdigest())
+            return envelope, validation
+    except OSError as error:
+        raise MbError("cannot read the sealed Build of this attempt", reason="ci-transport") from error
+
+
+def _read_results(reads: CommandReads, descriptor: dict[str, Any], plan: dict[str, Any],
+                  temporary_root: Path) -> dict[str, Any]:
+    """Download a results index by id: the canonical ``ci-results.json`` alone, valid for the plan
+    and bound to its descriptor. The caller authenticates the run and every artifact it lists."""
+
+    data = _download(reads, descriptor)
+    try:
+        with tempfile.TemporaryDirectory(prefix="mb-ci-results-", dir=temporary_root) as temporary:
+            root = Path(temporary) / "record"
+            bounds = ExtractionLimits(1, limits.MAX_CI_RECORD_BYTES, limits.MAX_CI_RECORD_BYTES,
+                                      suffixes=frozenset({".json"}))
+            check(extract(data, root, bounds) == [grammar.CI_RESULTS_NAME],
+                  "$.record", "results index requires exactly its fixed root filename")
+            raw = read_child_file(root, grammar.CI_RESULTS_NAME, max_bytes=limits.MAX_CI_RECORD_BYTES)
+    except OSError as error:
+        raise MbError("cannot read the private results index", reason="ci-transport") from error
+    document = load_document(raw, kind="mod-base.ci.results")
+    check(raw == canonical_json(document), "$.record", "results index must be canonical JSON")
+    return bind_results_index(document, descriptor=descriptor, plan=plan)
 
 
 def _gate_mode(descriptor: dict[str, Any], plan: dict[str, Any], gate: str) -> str:

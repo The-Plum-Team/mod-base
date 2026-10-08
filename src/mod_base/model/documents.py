@@ -32,7 +32,7 @@ from mod_base.build_ci.runtime_schema import validate_runtime_envelope
 from mod_base.build_ci.validation import validate_validation_receipt
 from mod_base.build_ci.handoff import validate_execution_handoff
 from mod_base.build_ci.root_request_schema import validate_root_request
-from mod_base.build_ci.records import (validate_build_envelope, validate_gate_receipt,
+from mod_base.build_ci.records import (validate_build_envelope, validate_gate_receipt, validate_results_index,
                                        validate_reuse_reference, validate_source_selection)
 from mod_base.errors import MbError
 from mod_base.model import grammar as g
@@ -2117,6 +2117,7 @@ VALIDATORS: dict[str, Callable[..., dict[str, Any]]] = {
     "mod-base.build.envelope": validate_build_envelope,
     "mod-base.ci.selection": validate_source_selection,
     "mod-base.ci.gate": validate_gate_receipt,
+    "mod-base.ci.results": validate_results_index,
     "mod-base.ci.reuse": validate_reuse_reference,
     "mod-base.ci.validation": validate_validation_receipt,
     "mod-base.ci.execution": validate_execution_handoff,
@@ -2146,6 +2147,7 @@ MAX_DOCUMENT_BYTES: dict[str, int] = {
     "mod-base.build.envelope": lim.MAX_CI_ENVELOPE_BYTES,
     "mod-base.ci.selection": lim.MAX_CI_RECORD_BYTES,
     "mod-base.ci.gate": lim.MAX_CI_RECORD_BYTES,
+    "mod-base.ci.results": lim.MAX_CI_RECORD_BYTES,
     "mod-base.ci.reuse": lim.MAX_CI_RECORD_BYTES,
     "mod-base.ci.validation": lim.MAX_CI_RECORD_BYTES,
     "mod-base.ci.execution": lim.MAX_CI_EXECUTION_BYTES,

@@ -292,6 +292,10 @@ MAX_CI_STATUS_DESCRIPTION_CHARS = 140
 #: the rest is for retries and for the further pages of a run that lists more than 100 jobs or
 #: artifacts.
 MAX_CI_ASSEMBLE_REQUESTS = 48 + 3 * MAX_CI_TARGETS
+#: ``ci seal-gate`` sends 15 requests for a Build gate and 20 for the packaged gate of a pull
+#: request, whatever the number of targets and lanes; the rest is for retries and for the further
+#: pages of a run that lists more than 100 jobs or artifacts.
+MAX_CI_GATE_REQUESTS = 60
 MAX_CI_BATCH_MEMBERS = 50
 #: A batch manifest travels in the body of its pull request, which GitHub bounds at 65,536; the
 #: whole body, the marker inside it and the decoded document share this bound.

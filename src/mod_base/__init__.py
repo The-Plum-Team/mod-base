@@ -40,6 +40,7 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "mod-base.build.envelope": 1,
     "mod-base.ci.selection": 1,
     "mod-base.ci.gate": 1,
+    "mod-base.ci.results": 1,
     "mod-base.ci.reuse": 1,
     "mod-base.ci.validation": 1,
     "mod-base.ci.execution": 1,

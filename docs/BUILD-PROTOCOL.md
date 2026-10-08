@@ -539,6 +539,20 @@ artifact, one results aggregate and every lane receipt. A receipt has `unit_id`,
 descriptors retain the same attempt/graph with independent upload windows. Owning Build IDs
 cannot collide with runtime IDs. Self-reported native hashes alone never prove validity.
 
+A gate writes its receipt from inside the run it judges (`ci seal-gate`, `build_ci.gate`). The run
+is still in progress, so the gate authenticates what exists: the live source, the run as its
+latest attempt, every job the graph finishes before the gate with its expected conclusion and
+seal-before-upload, and exactly one unexpired artifact for every sealing job among them
+(`build_ci.describe`). A pull request has one admissible mode; a protected run shows its mode by
+the job names of its own attempt and must then be exactly that graph. A Build gate downloads the
+complete Build of its attempt, verifies the export and the `verify_build` validation record that
+lies beside its envelope (`ci-validation.json` and its reports), and takes each target's
+`report_sha256` from that record. A packaged gate downloads `mod-base.ci.results`, the index its
+aggregating job sealed (docs/SCHEMAS.md), requires it to list exactly this attempt's lane
+artifacts and authenticates the owning Build. The reader of a receipt requires the completed
+graph and the real chronology. A job or an artifact of an earlier attempt is a rejection that
+says so: after a failed-jobs-only rerun the recovery is to rerun all jobs.
+
 `mod-base.ci.reuse` adds current producer and `source`: original PR binding plus independent
 direct `build_seal`/`packaged_seal` tested descriptors. Covered default-branch commit and original
 tested commit retain separate current/non-PR and original/PR bindings even when the final merged

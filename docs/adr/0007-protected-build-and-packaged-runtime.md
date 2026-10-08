@@ -67,6 +67,7 @@ unknown kind (`tests/test_schema_evolution.py`).
 | `mod-base.ci.validation` | The validator's receipt: the native verification reports of one hook and unit, bound to plan, run and input hash. |
 | `mod-base.ci.selection` | The exact Build a packaged run selected: its full descriptor and envelope hash. |
 | `mod-base.ci.gate` | The tested record of a Build or packaged gate: its artifacts, owning Build and native receipts. |
+| `mod-base.ci.results` | The complete packaged results of one attempt as an index: every lane's sealed artifact with the hashes of its envelope, validation record and report, and the owning Build. |
 | `mod-base.ci.reuse` | A direct reference from a merged commit to both original pull-request gate records. |
 | `mod-base.ci.execution` | A private runner-to-root record of one hook execution: bounded log, nonce and context. |
 | `mod-base.ci.root-request` | A private request to the root child to seal a Build export. |

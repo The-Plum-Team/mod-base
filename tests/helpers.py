@@ -1020,6 +1020,24 @@ def ci_gate(gate: str = "build") -> dict[str, Any]:
     return ci_run_gate(ci_plan(), gate, "full" if gate == "build" else "pull-request")
 
 
+def ci_run_results(plan: dict[str, Any], mode: str) -> dict[str, Any]:
+    """The results index a packaged run in ``mode`` seals for the plan's subject: the lane
+    artifacts and the owning Build that :func:`ci_run_gate` names for the same run."""
+
+    receipt = ci_run_gate(plan, "packaged", mode)
+    return {"kind": "mod-base.ci.results", "schema_version": 1, "identity": copy.deepcopy(plan["identity"]),
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"], "producer": receipt["producer"],
+            "owning_build": receipt["owning_build"], "build_envelope_sha256": canonical_sha256(ci_envelope(plan)),
+            "lanes": [{"id": lane["id"], "native_contract_sha256": lane["native_contract_sha256"],
+                       "descriptor": descriptor, "envelope_sha256": h(lane["id"] + "-runtime-envelope"),
+                       "validation_sha256": h(lane["id"] + "-validation"), "report_sha256": h(lane["id"] + "-native")}
+                      for lane, descriptor in zip(plan["lanes"], receipt["artifacts"])]}
+
+
+def ci_results() -> dict[str, Any]:
+    return ci_run_results(ci_plan(), "pull-request")
+
+
 def ci_reuse() -> dict[str, Any]:
     from mod_base.build_ci.graph import run_graph
 
@@ -1174,6 +1192,7 @@ def sample_documents() -> dict[str, dict[str, Any]]:
         "ci-selection": ci_selection(),
         "ci-gate-build": ci_gate(),
         "ci-gate-packaged": ci_gate("packaged"),
+        "ci-results": ci_results(),
         "ci-reuse": ci_reuse(),
         "ci-validation": ci_validation(),
         "ci-execution": ci_execution(),
@@ -1209,6 +1228,7 @@ VALID_FIXTURE_KINDS = {
     "ci-selection": "mod-base.ci.selection",
     "ci-gate-build": "mod-base.ci.gate",
     "ci-gate-packaged": "mod-base.ci.gate",
+    "ci-results": "mod-base.ci.results",
     "ci-reuse": "mod-base.ci.reuse",
     "ci-validation": "mod-base.ci.validation",
     "ci-execution": "mod-base.ci.execution",

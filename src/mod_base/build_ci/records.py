@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from mod_base import readable_schema_versions
+from mod_base import SCHEMA_VERSIONS, readable_schema_versions
 from mod_base.build_ci.protocol import (OUTPUT_ROLES, PROFILES, check_output_paths, check_output_scope,
                                         validate_identity, validate_plan)
 from mod_base.model import grammar as g
@@ -350,6 +350,76 @@ def validate_gate_receipt(document: Any, *, plan: dict[str, Any] | None = None,
     return document
 
 
+def gate_receipt(*, plan: dict[str, Any], producer: dict[str, Any], gate: str, mode: str,
+                 artifacts: list[dict[str, Any]], owning_build: dict[str, Any] | None,
+                 native_receipts: list[dict[str, Any]]) -> dict[str, Any]:
+    """The receipt the gate job of ``producer`` (an attempt's identity, without a window) seals
+    for ``plan``: a new ``mod-base.ci.gate`` document that is valid for the plan, independent of
+    its arguments. Writing one proves nothing: the gate authenticates what it names first."""
+
+    validate_plan(plan)
+    document = {"kind": "mod-base.ci.gate", "schema_version": SCHEMA_VERSIONS["mod-base.ci.gate"],
+                "identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+                "producer": producer, "gate": gate, "mode": mode, "artifacts": artifacts,
+                "owning_build": owning_build, "native_receipts": native_receipts}
+    return validate_gate_receipt(copy.deepcopy(document), plan=plan)
+
+
+#: One lane of a results index: its sealed artifact, the SHA-256 of the canonical runtime envelope
+#: and of the canonical validation record inside it, and the SHA-256 of the lane's verification
+#: report as that record inventories it.
+_RESULT_LANE = Obj({"id": UNIT, "native_contract_sha256": SHA256, "descriptor": validate_descriptor,
+                    "envelope_sha256": SHA256, "validation_sha256": SHA256, "report_sha256": SHA256})
+_RESULTS = Obj({
+    **_header("mod-base.ci.results"), **_binding(), "producer": _PRODUCER_IDENTITY,
+    "owning_build": validate_descriptor, "build_envelope_sha256": SHA256,
+    "lanes": List(_RESULT_LANE, min_items=1, max_items=lim.MAX_CI_LANES, unique_by=lambda item: item["id"]),
+})
+
+
+def validate_results_index(document: Any, *, plan: dict[str, Any] | None = None,
+                           path: str = "$") -> dict[str, Any]:
+    """The complete packaged results of one attempt as an index of its lanes, never a byte union.
+
+    Every lane names the runtime artifact of the same attempt that holds its sealed results. The
+    owning Build is the complete bundle every lane ran: the Build the packaged run itself rebuilt,
+    or the one of a separate Build run. With a plan, the lanes are exactly the planned ones with
+    their native contracts, in plan order. Hashes are recorded, not proven, by this structure."""
+
+    _RESULTS(document, path)
+    _plan_binding(document, plan, path)
+    producer, owning = document["producer"], document["owning_build"]
+    check(_producer_binding(producer, document["identity"], f"{path}.producer") == "packaged",
+          f"{path}.producer.workflow_path", "only the packaged caller seals a results index")
+    _same_binding(owning, document, f"{path}.owning_build")
+    check(g.parse_ci_artifact_name(owning["artifact"]["name"]).kind == "build", f"{path}.owning_build",
+          "must name a complete Build bundle")
+    if ci_producer(owning["producer"]["workflow_path"]) == "packaged":
+        check(all(owning["producer"][key] == producer[key] for key in producer), f"{path}.owning_build.producer",
+              "a rebuilt Build is sealed by the packaged run itself")
+    else:
+        check(owning["producer"]["run_id"] != producer["run_id"], f"{path}.owning_build.producer",
+              "a consumed Build comes from a separate Build run")
+    artifact_ids = {owning["artifact"]["id"]}
+    for index, lane in enumerate(document["lanes"]):
+        here = f"{path}.lanes[{index}]"
+        descriptor = lane["descriptor"]
+        _same_binding(descriptor, document, f"{here}.descriptor")
+        check(all(descriptor["producer"][key] == producer[key] for key in producer), f"{here}.descriptor.producer",
+              "mixed producer or attempt")
+        name = g.parse_ci_artifact_name(descriptor["artifact"]["name"])
+        check((name.kind, name.unit_id) == ("runtime", lane["id"]), f"{here}.descriptor.artifact.name",
+              "must name the runtime artifact of this lane")
+        check(descriptor["artifact"]["id"] not in artifact_ids, f"{here}.descriptor.artifact.id",
+              "repeats an artifact id")
+        artifact_ids.add(descriptor["artifact"]["id"])
+    if plan is not None:
+        expected = [(lane["id"], lane["native_contract_sha256"]) for lane in plan["lanes"]]
+        check([(lane["id"], lane["native_contract_sha256"]) for lane in document["lanes"]] == expected,
+              f"{path}.lanes", "does not list every planned lane and no other, in plan order")
+    return document
+
+
 _REUSE_SOURCE = Obj({**_binding(), "build_seal": validate_descriptor, "packaged_seal": validate_descriptor})
 _REUSE = Obj({**_header("mod-base.ci.reuse"), **_binding(), "producer": _PRODUCER_IDENTITY, "source": _REUSE_SOURCE})
 
@@ -415,6 +485,18 @@ def bind_gate_receipt(document: dict[str, Any], *, descriptor: dict[str, Any],
     if document["owning_build"] is not None:
         inputs.append(document["owning_build"])
     _bind_record_producer(document, descriptor, kind="tested", unit=document["gate"], inputs=inputs)
+    return document
+
+
+def bind_results_index(document: dict[str, Any], *, descriptor: dict[str, Any],
+                       plan: dict[str, Any]) -> dict[str, Any]:
+    """Bind a results index to the results artifact it was read from: the same attempt sealed
+    both, and every lane and the owning Build were uploaded before the index was. The run, the
+    graph and every artifact it names remain to be authenticated."""
+
+    validate_results_index(document, plan=plan)
+    _bind_record_producer(document, descriptor, kind="results", unit=None,
+                          inputs=[*(lane["descriptor"] for lane in document["lanes"]), document["owning_build"]])
     return document
 
 

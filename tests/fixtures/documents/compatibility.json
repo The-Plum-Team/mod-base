@@ -45,6 +45,11 @@
       "decision": "new-kind",
       "previous_version": null
     },
+    "mod-base.ci.results": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
     "mod-base.ci.reuse": {
       "current_version": 1,
       "decision": "new-kind",

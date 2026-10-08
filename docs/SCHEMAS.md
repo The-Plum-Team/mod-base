@@ -722,6 +722,40 @@ heads, builds the stack again and requires every field of the manifest to equal 
 to the pull request that carries the marker. No execution selector, approval, secret,
 permission or status is accepted, and parsing a manifest grants no writer or consumer authority.
 
+## Packaged results index data v1
+
+`mod-base.ci.results` writes/reads 1. This is a new kind (previous null); the archived v1.0.3
+reader rejects it. It is the complete packaged results of one attempt of the packaged caller as
+an index of its lane artifacts, never a union of their bytes: Quick Skin's 34 lanes hold more
+than the 512 MiB one complete runtime export may. The aggregating job seals it as
+`ci-results.json`, the one file of the artifact `mb-ci-results--<run>--a<attempt>`, canonical
+JSON of at most 4 MiB.
+
+The closed top level has kind, schema_version, identity, plan_sha256, profile, producer,
+owning_build, build_envelope_sha256 and lanes.
+
+| Field | Meaning |
+| --- | --- |
+| `identity`, `plan_sha256`, `profile` | The binding of the plan every lane ran under. Every descriptor inside carries the same three. |
+| `producer` | The attempt that sealed the index: `run_id`, `run_attempt`, `workflow_path`, `workflow_ref`, `api_head_sha`, `event`, `graph_sha256`, without an upload window. Always a run of the managed packaged caller. |
+| `owning_build` | The descriptor of the complete Build every lane ran: the bundle this same attempt rebuilt (a standalone run only), or the bundle of a separate run of the Build caller. |
+| `build_envelope_sha256` | SHA-256 of that Build's canonical envelope, as the job's selection record carries it. |
+| `lanes` | 1..256 entries: exactly the planned lanes, in plan order. |
+
+A lane has exactly:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `native_contract_sha256` | The lane and its native contract, as the plan lists them. |
+| `descriptor` | The descriptor of the lane's `mb-ci-runtime` artifact of the same attempt. Artifact ids are distinct among the lanes and from the owning Build. |
+| `envelope_sha256` | SHA-256 of the canonical runtime envelope inside that artifact. |
+| `validation_sha256` | SHA-256 of the canonical validation record (`verify_runtime`) inside that artifact. |
+| `report_sha256` | SHA-256 of the lane's verification report, as that validation record inventories it: the lane's native receipt in the packaged gate. |
+
+There is no success flag, file inventory or status. An index is evidence only together with what
+its writer and readers authenticate: the gate requires the index to list exactly the lane
+artifacts its attempt uploaded and authenticates the owning Build (`build_ci.gate`).
+
 ## Profile activation data v1
 
 `mod-base.ci.activation` writes and reads 1. It is a new kind: the compatibility ledger records

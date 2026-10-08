@@ -177,8 +177,9 @@ def describe_attempt(api: GitHubApi | CommandReads, *, producer: dict[str, Any],
     graph mode its digest stands for. ``expected`` holds distinct ``(kind, unit_id)`` pairs;
     ``finished`` names further jobs that must have finished as the graph expects, beside the
     jobs that uploaded the expected artifacts (:func:`settled_jobs`). Two requests for a run of
-    up to 100 jobs and 100 artifacts. One observation: a caller that produces an effect describes
-    again immediately before it and requires the same answer."""
+    up to 100 jobs and 100 artifacts; with nothing expected only the jobs are read and required.
+    One observation: a caller that produces an effect describes again immediately before it and
+    requires the same answer."""
 
     reads = CommandReads.of(api)
     plan = _plan(plan)
@@ -187,14 +188,14 @@ def describe_attempt(api: GitHubApi | CommandReads, *, producer: dict[str, Any],
     check(producer["graph_sha256"] == run_graph(caller, mode).sha256(plan), "$.producer.graph_sha256",
           "is not the graph of this run in that mode")
     expected = [(kind, unit_id) for kind, unit_id in expected]
-    check(bool(expected) and len(set(expected)) == len(expected), "$.expected", "must name distinct artifacts")
+    check(len(set(expected)) == len(expected), "$.expected", "must name distinct artifacts")
     uploads = [upload_job_name(caller, kind, unit_id) for kind, unit_id in expected]
     run_id, attempt = producer["run_id"], producer["run_attempt"]
     jobs = attempt_jobs(reads, run_id, attempt)
     require_partial_graph(jobs, plan=plan, producer=caller, mode=mode, run_attempt=attempt,
                           finished=list(dict.fromkeys([*finished, *uploads])))
     descriptors = []
-    for state, upload in zip(_artifacts(reads, producer, plan, expected), uploads):
+    for state, upload in zip(_artifacts(reads, producer, plan, expected) if expected else [], uploads):
         started, completed = sealed_upload(find_job(jobs, upload, run_attempt=attempt))
         descriptors.append(validate_descriptor({
             "identity": copy.deepcopy(plan["identity"]), "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
