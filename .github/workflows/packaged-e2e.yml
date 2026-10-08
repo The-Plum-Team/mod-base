@@ -42,7 +42,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:71d03dc68476071c444fb4d72daaea54ac56f574e2cc7b6a53342ff8a00c510e"
+  MB_KIT_TREE_DIGEST: "sha256:fcdc9cb5ea7513ada571ac35932306d515fbb614dedbe3954ce77ae17d4035ab"
 
 jobs:
   input:
@@ -362,7 +362,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --producer packaged --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+            --producer packaged --pr "$PR_NUMBER" --candidate candidate --github-output "$GITHUB_OUTPUT"
       - name: Fence the host and prepare the worker accounts
         id: prepare
         shell: bash

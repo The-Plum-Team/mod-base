@@ -293,6 +293,8 @@ class PackagedShellTests(unittest.TestCase):
     def test_every_job_issues_exactly_its_command_lines(self) -> None:
         job, out, upload = self.job, self.out, self.upload
         subject = ["ci", "subject", *job, "--producer", "packaged", "--pr", "17", *out]
+        # A job that holds the candidate checkout derives its subject from it and from one request.
+        derived = ["ci", "subject", *job, "--producer", "packaged", "--pr", "17", "--candidate", "candidate", *out]
         expected = ["--expect-sha256", SAMPLES["PLAN_SHA256"]]
         # Every later job writes the selection record of the same run into its own state.
         reselect = ["ci", "select-build", *job, "--build-run-id", SAMPLES["SELECTED_RUN_ID"],
@@ -303,7 +305,7 @@ class PackagedShellTests(unittest.TestCase):
             "input": [subject, self.prepare("validator"), ["ci", "plan", *job, *out],
                       ["ci", "select-build", *job, "--build-run-id", "", "--wait-seconds", "5400",
                        "--output", self.selection, *out], finish],
-            "lane": [subject, self.prepare("candidate+validator"),
+            "lane": [derived, self.prepare("candidate+validator"),
                      ["ci", "plan", *job, "--candidate", "candidate", *expected, *out], reselect,
                      ["ci", "fetch-build", *job, "--selection", self.selection],
                      ["ci", "worker-stage", *job, "--candidate", "candidate", "--bundle"],

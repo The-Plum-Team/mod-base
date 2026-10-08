@@ -733,6 +733,36 @@ class CiCalleePolicyTests(unittest.TestCase):
             self.assertEqual(ci_callee(name)["env"]["MB_KIT_TREE_DIGEST"], digest,
                              "run python3 tools/update_tree_digest.py --write")
 
+    def test_a_subject_is_derived_exactly_where_the_candidate_is_held_and_then_proven_by_the_plan(self) -> None:
+        # `ci subject --candidate` spends one request instead of four or five and does not observe
+        # the default branch (`identity.derive_subject`). So only a job that holds the candidate
+        # checkout uses it, and that job then reproduces the plan of the job of its run that
+        # authenticated the subject in full and named the commit the candidate was checked out at.
+        derived = set()
+        for name, job_id, job in iter_ci_jobs():
+            steps = job["steps"]
+            names = [item["name"] for item in steps]
+            subject = next(item for item in steps if step_verb(item) == "subject")
+            words = subject["run"].splitlines()[-1].split()
+            with self.subTest(callee=name, job=job_id):
+                self.assertEqual("--candidate" in words, CANDIDATE_CHECKOUT in names)
+                if "--candidate" not in words:
+                    continue
+                derived.add((name, job_id))
+                self.assertEqual(words[words.index("--candidate") + 1], "candidate")
+                self.assertLess(names.index(CANDIDATE_CHECKOUT), names.index(subject["name"]))
+                plan = next(item for item in steps if step_verb(item) == "plan")
+                self.assertLess(names.index(subject["name"]), names.index(plan["name"]))
+                self.assertIn('--candidate candidate --expect-sha256 "$PLAN_SHA256"', plan["run"].splitlines()[-1])
+                source = re.fullmatch(r"\$\{\{ needs\.([a-z]+)\.outputs\.plan-sha256 \}\}", plan["env"]["PLAN_SHA256"])
+                self.assertIsNotNone(source, "the plan to reproduce comes from an earlier job of this run")
+                first = ci_callee(name)["jobs"][source[1]]
+                self.assertEqual(first["outputs"]["plan-sha256"], "${{ steps.plan.outputs.plan_sha256 }}")
+                self.assertEqual(CANDIDATE_REF[name], "${{ needs." + source[1] + ".outputs.tested-sha }}")
+                authenticated = next(item for item in first["steps"] if step_verb(item) == "subject")
+                self.assertNotIn("--candidate", authenticated["run"], "that job authenticates in full")
+        self.assertEqual(derived, {("build", "policy"), ("build", "target"), ("packaged-e2e", "lane")})
+
 
 class CiShellSyntaxTests(unittest.TestCase):
     def test_every_run_body_parses_and_passes_shellcheck(self) -> None:

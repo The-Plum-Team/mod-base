@@ -30,6 +30,11 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   subject and writes the private identity record, pure plan construction with the policy digest,
   and a synthetic mod (`tests/fixtures/ci_mod`) that implements every hook. Planned output paths
   accept the mods' real file names (single inner spaces and `+`).
+- Add `ci subject --candidate DIR` for the jobs that hold the candidate checkout (the Build's policy
+  and target jobs and the packaged lanes). They derive the same identity record from that
+  checkout, from the mod checkout and from one API request instead of four (five for a push),
+  and prove it by reproducing the plan hash of the job of their run that authenticated in full.
+  Every other job, the gates among them, still authenticates in full.
 - Add the first job steps of the disposable-worker lifecycle: `ci worker-prepare` (host fence,
   accounts, the protected adapter copy for the validator), `ci plan` (runs `derive_plan` and writes
   the plan of the job) and `ci worker-finish` (locks the accounts and reopens the runner home).

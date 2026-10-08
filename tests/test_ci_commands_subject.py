@@ -1,4 +1,9 @@
-"""``ci subject`` end to end: real mod checkout, real state directory, fake GitHub API."""
+"""``ci subject`` end to end: real mod checkout, real state directory, fake GitHub API.
+
+``DerivedSubjectCommandTests`` runs ``ci subject --candidate`` on real Git checkouts of the mod and
+of the candidate (``tests/ci_checkout_fixture.py``) and compares what it writes with what the
+command without the option writes for the same subject.
+"""
 
 from __future__ import annotations
 
@@ -10,10 +15,12 @@ from pathlib import Path
 from unittest import mock
 
 from mod_base import cli
-from mod_base.build_ci import commands, identity
+from mod_base.build_ci import commands, identity, lifecycle
+from mod_base.github import api as github_api
 from mod_base.workflow import CI_CALLER_WORKFLOWS
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json
+from tests import ci_checkout_fixture as checkouts
 from tests import ci_mod_harness as h
 
 
@@ -150,6 +157,131 @@ class SubjectCommandTests(unittest.TestCase):
                 self.assertEqual(self.api.request_count, 0)
                 self.assertFalse(self.state.exists())
                 self.assertFalse(self.output.exists())
+
+
+class DerivedSubjectCommandTests(checkouts.GenerationCase):
+    """``ci subject --candidate``: the record, the state and the outputs of the full command, from
+    one budgeted request."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.budgets: list[int | None] = []
+
+    def run_subject(self, api, name: str, *, candidate: Path | str | None, pr: str = str(checkouts.PULL_REQUEST),
+                    producer: str = "build", environment: dict[str, str] | None = None) -> tuple[int, str]:
+        """Run ``ci subject`` of the job whose mod checkout is ``self.mod`` through the real entry
+        point, with the state ``<name>-state`` and the outputs ``<name>-output``; return its exit
+        code and stderr."""
+
+        environment = self.generation.environment() if environment is None else environment
+
+        def client(environ, *, writable=False, max_requests=None):
+            self.assertIs(writable, False)
+            self.budgets.append(max_requests)
+            return api
+
+        argv = ["ci", "subject", "--repo", str(self.mod), "--config", str(self.mod / "site" / "mod-base.json"),
+                "--state", str(self.temporary / f"{name}-state"), "--producer", producer, "--pr", pr,
+                *(() if candidate is None else ("--candidate", str(candidate))),
+                "--github-output", str(self.temporary / f"{name}-output")]
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli, "environ", return_value=environment), \
+                mock.patch.object(commands.github_api, "from_environment", side_effect=client), \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            code = cli.main(argv)
+        self.assertEqual(stdout.getvalue(), "")
+        return code, stderr.getvalue()
+
+    def written(self, name: str) -> tuple[bytes, str]:
+        """The identity record and the step outputs the command named ``name`` wrote."""
+
+        return ((self.temporary / f"{name}-state" / identity.IDENTITY_NAME).read_bytes(),
+                (self.temporary / f"{name}-output").read_text(encoding="utf-8"))
+
+    def assert_nothing_written(self, name: str) -> None:
+        self.assertFalse((self.temporary / f"{name}-state").exists())
+        self.assertFalse((self.temporary / f"{name}-output").exists())
+
+    def test_a_pull_request_writes_what_the_full_command_writes_from_one_budgeted_request(self) -> None:
+        full, _ = self.generation.github(max_requests=limits.MAX_CI_SUBJECT_REQUESTS)
+        self.assertEqual(self.run_subject(full, "full", candidate=None), (0, ""))
+        api, _ = self.generation.github(max_requests=limits.MAX_CI_DERIVED_SUBJECT_REQUESTS)
+        self.assertEqual(self.run_subject(api, "derived", candidate=self.candidate), (0, ""))
+        self.assertEqual(self.budgets, [limits.MAX_CI_SUBJECT_REQUESTS, limits.MAX_CI_DERIVED_SUBJECT_REQUESTS])
+        # One request, and the budget is that request with every attempt the client may retry it for.
+        self.assertEqual(limits.MAX_CI_DERIVED_SUBJECT_REQUESTS, github_api.REQUEST_ATTEMPTS)
+        self.assertEqual((full.request_count, api.request_count, api.mutations), (4, 1, []))
+        self.assertEqual(api.paths, [f"/repos/{h.REPOSITORY}/pulls/{checkouts.PULL_REQUEST}"])
+        self.assertEqual(self.written("derived"), self.written("full"))
+        record, outputs = self.written("derived")
+        self.assertEqual(outputs, f"tested_sha={self.generation.tested.sha}\npr_number={checkouts.PULL_REQUEST}\n")
+        self.assertEqual(record, canonical_json(identity.read_subject(self.temporary / "derived-state")))
+        state = self.temporary / "derived-state"
+        self.assertEqual((state.stat().st_mode & 0o7777, (state / identity.IDENTITY_NAME).stat().st_mode & 0o7777),
+                         (0o700, 0o600))
+
+    def test_a_protected_subject_writes_what_the_full_command_writes_from_one_budgeted_request(self) -> None:
+        candidate = checkouts.copy(self.mod, self.temporary / "protected" / "candidate")
+        for event in ("push", "workflow_dispatch"):
+            environment = self.generation.environment(event=event)
+            full, _ = self.generation.github(max_requests=limits.MAX_CI_SUBJECT_REQUESTS)
+            self.assertEqual(self.run_subject(full, f"full-{event}", candidate=None, pr="", environment=environment),
+                             (0, ""))
+            api, _ = self.generation.github(max_requests=limits.MAX_CI_DERIVED_SUBJECT_REQUESTS)
+            self.assertEqual(self.run_subject(api, f"derived-{event}", candidate=candidate, pr="",
+                                              environment=environment), (0, ""))
+            with self.subTest(event=event):
+                self.assertEqual((full.request_count, api.request_count), (5, 1))
+                self.assertEqual(api.paths, [f"/repos/{h.REPOSITORY}/branches/{h.BRANCH}"])
+                self.assertEqual(self.written(f"derived-{event}"), self.written(f"full-{event}"))
+                self.assertEqual(self.written(f"derived-{event}")[1],
+                                 f"tested_sha={self.generation.controller.sha}\npr_number=\n")
+
+    def test_the_next_steps_of_the_job_open_the_derived_state(self) -> None:
+        api, _ = self.generation.github()
+        self.assertEqual(self.run_subject(api, "job", candidate=self.candidate), (0, ""))
+        invocation = checkouts.invocation(self.mod, self.generation.environment())
+        job = lifecycle.open_job(invocation, self.temporary / "job-state")
+        self.assertEqual((job.subject["tested_sha"], job.record["controller_tree"], job.sources.controller_sha),
+                         (self.generation.tested.sha, self.generation.controller.tree,
+                          self.generation.controller.sha))
+        # `ci plan --candidate` reads the same checkout with the same Git and finds the tested tree there.
+        files = lifecycle.checkout_candidate_files(self.candidate, job)
+        self.assertEqual(list(files.values())[0], (self.candidate / "release" / "inventory.json").read_bytes())
+        self.assertEqual(api.request_count, 1)
+
+    def test_a_rejection_writes_no_state_and_no_output(self) -> None:
+        api, _ = self.generation.github()
+        # The mod checkout is at the controller: no candidate of this pull request.
+        code, stderr = self.run_subject(api, "elsewhere", candidate=self.mod)
+        self.assertEqual(code, 2)
+        self.assertIn("the candidate checkout is not at the current test merge of the pull request", stderr)
+        self.assertEqual(api.request_count, 1)
+        self.assert_nothing_written("elsewhere")
+        plain = h.materialize(self.temporary / "plain")
+        code, stderr = self.run_subject(api, "plain", candidate=plain)
+        self.assertEqual((code, stderr), (2, "mod_base: git: the plain checkout has no Git directory of its own\n"))
+        self.assertEqual(api.request_count, 1, "nothing is asked once a checkout cannot be read")
+        self.assert_nothing_written("plain")
+        api, pull = self.generation.github()
+        h.seed_pull_request(api, {**pull, "draft": True})
+        code, stderr = self.run_subject(api, "draft", candidate=self.candidate)
+        self.assertEqual((code, stderr), (2, f"mod_base: draft: pull request {checkouts.PULL_REQUEST} is a draft: "
+                                             "the caller must defer, not call\n"))
+        self.assert_nothing_written("draft")
+
+    def test_a_status_job_and_an_empty_candidate_are_refused_before_any_request(self) -> None:
+        api, _ = self.generation.github()
+        code, stderr = self.run_subject(api, "status", candidate=self.candidate, producer="status",
+                                        environment=self.generation.environment(caller="status"))
+        self.assertEqual(code, 2)
+        self.assertIn("only a Build or packaged job holds a candidate checkout", stderr)
+        self.assert_nothing_written("status")
+        code, stderr = self.run_subject(api, "empty", candidate="")
+        self.assertEqual(code, 2)
+        self.assertTrue(stderr.startswith("mod_base: usage: "), stderr)
+        self.assert_nothing_written("empty")
+        self.assertEqual((api.request_count, self.budgets), (0, [limits.MAX_CI_DERIVED_SUBJECT_REQUESTS]))
 
 
 if __name__ == "__main__":

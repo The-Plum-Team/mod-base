@@ -326,6 +326,7 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
 | MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
 | MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse` |
+| MB11 | `mod_base.build_ci.checkout` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -718,11 +719,13 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_COMMIT_PULLS`: 100, the pull requests GitHub associates with one pushed commit: the one page post-merge reuse reads to find the merge.
 * `MAX_CI_REUSE_ADMIT_REQUESTS`: 96, the request budget of `ci reuse-admit` (38 for an admitted reuse, 1 for a direct push, 11 when the merged tree differs, whatever the number of targets and lanes).
 * `MAX_CI_SUBJECT_REQUESTS`: the 16-request budget of one `ci subject` (a pull request costs 4, a protected subject 5).
+* `MAX_CI_DERIVED_SUBJECT_REQUESTS`: the 4-request budget of one `ci subject --candidate`, the subject of a job that holds the candidate checkout: one request (the pull request, or the head of the default branch for a protected subject) and the retried attempts of that request.
 * `MAX_CI_STATUS_CONTEXT_CHARS`: 100 characters for one status context of the protected Build config.
 * `CI_BUILD_POLL_SECONDS`, `MAX_CI_BUILD_POLLS`: Protected 60-second polling cadence and independent 91-observation ceiling within the existing 5400-second admission budget.
 * `MAX_CI_WORKER_RECORD_BYTES`: 256 KiB for the private `worker.json` state record of `ci worker-prepare`.
 * `MAX_CI_PLAN_REQUESTS`: the 24-request budget of one `ci plan` without a candidate checkout (the tested tree and one blob per candidate file: 3 without extra plan inputs, at most 11; with a checkout the command spends none).
-* `CI_GIT_READ_TIMEOUT_SECONDS`, `MAX_CI_GIT_ANSWER_BYTES`: 60 seconds for one read of the candidate checkout's object store, and 4 KiB for what such a read answers besides a blob (one object id, or one tree entry with its path).
+* `CI_GIT_READ_TIMEOUT_SECONDS`, `MAX_CI_GIT_ANSWER_BYTES`: 60 seconds for one read of the object store of a job's checkout, and 4 KiB for what such a read answers besides an object (one object id, or one tree entry with its path).
+* `MAX_CI_GIT_COMMIT_BYTES`: 1 MiB for one commit object read whole from a checkout: its header lines, a signature and its message.
 * `MAX_CI_PLAN_INPUT_FILES`, `MAX_CI_PLAN_INPUT_ENTRIES`, `MAX_CI_PLAN_INPUT_BYTES`: The validator's input tree `validation-input/`: at most the plan, the inventory, the scenario contract and `MAX_CI_PLAN_INPUTS` extra plan inputs (11 files, 12 entries with the directory, the plan cap plus ten times the candidate file cap). A check of the tree requires exactly the files of its state, not merely at most these.
 * `MAX_CI_SELECT_BUILD_REQUESTS`: 155, the request budget of `ci select-build`: a pull request whose Build is complete costs 17 and each earlier poll of its wait one more (91 polls at most); a protected subject costs 15, or 17 plus one for each poll that found its Build run still in progress (at most 90). The rest is for retries and for the further pages of a run that lists more than 100 jobs.
 * `MAX_CI_FETCH_BUILD_REQUESTS`: 48, the request budget of `ci fetch-build` (21 for a pull request, 18 for a selected and 15 for a rebuilt Build of a protected subject).
@@ -1902,6 +1905,7 @@ each Git object once per command.
 * `def run_head(identity: dict[str, Any]) -> tuple[str, str, str]`: ``(head_sha, head_branch, head_repository)`` GitHub records on every run and artifact a managed caller produces for the identity: a pull request's head commit, branch and source repository, or the default-branch commit a protected push or dispatch runs from, which must also be its tested commit.
 * `def authenticate_merged_pr_identity(api: GitHubApi, identity: dict[str, Any], *, controller_sha: str, merged_sha: str) -> MergedPr`: Bind an independently admitted original PR identity and current controller/final SHA to a closed merged same-repository PR, the original synthetic merge with exact ordered parents, an equal complete final tree and original/current protected history, in one pass. The identity is copied on entry. Live admission remains separate; full historical gates, native policy/pin, source seals and writer/owner approval remain required.
 * `def read_pr_generation(api: GitHubApi, *, pr_number: int, controller_sha: str) -> PrGeneration`: One read of the repository, its default head and an open same-repository PR against the executing controller. Draft and unavailable merge states do not authorize workers; ready merge/policy/plan admission remains independent.
+* `def read_pr_on_base(api: GitHubApi, *, pr_number: int, base_branch: str, controller_sha: str, controller_tree: str) -> PrGeneration`: The same observation of the pull request alone, in one request, against a base the caller holds from sources of its own: the protected base branch, the executing controller commit and its tree (returned as given). The pull request is checked as in `read_pr_generation`; that the branch is the default branch and the controller still its head is not observed. Malformed arguments are refused before the request.
 * `def authenticate_pr_identity(api: GitHubApi, identity: dict[str, Any]) -> None`: Check the ready PR generation and protected default/base, then the exact ordered merge parents and tree of the tested commit, in one pass. Does not establish native policy, approval, bytes or status authority.
 * `def authenticate_source_identity(api: GitHubApi, identity: dict[str, Any]) -> None`: Dispatch to ready-PR authentication or authenticate an exact non-PR Git commit/tree/ordered parents in protected default history against the live controller, in one pass. Request/run/profile authorization and full recovery policy remain caller obligations.
 
@@ -2014,15 +2018,37 @@ writes. It imports no worker module; `tests/test_ci_adapter.py` pins its directo
 * `def parse_derived_plan(data: bytes) -> dict[str, Any]`: Strictly decode `derive_plan`'s `plan.json` (at most `MAX_CI_PLAN_BYTES`): `protocol.validate_plan_units` and no reserved unit id.
 * `def parse_runtime_values(data: bytes) -> dict[str, str]`: Strictly decode `derive_runtime`'s `runtime.json` (at most `MAX_CI_REPORT_BYTES`): `{"values": {...}}` holding exactly `RUNTIME_VALUES`, each non-blank text without control characters of at most `MAX_CI_ENV_VALUE_BYTES` bytes.
 
+## `mod_base.build_ci.checkout`
+
+Owner: MB11. Reads of the Git objects of a job's checkouts (the protected mod at the controller
+commit, the candidate at the tested commit), by plumbing; no working file is read here.
+One closed Git serves every such read: `ci subject --candidate` (`identity.derive_subject`) and
+`ci plan --candidate` (`lifecycle.checkout_candidate_files`). A commit is read as the bytes of its
+object, which must hash to its name, because Git's own reading of a commit can be changed inside
+the repository: `--no-replace-objects` keeps a replacement ref out, but a grafts file and the
+shallow boundary of every `actions/checkout` clone still change the parents Git reports, and
+`cat-file` prints an object without comparing it with the name it is stored under.
+
+* `GIT = '/usr/bin/git'`
+* `class CheckoutError(MbError)`: A checkout's Git objects cannot be read, or are not the objects their names say (exit 2, reason `git`).
+* `class Commit`: One commit as its own object states it: its name, its tree and its ordered parents.
+  * fields: `sha: str, tree: str, parents: tuple[str, ...]`
+* `def read_objects(checkout: Path, *arguments: str, max_bytes: int) -> bytes`: One read of a checkout's object store: `/usr/bin/git --git-dir=<checkout>/.git --no-replace-objects -c core.hooksPath=/dev/null <arguments>` with a fixed environment (no system or global configuration, no replacement objects, no lazy fetch, no prompt), no stdin, a timeout of `CI_GIT_READ_TIMEOUT_SECONDS` and at most `max_bytes` of output. `<checkout>/.git` must be a real directory: a link or a file that points elsewhere is refused, although Git would follow both. Only `rev-parse`, `ls-tree` and `cat-file` are ever passed. A failing Git or a longer answer is a `CheckoutError`.
+* `def head_commit(checkout: Path) -> Commit`: The commit `HEAD` of `checkout` names, proven by its own bytes: `HEAD` is resolved to an object name without reading the object and the object's size is asked first (at most `MAX_CI_GIT_COMMIT_BYTES`); the object is then read whole as a commit and must hash to that name, so `HEAD` names the commit itself (a branch at it is fine, a tag of it is not). The tree is the first header line and the parents are the `parent` lines directly after it, in order; either header anywhere else in the header block is a rejection. The parents need not be present (a shallow checkout holds the one commit), and no replacement ref, grafts file, shallow boundary or object stored under another object's name changes the result; the last is a rejection.
+
 ## `mod_base.build_ci.identity`
 
 Owner: MB11. What `ci subject` does: authenticate the tested subject through the API and keep it in
-the job's private state directory. Mutable state (default branch, pull request) is read at the
-start and again before the record is written; the commit object is read once. Besides the two
+the job's private state directory. A pull request is observed once alongside the live default
+branch; a protected subject reads the default branch again before returning. The commit object
+is read once. Besides the two
 gates there is a third producer, `status`: the status caller's evaluation job, whose subject is
 always the pull request `--pr` names, on every event that starts that caller. Its controller is
 the default-branch commit the run executes, so it derives the identity (and the plan) the Build
-and the packaged run of the generation derived.
+and the packaged run of the generation derived. A job that holds the candidate checkout (`ci
+subject --candidate`: the policy, target and lane jobs) derives the same record from its
+environment, from the commits its two checkouts are at and from one request (`derive_subject`),
+and proves it by reproducing the plan hash of the job of its run that authenticated in full.
 
 * `IDENTITY_NAME = 'identity.json'`
 * `PULL_REQUEST_EVENT = 'pull_request_target'`
@@ -2037,6 +2063,7 @@ and the packaged run of the generation derived.
 * `def run_events(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The events a job of `producer` may run on: `pull_request_target` for a gate's pull request and `PROTECTED_EVENTS` for its protected subject; `STATUS_EVENTS` for the pull request of a `status` job, which has no protected subject (no event).
 * `def validate_subject_record(document: Any, path: str = '$') -> dict[str, Any]`: The closed identity record `{producer, event, workflow_path, controller_tree, subject}`; `subject` is `protocol.validate_subject` and always names the Build caller as `controller_workflow`. The producer is one of `SUBJECT_PRODUCERS`, and its event and caller are those `run_events` and `run_workflows` admit for the subject.
 * `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None) -> dict[str, Any]`: Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. For the `status` producer `pr_number` is the pull request under evaluation on any of `STATUS_EVENTS`, authenticated like a gate's (the live default branch must be the executing commit and the pull request's base), never None. The environment's claims are checked before the first request; 4 requests for a pull request, 5 otherwise; nothing is written.
+* `def derive_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None, candidate: Path) -> dict[str, Any]`: The same identity record, byte for byte, for a job that holds the candidate checkout `candidate`, from one request. The environment is admitted as in `authenticate_subject` and the base branch is the mod's canonical branch, which the run and its caller must name; the mod checkout's `HEAD` must be the executing controller commit and gives the controller tree; the candidate's `HEAD` gives the tested commit, its tree and its ordered parents (`checkout.head_commit` for both: the commit's own bytes, hashed to its name). All of that is settled before the one request, which is made last: the pull request (`authenticate.read_pr_on_base`: open, not a draft, same repository, based on that branch at the controller, its test merge the commit the candidate is at), or for a protected subject the head of the canonical branch, which must still be the executing commit both checkouts are at. Not observed: that the canonical branch is the default branch and, for a pull request, that the controller is still its head. A job therefore uses this only when it then requires the plan hash of a job of its run that authenticated in full (`ci plan --expect-sha256`; `tests/test_workflow_ci_policy.py` holds the callees to that). `producer` is `build` or `packaged`: a status job holds no candidate checkout. Nothing is written.
 * `def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str`: The closed protected-policy digest: canonical SHA-256 of `{format: POLICY_FORMAT, build_adapter_api, graph_versions: {build, packaged}, kit: subject.kit, config_sha256, adapter_files: [{path, sha256}], control_files: [{path, sha256 | null}]}`. It changes with the protected Build config bytes, any source of the adapter closure, the bytes or the presence of a control file (`config.CONTROL_PATHS`: the activation manifest and the caller workflows), the kit pin or tree digest, the adapter API or a graph version, and with nothing else.
 * `def create_state(state: Path) -> None`: Create the job's private state directory (mode 0700); an existing path is never adopted.
 * `def write_state_record(state: Path, name: str, raw: bytes) -> None`: Create `<state>/<name>` (mode 0600) in an existing private state directory; never replaces a record.
@@ -2067,9 +2094,12 @@ Owner: MB11. The top-level `ci` command. Each work area lists its verb module in
 
 ## `mod_base.build_ci.commands_subject`
 
-Owner: MB11. `ci subject --repo DIR --config F --state DIR --producer build|packaged --pr N --github-output F`:
+Owner: MB11. `ci subject --repo DIR --config F --state DIR --producer build|packaged --pr N [--candidate DIR] --github-output F`:
 authenticates the subject, creates `--state` with `identity.json` and outputs `tested_sha` and
-`pr_number` (`--pr` and the output are empty for a protected subject).
+`pr_number` (`--pr` and the output are empty for a protected subject). With `--candidate DIR`, the
+candidate checkout of a job that has one, the same record is derived from that checkout, the mod
+checkout and one request (`identity.derive_subject`, budget `MAX_CI_DERIVED_SUBJECT_REQUESTS`)
+instead of four or five (`identity.authenticate_subject`, budget `MAX_CI_SUBJECT_REQUESTS`).
 
 * `PULL_REQUEST`: the argparse type of `--pr`, a positive decimal as `int` or the empty string as `None`.
 * `def add_verbs(verbs: argparse._SubParsersAction) -> None`

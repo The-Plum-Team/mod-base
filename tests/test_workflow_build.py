@@ -250,6 +250,8 @@ class BuildShellTests(unittest.TestCase):
         out = ["--github-output", str(self.runner.output)]
         upload = ["--output", f"{temp}/mb-upload"]
         subject = ["ci", "subject", *job, "--producer", "build", "--pr", "17", *out]
+        # A job that holds the candidate checkout derives its subject from it and from one request.
+        derived = ["ci", "subject", *job, "--producer", "build", "--pr", "17", "--candidate", "candidate", *out]
         expected = ["--expect-sha256", SAMPLES["PLAN_SHA256"], *out]
         replan = ["ci", "plan", *job, *expected]
         replan_candidate = ["ci", "plan", *job, "--candidate", "candidate", *expected]
@@ -263,9 +265,9 @@ class BuildShellTests(unittest.TestCase):
         self.assertEqual({job_id: self.commands(job_id) for job_id in self.jobs}, {
             "plan": [subject, prepare("validator"), ["ci", "plan", *job, *out], ["ci", "reuse-admit", *job, *out],
                      finish],
-            "policy": [subject, prepare("candidate+validator"), replan_candidate, stage,
+            "policy": [derived, prepare("candidate+validator"), replan_candidate, stage,
                        ["ci", "worker-run", *job, "--hook", "policy"], ["ci", "worker-seal", *job], finish],
-            "target": [subject, prepare("candidate+validator"), replan_candidate, stage,
+            "target": [derived, prepare("candidate+validator"), replan_candidate, stage,
                        ["ci", "worker-run", *job, "--hook", "build_target", "--unit", "target-a"],
                        ["ci", "worker-seal", *job],
                        ["ci", "worker-validate", *job, "--hook", "verify_target", "--unit", "target-a", *upload],

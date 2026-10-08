@@ -162,7 +162,8 @@ def _pr_generation(api: GitHubApi, number: int, branch: str, controller: str,
         grammar.require_sha1(value.get("sha"), f"PR {side} SHA")
         grammar.require(grammar.BRANCH, value.get("ref"), f"PR {side} branch")
     check(pr["base"]["ref"] == branch and pr["base"]["sha"] == controller,
-          "$.pr.base", "PR base differs from the protected executing controller")
+          "$.pr.base", "PR base differs from the protected executing controller; update the pull request branch "
+          "and push it again after the default branch moves")
     check("merge_commit_sha" in pr, "$.pr.merge_commit_sha", "missing merge state")
     merge = pr["merge_commit_sha"]
     if merge is not None:
@@ -189,6 +190,26 @@ def read_pr_generation(api: GitHubApi, *, pr_number: int, controller_sha: str) -
     controller, tree = branch_head(api, branch)
     check(controller == controller_sha, "$.controller_sha", "protected executing controller has moved")
     return _pr_generation(api, pr_number, branch, controller, tree)
+
+
+def read_pr_on_base(api: GitHubApi, *, pr_number: int, base_branch: str, controller_sha: str,
+                    controller_tree: str) -> PrGeneration:
+    """One observation of an open same-repository PR against a base the caller already holds.
+
+    The caller has the protected base branch, the executing controller commit and its tree from
+    sources of its own (its run and a verified checkout). This reads the pull request alone, in
+    one request, and binds its base to them with the checks of :func:`read_pr_generation`. It
+    does not observe that the branch is the default branch or that the controller is still its
+    head: a caller that needs either uses :func:`read_pr_generation`. Drafts and unavailable
+    merge objects remain observations, as there.
+    """
+
+    Int(1, limits.MAX_RUN_ID)(pr_number, "$.pr_number")
+    grammar.require(grammar.BRANCH, base_branch, "protected base branch")
+    grammar.require_sha1(controller_sha, "executing controller SHA")
+    grammar.require_sha1(controller_tree, "executing controller tree")
+    grammar.require(grammar.REPOSITORY, api.repository, "repository")
+    return _pr_generation(api, pr_number, base_branch, controller_sha, controller_tree)
 
 
 def authenticate_source_identity(api: GitHubApi, identity: dict[str, Any]) -> None:

@@ -5,7 +5,7 @@ import dataclasses
 import unittest
 from unittest.mock import patch
 
-from mod_base.build_ci.authenticate import authenticate_pr_identity, read_pr_generation
+from mod_base.build_ci.authenticate import authenticate_pr_identity, read_pr_generation, read_pr_on_base
 from mod_base.errors import MbError
 from tests.helpers import ci_plan
 from tests.test_ci_protocol import seeded_pr
@@ -161,6 +161,77 @@ class PrGenerationTests(unittest.TestCase):
             api.add_response(path, pr)
             with self.subTest(index=index), self.assertRaises(MbError):
                 authenticate_pr_identity(api, ci_plan()["identity"])
+
+
+class PrOnBaseTests(unittest.TestCase):
+    """The pull request alone, against a base its caller holds: one request, the same observation."""
+
+    TREE = "8" * 40
+    seed = PrGenerationTests.seed
+
+    def read(self, api, controller, **changes):
+        return read_pr_on_base(api, **{"pr_number": 7, "base_branch": "master", "controller_sha": controller,
+                                       "controller_tree": self.TREE, **changes})
+
+    def test_one_request_gives_the_observation_of_the_full_read(self):
+        for draft in (False, True):
+            for merge in (False, True):
+                api, _, path, controller = self.seed(draft=draft, merge=merge)
+                whole = read_pr_generation(api, pr_number=7, controller_sha=controller)
+                self.assertEqual(whole.controller_tree, self.TREE)
+                api, pr, path, controller = self.seed(draft=draft, merge=merge)
+                with patch.object(api, "get_json", wraps=api.get_json) as reads:
+                    alone = self.read(api, controller)
+                with self.subTest(draft=draft, merge=merge):
+                    self.assertEqual(alone, whole)
+                    self.assertEqual((alone.draft, alone.merge_sha), (draft, pr["merge_commit_sha"]))
+                    self.assertEqual([call.args[0] for call in reads.call_args_list], [path])
+                    self.assertEqual(api.mutations, [])
+
+    def test_the_base_is_bound_to_what_the_caller_holds(self):
+        api, pr, _, controller = self.seed()
+        # The tree is the caller's word for its controller commit: the pull request names no tree.
+        self.assertEqual(self.read(api, controller, controller_tree="7" * 40).controller_tree, "7" * 40)
+        for changes in ({"base_branch": "release"}, {"controller_sha": "e" * 40}, {"pr_number": 8}):
+            with self.subTest(changes=changes), self.assertRaises(MbError):
+                self.read(api, controller, **changes)
+        self.assertNotEqual(pr["base"]["sha"], "e" * 40)
+
+    def test_the_default_branch_and_its_head_are_left_to_the_caller(self):
+        # What `read_pr_generation` observes besides the pull request is not observed here.
+        api, _, _, controller = self.seed()
+        first = self.read(api, controller)
+        api.set_branch("master", "e" * 40, "e" * 40)
+        api.add_response(f"/repos/{api.repository}", {"full_name": api.repository, "default_branch": "renamed"})
+        self.assertEqual(self.read(api, controller), first)
+        with self.assertRaises(MbError):
+            read_pr_generation(api, pr_number=7, controller_sha=controller)
+
+    def test_malformed_inputs_reject_before_any_api_read(self):
+        api, _, _, controller = self.seed()
+        cases = [{"pr_number": number} for number in (True, 0, -1, "7", None)]
+        cases += [{"base_branch": branch} for branch in ("", "a b", "../unsafe", None, b"master")]
+        cases += [{"controller_sha": sha} for sha in ("bad", None, "E" * 40, controller[:39])]
+        cases += [{"controller_tree": tree} for tree in ("bad", None, "E" * 40, self.TREE[:39])]
+        for changes in cases:
+            with patch.object(api, "get_json") as reads, self.subTest(changes=changes):
+                with self.assertRaises(MbError):
+                    self.read(api, controller, **changes)
+                reads.assert_not_called()
+
+    def test_closed_or_foreign_or_malformed_generation_refuses(self):
+        changes = [lambda p: p.update(number=8), lambda p: p.update(state="closed"), lambda p: p.pop("draft"),
+                   lambda p: p.pop("merge_commit_sha"), lambda p: p.update(merge_commit_sha="bad"),
+                   lambda p: p["head"]["repo"].update(full_name="fork/mod"),
+                   lambda p: p["base"]["repo"].update(full_name="foreign/mod"),
+                   lambda p: p["base"].update(ref="other"), lambda p: p["base"].update(sha="f" * 40),
+                   lambda p: p["head"].update(sha=True), lambda p: p["head"].update(ref="../unsafe")]
+        for index, change in enumerate(changes):
+            api, pr, path, controller = self.seed(draft=True, merge=False)
+            change(pr)
+            api.add_response(path, pr)
+            with self.subTest(index=index), self.assertRaises(MbError):
+                self.read(api, controller)
 
 
 if __name__ == "__main__":

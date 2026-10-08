@@ -27,8 +27,14 @@ live default branch must still be that commit and the pull request's base, or th
 gates ran for is gone. The identity is therefore the one the Build and the packaged run derived,
 and so is the plan.
 
-Mutable state (the default branch, the pull request) is read at the start and again before the
-record is written; the commit object, which never changes, is read once.
+A pull request is observed once, alongside the live default branch; a protected subject reads
+the default branch again before returning. The immutable commit object is read once.
+
+A job that holds the candidate checkout (``ci subject --candidate``: the policy, target and lane
+jobs) does not ask the API again what an earlier job of its run already authenticated. It derives
+the same record (:func:`derive_subject`) from its environment, from the commits its two checkouts
+are at, read as their own bytes, and from one live request, and then proves the result against
+that earlier job by reproducing its plan hash, which covers the whole identity.
 
 The record is ``<state>/identity.json``: canonical JSON in a directory only the runner can enter.
 ``ci subject`` creates that directory; nothing in it is ever replaced.
@@ -38,10 +44,12 @@ from __future__ import annotations
 
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mod_base.build_ci.authenticate import read_pr_generation
+from mod_base.build_ci.authenticate import PrGeneration, read_pr_generation, read_pr_on_base
+from mod_base.build_ci.checkout import Commit, head_commit
 from mod_base.build_ci.config import BuildConfig
 from mod_base.build_ci.protocol import (BUILD_ADAPTER_API, BUILD_GRAPH_VERSION, PACKAGED_GRAPH_VERSION, PRODUCERS,
                                         SHA1, WORKFLOW, validate_subject)
@@ -141,8 +149,8 @@ def _environment(invocation: Invocation, name: str) -> str:
     return value
 
 
-def _commit(api: GitHubApi, sha: str) -> tuple[str, tuple[str, ...]]:
-    """``(tree, ordered parents)`` of one Git commit: an immutable object, read once."""
+def _commit(api: GitHubApi, sha: str) -> Commit:
+    """One Git commit as the API states it: an immutable object, read once."""
 
     value = api.get_json(f"/repos/{api.repository}/git/commits/{sha}")
     check(type(value) is dict and value.get("sha") == sha, "$.commit", "response names another Git object")
@@ -151,7 +159,68 @@ def _commit(api: GitHubApi, sha: str) -> tuple[str, tuple[str, ...]]:
     check(type(parents) is list and len(parents) <= 2
           and all(type(parent) is dict and grammar.is_match(grammar.SHA1, parent.get("sha")) for parent in parents),
           "$.commit.parents", "must be at most two commits")
-    return tree["sha"], tuple(parent["sha"] for parent in parents)
+    return Commit(sha, tree["sha"], tuple(parent["sha"] for parent in parents))
+
+
+@dataclass(frozen=True)
+class _Run:
+    """What the environment of a run says of itself, admitted for one producer before any request:
+    the repository, the executing controller commit, the event, the managed caller and the kit."""
+
+    repository: str
+    controller: str
+    event: str
+    caller: grammar.WorkflowRef
+    kit: dict[str, str]
+
+
+def _run(invocation: Invocation, api: GitHubApi, *, producer: str, pull_request: bool) -> _Run:
+    repository = invocation.repository
+    controller = invocation.implementation_sha
+    check(api.repository == repository, "$.repository", "the API client serves another repository")
+    event = _environment(invocation, "GITHUB_EVENT_NAME")
+    check(event in run_events(producer, pull_request=pull_request), "$.event",
+          "a pull request subject needs the pull_request_target event and no other subject may use it; "
+          "only a status evaluation, always of a pull request, runs on the events of the status caller")
+    caller = grammar.parse_workflow_ref(_environment(invocation, "GITHUB_WORKFLOW_REF"))
+    check(caller.repository == repository and caller.path in run_workflows(producer, pull_request=pull_request),
+          "$.workflow_ref", "the run is not this repository's managed caller of the producer")
+    return _Run(repository, controller, event, caller,
+                {**invocation.kit, "tree_digest": kit_tree_digest(invocation.kit_root)})
+
+
+def _require_branch(invocation: Invocation, run: _Run, branch: str) -> None:
+    check(run.caller.branch == branch and _environment(invocation, "GITHUB_REF") == f"refs/heads/{branch}"
+          and invocation.config.canonical_branch == branch,
+          "$.ref", "the run, its caller and the mod's canonical branch must all be the default branch")
+
+
+def _test_merge(generation: PrGeneration) -> str:
+    """The commit GitHub tests for a pull request that is ready and has one."""
+
+    number = generation.pr_number
+    if generation.draft:
+        raise SubjectError(f"pull request {number} is a draft: the caller must defer, not call", reason="draft")
+    if generation.merge_sha is None:
+        raise SubjectError(f"pull request {number} has no test merge: it conflicts or is not computed yet",
+                           reason="no-test-merge")
+    return generation.merge_sha
+
+
+def _record(run: _Run, *, producer: str, pr_number: int | None, branch: str, controller_tree: str,
+            head_sha: str, head_branch: str, tested: Commit) -> dict[str, Any]:
+    """The identity record both ways of learning a subject end in, validated as one."""
+
+    subject = {
+        "repository": run.repository, "source_repository": run.repository, "pr_number": pr_number or 0,
+        "head_sha": head_sha, "head_branch": head_branch, "base_sha": run.controller, "base_branch": branch,
+        "controller_sha": run.controller, "controller_workflow": CI_CALLER_WORKFLOWS["build"],
+        "controller_ref": grammar.workflow_ref(run.repository, CI_CALLER_WORKFLOWS["build"], branch),
+        "kit": run.kit, "tested_sha": tested.sha, "tested_tree": tested.tree,
+        "tested_parents": list(tested.parents), "graph_version": BUILD_GRAPH_VERSION,
+    }
+    return validate_subject_record({"producer": producer, "event": run.event, "workflow_path": run.caller.path,
+                                    "controller_tree": controller_tree, "subject": subject})
 
 
 def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str,
@@ -165,57 +234,82 @@ def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: st
     here."""
 
     check(producer in SUBJECT_PRODUCERS, "$.producer", "must be build, packaged or status")
-    pull_request = pr_number is not None
-    repository = invocation.repository
-    controller = invocation.implementation_sha
-    check(api.repository == repository, "$.repository", "the API client serves another repository")
-    event = _environment(invocation, "GITHUB_EVENT_NAME")
-    check(event in run_events(producer, pull_request=pull_request), "$.event",
-          "a pull request subject needs the pull_request_target event and no other subject may use it; "
-          "only a status evaluation, always of a pull request, runs on the events of the status caller")
-    caller = grammar.parse_workflow_ref(_environment(invocation, "GITHUB_WORKFLOW_REF"))
-    check(caller.repository == repository and caller.path in run_workflows(producer, pull_request=pull_request),
-          "$.workflow_ref", "the run is not this repository's managed caller of the producer")
-    kit = {**invocation.kit, "tree_digest": kit_tree_digest(invocation.kit_root)}
-
-    if pull_request:
-        generation = read_pr_generation(api, pr_number=pr_number, controller_sha=controller)
-        if generation.draft:
-            raise SubjectError(f"pull request {pr_number} is a draft: the caller must defer, not call", reason="draft")
-        if generation.merge_sha is None:
-            raise SubjectError(f"pull request {pr_number} has no test merge: it conflicts or is not computed yet",
-                               reason="no-test-merge")
-        branch, controller_tree, tested = generation.base_branch, generation.controller_tree, generation.merge_sha
-        base_sha, head_sha, head_branch = generation.base_sha, generation.head_sha, generation.head_branch
-        # The subject rules below require these parents to be exactly [base, head], in that order.
-        tree, parents = _commit(api, tested)
+    run = _run(invocation, api, producer=producer, pull_request=pr_number is not None)
+    if pr_number is not None:
+        generation = read_pr_generation(api, pr_number=pr_number, controller_sha=run.controller)
+        branch, controller_tree = generation.base_branch, generation.controller_tree
+        head_sha, head_branch = generation.head_sha, generation.head_branch
+        # The subject rules require the parents of this commit to be exactly [base, head], in that order.
+        tested = _commit(api, _test_merge(generation))
     else:
         branch = default_branch(api)
         live = branch_head(api, branch)
-        if live[0] != controller:
+        if live[0] != run.controller:
             raise SubjectError("the protected default branch has moved past the executing commit",
                                reason="controller-moved")
-        controller_tree, head_branch = live[1], branch
-        tested = base_sha = head_sha = controller
-        tree, parents = _commit(api, tested)
-        check(tree == controller_tree and tested not in parents, "$.commit",
+        controller_tree, head_sha, head_branch = live[1], run.controller, branch
+        tested = _commit(api, run.controller)
+        check(tested.tree == controller_tree and tested.sha not in tested.parents, "$.commit",
               "the default branch and its commit object disagree")
         check(default_branch(api) == branch and branch_head(api, branch) == live, "$.controller_sha",
               "the protected default branch moved during authentication")
+    _require_branch(invocation, run, branch)
+    return _record(run, producer=producer, pr_number=pr_number, branch=branch, controller_tree=controller_tree,
+                   head_sha=head_sha, head_branch=head_branch, tested=tested)
 
-    check(caller.branch == branch and _environment(invocation, "GITHUB_REF") == f"refs/heads/{branch}"
-          and invocation.config.canonical_branch == branch,
-          "$.ref", "the run, its caller and the mod's canonical branch must all be the default branch")
-    subject = {
-        "repository": repository, "source_repository": repository, "pr_number": pr_number or 0,
-        "head_sha": head_sha, "head_branch": head_branch, "base_sha": base_sha, "base_branch": branch,
-        "controller_sha": controller, "controller_workflow": CI_CALLER_WORKFLOWS["build"],
-        "controller_ref": grammar.workflow_ref(repository, CI_CALLER_WORKFLOWS["build"], branch),
-        "kit": kit, "tested_sha": tested, "tested_tree": tree, "tested_parents": list(parents),
-        "graph_version": BUILD_GRAPH_VERSION,
-    }
-    return validate_subject_record({"producer": producer, "event": event, "workflow_path": caller.path,
-                                    "controller_tree": controller_tree, "subject": subject})
+
+def derive_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None,
+                   candidate: Path) -> dict[str, Any]:
+    """The identity record of a job that holds the candidate checkout, from one live request.
+
+    The record is the one :func:`authenticate_subject` returns for the same subject. Each part
+    comes from a source that is authentic on its own:
+
+    * the environment of the run, admitted as there before anything is read;
+    * the mod checkout the prologue verified: its ``HEAD`` must be the executing controller
+      commit, and the bytes of that commit give the controller tree;
+    * the candidate checkout ``candidate``: the bytes of its ``HEAD`` commit give the tested
+      commit, its tree and its ordered parents
+      (:func:`mod_base.build_ci.checkout.head_commit`: a commit is named by the hash of its
+      bytes, and no replacement, graft or shallow boundary takes part in reading them);
+    * one request, made last. For a pull request it is the pull request: open, not a draft, of
+      this repository, based on the canonical branch at the controller, and its current test
+      merge is the commit the candidate is at. For a protected subject it is the head of the
+      canonical branch, which must still be the executing commit both checkouts are at.
+
+    Two observations of :func:`authenticate_subject` are not made here: that the canonical branch
+    is the repository's default branch, and for a pull request that the controller is still the
+    head of that branch. A job therefore derives its subject only when it goes on to require the
+    plan hash of a job of its run that authenticated in full (``ci plan --expect-sha256``): the
+    hash covers the whole identity, so an equal hash proves this record equal to the authenticated
+    one. Whether both still hold is for the gate, which seals and authenticates in full again. A
+    status job holds no candidate checkout and is refused."""
+
+    check(producer in PRODUCERS, "$.producer", "only a Build or packaged job holds a candidate checkout")
+    run = _run(invocation, api, producer=producer, pull_request=pr_number is not None)
+    branch = invocation.config.canonical_branch
+    _require_branch(invocation, run, branch)
+    controller = head_commit(invocation.repo_root)
+    check(controller.sha == run.controller, "$.controller_sha",
+          "the mod checkout is not at the executing controller commit")
+    tested = head_commit(candidate)
+    if pr_number is not None:
+        generation = read_pr_on_base(api, pr_number=pr_number, base_branch=branch, controller_sha=controller.sha,
+                                     controller_tree=controller.tree)
+        head_sha, head_branch = generation.head_sha, generation.head_branch
+        check(tested.sha == _test_merge(generation), "$.candidate",
+              "the candidate checkout is not at the current test merge of the pull request")
+    else:
+        check(tested == controller, "$.candidate",
+              "the candidate checkout of a protected subject is not at the executing commit")
+        live = branch_head(api, branch)
+        if live[0] != controller.sha:
+            raise SubjectError("the protected default branch has moved past the executing commit",
+                               reason="controller-moved")
+        check(live[1] == controller.tree, "$.commit", "the default branch and its commit object disagree")
+        head_sha, head_branch = controller.sha, branch
+    return _record(run, producer=producer, pr_number=pr_number, branch=branch, controller_tree=controller.tree,
+                   head_sha=head_sha, head_branch=head_branch, tested=tested)
 
 
 def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str:

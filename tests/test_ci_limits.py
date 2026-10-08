@@ -126,6 +126,8 @@ KIT: dict[str, tuple[Any, str]] = {
                               "the inventory and the scenario contract; Quick Skin needs one (gradle.properties)"),
     "MAX_CI_IDENTITY_BYTES": (16 * KIB, "the private subject record of one job"),
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
+    "MAX_CI_DERIVED_SUBJECT_REQUESTS": (4, "API requests one subject derivation in a job that holds the candidate "
+                                           "checkout may spend: its one request and the retries of that request"),
     "MAX_CI_GATE_REQUESTS": (96, "API requests one `ci seal-gate` may spend: 15 for a Build gate, 20 for the "
                                  "packaged gate of a pull request and 47 for the gate of a reuse run, whatever the "
                                  "plan's size, and room for retries and further listing pages"),
@@ -137,8 +139,10 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),
     "MAX_CI_WORKER_RECORD_BYTES": (256 * KIB, "the private worker record of one job"),
     "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation without a candidate checkout may spend"),
-    "CI_GIT_READ_TIMEOUT_SECONDS": (60.0, "one object read from the candidate checkout"),
-    "MAX_CI_GIT_ANSWER_BYTES": (4 * KIB, "one object id or tree entry read from the candidate checkout"),
+    "CI_GIT_READ_TIMEOUT_SECONDS": (60.0, "one object read from a checkout of the job"),
+    "MAX_CI_GIT_ANSWER_BYTES": (4 * KIB, "one object id or tree entry read from a checkout of the job"),
+    "MAX_CI_GIT_COMMIT_BYTES": (1 * MIB, "one commit object read whole from a checkout of the job: header, "
+                                         "signature and message"),
     "MAX_CI_FETCH_BUILD_REQUESTS": (48, "API requests one `ci fetch-build` may spend: 21 for a pull request, the "
                                         "rest for retries and further listing pages"),
     "MAX_CI_GATE_STATUS_REQUESTS": (96, "API requests one `ci gate-status` may spend: 45 with both runs complete, "

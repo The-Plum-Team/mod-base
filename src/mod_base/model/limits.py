@@ -198,6 +198,10 @@ MAX_CI_IDENTITY_BYTES = 16 * KIB
 #: API requests of one ``ci subject``: a pull request costs 4, a protected subject 5; the rest is
 #: room for retried attempts.
 MAX_CI_SUBJECT_REQUESTS = 16
+#: API requests of one ``ci subject --candidate``, the subject of a job that holds the candidate
+#: checkout: one, the pull request or the head of the default branch; the rest is room for the
+#: retried attempts of that one request.
+MAX_CI_DERIVED_SUBJECT_REQUESTS = 4
 #: The private ``worker.json`` state record ``ci worker-prepare`` writes: the accounts, the tool
 #: receipt and at most ``MAX_CI_TOOL_ROOTS`` paths of ``MAX_CI_TOOL_PATH_BYTES`` each, twice.
 MAX_CI_WORKER_RECORD_BYTES = 256 * KIB
@@ -205,10 +209,13 @@ MAX_CI_WORKER_RECORD_BYTES = 256 * KIB
 #: candidate file, so 3 without extra plan inputs and at most 11; the rest is room for retried
 #: attempts. With a checkout it spends none.
 MAX_CI_PLAN_REQUESTS = 24
-#: One read (``rev-parse``, ``ls-tree``, ``cat-file``) of the candidate checkout's object store.
+#: One read (``rev-parse``, ``ls-tree``, ``cat-file``) of the object store of a job's checkout.
 CI_GIT_READ_TIMEOUT_SECONDS = 60.0
-#: What such a read answers besides a blob: one object id, or one tree entry with its path.
+#: What such a read answers besides an object: one object id, or one tree entry with its path.
 MAX_CI_GIT_ANSWER_BYTES = 4 * KIB
+#: One commit object read whole from a checkout: its header lines, a signature and its message.
+#: A squashed pull request carries its description and every commit subject, tens of KiB at most.
+MAX_CI_GIT_COMMIT_BYTES = 1 * MIB
 #: ``validation-input/``: the candidate files a plan is derived from (the inventory, the scenario
 #: contract and the extra plan inputs) and, once it exists, the plan.
 MAX_CI_PLAN_INPUT_FILES = 3 + MAX_CI_PLAN_INPUTS

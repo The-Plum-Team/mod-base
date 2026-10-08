@@ -38,13 +38,13 @@ import contextlib
 import hashlib
 import os
 import stat
-import subprocess
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mod_base.build_ci import adapter, identity, planning
+from mod_base.build_ci.checkout import read_objects
 from mod_base.build_ci.config import BuildConfig, load_build_config
 from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, ControllerSources,
                                           checkout_controller_sources, execute_controller_validator,
@@ -89,11 +89,6 @@ WORKER_NAME = "worker.json"
 PLAN_NAME = grammar.CI_PLAN_NAME
 #: ``ci worker-prepare --roles``: the accounts a job allocates, in allocation order.
 ROLE_SETS = {"validator": ("validator",), "candidate+validator": ("candidate", "validator")}
-_GIT = "/usr/bin/git"
-_GIT_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "HOME": "/nonexistent",
-            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
-            "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0",
-            "GIT_LITERAL_PATHSPECS": "1"}
 
 
 class LifecycleError(MbError):
@@ -425,24 +420,8 @@ def api_candidate_files(api: GitHubApi, job: Job) -> dict[str, bytes]:
     return {name: read(path) for name, path in adapter.plan_sources(job.config.data).items()}
 
 
-def _git(checkout: Path, *arguments: str, max_bytes: int) -> bytes:
-    """One read of the candidate checkout's object store: fixed program, environment and bound.
-
-    No template, hook, system or global configuration and no replacement object takes part, and
-    nothing is fetched. Only ``rev-parse``, ``ls-tree`` and ``cat-file`` are ever passed.
-    """
-
-    command = (_GIT, f"--git-dir={checkout / '.git'}", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
-               *arguments)
-    try:
-        completed = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, env=dict(_GIT_ENV), cwd="/",
-                                   timeout=limits.CI_GIT_READ_TIMEOUT_SECONDS, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise LifecycleError(f"git {arguments[0]} could not read the candidate checkout", reason="git") from error
-    if completed.returncode != 0 or len(completed.stdout) > max_bytes:
-        raise LifecycleError(f"git {arguments[0]} rejected the candidate checkout", reason="git")
-    return completed.stdout
+#: One read of the candidate checkout's object store: the closed Git every checkout is read with.
+_git = read_objects
 
 
 def checkout_candidate_files(checkout: Path, job: Job) -> dict[str, bytes]:
