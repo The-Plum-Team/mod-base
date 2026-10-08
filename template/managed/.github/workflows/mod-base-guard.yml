@@ -1,13 +1,14 @@
 # mod-base managed: guard workflow, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-guard.yml
 name: mod-base guard
 
-# The caller-owned defence of the managed Build and packaged E2E callers. Each calls it first and
-# as a local workflow, so GitHub lists this file in the run's referenced_workflows at the commit
-# the caller itself ran from: the controller commit, which a pull_request_target run names nowhere
-# else. Before any kit code runs, the one job admits the event, checks out the protected mod at
-# github.sha and binds the run to the single pin of its workflows: the pin this file was rendered
-# for, a released commit of the kit's main branch, and the only kit commit the run references.
-# It runs this shell and the mod's managed bootstrap, nothing else, and its token only reads.
+# The caller-owned defence of the managed Build, packaged E2E and gate status callers. Each calls
+# it first and as a local workflow, so GitHub lists this file in the run's referenced_workflows at
+# the commit the caller itself ran from: the controller commit, which a pull_request_target run
+# names nowhere else. Before any kit code runs, the one job admits the event, checks out the
+# protected mod at github.sha and binds the run to the single pin of its workflows: the pin this
+# file was rendered for, a released commit of the kit's main branch, and the only kit commit the
+# run references. It runs this shell and the mod's managed bootstrap, nothing else, and its token
+# only reads.
 on:
   workflow_call:
     inputs:
@@ -66,16 +67,26 @@ jobs:
             done
           }
           fail() { printf 'Pinned mod-base: %s\n' "$1" >&2; exit 1; }
-          # The event, the calling workflow and the kit workflows it declares are closed lists.
-          case "$GITHUB_EVENT_NAME" in
-            pull_request_target | push | workflow_dispatch) ;;
-            *) fail "the managed callers run only on pull_request_target, push or workflow_dispatch" ;;
-          esac
+          # The calling workflow, the kit workflows it declares and the events that start it are
+          # closed lists. The gate status caller tests nothing and is started by other events
+          # than the two callers whose runs it evaluates.
           case "$CALLEES" in
             build) caller=.github/workflows/mod-base-build.yml ;;
             "select-build build packaged-e2e") caller=.github/workflows/mod-base-packaged-e2e.yml ;;
+            gate-status) caller=.github/workflows/mod-base-gate-status.yml ;;
             *) fail "the calling workflow declares kit workflows outside the closed list" ;;
           esac
+          if [[ "$CALLEES" == gate-status ]]; then
+            case "$GITHUB_EVENT_NAME" in
+              workflow_run | pull_request_target | schedule | workflow_dispatch) ;;
+              *) fail "the gate status caller runs only on workflow_run, pull_request_target, schedule or workflow_dispatch" ;;
+            esac
+          else
+            case "$GITHUB_EVENT_NAME" in
+              pull_request_target | push | workflow_dispatch) ;;
+              *) fail "the Build and packaged E2E callers run only on pull_request_target, push or workflow_dispatch" ;;
+            esac
+          fi
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "malformed run identity"
           [[ "$MB_KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "this guard was rendered without a pin"
           default_branch="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY" --jq .default_branch)" ||

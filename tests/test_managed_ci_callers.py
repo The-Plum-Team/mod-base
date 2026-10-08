@@ -28,7 +28,7 @@ from typing import Any
 
 from mod_base import workflow
 from mod_base.build_ci import graph
-from mod_base.build_ci.activation import BUILD_CALLER, GUARD_CALLER, PACKAGED_CALLER
+from mod_base.build_ci.activation import BUILD_CALLER, GUARD_CALLER, PACKAGED_CALLER, STATUS_CALLER
 from mod_base.pin import Pin, parse_pin_files
 from mod_base.template import tool
 from tests.helpers import ci_activation
@@ -48,6 +48,11 @@ RUN_ID = "36042781699"
 TOKEN = "fixture-token"
 CALLERS = (GUARD_CALLER, BUILD_CALLER, PACKAGED_CALLER)
 PRODUCERS = {"build": BUILD_CALLER, "packaged": PACKAGED_CALLER}
+#: Every workflow that calls the guard: the two producers and the gate status caller, whose own
+#: policy is in ``tests/test_managed_status_caller.py``.
+GUARDED_CALLERS = {**PRODUCERS, "status": STATUS_CALLER}
+#: The events that start the status caller (the guard admits them for that caller alone).
+STATUS_EVENTS = ("workflow_run", "pull_request_target", "schedule", "workflow_dispatch")
 MODES = {"build": graph.BUILD_MODES, "packaged": graph.PACKAGED_MODES}
 LOCAL_GUARD = "./" + GUARD_CALLER
 NAMES = {GUARD_CALLER: "mod-base guard", BUILD_CALLER: "mod-base Build", PACKAGED_CALLER: "mod-base packaged E2E"}
@@ -105,16 +110,29 @@ GROUPS = {BUILD_CALLER: "build-gate-${{ github.workflow }}-" + REQUEST, PACKAGED
 CANCEL = "${{ github.event_name == 'pull_request_target' }}"
 
 
-def rendered(sha: str = KIT_SHA, version: str = VERSION, branch: str = BRANCH) -> dict[str, str]:
-    """The three callers as ``template sync`` writes them for a mod pinned at ``sha``/``version``
-    whose canonical branch is ``branch``."""
+def rendered(sha: str = KIT_SHA, version: str = VERSION, branch: str = BRANCH,
+             paths: tuple[str, ...] = CALLERS) -> dict[str, str]:
+    """The three callers (or ``paths``) as ``template sync`` writes them for a mod pinned at
+    ``sha``/``version`` whose canonical branch is ``branch``."""
 
     files = tool.expected_callers(ROOT, Pin(sha, version, ()), ci_activation("shadow"), branch)
-    return {path: files[path].decode("utf-8") for path in CALLERS}  # type: ignore[union-attr]
+    return {path: files[path].decode("utf-8") for path in paths}  # type: ignore[union-attr]
 
 
 def documents() -> dict[str, dict[str, Any]]:
     return {path: parse_yaml(text, path) for path, text in rendered().items()}
+
+
+def calls_of(caller: str) -> Mapping[str, str]:
+    """Calling job -> called workflow of a caller that calls the guard."""
+
+    return workflow.CI_STATUS_CALLS if caller == "status" else workflow.CI_CALLS[caller]
+
+
+def declared(caller: str) -> str:
+    """The ``callees`` a caller passes to the guard: the kit workflows it calls, in job order."""
+
+    return " ".join(callee for callee in calls_of(caller).values() if callee != "guard")
 
 
 def needed(job: Mapping[str, Any]) -> list[str]:
@@ -128,7 +146,7 @@ def kit_workflow(callee: str) -> str:
 
 # -- GitHub expressions -------------------------------------------------------------------------------
 
-_TOKEN = re.compile(r"\s*(?:(?P<string>'(?:[^']|'')*')|(?P<number>\d+)|(?P<op>==|!=|&&|\|\||[!(),.])"
+_TOKEN = re.compile(r"\s*(?:(?P<string>'(?:[^']|'')*')|(?P<number>\d+)|(?P<op>==|!=|&&|\|\||[!(),.\[\]])"
                     r"|(?P<name>[A-Za-z_][A-Za-z0-9_-]*))")
 _STATUS_CHECK = re.compile(r"\b(?:success|always|cancelled|failure)\(\)")
 _INTERPOLATION = re.compile(r"\$\{\{(.*?)\}\}")
@@ -181,8 +199,8 @@ def text_of(value: Any) -> str:
 
 class _Evaluation:
     """One evaluation of an expression: ``!``, ``==``, ``!=``, ``&&``, ``||``, parentheses,
-    literals, property access and function calls. Anything else fails the test, so a template that
-    starts to use another operator is not silently misread."""
+    literals, property access, a literal index and function calls. Anything else fails the test,
+    so a template that starts to use another operator is not silently misread."""
 
     def __init__(self, text: str, context: Mapping[str, Any], functions: Mapping[str, Any]) -> None:
         self.items: list[tuple[str, str]] = []
@@ -269,8 +287,15 @@ class _Evaluation:
         if text not in self.context:
             raise AssertionError(f"the callers do not read the {text} context")
         value = self.context[text]
-        while self.peek() == ("op", "."):
-            self.take()
+        while self.peek() in (("op", "."), ("op", "[")):
+            if self.take() == ("op", "["):
+                # A literal index, as GitHub reads it: null beyond the end or of anything but a list.
+                kind, index = self.take()
+                if kind != "number":
+                    raise AssertionError(f"the callers index a list with a literal number alone, not {index!r}")
+                self.take("]")
+                value = value[int(index)] if isinstance(value, list) and int(index) < len(value) else None
+                continue
             kind, name = self.take()
             if kind != "name":
                 raise AssertionError(f"malformed property {name!r}")
@@ -426,7 +451,19 @@ class ExpressionTests(unittest.TestCase):
             with self.subTest(expression=text):
                 self.assertEqual(evaluate(text, context), expected)
         self.assertEqual(interpolate("a-${{ github.run_id }}-${{ github.event.x }}-${{ true }}", context), "a-7--true")
-        for text in ("github.ref < 1", "always()", "secrets.TOKEN", "github.ref ==", "contains(github.ref, 'x')"):
+        # A literal index: the element, or null beyond the end and of anything that is no list.
+        listed = {"github": {"event": {"workflow_run": {"pull_requests": [{"number": 17}, {"number": 18}]}}}}
+        for text, expected in {"github.event.workflow_run.pull_requests[0].number": 17,
+                               "github.event.workflow_run.pull_requests[1].number": 18,
+                               "github.event.workflow_run.pull_requests[2].number": None,
+                               "github.event.workflow_run.pull_requests[2].number || 'none'": "none",
+                               "github.event.pull_request.labels[0].name": None,
+                               "github.event.workflow_run[0]": None}.items():
+            with self.subTest(expression=text):
+                self.assertEqual(evaluate(text, listed), expected)
+        for text in ("github.ref < 1", "always()", "secrets.TOKEN", "github.ref ==", "contains(github.ref, 'x')",
+                     "github.event.pull_requests[github.run_id]", "github.event.pull_requests['0']",
+                     "github.event.pull_requests[0", "github.event.pull_requests[*].number"):
             with self.subTest(unsupported=text), self.assertRaises(AssertionError):
                 evaluate(text, context)
 
@@ -492,13 +529,25 @@ class CallerStructureTests(unittest.TestCase):
                      "pull_request:", "schedule", "write", "id-token", "environment:", "continue-on-error",
                      "github.head_ref", "github.event.pull_request.head", "github.event.pull_request.title",
                      "github.event.pull_request.body", "actions/checkout", "job.workflow_sha")
+        # The guard names the two events that start the gate status caller alone, and nowhere but
+        # in the list it admits for that caller and in what it says when it refuses another event.
+        status_events = ("workflow_run", "schedule")
         for path, text in self.texts.items():
             for word in forbidden:
                 with self.subTest(path=path, word=word):
-                    self.assertNotIn(word, text)
+                    if path == GUARD_CALLER and word in status_events:
+                        self.assertEqual([line.strip() for line in text.splitlines() if word in line], [
+                            "workflow_run | pull_request_target | schedule | workflow_dispatch) ;;",
+                            '*) fail "the gate status caller runs only on workflow_run, pull_request_target, '
+                            'schedule or workflow_dispatch" ;;'])
+                    else:
+                        self.assertNotIn(word, text)
             with self.subTest(path=path):
                 self.assertNotIn("{{", text.replace("${{", ""), "no placeholder is left")
                 self.assertNotIn("\t", text)
+                self.assertNotIn("on:\n  workflow_run", text)
+                self.assertEqual(len(re.findall(r"^  (?:schedule|workflow_run):", text, re.MULTILINE)), 0,
+                                 "neither a producer nor the guard is started by those events")
 
     def test_jobs_are_the_registered_ones_in_order(self) -> None:
         for producer, path in PRODUCERS.items():
@@ -622,16 +671,25 @@ class CallerStructureTests(unittest.TestCase):
         script = step(self.documents[GUARD_CALLER]["jobs"]["verify"]["steps"], GUARD_STEP)["run"]
         arms = re.findall(r'^  (?:"([a-z0-9 -]+)"|([a-z0-9-]+))\) caller=(\S+) ;;$', script, re.MULTILINE)
         closed = {quoted or plain: path for quoted, plain, path in arms}
-        self.assertEqual((len(arms), script.count(" caller=")), (2, 2))
-        self.assertEqual(closed, {self.documents[path]["jobs"]["guard"]["with"]["callees"]:
-                                  workflow.CI_CALLER_WORKFLOWS[producer] for producer, path in PRODUCERS.items()})
+        self.assertEqual((len(arms), script.count(" caller=")), (3, 3))
+        self.assertEqual({callees: path for callees, path in closed.items() if path in PRODUCERS.values()},
+                         {self.documents[path]["jobs"]["guard"]["with"]["callees"]:
+                          workflow.CI_CALLER_WORKFLOWS[producer] for producer, path in PRODUCERS.items()})
+        # The third caller of the guard is the gate status caller, with the one kit workflow it calls.
+        self.assertEqual(closed, {declared(caller): workflow.CI_CALLER_WORKFLOWS[caller] for caller in GUARDED_CALLERS})
+        self.assertEqual(closed["gate-status"], STATUS_CALLER)
+        self.assertEqual(GUARDED_CALLERS, {caller: workflow.CI_CALLER_WORKFLOWS[caller]
+                                           for caller in (*workflow.CI_CALLS, "status")})
         self.assertEqual(set(PRODUCERS.values()), {workflow.CI_CALLER_WORKFLOWS[producer] for producer in workflow.CI_CALLS})
         self.assertIn(f'"$GITHUB_REPOSITORY/{workflow.CI_GUARD_WORKFLOW_PATH}"', script)
         self.assertIn(f'"{KIT}/.github/workflows/\\(.).yml@\\($kit)"', script)
         self.assertEqual(sorted({path.rsplit("/", 1)[1][:-4] for path in workflow.CI_CALLEE_WORKFLOWS.values()}),
                          sorted(workflow.CI_CALLEE_WORKFLOWS), "a callee id is its file name, as the guard assumes")
-        events = re.search(r"^  ([a-z_ |]+)\) ;;$", script, re.MULTILINE)
-        self.assertEqual(events.group(1).split(" | ") if events else None, list(EVENTS))
+        # Two closed lists of events: the status caller's first, then the two producers'.
+        events = re.findall(r"^    ([a-z_ |]+)\) ;;$", script, re.MULTILINE)
+        self.assertEqual([arm.split(" | ") for arm in events], [list(STATUS_EVENTS), list(EVENTS)])
+        self.assertEqual(script.count('if [[ "$CALLEES" == gate-status ]]; then'), 1)
+        self.assertEqual(len(re.findall(r"^\s+[a-z_ |]+\) ;;$", script, re.MULTILINE)), 2, "no third list")
 
     def test_the_retry_function_is_the_pages_caller_s(self) -> None:
         pattern = re.compile(r"(?ms)^protected_gh_api_retry\(\) \{.*?^\}\n")
@@ -770,8 +828,10 @@ def references(callees: tuple[str, ...], *, head: str = HEAD, kit: str = KIT_SHA
 
 
 def run_record(producer: str, name: str, **overrides: object) -> dict[str, Any]:
-    callees = tuple(callee for callee in workflow.CI_CALLS[producer].values() if callee != "guard")
-    run: dict[str, Any] = {"id": int(RUN_ID), "path": PRODUCERS[producer], "event": name, "head_sha": HEAD,
+    """The run of a caller that calls the guard (a producer or ``status``) as the API reports it."""
+
+    callees = tuple(declared(producer).split())
+    run: dict[str, Any] = {"id": int(RUN_ID), "path": GUARDED_CALLERS[producer], "event": name, "head_sha": HEAD,
                            "head_branch": BRANCH, "head_repository": {"full_name": REPOSITORY},
                            "referenced_workflows": references(callees)}
     if name == "pull_request_target":
@@ -814,12 +874,11 @@ class GuardCase(unittest.TestCase):
         self.output = self.root / "github_output"
 
     def environment(self, producer: str, name: str, **env: str) -> dict[str, str]:
-        callees = " ".join(callee for callee in workflow.CI_CALLS[producer].values() if callee != "guard")
         environment = {
-            "GH_TOKEN": TOKEN, "CALLEES": callees, "MB_KIT_SHA": KIT_SHA, "MB_KIT_VERSION": VERSION,
+            "GH_TOKEN": TOKEN, "CALLEES": declared(producer), "MB_KIT_SHA": KIT_SHA, "MB_KIT_VERSION": VERSION,
             "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_RUN_ID": RUN_ID, "GITHUB_SHA": HEAD,
             "GITHUB_REF": f"refs/heads/{BRANCH}", "GITHUB_EVENT_NAME": name,
-            "GITHUB_WORKFLOW_REF": f"{REPOSITORY}/{PRODUCERS[producer]}@refs/heads/{BRANCH}",
+            "GITHUB_WORKFLOW_REF": f"{REPOSITORY}/{GUARDED_CALLERS[producer]}@refs/heads/{BRANCH}",
             "GITHUB_SERVER_URL": "https://github.com", "GITHUB_OUTPUT": str(self.output),
             "STUB_GIT_SCRIPT": GIT_STUB_SCRIPT, "STUB_GIT_HEAD": HEAD,
             "STUB_PYTHON3_SCRIPT": BOOTSTRAP_STUB_SCRIPT, "STUB_PIN": f"{KIT_SHA} {VERSION}",
@@ -929,6 +988,13 @@ class GuardExecutionTests(GuardCase):
             "the packaged callees in another order": {"producer": "packaged",
                                                       "env": {"CALLEES": "build select-build packaged-e2e"}},
             "the Build callee declared by the packaged caller": {"producer": "packaged", "env": {"CALLEES": "build"}},
+            # The status caller's declaration admits its own events and its own workflow alone.
+            "the status callee declared by the Build caller on a push": {"env": {"CALLEES": "gate-status"}},
+            "the status callee declared by the Build caller on a dispatch": {
+                "name": "workflow_dispatch", "env": {"CALLEES": "gate-status"}},
+            "the status callee declared by the packaged caller": {
+                "producer": "packaged", "name": "pull_request_target", "env": {"CALLEES": "gate-status"}},
+            "the status callee after the Build callee": {"env": {"CALLEES": "build gate-status"}},
             "a callee list with a line break": {"env": {"CALLEES": "build\nbuild"}},
             "a malformed head": {"env": {"GITHUB_SHA": "HEAD"}},
             "a malformed run id": {"env": {"GITHUB_RUN_ID": "0"}},

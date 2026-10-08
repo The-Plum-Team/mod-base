@@ -10,10 +10,12 @@ fill the placeholders in. Composites never ``uses:`` a sibling and never read
 ``GITHUB_ACTION_REF``/``GITHUB_ACTION_REPOSITORY``.
 
 The Build/E2E caller templates are a closed list (:data:`ACTIVATION_CALLERS`): each may reference
-only the kit entry points listed for it, and only the Build and the packaged E2E caller may call
-the mod's own managed guard workflow, the one local ``uses:`` in the kit. Those two also hold the
-one other placeholder, ``{{BRANCH}}``, on the branch filter of their ``push`` trigger and nowhere
-else (:data:`BRANCH_LINE`); the guard itself is shell alone and has no ``uses:`` at all.
+only the kit entry points listed for it, and only the Build, the packaged E2E and the gate status
+caller may call the mod's own managed guard workflow, the one local ``uses:`` in the kit. The two
+producers also hold the one other placeholder, ``{{BRANCH}}``, on the branch filter of their
+``push`` trigger and nowhere else (:data:`BRANCH_LINE`); the guard itself is shell alone and has no
+``uses:`` at all. One caller uses a third-party action: the gate status caller mints its App
+token with ``actions/create-github-app-token``, at the reviewed pin and in that one place.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import re
 import unittest
 from pathlib import Path
 
-from tests.test_workflow_policy import (CALLEE_PATHS, CALLER_PATH, CHECKOUT, COMPOSITE_PATHS, COMPOSITES,
+from tests.test_workflow_policy import (APP_TOKEN, CALLEE_PATHS, CALLER_PATH, CHECKOUT, COMPOSITE_PATHS, COMPOSITES,
                                         DEPLOY_PAGES, PINNED_ACTIONS, ROOT, SETUP_PYTHON, UPLOAD, UPLOAD_PAGES)
 
 USES = re.compile(r"^\s*(?:-\s+)?uses:\s*(.*?)\s*$")
@@ -48,11 +50,16 @@ ACTIVATION_CALLERS = {
     BUILD_TEMPLATE: (".github/workflows/build.yml",),
     PACKAGED_TEMPLATE: (".github/workflows/select-build.yml", ".github/workflows/build.yml",
                         ".github/workflows/packaged-e2e.yml"),
-    STATUS_TEMPLATE: ("actions/setup",),
+    STATUS_TEMPLATE: (".github/workflows/gate-status.yml",),
 }
-#: The mod's own managed guard workflow, which only the Build and packaged E2E callers call.
+#: The mod's own managed guard workflow, which only the three callers that call the kit call.
 LOCAL_GUARD = "./.github/workflows/mod-base-guard.yml"
-GUARDED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE)
+GUARDED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE)
+#: Every other ``uses:`` of a Build/E2E caller template, in order: the App token of the gate status
+#: caller's publishing job and nothing else. A mod that manages the caller must keep Dependabot
+#: off that action (``template.tool``: the ignore list of ``.github/dependabot.yml``).
+ACTIVATION_ACTIONS = {GUARD_TEMPLATE: (), BUILD_TEMPLATE: (), PACKAGED_TEMPLATE: (),
+                      STATUS_TEMPLATE: (f"{APP_TOKEN} # v3.2.0",)}
 #: How often ``{{PIN}}`` (and ``{{VERSION}}``) appears in each: once per kit reference, and once in
 #: the guard, which carries the pin as the literal it verifies.
 ACTIVATION_PLACEHOLDERS = {GUARD_TEMPLATE: 1, BUILD_TEMPLATE: 1, PACKAGED_TEMPLATE: 3, STATUS_TEMPLATE: 1}
@@ -68,13 +75,15 @@ CANARY = ROOT / "canary"
 CANARY_CALLER = CANARY / ".github/workflows/pages.yml"
 PLACEHOLDERS = ("{{PIN}}", "{{VERSION}}")
 OWNED = [*CALLEE_PATHS.values(), CALLER_PATH, *COMPOSITE_PATHS.values()]
-#: Where each nested action may appear (a composite never deploys; only the caller deploys).
+#: Where each nested action may appear (a composite never deploys; only the caller deploys, and
+#: only the gate status caller mints an App token).
 PLACES = {
     CHECKOUT: {"publish.yml", "finalize.yml", "rotate.yml"},
     SETUP_PYTHON: {"publish.yml", "finalize.yml", "rotate.yml", "prepare-evidence", "publish-family"},
     UPLOAD: {"publish.yml", "finalize.yml", "prepare-evidence", "publish-family"},
     UPLOAD_PAGES: {"publish.yml"},
     DEPLOY_PAGES: {"pages.yml"},
+    APP_TOKEN: {"mod-base-gate-status.yml"},
 }
 
 
@@ -113,7 +122,8 @@ def pin_problem(path: Path, value: str) -> str | None:
     if path == CALLER_PATH and "mod-base" in value:
         return None if TEMPLATE_PIN.match(value) else "a caller kit reference must be @{{PIN}} # {{VERSION}}"
     if path in ACTIVATION_CALLERS and value == LOCAL_GUARD:
-        return None if path in GUARDED_CALLERS else "only the Build and packaged E2E callers call the guard"
+        return (None if path in GUARDED_CALLERS
+                else "only the Build, packaged E2E and gate status callers call the guard")
     if path in ACTIVATION_CALLERS and "mod-base" in value.lower():
         kit = CANARY_KIT_PIN.match(value)
         if kit is None:
@@ -152,8 +162,9 @@ class PinTests(unittest.TestCase):
             (PACKAGED_TEMPLATE, "The-Plum-Team/mod-base/.github/workflows/select-build.yml@{{PIN}} # {{VERSION}}"),
             (PACKAGED_TEMPLATE, "The-Plum-Team/mod-base/.github/workflows/packaged-e2e.yml@{{PIN}} # {{VERSION}}"),
             (PACKAGED_TEMPLATE, LOCAL_GUARD),
-            (STATUS_TEMPLATE, "The-Plum-Team/mod-base/actions/setup@{{PIN}} # {{VERSION}}"),
-            (STATUS_TEMPLATE, f"{CHECKOUT} # v7.0.1"),
+            (STATUS_TEMPLATE, "The-Plum-Team/mod-base/.github/workflows/gate-status.yml@{{PIN}} # {{VERSION}}"),
+            (STATUS_TEMPLATE, LOCAL_GUARD),
+            (STATUS_TEMPLATE, f"{APP_TOKEN} # v3.2.0"),
         }
         rejected = {
             # A canary kit reference is only ever the placeholder, never a real or tag pin...
@@ -182,13 +193,19 @@ class PinTests(unittest.TestCase):
             (BUILD_TEMPLATE, "The-Plum-Team/mod-base/.github/workflows/build.yml@main"),
             (BUILD_TEMPLATE, "the-plum-team/MOD-BASE/.github/workflows/build.yml@{{PIN}} # {{VERSION}}"),
             (PACKAGED_TEMPLATE, "The-Plum-Team/mod-base/actions/setup@{{PIN}} # {{VERSION}}"),
+            (PACKAGED_TEMPLATE, "The-Plum-Team/mod-base/.github/workflows/gate-status.yml@{{PIN}} # {{VERSION}}"),
             (STATUS_TEMPLATE, "The-Plum-Team/mod-base/.github/workflows/build.yml@{{PIN}} # {{VERSION}}"),
+            (STATUS_TEMPLATE, "The-Plum-Team/mod-base/actions/setup@{{PIN}} # {{VERSION}}"),
+            (STATUS_TEMPLATE, f"The-Plum-Team/mod-base/.github/workflows/gate-status.yml@{sha} # v1.0.0"),
             (GUARD_TEMPLATE, "The-Plum-Team/mod-base/actions/setup@{{PIN}} # {{VERSION}}"),
-            # ...and the guard is the only local workflow, called by the Build and packaged callers alone.
+            # ...a third-party action stays strictly pinned in a caller too...
+            (STATUS_TEMPLATE, "actions/create-github-app-token@v3"),
+            (STATUS_TEMPLATE, "actions/create-github-app-token@{{PIN}} # {{VERSION}}"),
+            # ...and the guard is the only local workflow, called by the three callers of the kit alone.
             (BUILD_TEMPLATE, "./.github/workflows/build-gate.yml"),
             (BUILD_TEMPLATE, "./.github/workflows/mod-base-guard.yml@main"),
+            (STATUS_TEMPLATE, "./.github/workflows/mod-base-build.yml"),
             (GUARD_TEMPLATE, LOCAL_GUARD),
-            (STATUS_TEMPLATE, LOCAL_GUARD),
             (CALLER_PATH, LOCAL_GUARD),
             (CALLEE_PATHS["publish"], LOCAL_GUARD),
             (canary, LOCAL_GUARD),
@@ -248,11 +265,14 @@ class PinTests(unittest.TestCase):
 
     def test_owned_files_use_exactly_the_reviewed_pins_in_their_places(self) -> None:
         seen = set()
-        for path in OWNED:
+        for path in (*OWNED, *ACTIVATION_CALLERS):
             for line in path.read_text(encoding="utf-8").splitlines():
                 match = USES.match(line)
                 if match is None or TEMPLATE_PIN.match(match.group(1)):
                     continue
+                value = match.group(1)
+                if path in ACTIVATION_CALLERS and (value == LOCAL_GUARD or CANARY_KIT_PIN.match(value)):
+                    continue  # the guard and the kit workflows of a Build/E2E caller, checked above
                 action, _, comment = match.group(1).partition(" # ")
                 with self.subTest(file=path.relative_to(ROOT).as_posix(), uses=action):
                     self.assertIn(action, PINNED_ACTIONS)
@@ -292,6 +312,7 @@ class PinTests(unittest.TestCase):
                      if path.parent == TEMPLATE_WORKFLOWS and "{{PIN}}" in path.read_text(encoding="utf-8")}
         self.assertEqual(templated, {CALLER_PATH, *ACTIVATION_CALLERS})
         self.assertEqual(set(ACTIVATION_PLACEHOLDERS), set(ACTIVATION_CALLERS))
+        self.assertEqual(set(ACTIVATION_ACTIONS), set(ACTIVATION_CALLERS))
         for path, references in ACTIVATION_CALLERS.items():
             lines = path.read_text(encoding="utf-8").splitlines()
             kit_uses = [match.group(1) for line in lines if (match := USES.match(line)) is not None
@@ -310,6 +331,9 @@ class PinTests(unittest.TestCase):
                                         line)
                 self.assertEqual(len(kit_uses), ACTIVATION_PLACEHOLDERS[path] - (path == GUARD_TEMPLATE))
                 self.assertEqual(LOCAL_GUARD in uses_values(path), path in GUARDED_CALLERS)
+                self.assertEqual([value for value in uses_values(path) if value != LOCAL_GUARD
+                                  and not CANARY_KIT_PIN.match(value)], list(ACTIVATION_ACTIONS[path]),
+                                 "no other action runs in a Build/E2E caller")
                 self.assertEqual([line for line in lines if BRANCH_PLACEHOLDER in line],
                                  [BRANCH_LINE] if path in BRANCHED_CALLERS else [])
                 self.assertLessEqual(set(TEMPLATE_TOKEN.findall("\n".join(lines))), {*PLACEHOLDERS, BRANCH_PLACEHOLDER},
@@ -317,7 +341,8 @@ class PinTests(unittest.TestCase):
         self.assertEqual(uses_values(GUARD_TEMPLATE), [], "the guard is shell alone")
 
     def test_the_branch_placeholder_stays_on_the_push_filter_of_the_two_producers(self) -> None:
-        self.assertEqual(set(BRANCHED_CALLERS), set(GUARDED_CALLERS), "the callers that run on a push")
+        self.assertEqual(set(BRANCHED_CALLERS), set(GUARDED_CALLERS) - {STATUS_TEMPLATE},
+                         "the callers that run on a push: the status caller never does")
         files = {*kit_yaml_files(), *(item for item in (ROOT / "template").rglob("*") if item.is_file())}
         self.assertTrue(set(BRANCHED_CALLERS) <= files)
         for path in sorted(files - set(BRANCHED_CALLERS)):

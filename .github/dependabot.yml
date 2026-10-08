@@ -11,6 +11,9 @@ updates:
   #   - template/managed/.github/workflows/pages.yml, the only user of actions/deploy-pages
   #     (tests/test_workflow_pins.py), together with its byte-identical copy
   #     canary/.github/workflows/pages.yml (tests/test_conformance.py);
+  #   - template/managed/.github/workflows/mod-base-gate-status.yml, the
+  #     only user of actions/create-github-app-token (tests/test_workflow_pins.py): the pin of the
+  #     one job that holds a mod's gate status App key, moved only after its new commit was reviewed;
   #   - canary/.github/workflows/canary-*.yml, whose actions/checkout and actions/setup-python pins
   #     must equal PINNED_ACTIONS (tests/test_conformance.py).
   - package-ecosystem: github-actions

@@ -303,17 +303,24 @@ class KitTemplateTest(unittest.TestCase):
         # Derived independently of the tool, as Quick Skin's repository guidance does: every action
         # the managed region pins moves only with a kit bump, so a Dependabot bump would be drift.
         managed = CALLER_TEMPLATE.read_text(encoding="utf-8").split(tool.MANAGED_END, 1)[0]
-        pinned = sorted(set(re.findall(r"^\s*(?:-\s+)?uses:\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/[^@\s]*)?@",
-                                       managed, re.MULTILINE)) - {"The-Plum-Team/mod-base"})
+        uses = re.compile(r"^\s*(?:-\s+)?uses:\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/[^@\s]*)?@", re.MULTILINE)
+        pinned = sorted(set(uses.findall(managed)) - {"The-Plum-Team/mod-base"})
         self.assertIn("actions/deploy-pages", pinned)
         manifest = tool.load_manifest(KIT_ROOT)
         entry = next(item for item in manifest["files"] if item["path"] == tool.DEPENDABOT_PATH)
         self.assertEqual(tool.pinned_actions(KIT_ROOT, manifest, entry),
                          tuple((name, ".github/workflows/pages.yml") for name in pinned))
+        # The Build/E2E callers a mod manages once it activates the shared gates pin an action
+        # too (the App token of the gate status caller): the seed ignores it from the start, so a
+        # seeded mod is clean in every activation mode.
+        activated = sorted({name for record in tool.RENDERED_CALLERS if record.modes is not None
+                            for name in uses.findall((TEMPLATE_ROOT / record.source).read_text(encoding="utf-8"))}
+                           - {"The-Plum-Team/mod-base"})
+        self.assertEqual(activated, ["actions/create-github-app-token"])
         seeded = (TEMPLATE_ROOT / "seed" / ".github" / "dependabot.yml.tmpl").read_text(encoding="utf-8")
         self.assertIn("\n    ignore:\n"
                       f'      - dependency-name: "{tool.DEPENDABOT_IGNORE}"\n'
-                      + "".join(f'      - dependency-name: "{name}"\n' for name in pinned)
+                      + "".join(f'      - dependency-name: "{name}"\n' for name in (*pinned, *activated))
                       + "    groups:\n", seeded)
 
     def test_the_staged_file_lock_is_maintained_by_its_module(self) -> None:
@@ -686,9 +693,11 @@ class CheckTest(TemplateCase):
         self.assertEqual(self.check(), [])
         flow = complete.replace('    ignore:\n      - dependency-name: "The-Plum-Team/mod-base*"\n'
                                 '      - dependency-name: "actions/deploy-pages"\n'
-                                "      - dependency-name: github/codeql-action\n",
+                                "      - dependency-name: github/codeql-action\n"
+                                '      - dependency-name: "actions/create-github-app-token"\n',
                                 '    ignore: [{dependency-name: "The-Plum-Team/mod-base*"}, '
-                                '{dependency-name: actions/deploy-pages}, {dependency-name: "github/codeql-action"}]\n')
+                                '{dependency-name: actions/deploy-pages}, {dependency-name: "github/codeql-action"}, '
+                                '{dependency-name: actions/create-github-app-token}]\n')
         self.assertNotEqual(flow, complete)
         dependabot.write_text(flow, encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])

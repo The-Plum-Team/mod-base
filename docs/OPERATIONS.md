@@ -312,6 +312,70 @@ restore any other managed file. On a `core.autocrlf=true` clone the callers chec
 until the managed `.gitattributes` lists them: add `/.github/workflows/mod-base-*.yml text eol=lf`
 to `.git/info/attributes`.
 
+### The gate status App
+
+The two protected gate contexts of a pull request (`contexts.build` and `contexts.packaged` of
+`scripts/ci/mod-base-build.json`, each with ` (shadow)` appended in `shadow`) are commit statuses
+that one job writes: `publish` of the managed `mod-base-gate-status.yml`, with an App token that
+can write commit statuses of the mod's repository and nothing else. Every mode that manages that
+caller (`shadow`, `shared-build`, `shared-build-and-e2e` and a rollback from one of them) needs
+three things in the mod's repository. **Creating them is an owner operation**; no workflow and no
+kit command does it, and until they exist every run of the caller fails in `publish` and
+publishes nothing (it can never publish a success instead).
+
+| What | Name | Value |
+|---|---|---|
+| environment | `mod-base-gate` | deployment branches: the default branch alone; no required reviewers and no wait timer (either would hold every status) |
+| variable of that environment | `MOD_BASE_GATE_APP_CLIENT_ID` | the client ID of the gate status App |
+| secret of that environment | `MOD_BASE_GATE_APP_PRIVATE_KEY` | a private key of that App (the PEM file) |
+
+The App has the one repository permission "Commit statuses: Read and write" and is installed on
+the mod's repository alone; Block Pops keeps the App that writes its `Trusted PR / ...` contexts
+today, Quick Skin gets a dedicated one. The branch restriction is not optional: it is the only
+thing that keeps the key from a workflow of another branch. Anyone who can push a branch can add
+a job there that names the environment and the secret; GitHub refuses such a job only because
+the environment admits the default branch alone. Keep the key in the environment, never as a
+repository or organization secret. With `R` the repository, `BRANCH` its default branch and
+`app.pem` the downloaded key:
+
+```bash
+gh api -X PUT "repos/$R/environments/mod-base-gate" --input - <<'JSON'
+{"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+JSON
+gh api -X POST "repos/$R/environments/mod-base-gate/deployment-branch-policies" -f name="$BRANCH" -f type=branch
+gh variable set MOD_BASE_GATE_APP_CLIENT_ID --repo "$R" --env mod-base-gate --body "$CLIENT_ID"
+gh secret set MOD_BASE_GATE_APP_PRIVATE_KEY --repo "$R" --env mod-base-gate < app.pem
+gh api "repos/$R/environments/mod-base-gate/deployment-branch-policies" --jq '.branch_policies[].name'   # exactly $BRANCH
+```
+
+Do this before the pull request that makes a mode manage the caller is merged, and in the same
+pull request add `actions/create-github-app-token` to the `ignore` list of every `github-actions`
+update in `.github/dependabot.yml` (`template check` names it; a mod seeded by this kit has it):
+the caller pins that action and it moves only with a kit bump. A ruleset that requires the two
+contexts names the App as their source (`integration_id`, as in
+[P1](#p1-ruleset-block-pops-master)), so that no other writer of a status with the same name
+satisfies it.
+
+The caller runs when a run of either gate caller is requested or has completed, on the pull
+request events that start those runs, once an hour for one open pull request in turn (of the ten
+most recently updated that are no drafts), and on request:
+
+```bash
+gh workflow run mod-base-gate-status.yml --repo "$R" --ref "$BRANCH" -f pr-number=<N>   # evaluate and publish again
+```
+
+`evaluate` is read-only and decides the states; `publish` writes exactly those on the head the
+evaluation names, after it read the live pull request again. It does not write a status again
+while the newest one of that context on that commit is the App's own and says exactly the same:
+GitHub keeps at most 1000 statuses of one context on one commit, and the caller runs for every
+event and every hour. A status it published as a success stays on that commit: GitHub has no way
+to withdraw it, so a later failure is a new status, and a run that fails or is superseded
+publishes nothing. A finished gate run is verified against the
+plan of the pull request as it is now, on the commit of the default branch the status run
+executes. Once the default branch has moved past the base the pull request was tested on, that
+generation is gone: `evaluate` fails in `ci subject`, nothing is published and the statuses stay
+as they were. Update the pull request to start a new generation.
+
 ## Canary procedure
 
 The canary is a separate public caller repository, so it exercises exactly the cross-repository

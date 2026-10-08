@@ -41,9 +41,12 @@ SETUP_PYTHON = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
 UPLOAD = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 UPLOAD_PAGES = "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9"
 DEPLOY_PAGES = "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128"
+#: The one action of the managed gate status caller: its publishing job mints the statuses-only
+#: App token with it (the pin Block Pops reviewed for its own status writer).
+APP_TOKEN = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"
 #: The reviewed nested pins (verified against both mods' workflows) and their version comments.
 PINNED_ACTIONS = {CHECKOUT: "v7.0.1", SETUP_PYTHON: "v7.0.0", UPLOAD: "v7.0.1", UPLOAD_PAGES: "v5.0.0",
-                  DEPLOY_PAGES: "v5.0.0"}
+                  DEPLOY_PAGES: "v5.0.0", APP_TOKEN: "v3.2.0"}
 
 #: SPEC §1.2 step 6: every step that does not call the API first unsets every credential...
 SCRUB = ("unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN "

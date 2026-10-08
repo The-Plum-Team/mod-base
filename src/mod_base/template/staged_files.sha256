@@ -1,7 +1,7 @@
 a2762dc1f34d57b2f7be02c0cc46c26518ce7a6850fe409c047769496a0ec9a3  ./template/managed/.gitattributes
 f6f237842205a47dd542ae657d4fa84b3c6b15e619a011e1b26c0542d2eeed2d  ./template/managed/.github/workflows/mod-base-build.yml
-86d25a697864ec5ec9c49f362ab01fe99d163f5c9785d260b413dee684b7bb08  ./template/managed/.github/workflows/mod-base-gate-status.yml
-d56662a0ab491a346e536a5dc201805588d82635b41ce4c39d1310097adc0b75  ./template/managed/.github/workflows/mod-base-guard.yml
+5a9bcc7ee686169ed4b807986252f86b8892ce539048c94ac0c09de8c3763677  ./template/managed/.github/workflows/mod-base-gate-status.yml
+39eb62809ec3737142e31d96ad9375837940d476ec9169ed4eba8e0dce6fe248  ./template/managed/.github/workflows/mod-base-guard.yml
 e1eff004630dfa4dc9d6b6b1f0993c316a2cf501fc9b00da8c11cdfb598b60f0  ./template/managed/.github/workflows/mod-base-packaged-e2e.yml
 bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/managed/.github/workflows/pages.yml
 9b3aef4f40e08a64d004e67809b55641cf323b23ccbe32623e4940903d4c60a7  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
@@ -9,7 +9,7 @@ bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/man
 c53e0b90b37544302890c2d22d7ba97c2f43403fc61a93bd3e9c168bfffe4c46  ./template/managed/scripts/ci/mod_base_kit.py
 da20b92010d9b9f083cf88d84ffad931d391336dfbfb0154d66f0be8d38c945b  ./template/manifest.json
 f52062f61bc044645c13ecbe926b672253834dfaca3c03dfb14d3682d78a88eb  ./template/seed/.github/CODEOWNERS.tmpl
-0e6bfc5a7783036fb43a585b5222f5a752b86695c255fa3ece3bc5d4e2f5d5c4  ./template/seed/.github/dependabot.yml.tmpl
+4efaee51617f8a2ba20172388e645de146ea99d03711917b003648c06fd2117c  ./template/seed/.github/dependabot.yml.tmpl
 a23e56ed234d6f38c630966561dfb8e95541c9eb9d2cf0b1ff278f379ac73cd8  ./template/seed/.github/pull_request_template.md.tmpl
 cdab786ca1430ec68e7b6c7dde71bd669367189805fb9a37381ee1c33be9eb0e  ./template/seed/.gitignore.base
 557fee3e0ffc0c8495f37276aaca2c9255e971fe8baf12dabb7aeba22339576e  ./template/seed/AGENTS.md.tmpl

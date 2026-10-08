@@ -1105,10 +1105,11 @@ class DependabotTest(unittest.TestCase):
                     scanned |= {match.group(1).partition(" # ")[0]
                                 for match in map(USES.match, path.read_text(encoding="utf-8").splitlines()) if match}
         by_hand = sorted(action.split("@")[0] for action in set(PINNED_ACTIONS) - scanned)
-        self.assertEqual(by_hand, ["actions/deploy-pages"])
+        self.assertEqual(by_hand, ["actions/create-github-app-token", "actions/deploy-pages"])
         for action in by_hand:
             self.assertIn(f"only user of {action}", text)
         self.assertIn("template/managed/.github/workflows/pages.yml", text)
+        self.assertIn("template/managed/.github/workflows/mod-base-gate-status.yml", text)
         self.assertIn("canary/.github/workflows/canary-*.yml", text)
 
 

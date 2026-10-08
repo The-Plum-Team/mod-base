@@ -187,9 +187,11 @@ sandbox against a malicious adapter:
   that installs it with `pip install --user` (Block Pops' credentialless sandbox) reaches the kit's
   isolated children only through the user-site rule of "The mod adapter" above.
 - Dependabot ignores `The-Plum-Team/mod-base*` and every third-party action the caller's managed
-  region pins (`actions/deploy-pages`), which `template check` requires from the kit's own template;
-  the only bump path is the bootstrap's `bump`, which verifies the release before editing and
-  re-synchronizes the managed files.
+  region pins (`actions/deploy-pages`) or a managed Build/E2E caller pins
+  (`actions/create-github-app-token`, in the one job of the gate status caller that holds the
+  mod's App key), which `template check` requires from the kit's own templates; the only bump path
+  is the bootstrap's `bump`, which verifies the release before editing and re-synchronizes the
+  managed files.
 
 ### The published site
 

@@ -724,8 +724,7 @@ class KitCallerTemplatesTest(unittest.TestCase):
                 self.assertRegex(text.splitlines()[0],
                                  r"^# mod-base managed: .+, edit only in The-Plum-Team/mod-base template/managed/"
                                  + path.replace(".", r"\.") + "$")
-                self.assertEqual(text.splitlines()[1].startswith("# PROVISIONAL: "), path == STATUS,
-                                 "only the status caller is still a synthetic stand-in, and it says so")
+                self.assertNotIn("PROVISIONAL", text, "no caller is a stand-in any more")
                 self.assertEqual(f'    branches: ["{BRANCH}"]' in text.splitlines(), path in (BUILD, PACKAGED),
                                  "the Build and the packaged E2E caller run on a push to the canonical branch")
         found = parse_pin_files(expected)
@@ -747,18 +746,21 @@ class KitCallerTemplatesTest(unittest.TestCase):
 
     def test_the_callers_have_the_jobs_and_references_of_the_architecture(self) -> None:
         """The shape the other cases of this module rely on. ``test_managed_ci_callers`` holds the
-        policy of the guard, the Build caller and the packaged E2E caller."""
+        policy of the guard, the Build caller and the packaged E2E caller, and
+        ``test_managed_status_caller`` that of the gate status caller."""
 
         documents = {path: parse_yaml(data.decode("utf-8"), path) for path, data in real_callers().items()}
         for path, document in documents.items():
             with self.subTest(path=path):
                 self.assertEqual(document["permissions"], {})
-                self.assertNotIn("secrets", json.dumps(document))
+                # One job of one caller names one secret: the status caller's publishing job.
+                self.assertEqual(json.dumps(document).count("secrets"), int(path == STATUS))
         events = ["pull_request_target", "push", "workflow_dispatch"]
         self.assertEqual({path: document["on"] if isinstance(document["on"], str) else list(document["on"])
                           for path, document in documents.items()},
-                         {GUARD: ["workflow_call"], BUILD: events, PACKAGED: events, STATUS: "workflow_dispatch"},
-                         "the status caller, still provisional, runs on no event")
+                         {GUARD: ["workflow_call"], BUILD: events, PACKAGED: events,
+                          STATUS: ["workflow_run", "pull_request_target", "schedule", "workflow_dispatch"]},
+                         "the status caller runs whenever the answer for a pull request may have changed")
         guard = documents[GUARD]
         self.assertEqual(list(guard["on"]["workflow_call"]["outputs"]), ["kit-sha"])
         self.assertEqual(guard["env"], {"MB_KIT_SHA": SHA, "MB_KIT_VERSION": VERSION})
@@ -778,15 +780,23 @@ class KitCallerTemplatesTest(unittest.TestCase):
                           "select": ("Select exact Build", f"{kit}select-build.yml@{SHA}"),
                           "rebuild": ("Shared Build", f"{kit}build.yml@{SHA}"),
                           "shared": ("Shared Packaged E2E", f"{kit}packaged-e2e.yml@{SHA}")})
-        for jobs in (build, packaged):
+        status = documents[STATUS]["jobs"]
+        self.assertEqual({name: (job["name"], job.get("uses")) for name, job in status.items()},
+                         {"guard": ("Verify pinned mod-base", local),
+                          "locate": ("Locate the pull request", None),
+                          "evaluate": ("Evaluate protected gates", f"{kit}gate-status.yml@{SHA}"),
+                          "publish": ("Publish protected gate statuses", None)})
+        self.assertEqual({name: job["name"] for name, job in status.items()}, workflow.CI_CALLER_JOBS["status"])
+        for jobs in (build, packaged, status):
             for name, job in jobs.items():
                 if "uses" in job and name != "guard":
                     self.assertEqual(job["with"]["kit-sha"], "${{ needs.guard.outputs.kit-sha }}", name)
-        status = documents[STATUS]["jobs"]
-        self.assertEqual({name: job["name"] for name, job in status.items()},
-                         {"evaluate": "Evaluate protected gates", "publish": "Publish protected gate statuses"})
-        self.assertEqual([step.get("uses") for step in status["evaluate"]["steps"]],
-                         [f"The-Plum-Team/mod-base/actions/setup@{SHA}"])
+        # The one action a caller runs: the App token of the status caller's publishing job.
+        token = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"
+        self.assertEqual({(path, name): [step["uses"] for step in job.get("steps", []) if "uses" in step]
+                          for path, document in documents.items() for name, job in document["jobs"].items()
+                          if any("uses" in step for step in job.get("steps", []))},
+                         {(STATUS, "publish"): [token]})
 
     def test_the_rendered_callers_pass_actionlint(self) -> None:
         require_tools("actionlint", "shellcheck")

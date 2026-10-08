@@ -132,7 +132,7 @@ for its mode plus those callee jobs.
 | --- | --- | --- |
 | Build, `mod-base-build.yml` | "Verify pinned mod-base", "Build deferred for draft", "Shared Build" | `build.yml`: "Plan protected Build", "Verify protected policy", "Compile target {id}", "Seal complete Build bundle", "Verify complete Build" |
 | Packaged E2E, `mod-base-packaged-e2e.yml` | "Verify pinned mod-base", "Packaged E2E deferred for draft", "Select exact Build", "Shared Build" (only when a non-PR selection found nothing), "Shared Packaged E2E" | `select-build.yml`: "Select exact Build source". `build.yml` as above. `packaged-e2e.yml`: "Authenticate exact Build", "Run packaged lane {id}", "Seal complete packaged results", "Verify complete packaged E2E" |
-| Status, `mod-base-gate-status.yml` | "Evaluate protected gates", "Publish protected gate statuses" | none |
+| Status, `mod-base-gate-status.yml` | "Verify pinned mod-base", "Locate the pull request", "Evaluate protected gates", "Publish protected gate statuses" | `gate-status.yml`: "Evaluate gate states" (read-only, one pull request; no secret). The publishing job is the caller's own and runs no kit code |
 
 "Verify pinned mod-base" calls the mod's own managed `mod-base-guard.yml`. The callee job and step
 names are constants of `mod_base.workflow`; the mods' job listings of today are in

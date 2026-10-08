@@ -61,17 +61,18 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 - Managed files, by activation only: four caller workflows (`.github/workflows/mod-base-guard.yml`,
   `mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`) become managed
   files of a mod whose activation mode lists them. They are not template-manifest entries and no
-  mod without an activation manifest receives or is asked for one. The guard, the Build caller and
-  the packaged E2E caller are the reviewed workflows; the status caller is still a provisional
-  stand-in, and the managed `.gitattributes` has no `eol=lf` rule for the four yet.
+  mod without an activation manifest receives or is asked for one. All four are the reviewed
+  workflows; the managed `.gitattributes` has no `eol=lf` rule for them yet.
   - `mod-base-guard.yml` is a local reusable workflow (input `callees`, output `kit-sha`) that the
-    two producers call first, so the run lists it in `referenced_workflows` at the commit the
-    caller ran from. Its one job, shell alone with a read-only token, admits the event
-    (`pull_request_target`, `push`, `workflow_dispatch`, always for the default branch), checks
-    out the protected mod at `github.sha` without persisting a credential, requires the single pin
-    the bootstrap reads there to be the pin the guard was rendered for and a released commit of
-    the kit's main branch (`mod_base_kit.py verify --network`), and requires the run to reference
-    nothing but this guard at `github.sha` and the caller's own kit workflows at the pin.
+    two producers and the gate status caller call first, so the run lists it in
+    `referenced_workflows` at the commit the caller ran from. Its one job, shell alone with a
+    read-only token, admits the event (`pull_request_target`, `push`, `workflow_dispatch` for a
+    producer; `workflow_run`, `pull_request_target`, `schedule`, `workflow_dispatch` for the status
+    caller; always for the default branch), checks out the protected mod at `github.sha` without
+    persisting a credential, requires the single pin the bootstrap reads there to be the pin the
+    guard was rendered for and a released commit of the kit's main branch
+    (`mod_base_kit.py verify --network`), and requires the run to reference nothing but this guard
+    at `github.sha` and the caller's own kit workflows at the pin.
   - `mod-base-build.yml` (workflow `mod-base Build`) and `mod-base-packaged-e2e.yml` (workflow
     `mod-base packaged E2E`) run on `pull_request_target` (`opened`, `synchronize`, `reopened`,
     `ready_for_review`, `converted_to_draft`), on a push to the canonical branch and on
@@ -80,6 +81,25 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
     or a manual request (`select-build.yml`) and calls `build.yml` itself only when none exists; a
     pull request waits for its separate Build run. A new generation of a pull request cancels the
     one before it; nothing else is cancelled while it runs.
+  - `mod-base-gate-status.yml` (workflow `mod-base gate status`) is the only writer of the two
+    protected gate contexts. It runs when a run of either producer is requested or has completed
+    (`workflow_run`), on the same five pull request events as the producers, once an hour for one
+    open pull request in turn (of the ten most recently updated that are no drafts) and on
+    `workflow_dispatch` with a pull request number. Jobs: `guard`; `locate` (shell, read-only
+    token: the pull request of the event, or none); `evaluate` (the kit's `gate-status.yml`,
+    read-only, no secret); `publish`, which runs only after a successful evaluation that returned a
+    document. `publish` is the one job that names an environment (`mod-base-gate`), a variable
+    (`MOD_BASE_GATE_APP_CLIENT_ID`) and a secret (`MOD_BASE_GATE_APP_PRIVATE_KEY`): it mints an
+    App token that can write commit statuses of this repository and nothing else
+    (`actions/create-github-app-token`, pinned), admits the document as a whole or not at all,
+    reads the live pull request again (open, the evaluated head, the default branch of this
+    repository, no draft unless every status is pending) and posts one status for each gate, a
+    state that is no success first and none that the App already shows unchanged (GitHub keeps at
+    most 1000 statuses of one context on one commit). A run waits for the run before it of the
+    same pull request and is never cancelled by a newer one. **An owner creates the environment,
+    the variable and the secret** (docs/OPERATIONS.md, "The gate status App"), and a mod that
+    manages this caller makes `.github/dependabot.yml` ignore `actions/create-github-app-token`
+    (`template check` names it; the seed already does).
   - A caller that is rendered whole may hold a third placeholder, `{{BRANCH}}`, which
     `template sync|init` fill in with `canonical_branch` of `site/mod-base.json`: GitHub reads the
     branch filter of a `push` trigger as a literal. A caller whose branch differs from the
