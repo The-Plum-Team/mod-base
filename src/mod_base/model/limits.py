@@ -365,8 +365,6 @@ MAX_CI_ROOT_REQUEST_BYTES = (2 * MAX_CI_SOURCE_LIST_BYTES + MAX_CI_PLAN_BYTES + 
                              + MAX_CI_RUNTIME_ENVELOPE_BYTES + MAX_CI_RECORD_BYTES + 2 * MIB)
 # Complete logical closure, including every legal directory prefix and the envelope.
 MAX_CI_RUNTIME_ENTRIES = (MAX_CI_RUNTIME_AGGREGATE_FILES + 1) * (MAX_BUNDLE_PATH_DEPTH + 1) + 1
-# Private original input parent plus independently bounded Build/runtime child closures.
-MAX_CI_ORIGINAL_INPUT_ENTRIES = MAX_CI_EXPORT_ENTRIES + MAX_CI_RUNTIME_ENTRIES + 1
 MAX_CI_REPORT_BYTES = 4 * MIB
 # Original Build input reports and new validator-output reports have separate contracts.
 MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE = {"quick-skin": 4 * MIB, "block-pops": 8 * MIB}

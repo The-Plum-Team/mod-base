@@ -768,7 +768,6 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_BUNDLE_COMPRESSED_BYTES`: 512 MiB archive cap of one `mb-ci-*` artifact of any kind and profile (`tests/test_ci_limits.py` pins every Build/E2E bound with the native bound it preserves).
 * `MAX_CI_EXPORT_FILES`, `MAX_CI_EXPORT_ENTRIES`, `MAX_CI_EXPORT_FILE_BYTES`, `MAX_CI_EXPORT_TREE_BYTES`
 * `MAX_CI_TARGET_DOWNLOAD_BYTES`, `MAX_CI_TARGET_INPUT_ENTRIES`: Additional aggregate compressed-download and physical wrapped-input bounds; do not widen native/runtime fan-in or original logical export limits.
-* `MAX_CI_ORIGINAL_INPUT_ENTRIES`: original Build/runtime private parent plus the two existing bounded child closures.
 * `MAX_CI_RUNTIME_ENTRIES`: complete runtime logical tree closure, derived from existing file/path bounds.
 * `MAX_CI_RUNTIME_AGGREGATE_FILES`, `MAX_CI_RUNTIME_AGGREGATE_BYTES`, `MAX_CI_RUNTIME_ENVELOPE_BYTES`: original Block Pops aggregate and closed envelope bounds.
 * `MAX_CI_RUNTIME_FILES`, `MAX_CI_RUNTIME_BYTES`, `MAX_CI_REPORT_BYTES`, `MAX_CI_LOG_BYTES`
@@ -2502,8 +2501,6 @@ and its last.
 * `def download_merged_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, controller_sha: str, merged_sha: str, temporary_root: Path) -> dict[str, Any]`: The same for one original PR seal after merge, under historical admission of the merged pull request; original producer identities are preserved. No reuse or settlement effect is approved.
 * `def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Read both original tested seals once and require the packaged gate's owning Build to be the Build gate's bundle. Never a partial result or reuse authority; a seal or source artifact that is gone raises `OriginalUnavailable`.
 * `def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: Privately materialize the exact original complete Build bundle of a coherent historical seal pair, observing the pair's mutable state again inside the atomic publication.
-* `def download_merged_runtime(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: The same for the pair's complete results aggregate, bound to the original owning Build. The extracted source is verified against the bound envelope once more inside the atomic copy, so a source replaced after binding is never published.
-* `def download_merged_inputs(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Publish both under fixed private build/runtime children after one final admission. Each child must carry the very envelope that was bound when its archive was extracted; either failure publishes neither.
 
 ## `mod_base.build_ci.describe`
 

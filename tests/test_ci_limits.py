@@ -239,8 +239,6 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
     "MAX_CI_RUNTIME_ENTRIES": (
         69_650, "every aggregate file and the envelope with all their parent directories, and the root",
         lambda: (limits.MAX_CI_RUNTIME_AGGREGATE_FILES + 1) * (limits.MAX_BUNDLE_PATH_DEPTH + 1) + 1),
-    "MAX_CI_ORIGINAL_INPUT_ENTRIES": (89_651, "a Build export, a runtime export and their parent",
-                                      lambda: limits.MAX_CI_EXPORT_ENTRIES + limits.MAX_CI_RUNTIME_ENTRIES + 1),
     "MAX_CI_EXECUTION_LOG_CHARS": (22_369_624, "the base64 length of a full log",
                                    lambda: 4 * ((limits.MAX_CI_LOG_BYTES + 2) // 3)),
     "MAX_CI_EXECUTION_BYTES": (22_435_160, "that log and 64 KiB of record",

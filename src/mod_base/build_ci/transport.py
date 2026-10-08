@@ -22,7 +22,6 @@ from __future__ import annotations
 import contextlib
 import functools
 import hashlib
-import itertools
 import os
 import re
 import tempfile
@@ -41,8 +40,7 @@ from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.reads import CommandReads, Watch
 from mod_base.build_ci.records import (bind_build_envelope, bind_gate_receipt, bind_results_index,
                                        validate_descriptor)
-from mod_base.build_ci.runtime_exports import (_materialize_runtime_export, materialize_runtime_export,
-                                               verify_runtime_export)
+from mod_base.build_ci.runtime_exports import verify_runtime_export
 from mod_base.build_ci.runtime_schema import bind_runtime_envelope
 from mod_base.build_ci.validation import verify_validation_export
 from mod_base.errors import MbError, Unavailable
@@ -275,37 +273,6 @@ def _materialize_build(reads: CommandReads, descriptor: dict[str, Any], plan: di
             return envelope
     except OSError as error:
         raise MbError("cannot materialize private Build download", reason="ci-transport") from error
-
-
-def _materialize_runtime(reads: CommandReads, descriptor: dict[str, Any], owning_build: dict[str, Any],
-                         plan: dict[str, Any], output: Path,
-                         before_publish: Callable[[], None] | None) -> dict[str, Any]:
-    """Download an authenticated complete results aggregate by id and publish a verified private copy.
-
-    What is published is what was bound: with ``before_publish`` the extracted source is verified
-    against the bound envelope once more inside the atomic copy; without it the copy is a child of
-    the caller's own unpublished stage and must carry the bound envelope."""
-
-    data = _download(reads, descriptor)
-    try:
-        with tempfile.TemporaryDirectory(prefix="mb-ci-runtime-", dir=output.parent) as temporary:
-            root = Path(temporary) / "export"
-            extract_runtime(data, root, scope="complete")
-            del data
-            envelope = verify_runtime_export(root, plan=plan)
-            bind_runtime_envelope(envelope, descriptor=descriptor, owning_build=owning_build, plan=plan)
-            changed = "original runtime bytes changed before publication"
-            if before_publish is None:
-                check(materialize_runtime_export(root, output, plan=plan) == envelope, "$.envelope", changed)
-                return envelope
-
-            def admitted() -> None:
-                check(verify_runtime_export(root, plan=plan) == envelope, "$.envelope", changed)
-                before_publish()
-
-            return _materialize_runtime_export(root, output, plan=plan, before_publish=admitted)
-    except OSError as error:
-        raise MbError("cannot materialize private runtime download", reason="ci-transport") from error
 
 
 def _download_build(reads: CommandReads, watch: Watch, descriptor: dict[str, Any], plan: dict[str, Any],
@@ -723,13 +690,6 @@ def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any
     return documents
 
 
-def _results(packaged: dict[str, Any]) -> dict[str, Any]:
-    aggregates = [descriptor for descriptor in packaged["artifacts"]
-                  if grammar.parse_ci_artifact_name(descriptor["artifact"]["name"]).kind == "results"]
-    check(len(aggregates) == 1, "$.artifacts", "requires exactly one original complete runtime aggregate")
-    return aggregates[0]
-
-
 def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any],
                           packaged_descriptor: dict[str, Any], plan: dict[str, Any],
                           controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]:
@@ -750,67 +710,3 @@ def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any],
     build, _ = _merged_pair(reads, watch, build_descriptor=build_descriptor, packaged_descriptor=packaged_descriptor,
                             plan=plan, merged=merged, temporary_root=output.parent)
     return _materialize_build(reads, build["artifacts"][0], plan, output, watch.recheck)
-
-
-def download_merged_runtime(api: GitHubApi, *, build_descriptor: dict[str, Any],
-                            packaged_descriptor: dict[str, Any], plan: dict[str, Any],
-                            controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]:
-    """Copy the coherent original pair's complete results bytes, retaining all original identities.
-
-    Independently admit private writer-excluded output ancestry and the original plan. Native
-    runtime/Build validation, actual owning Build bytes, newest eligible sources, original/current
-    policy and pin and later consumer/writer admission remain mandatory. This reader activates no
-    reuse, native success, status or settlement authority.
-    """
-
-    check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
-    plan, build_descriptor, packaged_descriptor, merged = _pair_inputs(
-        build_descriptor=build_descriptor, packaged_descriptor=packaged_descriptor, plan=plan,
-        controller_sha=controller_sha, merged_sha=merged_sha)
-    reads, watch = CommandReads.of(api), Watch()
-    build, packaged = _merged_pair(reads, watch, build_descriptor=build_descriptor,
-                                   packaged_descriptor=packaged_descriptor, plan=plan, merged=merged,
-                                   temporary_root=output.parent)
-    return _materialize_runtime(reads, _results(packaged), build["artifacts"][0], plan, output, watch.recheck)
-
-
-def download_merged_inputs(api: GitHubApi, *, build_descriptor: dict[str, Any],
-                           packaged_descriptor: dict[str, Any], plan: dict[str, Any],
-                           controller_sha: str, merged_sha: str,
-                           output: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Publish exact original Build/runtime bytes together under one final coherent admission.
-
-    Fixed private children are build and runtime. Neither is published as a caller output if
-    either read or the final admission fails. Caller owns private ancestry and excludes writers;
-    native domain validity, policy/pin/newest-source/consumer and effect authority remain separate.
-    """
-
-    check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
-    plan, build_descriptor, packaged_descriptor, merged = _pair_inputs(
-        build_descriptor=build_descriptor, packaged_descriptor=packaged_descriptor, plan=plan,
-        controller_sha=controller_sha, merged_sha=merged_sha)
-    reads, watch = CommandReads.of(api), Watch()
-    build, packaged = _merged_pair(reads, watch, build_descriptor=build_descriptor,
-                                   packaged_descriptor=packaged_descriptor, plan=plan, merged=merged,
-                                   temporary_root=output.parent)
-    bundle, results = build["artifacts"][0], _results(packaged)
-
-    def writer(stage: Path, stage_fd: int) -> tuple[dict[str, Any], dict[str, Any]]:
-        build_root, runtime_root = stage / "build", stage / "runtime"
-        build_envelope = _materialize_build(reads, bundle, plan, build_root, None)
-        runtime_envelope = _materialize_runtime(reads, results, bundle, plan, runtime_root, None)
-        watch.recheck()
-        validate_tree_entries(stage, max_entries=limits.MAX_CI_ORIGINAL_INPUT_ENTRIES)
-        with os.scandir(stage) as entries:
-            names = sorted(entry.name for entry in itertools.islice(entries, 3))
-        check(names == ["build", "runtime"], "$.inputs", "combined inputs differ from fixed private children")
-        check(verify_build_export(build_root, plan=plan) == build_envelope,
-              "$.build", "original Build bytes changed before combined publication")
-        check(verify_runtime_export(runtime_root, plan=plan) == runtime_envelope,
-              "$.runtime", "original runtime bytes changed before combined publication")
-        return build_envelope, runtime_envelope
-
-    try:
-        return atomic_directory(output, writer)
-    except OSError as error:
-        raise MbError("cannot publish private original Build/runtime inputs", reason="ci-transport") from error

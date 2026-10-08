@@ -23,7 +23,6 @@ from unittest.mock import patch
 from mod_base.build_ci import adapter, runtime_inputs, transport, validation
 from mod_base.build_ci.exports import verify_build_export
 from mod_base.build_ci.protocol import plan_sha256
-from mod_base.build_ci.reads import CommandReads
 from mod_base.build_ci.runtime_exports import verify_runtime_export
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
@@ -771,18 +770,6 @@ class RoundTripTests(UploadCase):
         for index, (_, sealed) in enumerate(expected):
             self.assertEqual(tree(output / f"target-{index}"), sealed)
 
-    def test_a_lane_reaches_the_runtime_reader(self) -> None:
-        world = World()
-        arguments, export, detached = self.uploaded(world.plan, "verify_runtime", "lane-a")
-        descriptor = world.publish(world.describe("packaged", "pull-request", "runtime", export, unit_id="lane-a"),
-                                   export)
-        output = self.temporary / "lane"
-        envelope = transport._materialize_runtime(CommandReads.of(world.api), descriptor,
-                                                  arguments["envelope"]["owning_build"], world.plan, output, None)
-        self.assertEqual(envelope, arguments["envelope"])
-        self.assertEqual(tree(output), tree(self.export))
-        self.assertEqual(verify_runtime_export(output, plan=world.plan), envelope)
-        self.assert_detached_verification(arguments, detached, self.record)
 
 
 if __name__ == "__main__":
