@@ -348,6 +348,16 @@ row adds. Every rejection is an `MbError`: exit code 2 and one bounded line on s
 | A target, a lane or a batch member is missing | `ci assemble` and `ci aggregate` require exactly one artifact of their own attempt for every planned unit, and a gate one native receipt for every planned unit. `ci batch-settle` refuses a batch whose rebuilt commits differ from its manifest |
 | A Pages, AI review or notification failure | Outside this pipeline: no `ci` command reads or writes Pages state, and the Pages workflows are unchanged |
 
+Hook timeouts and job deadlines are separate bounds. The configuration's six-hour maximum is
+per hook, not a promise that every admitted configuration fits a whole job; the job deadline
+remains authoritative and a timed-out job cannot produce a successful gate. The generic test
+configuration permits a 60-minute policy hook inside a 60-minute job and a 120-minute target hook
+inside a 120-minute job, before setup, planning and verification. The packaged input job permits
+a 10-minute planning hook plus a 90-minute Build wait inside 100 minutes. This distinction is
+retained deliberately as `CiConfiguredTimeoutTests.test_no_admitted_hook_timeout_is_as_long_as_the_job_that_runs_it`
+in `tests/test_workflow_ci_policy.py` (`expectedFailure`). No adapter timing has been measured for
+the mods: choosing their budgets and setup margin belongs to K7 and the Q/B migrations.
+
 ## Request budget
 
 The token of a workflow run may send 1,000 REST requests an hour for its repository. Every

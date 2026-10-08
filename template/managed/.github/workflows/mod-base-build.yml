@@ -8,6 +8,7 @@ name: mod-base Build
 # and passes none on; candidate code runs only inside the kit's sandbox, without any token.
 on:
   pull_request_target:
+    branches: ["{{BRANCH}}"]
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: ["{{BRANCH}}"]

@@ -10,6 +10,7 @@ name: mod-base packaged E2E
 # file holds no secret and passes none on.
 on:
   pull_request_target:
+    branches: ["{{BRANCH}}"]
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: ["{{BRANCH}}"]
@@ -19,10 +20,12 @@ permissions: {}
 
 # A new generation of a pull request (a push, a draft conversion, a readiness event) cancels the
 # one before it. A push to the default branch waits for the generation before it and replaces an
-# older one that is still waiting; a manual request has a group of its own.
+# older one that is still waiting; a manual request has a group of its own. The group carries the
+# name of this workflow: a mod's own packaged E2E workflow, which runs beside this one in shadow
+# mode, takes packaged-e2e-<pull request or ref>, and neither may cancel the other's run.
 concurrency:
   group: >-
-    packaged-e2e-${{ github.event.pull_request.number ||
+    packaged-e2e-${{ github.workflow }}-${{ github.event.pull_request.number ||
     (github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.ref, github.run_id)) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 

@@ -116,8 +116,9 @@ class StatusCallerStructureTests(unittest.TestCase):
         self.assertNotIn(NAME, NAMES.values(), "no name of a workflow whose runs start this one")
         self.assertNotIn("{{", self.text.replace("${{", ""), "no placeholder is left")
         self.assertNotIn("\t", self.text)
-        self.assertEqual(rendered(branch="release/1.21", paths=(STATUS_CALLER,))[STATUS_CALLER], self.text,
-                         "nothing of this caller changes with the canonical branch")
+        self.assertEqual(rendered(branch="release/1.21", paths=(STATUS_CALLER,))[STATUS_CALLER],
+                         self.text.replace('    branches: ["master"]', '    branches: ["release/1.21"]'),
+                         "only the pull request base filter changes with the canonical branch")
 
     def test_the_four_triggers_are_exactly_the_specified_ones(self) -> None:
         triggers = self.document["on"]
@@ -132,14 +133,14 @@ class StatusCallerStructureTests(unittest.TestCase):
             self.assertIn(gate["name"], triggers["workflow_run"]["workflows"])
             # The same five kinds of event that start a generation of the gates start its evaluation.
             self.assertEqual(triggers["pull_request_target"], gate["on"]["pull_request_target"])
-        self.assertEqual(triggers["pull_request_target"], {"types": PR_TYPES})
+        self.assertEqual(triggers["pull_request_target"], {"branches": [BRANCH], "types": PR_TYPES})
         self.assertEqual(triggers["schedule"], [{"cron": CRON}])
         self.assertRegex(CRON, r"^[0-5]?[0-9] \* \* \* \*$", "once an hour")
         self.assertNotEqual(CRON, workflow.PAGES_CRON, "not in the minute of the Pages caller")
         self.assertEqual(triggers["workflow_dispatch"], {"inputs": {"pr-number": {
             "description": "The pull request whose gate statuses are evaluated and published again",
             "required": "true", "type": "string"}}})
-        for absent in ("push:", "pull_request:", "issue_comment", "repository_dispatch", "workflow_call", "branches"):
+        for absent in ("push:", "pull_request:", "issue_comment", "repository_dispatch", "workflow_call"):
             self.assertNotIn(absent, self.text)
 
     def test_no_permission_at_the_top_level_and_only_read_grants_below(self) -> None:

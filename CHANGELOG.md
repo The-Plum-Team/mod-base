@@ -103,7 +103,11 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
     request gets the deferral job alone. The packaged caller selects an existing Build for a push
     or a manual request (`select-build.yml`) and calls `build.yml` itself only when none exists; a
     pull request waits for its separate Build run. A new generation of a pull request cancels the
-    one before it; nothing else is cancelled while it runs.
+    one before it; nothing else is cancelled while it runs. Pull request triggers of all three
+    callers filter to the canonical base branch, so another-base run under the same head cannot
+    supersede the protected generation. Both concurrency groups carry the name
+    of their workflow (`build-gate-<workflow>-…`, `packaged-e2e-<workflow>-…`), so neither is the
+    group of a mod's own Build or packaged E2E workflow, which runs beside the callers in `shadow`.
   - `mod-base-gate-status.yml` (workflow `mod-base gate status`) is the only writer of the two
     protected gate contexts. It runs when a run of either producer is requested or has completed
     (`workflow_run`), on the same five pull request events as the producers, once an hour for one

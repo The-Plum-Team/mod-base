@@ -17,6 +17,7 @@ on:
     workflows: ["mod-base Build", "mod-base packaged E2E"]
     types: [requested, completed]
   pull_request_target:
+    branches: ["{{BRANCH}}"]
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   schedule:
     - cron: "17 * * * *"

@@ -35,12 +35,14 @@ from typing import Any
 
 from mod_base import cli, workflow
 from mod_base.adapter import protocol
+from mod_base.build_ci import adapter as build_adapter
 from mod_base.build_ci import graph, planning
+from mod_base.build_ci.config import validate_build_config
 from mod_base.errors import MbError
 from mod_base.model import grammar
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json
-from tests.helpers import ci_plan, ci_selection
+from tests.helpers import ci_config, ci_plan, ci_selection
 from tests.test_tree_digest_literal import (GIT_STUB, SHELL, digest_block, make_kit, reference_digest,
                                             update_tree_digest)
 from tests.test_workflow_pins import uses_values
@@ -983,6 +985,45 @@ class CiCommandLineTests(unittest.TestCase):
             with self.subTest(step=label):
                 self.assertEqual(environment, {**dict.fromkeys(AMBIENT), "GH_TOKEN": token, "PYTHONPATH": source,
                                                **ISOLATION})
+
+
+class CiConfiguredTimeoutTests(unittest.TestCase):
+    """The generic config fixture admits hook budgets that need not fit a whole job.
+
+    ``tests.helpers.ci_config`` grants policy 3600 seconds in a 60-minute job and target 7200
+    in a 120-minute job, before planning, setup and verification. This is a schema/workflow
+    observation, not a measurement of either mod's adapter.
+    """
+
+    def hooks(self, name: str, job_id: str, job: Mapping[str, Any]) -> list[str]:
+        """The adapter hooks a job runs: the ones its steps name, and the planning hook of ``ci plan``."""
+
+        named = set(re.findall(r"--hook ([a-z_]+)", "\n".join(item.get("run", "") for item in job["steps"])))
+        if "plan" in workflow.CI_JOB_VERBS[name][job_id]:
+            named.add("derive_plan")
+        self.assertLessEqual(named, set(build_adapter.HOOKS), f"{name}/{job_id} names a hook the contract lacks")
+        return sorted(named)
+
+    # Decision: the six-hour schema cap bounds each hook, not the whole job. The job deadline
+    # remains authoritative and fails closed; adapter timing and margin need K7/Q/B measurements.
+    # Retain this expected failure as the documented distinction: docs/BUILD-PROTOCOL.md#failures.
+    @unittest.expectedFailure
+    def test_no_admitted_hook_timeout_is_as_long_as_the_job_that_runs_it(self) -> None:
+        granted = []
+        jobs = 0
+        for name, job_id, job in iter_ci_jobs():
+            seconds = int(job["timeout-minutes"]) * 60
+            for hook in self.hooks(name, job_id, job):
+                jobs += 1
+                document = ci_config()
+                document["timeouts"][build_adapter.HOOKS[hook].timeout] = seconds
+                try:
+                    validate_build_config(document)
+                except MbError:
+                    continue
+                granted.append(f"{name}/{job_id}: {hook} may run for all {seconds} seconds of its job")
+        self.assertGreater(jobs, 0)
+        self.assertEqual(granted, [])
 
 
 if __name__ == "__main__":

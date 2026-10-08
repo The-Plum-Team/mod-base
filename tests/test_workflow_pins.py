@@ -11,9 +11,9 @@ fill the placeholders in. Composites never ``uses:`` a sibling and never read
 
 The Build/E2E caller templates are a closed list (:data:`ACTIVATION_CALLERS`): each may reference
 only the kit entry points listed for it, and only the Build, the packaged E2E and the gate status
-caller may call the mod's own managed guard workflow, the one local ``uses:`` in the kit. The two
-producers also hold the one other placeholder, ``{{BRANCH}}``, on the branch filter of their
-``push`` trigger and nowhere else (:data:`BRANCH_LINE`); the guard itself is shell alone and has no
+caller may call the mod's own managed guard workflow, the one local ``uses:`` in the kit. Those
+three callers hold the other placeholder, ``{{BRANCH}}``, on their pull request base filters, and
+the two producers also on their ``push`` filters (:data:`BRANCH_LINE`); the guard is shell alone and has no
 ``uses:`` at all. One caller uses a third-party action: the gate status caller mints its App
 token with ``actions/create-github-app-token``, at the reviewed pin and in that one place.
 """
@@ -64,11 +64,11 @@ ACTIVATION_ACTIONS = {GUARD_TEMPLATE: (), BUILD_TEMPLATE: (), PACKAGED_TEMPLATE:
 #: the guard, which carries the pin as the literal it verifies.
 ACTIVATION_PLACEHOLDERS = {GUARD_TEMPLATE: 1, BUILD_TEMPLATE: 1, PACKAGED_TEMPLATE: 3, STATUS_TEMPLATE: 1}
 GUARD_LITERALS = ('  MB_KIT_SHA: "{{PIN}}"', '  MB_KIT_VERSION: "{{VERSION}}"')
-#: The mod's canonical branch: GitHub reads the branch filter of a ``push`` trigger as a literal,
-#: so the two producers carry it as a placeholder on exactly this line, once.
+#: The canonical branch filters pull request bases in all three callers and pushes in the two
+#: producers. GitHub reads these as literals, so each filter carries this placeholder line.
 BRANCH_PLACEHOLDER = "{{BRANCH}}"
 BRANCH_LINE = '    branches: ["{{BRANCH}}"]'
-BRANCHED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE)
+BRANCHED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE)
 #: Any ``{{...}}`` token that is no GitHub expression.
 TEMPLATE_TOKEN = re.compile(r"(?<!\$)\{\{[^{}]*\}\}")
 CANARY = ROOT / "canary"
@@ -334,15 +334,15 @@ class PinTests(unittest.TestCase):
                 self.assertEqual([value for value in uses_values(path) if value != LOCAL_GUARD
                                   and not CANARY_KIT_PIN.match(value)], list(ACTIVATION_ACTIONS[path]),
                                  "no other action runs in a Build/E2E caller")
-                self.assertEqual([line for line in lines if BRANCH_PLACEHOLDER in line],
-                                 [BRANCH_LINE] if path in BRANCHED_CALLERS else [])
+                filters = 2 if path in (BUILD_TEMPLATE, PACKAGED_TEMPLATE) else 1 if path == STATUS_TEMPLATE else 0
+                self.assertEqual([line for line in lines if BRANCH_PLACEHOLDER in line], [BRANCH_LINE] * filters)
                 self.assertLessEqual(set(TEMPLATE_TOKEN.findall("\n".join(lines))), {*PLACEHOLDERS, BRANCH_PLACEHOLDER},
                                      "the three placeholders are a closed set")
         self.assertEqual(uses_values(GUARD_TEMPLATE), [], "the guard is shell alone")
 
-    def test_the_branch_placeholder_stays_on_the_push_filter_of_the_two_producers(self) -> None:
-        self.assertEqual(set(BRANCHED_CALLERS), set(GUARDED_CALLERS) - {STATUS_TEMPLATE},
-                         "the callers that run on a push: the status caller never does")
+    def test_the_branch_placeholder_is_confined_to_the_three_guarded_callers(self) -> None:
+        self.assertEqual(set(BRANCHED_CALLERS), set(GUARDED_CALLERS),
+                         "all three callers filter pull request bases to the canonical branch")
         files = {*kit_yaml_files(), *(item for item in (ROOT / "template").rglob("*") if item.is_file())}
         self.assertTrue(set(BRANCHED_CALLERS) <= files)
         for path in sorted(files - set(BRANCHED_CALLERS)):

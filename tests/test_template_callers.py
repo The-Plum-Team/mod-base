@@ -725,8 +725,8 @@ class KitCallerTemplatesTest(unittest.TestCase):
                                  r"^# mod-base managed: .+, edit only in The-Plum-Team/mod-base template/managed/"
                                  + path.replace(".", r"\.") + "$")
                 self.assertNotIn("PROVISIONAL", text, "no caller is a stand-in any more")
-                self.assertEqual(f'    branches: ["{BRANCH}"]' in text.splitlines(), path in (BUILD, PACKAGED),
-                                 "the Build and the packaged E2E caller run on a push to the canonical branch")
+                self.assertEqual(f'    branches: ["{BRANCH}"]' in text.splitlines(), path in (BUILD, PACKAGED, STATUS),
+                                 "all three callers filter pull request bases to the canonical branch")
         found = parse_pin_files(expected)
         self.assertEqual((found.sha, found.version), (SHA, VERSION))
         self.assertEqual({reference.split("@")[0] for reference in found.references}, {BUILD, PACKAGED, STATUS})

@@ -106,8 +106,19 @@ CONDITIONS = {
 }
 REQUEST = ("${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && "
            "format('{0}-{1}', github.ref, github.run_id)) || github.ref }}")
-GROUPS = {BUILD_CALLER: "build-gate-${{ github.workflow }}-" + REQUEST, PACKAGED_CALLER: "packaged-e2e-" + REQUEST}
+GROUPS = {BUILD_CALLER: "build-gate-${{ github.workflow }}-" + REQUEST,
+          PACKAGED_CALLER: "packaged-e2e-${{ github.workflow }}-" + REQUEST}
 CANCEL = "${{ github.event_name == 'pull_request_target' }}"
+#: The concurrency groups of the mods' own Build and packaged E2E workflows (Quick Skin's two, then
+#: Block Pops' two; docs/BUILD-E2E-DESIGN.md, "Evidence and current behavior"). Each cancels a run
+#: in progress, and in shadow mode each runs beside the managed caller of the same pull request.
+_OWN_SUBJECT = "inputs.expected_sha || inputs.attest_target_sha || github.event.pull_request.number || github.ref"
+OWN_GROUPS = (
+    "build-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
+    "packaged-e2e-${{ github.event.pull_request.number || github.ref }}",
+    "build-gate-${{ " + _OWN_SUBJECT + " }}",
+    "packaged-e2e-${{ " + _OWN_SUBJECT + " }}",
+)
 
 
 def rendered(sha: str = KIT_SHA, version: str = VERSION, branch: str = BRANCH,
@@ -497,7 +508,7 @@ class CallerStructureTests(unittest.TestCase):
             with self.subTest(path=path):
                 triggers = self.documents[path]["on"]
                 self.assertEqual(list(triggers), list(EVENTS))
-                self.assertEqual(triggers["pull_request_target"], {"types": PR_TYPES})
+                self.assertEqual(triggers["pull_request_target"], {"branches": [BRANCH], "types": PR_TYPES})
                 self.assertEqual(triggers["push"], {"branches": [BRANCH]})
                 self.assertEqual(triggers["workflow_dispatch"], {})
         guard = self.documents[GUARD_CALLER]["on"]
@@ -508,14 +519,24 @@ class CallerStructureTests(unittest.TestCase):
         self.assertEqual({name: value["value"] for name, value in guard["workflow_call"]["outputs"].items()},
                          {"kit-sha": "${{ jobs.verify.outputs.kit-sha }}"})
 
-    def test_the_push_branch_is_the_canonical_branch_and_nothing_else_changes_with_it(self) -> None:
+    def test_the_event_base_is_the_canonical_branch_and_nothing_else_changes_with_it(self) -> None:
         other = rendered(branch="release/1.21")
         for path, text in self.texts.items():
             with self.subTest(path=path):
                 changed = [(old, new) for old, new in zip(text.splitlines(), other[path].splitlines()) if old != new]
-                expected = [] if path == GUARD_CALLER else [('    branches: ["master"]', '    branches: ["release/1.21"]')]
+                expected = [] if path == GUARD_CALLER else [
+                    ('    branches: ["master"]', '    branches: ["release/1.21"]')] * 2
                 self.assertEqual(changed, expected)
         self.assertEqual(parse_yaml(other[BUILD_CALLER], "build")["on"]["push"], {"branches": ["release/1.21"]})
+
+    def test_a_pull_request_against_another_base_creates_no_competing_run(self) -> None:
+        # A head can belong to two pull requests. A run rejected for the other base would be
+        # newest under that head and prevent selection of the honest default-base generation.
+        for path, text in rendered(paths=tuple(GUARDED_CALLERS.values())).items():
+            trigger = parse_yaml(text, path)["on"]["pull_request_target"]
+            with self.subTest(caller=path):
+                self.assertEqual(trigger.get("branches"), [BRANCH])
+                self.assertNotIn("release/other", trigger["branches"])
 
     def test_no_permission_at_the_top_level_and_only_read_grants_below(self) -> None:
         for path, document in self.documents.items():
@@ -628,7 +649,7 @@ class CallerStructureTests(unittest.TestCase):
         for producer, path in PRODUCERS.items():
             concurrency = self.documents[path]["concurrency"]
             self.assertEqual(concurrency, {"group": GROUPS[path], "cancel-in-progress": CANCEL})
-            prefix = {"build": "build-gate-mod-base Build-", "packaged": "packaged-e2e-"}[producer]
+            prefix = {"build": "build-gate-mod-base Build-", "packaged": "packaged-e2e-mod-base packaged E2E-"}[producer]
             name = self.documents[path]["name"]
             cases = {
                 "pull_request_target": (f"{prefix}17", "true"),
@@ -643,6 +664,27 @@ class CallerStructureTests(unittest.TestCase):
             other = {"github": {**event("pull_request_target", draft=True, number=18), "workflow": name}}
             self.assertEqual(interpolate(concurrency["group"], other), f"{prefix}18", "one group per pull request")
         self.assertNotIn("concurrency", self.documents[GUARD_CALLER])
+
+    def test_no_group_is_one_a_mod_s_own_gate_workflow_takes(self) -> None:
+        """In shadow mode the mod's own Build and packaged E2E run beside the managed callers and
+        stay authoritative. In a shared group the run that starts second cancels the other one of
+        the same pull request, and a push to the default branch waits behind the other's."""
+
+        subjects = {"pull_request_target": "17", "push": f"refs/heads/{BRANCH}", "workflow_dispatch": f"refs/heads/{BRANCH}"}
+        self.assertEqual(tuple(subjects), EVENTS)
+        for name_of_event, subject in subjects.items():
+            github = event(name_of_event, draft=False)
+            own = {interpolate(group, {"github": {**github, "workflow": own_name}, "inputs": {}})
+                   for group in OWN_GROUPS for own_name in ("Build gate", "Packaged E2E")}
+            self.assertEqual(own, {f"build-gate-Build gate-{subject}", f"build-gate-Packaged E2E-{subject}",
+                                   f"build-gate-{subject}", f"packaged-e2e-{subject}"})
+            for producer, path in PRODUCERS.items():
+                document = self.documents[path]
+                managed = interpolate(document["concurrency"]["group"],
+                                      {"github": {**github, "workflow": document["name"]}})
+                with self.subTest(producer=producer, event=name_of_event):
+                    self.assertNotIn(managed, own)
+                    self.assertIn(document["name"], managed, "the group names the managed workflow")
 
     def test_event_data_reaches_shell_only_through_env(self) -> None:
         environments = {
