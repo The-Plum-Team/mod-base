@@ -185,6 +185,6 @@ def run_fetch_build(args: argparse.Namespace) -> int:
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_FETCH_BUILD_REQUESTS)
     selection.fetch_build(api, record=document, plan=plan, run_id=run_id, run_attempt=run_attempt,
                           workflow_path=record["workflow_path"], event=record["event"],
-                          output=exports.BUILD_VALIDATION_ROOT, source_config_sha256=config.sha256)
+                          output=Path(exports.BUILD_VALIDATION_ROOT), source_config_sha256=config.sha256)
     identity.write_state_record(args.state, selection.SELECTION_NAME, canonical_json(document))
     return 0
