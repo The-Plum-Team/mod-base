@@ -739,11 +739,112 @@ class SelectBuildTests(unittest.TestCase):
                 self.assertIsNone(self.select(world, Path(directory), sleep=sleep))
                 self.assertEqual(list(Path(directory).iterdir()), [])
             sleep.assert_not_called()
-        world = World(push=True)
-        world.add_run("build", "build-full", status="in_progress", conclusion=None)
-        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(MbError, "has not completed"):
+            # The subject (3), the listing and, for a finished reuse run, the run and its jobs.
+            self.assertEqual(world.api.request_count, 4 if listing is None else 6)
+
+    def test_a_protected_subject_waits_for_its_sibling_build_one_request_per_poll(self):
+        # A push starts the Build caller and the packaged caller together: the packaged run
+        # always finds the Build run of its commit still running.
+        for status in ("queued", "in_progress", "waiting", "requested", "pending"):
+            world = build_world(push=True)
+            world.set_run(42, status=status, conclusion=None)
+            elapsed, counts = [0], []
+
+            def sleep(seconds):
+                counts.append(world.api.request_count)
+                elapsed[0] += seconds
+                if len(counts) == 4:
+                    world.set_run(42, status="completed", conclusion="success")
+
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                record = self.select(world, Path(directory), monotonic=lambda: elapsed[0], sleep=sleep)
+                self.assertEqual(list(Path(directory).iterdir()), [])
+                # The first poll admits the subject (3) and lists; every later one lists.
+                self.assertEqual(counts, [4, 5, 6, 7])
+                self.assertEqual(elapsed[0], 4 * limits.CI_BUILD_POLL_SECONDS)
+                # The poll that finds the run complete lists and describes it (5), the subject is
+                # admitted again (its branch, 2: the commit object never changes), and the
+                # download with its last observation costs the 7 of an immediate selection.
+                self.assert_record(world, record, requests=7 + 5 + 2 + 7)
+        self.assertLessEqual(3 + limits.MAX_CI_BUILD_POLLS + 15, limits.MAX_CI_SELECT_BUILD_REQUESTS)
+
+    def test_a_protected_wait_ends_at_the_deadline_and_fails_closed(self):
+        for wait_seconds, sleeps in ((5400, [60] * 90), (150, [60, 60, 30])):
+            for older in (False, True):
+                world = build_world(push=True) if older else World(push=True)
+                if older:
+                    later_run(world, status="in_progress", conclusion=None)
+                else:
+                    world.add_run("build", "build-full", status="in_progress", conclusion=None)
+                elapsed, slept = [0], []
+
+                def sleep(seconds):
+                    slept.append(seconds)
+                    elapsed[0] += seconds
+
+                with self.subTest(wait_seconds=wait_seconds, older=older), \
+                        tempfile.TemporaryDirectory() as directory, patch.object(world.api, "download") as download:
+                    with self.assertRaisesRegex(MbError, f"exhausted the {wait_seconds}-second"):
+                        self.select(world, Path(directory), wait_seconds=wait_seconds,
+                                    monotonic=lambda: elapsed[0], sleep=sleep)
+                    download.assert_not_called()  # the finished older Build is never the fallback
+                    self.assertEqual(list(Path(directory).iterdir()), [])
+                self.assertEqual(slept, sleeps)
+                self.assertEqual(world.api.request_count, 3 + len(sleeps))
+
+    def test_a_sibling_build_that_fails_while_waited_for_is_a_rejection_at_once(self):
+        for conclusion in ("failure", "cancelled", "timed_out"):
+            world = build_world(push=True)
+            world.set_run(42, status="in_progress", conclusion=None)
+            slept = []
+
+            def sleep(seconds):
+                slept.append(seconds)
+                world.set_run(42, status="completed", conclusion=conclusion)
+
+            with self.subTest(conclusion=conclusion), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(world.api, "download") as download:
+                with self.assertRaisesRegex(MbError, "newest exact Build failed or was cancelled"):
+                    self.select(world, Path(directory), monotonic=lambda: len(slept), sleep=sleep)
+                download.assert_not_called()
+            self.assertEqual(slept, [60])
+        # A failed newest run is a rejection without any wait, whatever an older run built.
+        world = build_world(push=True)
+        later_run(world, conclusion="failure")
+        sleep = Mock()
+        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(MbError, "failed or was cancelled"):
             self.select(world, Path(directory), sleep=sleep)
         sleep.assert_not_called()
+
+    def test_a_sibling_build_that_ends_as_an_admitted_reuse_leaves_nothing_to_select(self):
+        world = World(push=True)
+        world.add_run("build", "build-reuse", status="in_progress", conclusion=None)
+        slept = []
+
+        def sleep(seconds):
+            slept.append(seconds)
+            world.set_run(42, status="completed", conclusion="success")
+
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertIsNone(self.select(world, Path(directory), monotonic=lambda: len(slept), sleep=sleep))
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertEqual(slept, [60])
+
+    def test_a_default_branch_that_moves_during_the_wait_is_a_rejection(self):
+        world = build_world(push=True)
+        world.set_run(42, status="in_progress", conclusion=None)
+        slept = []
+
+        def sleep(seconds):
+            slept.append(seconds)
+            world.api.set_branch("master", "f" * 40, "e" * 40)
+            world.set_run(42, status="completed", conclusion="success")
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(world.api, "download") as download, \
+                self.assertRaises(MbError):
+            self.select(world, Path(directory), monotonic=lambda: len(slept), sleep=sleep)
+        download.assert_not_called()
+        self.assertEqual(slept, [60])
 
     def test_a_named_build_run_is_authenticated_exactly(self):
         world = build_world(push=True)

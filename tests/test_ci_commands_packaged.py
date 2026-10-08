@@ -202,14 +202,19 @@ class SelectBuildCommandTests(CommandTestCase):
                                  [grammar.CI_PLAN_NAME, identity.IDENTITY_NAME])
                 self.assertEqual(world.api.mutations, [])
 
-    def test_a_pending_build_of_a_protected_subject_is_a_rejection(self) -> None:
+    def test_a_pending_build_of_a_protected_subject_is_waited_for_and_fails_closed_when_its_wait_ends(self) -> None:
+        # The packaged run of a push finds its sibling Build run still running: it waits like a
+        # pull request does, within --wait-seconds, and neither rebuilds beside it nor answers
+        # found=false while the result is unknown.
         world = JobWorld(self.directory, push=True)
         world.add_run("build", "build-full", status="in_progress", conclusion=None)
         state = world.state("select")
-        code, stderr = self.select(world, state)
+        code, stderr = self.select(world, state, "--wait-seconds", "1")
         self.assertEqual(code, 2)
-        self.assertIn("has not completed", stderr)
+        self.assertIn("Build wait exhausted the 1-second/observation budget", stderr)
         self.assert_nothing_written(state)
+        # The subject (3) and one listing: the one-second wait ends after its first poll.
+        self.assertEqual((world.api.request_count, world.budgets), (4, [limits.MAX_CI_SELECT_BUILD_REQUESTS]))
 
     def test_a_named_build_run_must_be_the_newest_one(self) -> None:
         world = JobWorld(self.directory, push=True, event="workflow_dispatch").build()

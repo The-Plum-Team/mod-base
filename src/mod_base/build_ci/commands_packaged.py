@@ -7,7 +7,9 @@ The subject ``ci subject`` authenticated and ``--build-run-id`` choose the route
 * a pull request (``--build-run-id`` empty or absent) waits at most ``--wait-seconds`` (5400, the
   default and the maximum) for the newest Build run of its head;
 * a protected push or dispatch without ``--build-run-id`` takes the newest Build run of its
-  commit, or finds none and says so, on which its caller builds in the same run;
+  commit, waiting within the same ``--wait-seconds`` while that run is still in progress (a push
+  starts both callers together), or finds none and says so, on which its caller builds in the
+  same run;
 * ``--build-run-id ID`` requires exactly that run to be the newest Build run, and
   ``--build-run-id same-run`` authenticates the Build this run built for itself.
 
@@ -65,7 +67,8 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     select = verbs.add_parser("select-build", help="find and authenticate the exact Build of this packaged run")
     commands.add_job_arguments(select)
     select.add_argument("--wait-seconds", type=WAIT_SECONDS, default=limits.CI_BUILD_WAIT_SECONDS, metavar="N",
-                        help="how long a pull request waits for its Build run (default and maximum: 5400)")
+                        help="how long a pull request waits for its Build run, and a protected subject for one "
+                             "that is in progress (default and maximum: 5400)")
     select.add_argument("--build-run-id", type=BUILD_RUN, default=None, metavar="ID",
                         help="a protected subject's selected Build run, or same-run for the Build this run built; "
                              "empty for a pull request")

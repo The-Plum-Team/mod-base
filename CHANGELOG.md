@@ -106,6 +106,13 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   separate Build run; a run id; or `same-run` after a rebuild in the same run). Every job after
   `input` selects that run again by its id, the `aggregate` job's sealing step is `ci aggregate`,
   and in reuse mode only the gate runs. It is tabled, policed and digested like the other two.
+- `ci select-build`: a protected push or dispatch whose newest Build run is still in progress now
+  waits for it, within the same `--wait-seconds` (5400 at most, one listing request per poll) as
+  a pull request, instead of failing: a push starts the Build caller and the packaged caller
+  together, so the packaged run always met its sibling Build running. A newest run that failed or
+  was cancelled is still a rejection at once, and a commit without a Build run still answers
+  `found=false`. `selection.download_protected_build` takes `wait_seconds`, `monotonic` and
+  `sleep`; `selection.select_protected_build`, one observation, still rejects a run in progress.
 - `mod-base.ci.activation` v1 (still unreleased) gains the required `rollback_from` field, which
   names the mode a `reviewed-rollback` leaves and is `null` otherwise. `template check|sync|init`
   accept every mode, manage exactly the callers of the mod's mode, report a caller outside its mode

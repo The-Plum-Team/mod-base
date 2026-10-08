@@ -12,8 +12,11 @@ The listing carries no status filter. The newest run by ``(created_at, id)`` and
 attempt are chosen before any result is read:
 
 * no run: nothing to consume. A pull request keeps waiting; a protected subject builds for itself;
-* a run that has not completed: a pull request keeps waiting; for a protected subject it is a
-  rejection, because a rebuild must never race a Build whose result is unknown;
+* a run that has not completed: both keep waiting, within the same bounded wait. A push starts
+  the Build caller and the packaged caller together, so the packaged run of a push always finds
+  its sibling Build still running; it must neither consume nor rebuild beside a Build whose
+  result is unknown, so it waits for that result. A single observation that cannot wait
+  (:func:`select_protected_build`, a re-validation) still rejects such a run;
 * a completed run whose exact graph is the draft deferral (a pull request) or the admitted reuse
   (a protected subject): not a producer. The pull request keeps waiting, the protected subject
   builds for itself;
@@ -69,6 +72,12 @@ SAME_RUN = "same-run"
 _PENDING = ("queued", "in_progress", "waiting", "requested", "pending")
 #: The events that start a Build run of a protected subject.
 _PROTECTED_EVENTS = ("push", "workflow_dispatch")
+#: The observations (:func:`_observe`) a bounded wait sleeps on. A pull request has no other
+#: Build than its own run, so it waits for everything that is not a bundle yet. A protected
+#: subject waits only for a run whose result is unknown: with no run, or with an admitted reuse,
+#: it builds for itself at once.
+_PR_WAITS = ("absent", "pending", "deferred")
+_PROTECTED_WAITS = ("pending",)
 #: Artifact kind -> what a run that lacks it is said to lack.
 _ARTIFACTS = {"build": "complete bundle", "tested": "tested record"}
 
@@ -253,8 +262,11 @@ def revalidate_latest_merged_pr_build(api: GitHubApi, *, descriptor: dict[str, A
 
 
 def _wait(reads: CommandReads, plan: dict[str, Any], wait_seconds: int, monotonic: Callable[[], float],
-          sleep: Callable[[float], None]) -> tuple[dict[str, Any], Watch]:
-    """Poll the newest Build run until its bundle can be described; return it with what was read."""
+          sleep: Callable[[float], None],
+          waits: tuple[str, ...] = _PR_WAITS) -> tuple[dict[str, Any] | None, Watch]:
+    """Poll the newest Build run while its observation is one of ``waits``; return what it then
+    offers (its bundle, or None for an observation that offers none) with what was read. With
+    the default ``waits`` of a pull request the answer is always a bundle."""
 
     check(callable(monotonic) and callable(sleep), "$.wait", "protected clock/sleep must be callable")
     Int(1, limits.CI_BUILD_WAIT_SECONDS)(wait_seconds, "$.wait_seconds")
@@ -277,11 +289,11 @@ def _wait(reads: CommandReads, plan: dict[str, Any], wait_seconds: int, monotoni
         if not admitted:
             _admit_source(reads, watch, plan["identity"])
             admitted = True
-        selected = _select(reads, watch, plan)
+        state, selected = _observe(reads, watch, plan)
         remaining = deadline - now()
         if remaining <= 0:
             break
-        if selected is not None:
+        if state not in waits:
             _admit_source(reads, watch, plan["identity"])
             return selected, watch
         try:
@@ -345,11 +357,13 @@ def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], output: Pa
 
 def _protected(reads: CommandReads, watch: Watch, plan: dict[str, Any]) -> dict[str, Any] | None:
     """The complete bundle of a protected subject's newest Build run, or ``None`` when it has no
-    run or its newest run is an admitted reuse. A run that has not completed is a rejection."""
+    run or its newest run is an admitted reuse. One observation cannot wait, so a run that has
+    not completed is a rejection here."""
 
     state, descriptor = _observe(reads, watch, plan)
     check(state != "pending", "$.run.status",
-          "newest exact Build of this commit has not completed; a standalone run neither waits nor rebuilds beside it")
+          "newest exact Build of this commit has not completed; this observation cannot wait for it "
+          "and nothing is rebuilt beside it")
     return descriptor
 
 
@@ -360,7 +374,8 @@ def select_protected_build(api: GitHubApi, *, plan: dict[str, Any]) -> dict[str,
     tested commit. None means that no such run exists or that the newest one is an admitted reuse,
     which builds nothing: the caller then builds for itself. A newest run that is pending, failed
     or cancelled, another graph, a missing bundle or an API failure is fatal; no older run is
-    considered. One observation, like :func:`select_latest_pr_build`.
+    considered. One observation, like :func:`select_latest_pr_build`: the selection that may wait
+    for a run in progress is :func:`download_protected_build`.
     """
 
     plan = _protected_plan(plan)
@@ -381,23 +396,32 @@ def revalidate_protected_build(api: GitHubApi, *, descriptor: dict[str, Any], pl
 
 
 def download_protected_build(api: GitHubApi, *, plan: dict[str, Any], output: Path,
-                             run_id: int | None = None) -> dict[str, Any] | None:
+                             run_id: int | None = None,
+                             wait_seconds: int = limits.CI_BUILD_WAIT_SECONDS,
+                             monotonic: Callable[[], float] = time.monotonic,
+                             sleep: Callable[[float], None] = time.sleep) -> dict[str, Any] | None:
     """Select the newest Build run of a protected subject and privately copy its complete bundle.
+
+    A newest run that is still in progress is waited for, with the bounded wait of a pull request
+    (``wait_seconds``, at most 5400s, one listing request per poll): the packaged run of a push
+    starts together with the Build run of that push and would otherwise always meet it running.
+    Only that waits. No run, or a newest run that is an admitted reuse, answers at once; a newest
+    run that failed or was cancelled is a rejection at once, and so is one that does not finish
+    within the wait. No older run is ever considered.
 
     With ``run_id`` the newest run must be exactly that run; a missing, superseded or reused one
     is then a rejection. Without it the answer is None when there is nothing to select
-    (:func:`select_protected_build`). Immediately before publication the subject, the newest run,
-    its latest attempt and the bundle's availability are observed again. Returns the descriptor
-    and the envelope.
+    (:func:`select_protected_build`). The subject is admitted when the wait starts and again when
+    it ends; immediately before publication the subject, the newest run, its latest attempt and
+    the bundle's availability are observed once more. Returns the descriptor and the envelope.
     """
 
     plan = _protected_plan(plan)
     check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
     if run_id is not None:
         Int(1, limits.MAX_RUN_ID)(run_id, "$.run_id")
-    reads, watch = CommandReads.of(api), Watch()
-    _admit_source(reads, watch, plan["identity"])
-    descriptor = _protected(reads, watch, plan)
+    reads = CommandReads.of(api)
+    descriptor, watch = _wait(reads, plan, wait_seconds, monotonic, sleep, _PROTECTED_WAITS)
     if descriptor is None and run_id is None:
         return None
     check(descriptor is not None and run_id in (None, descriptor["producer"]["run_id"]), "$.run_id",
@@ -466,7 +490,8 @@ def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attem
 
     The subject and ``build_run_id`` choose the route. A pull request names no run and waits for
     the newest Build run of its head (:func:`download_latest_pr_build`). A protected subject
-    without ``build_run_id`` takes the newest Build run of its commit or answers None, on which
+    without ``build_run_id`` takes the newest Build run of its commit, waiting within the same
+    ``wait_seconds`` while that run is in progress, or answers None when there is none, on which
     its caller builds in the same run; with a run id that run must be the newest one
     (:func:`download_protected_build`); with :data:`SAME_RUN` the Build is the one this run built
     (:func:`download_rebuilt_build`, for which ``event`` is the run's event). The bundle is
@@ -496,7 +521,8 @@ def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attem
                 found = download_rebuilt_build(reads, plan=plan, run_id=run_id, run_attempt=run_attempt, event=event,
                                                output=output)
             else:
-                found = download_protected_build(reads, plan=plan, output=output, run_id=build_run_id)
+                found = download_protected_build(reads, plan=plan, output=output, run_id=build_run_id,
+                                                 wait_seconds=wait_seconds, monotonic=monotonic, sleep=sleep)
     except OSError as error:
         raise MbError("cannot hold the private Build copy of a selection", reason="ci-transport") from error
     if found is None:
