@@ -75,65 +75,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=src python3 -m unittest -v tests.ci_linux_worker
-      - name: Probe the hosted runner layout (temporary)
-        if: always() && matrix.python == '3.12'
-        shell: bash
-        run: |
-          set +e +o pipefail
-          prefix="$(python3 -c 'import sys; print(sys.base_prefix)')"
-          echo "== world-writable non-sticky directories outside /usr/share and /opt, depth 4"
-          sudo find / -xdev -maxdepth 4 -type d -perm -0002 ! -perm -1000 ! -path '/usr/share/*' ! -path '/opt/*' ! -path '/proc/*' 2>/dev/null > /tmp/ww.txt
-          wc -l < /tmp/ww.txt
-          sed -n '1,80p' /tmp/ww.txt
-          echo "== world-writable sticky directories, depth 3"
-          sudo find / -xdev -maxdepth 3 -type d -perm -1002 2>/dev/null > /tmp/sticky.txt
-          sed -n '1,30p' /tmp/sticky.txt
-          echo "== world-writable entry counts"
-          for root in /opt /usr/share /usr/local /usr/lib /usr/bin /usr/sbin /etc /var /home /snap /mnt /imagegeneration; do
-            printf '%s total=%s writable=%s\n' "$root" "$(sudo find "$root" -xdev 2>/dev/null | wc -l)" "$(sudo find "$root" -xdev -perm -0002 ! -type l 2>/dev/null | wc -l)"
-          done
-          echo "== acl"
-          getfacl -p /opt /opt/hostedtoolcache "$prefix" /usr/local/bin /home/runner 2>&1 > /tmp/acl.txt
-          sed -n '1,60p' /tmp/acl.txt
-          echo "== git templates and system config"
-          stat -c '%a %U:%G %n' /usr/share/git-core /usr/share/git-core/templates /usr/share/git-core/templates/hooks /etc/gitconfig /usr/lib/git-core 2>&1
-          ls -la /usr/local/bin > /tmp/ulb.txt 2>&1
-          sed -n '1,60p' /tmp/ulb.txt
-          echo "== tools"
-          for tool in setpriv useradd usermod userdel pkill pgrep chown setfacl getfacl git jq xvfb-run sudo env; do printf '%s -> %s\n' "$tool" "$(command -v "$tool")"; done
-          git --version
-          sudo -n true && echo "passwordless sudo"
-          sudo -n sh -c 'echo "sudo PATH=$PATH"'
-          echo "PATH=$PATH"
-          echo "== login.defs"
-          grep -E '^(UID_MIN|UID_MAX|SYS_UID_MIN|SYS_UID_MAX|USERGROUPS_ENAB|UMASK|HOME_MODE)' /etc/login.defs
-          echo "== kernel"
-          uname -r
-          cat /proc/sys/kernel/yama/ptrace_scope
-          findmnt -no TARGET,FSTYPE,OPTIONS / 2>&1
-          findmnt -no TARGET,FSTYPE,OPTIONS /tmp 2>&1
-          findmnt -no TARGET,FSTYPE,OPTIONS /mnt 2>&1
-          df -h / /mnt 2>&1
-          nproc
-          free -g
-          echo "== environment names"
-          env | cut -d= -f1 | sort | tr '\n' ' '
-          echo
-          echo "RUNNER_TEMP=$RUNNER_TEMP RUNNER_TOOL_CACHE=${RUNNER_TOOL_CACHE:-} RUNNER_ENVIRONMENT=${RUNNER_ENVIRONMENT:-} GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          echo "== time to remove group/other write"
-          time sudo chmod -R go-w /opt
-          time sudo chmod -R go-w /usr/share
-          time sudo chmod -R go-w /usr/local /usr/lib/jvm
-          stat -c '%a %U:%G %n' /opt /opt/hostedtoolcache "$prefix" /usr/share /usr/local/bin /usr/lib/jvm
-          echo "== remaining world-writable non-sticky directories, whole root filesystem"
-          sudo find / -xdev -type d -perm -0002 ! -perm -1000 ! -path '/proc/*' 2>/dev/null > /tmp/left.txt
-          wc -l < /tmp/left.txt
-          sed -n '1,40p' /tmp/left.txt
-          echo "== remaining world-writable regular files"
-          sudo find / -xdev -type f -perm -0002 ! -path '/proc/*' 2>/dev/null > /tmp/leftf.txt
-          wc -l < /tmp/leftf.txt
-          sed -n '1,20p' /tmp/leftf.txt
-          exit 0
 
   test-gate:
     name: Test
