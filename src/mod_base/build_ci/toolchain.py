@@ -14,6 +14,7 @@ import hashlib
 import itertools
 import os
 import stat
+import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -45,15 +46,35 @@ def _stamp(info: os.stat_result) -> tuple[int, ...]:
             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _no_default_acl(descriptor: int) -> None:
-    """A default ACL would hand its grants to whatever is created in the directory later."""
+_ACL_USER_OBJ, _ACL_USER, _ACL_GROUP_OBJ, _ACL_GROUP, _ACL_MASK, _ACL_OTHER = 0x01, 0x02, 0x04, 0x08, 0x10, 0x20
+_ACL_WRITE = 0x2
+
+
+def _no_writable_default_acl(descriptor: int, trusted: set[int]) -> None:
+    """A default ACL hands its grants to whatever is created in the directory later.
+
+    One that lets only the creating owner, root or the runner write is harmless: hosted images put
+    such an ACL on ``/home``, an ancestor of every runner-owned tree. A write grant to a group, to
+    others or to any other named user is refused, and so is an ACL this reader does not understand.
+    """
     try:
-        os.getxattr(descriptor, "system.posix_acl_default")
+        raw = os.getxattr(descriptor, "system.posix_acl_default")
     except OSError as error:
-        if error.errno not in {errno.ENODATA, errno.ENOTSUP}:
-            raise
-    else:
-        raise WorkerError("tool tree directory carries a default ACL")
+        if error.errno in {errno.ENODATA, errno.ENOTSUP}:
+            return
+        raise
+    if len(raw) < 4 or (len(raw) - 4) % 8 or struct.unpack_from("<I", raw)[0] != 2:
+        raise WorkerError("tool tree directory carries an unreadable default ACL")
+    entries = [struct.unpack_from("<HHI", raw, offset) for offset in range(4, len(raw), 8)]
+    mask = next((permissions for tag, permissions, _ in entries if tag == _ACL_MASK), 0x7)
+    for tag, permissions, identifier in entries:
+        if tag in (_ACL_USER_OBJ, _ACL_MASK) or (tag == _ACL_USER and identifier in trusted):
+            continue
+        if tag not in (_ACL_USER, _ACL_GROUP_OBJ, _ACL_GROUP, _ACL_OTHER):
+            raise WorkerError("tool tree directory carries an unreadable default ACL")
+        granted = permissions if tag == _ACL_OTHER else permissions & mask
+        if granted & _ACL_WRITE:
+            raise WorkerError("tool tree directory carries a default ACL that grants write access")
 
 
 class _Scan:
@@ -102,7 +123,7 @@ class _Scan:
         descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             self.record("/", os.fstat(descriptor))
-            _no_default_acl(descriptor)
+            _no_writable_default_acl(descriptor, self.trusted)
             while pending:
                 part = pending.pop(0)
                 absolute = "/" + "/".join((*resolved, part))
@@ -151,7 +172,7 @@ class _Scan:
                     try:
                         if _stamp(os.fstat(child)) != _stamp(info):
                             raise WorkerError("tool directory changed while opened")
-                        _no_default_acl(child)
+                        _no_writable_default_acl(child, self.trusted)
                     except BaseException:
                         os.close(child)
                         raise
@@ -177,7 +198,7 @@ class _Scan:
         try:
             if _stamp(os.fstat(descriptor)) != _stamp(info):
                 raise WorkerError("tool tree root changed while opened")
-            _no_default_acl(descriptor)
+            _no_writable_default_acl(descriptor, self.trusted)
             remaining = limits.MAX_CI_SOURCE_ENTRIES - len(self.records)
             with os.scandir(descriptor) as entries:
                 names = [entry.name for entry in itertools.islice(entries, remaining + 1)]

@@ -3,6 +3,7 @@
 import errno
 import os
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,13 @@ from mod_base.model import limits
 
 
 ROOT = "/opt/hostedtoolcache/Python/x64"
+NO_ID = 0xFFFFFFFF
+
+
+def default_acl(entries):
+    """The value of ``system.posix_acl_default``: version 2, then ``(tag, permissions, id)`` entries."""
+
+    return struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *entry) for entry in entries)
 BOUNDARY = HostBoundary("/home/runner", 1001, 121, 1, 10, 0o755)
 
 
@@ -85,8 +93,9 @@ class Filesystem:
                 return target if isinstance(target, bytes) else target.encode()
             stack.enter_context(patch.object(toolchain.os, "readlink", side_effect=readlink))
             def no_acl(descriptor, name):
-                if getattr(self.nodes[self.descriptors[descriptor]], "default_acl", False):
-                    return b"acl"
+                acl = getattr(self.nodes[self.descriptors[descriptor]], "default_acl", None)
+                if acl is not None:
+                    return acl
                 raise OSError(errno.ENODATA, "no ACL")
             stack.enter_context(patch.object(toolchain.os, "getxattr", side_effect=no_acl, create=True))
             return (operation() if operation is not None else
@@ -158,13 +167,37 @@ class ToolTreeTests(unittest.TestCase):
         with self.assertRaises(MbError):
             fs.inspect(("/srv/tools/jdk",))
 
-    def test_default_acl_on_a_root_ancestor_or_directory_is_rejected(self):
+    def test_default_acl_that_grants_write_on_a_root_ancestor_or_directory_is_rejected(self):
+        # user::rwx, group::r-x, mask::rwx and one entry that lets somebody else write.
+        base = [(0x01, 7, NO_ID), (0x04, 5, NO_ID), (0x10, 7, NO_ID)]
+        writable = {"other": [*base, (0x20, 7, NO_ID)],
+                    "group": [(0x01, 7, NO_ID), (0x04, 7, NO_ID), (0x10, 7, NO_ID), (0x20, 5, NO_ID)],
+                    "named group": [*base, (0x08, 6, 118), (0x20, 5, NO_ID)],
+                    "foreign user": [*base, (0x02, 7, 4242), (0x20, 5, NO_ID)]}
         for path in ("/opt", ROOT, ROOT + "/lib"):
+            for label, entries in writable.items():
+                fs = Filesystem()
+                fs.nodes[path].default_acl = default_acl(entries)
+                with self.subTest(path=path, grant=label), self.assertRaisesRegex(MbError, "grants write access"):
+                    fs.inspect()
+                self.assertEqual(fs.descriptors, {})
+        for raw in (b"acl", default_acl(base)[:-3], struct.pack("<I", 1), default_acl([*base, (0x40, 7, 0)])):
             fs = Filesystem()
-            fs.nodes[path].default_acl = True
-            with self.subTest(path=path), self.assertRaisesRegex(MbError, "default ACL"):
+            fs.nodes["/opt"].default_acl = raw
+            with self.subTest(raw=raw), self.assertRaisesRegex(MbError, "unreadable default ACL"):
                 fs.inspect()
-            self.assertEqual(fs.descriptors, {})
+
+    def test_default_acl_that_lets_only_owner_root_or_runner_write_is_admitted(self):
+        # First the ACL hosted images put on /home: the runner by name, everybody else read-only.
+        hosted = [(0x01, 7, NO_ID), (0x02, 7, BOUNDARY.uid), (0x04, 5, NO_ID), (0x10, 7, NO_ID), (0x20, 5, NO_ID)]
+        masked = [(0x01, 7, NO_ID), (0x04, 7, NO_ID), (0x08, 7, 118), (0x10, 5, NO_ID), (0x20, 5, NO_ID)]
+        rooted = [(0x01, 7, NO_ID), (0x02, 7, 0), (0x04, 5, NO_ID), (0x10, 7, NO_ID), (0x20, 0, NO_ID)]
+        for entries in (hosted, masked, rooted):
+            fs = Filesystem()
+            for path in ("/opt", ROOT, ROOT + "/lib"):
+                fs.nodes[path].default_acl = default_acl(entries)
+            with self.subTest(entries=entries):
+                self.assertGreater(fs.inspect().files, 0)
 
     def test_changed_tool_receipt_is_not_authority(self):
         proof = Filesystem().inspect()
@@ -355,10 +388,17 @@ class RealToolTreeTests(unittest.TestCase):
     @unittest.skipUnless(os.path.exists("/usr/bin/setfacl"), "the case sets a real default ACL")
     def test_real_default_acl_on_the_root_or_a_directory_below_it_is_rejected(self):
         for path in (self.root, self.root / "lib"):
-            subprocess.run(("/usr/bin/setfacl", "-d", "-m", "o::r-x", str(path)), check=True)
-            with self.subTest(path=path), self.assertRaisesRegex(MbError, "default ACL"):
-                self.scan()
-            subprocess.run(("/usr/bin/setfacl", "-k", str(path)), check=True)
+            for grant in ("o::rwx", "g::rwx", "u:65534:rwx", "g:65534:rw-"):
+                subprocess.run(("/usr/bin/setfacl", "-d", "-m", grant, str(path)), check=True)
+                with self.subTest(path=path, grant=grant), self.assertRaisesRegex(MbError, "grants write access"):
+                    self.scan()
+                subprocess.run(("/usr/bin/setfacl", "-k", str(path)), check=True)
+        # Read-only defaults, and a write grant to the runner itself, hand nothing to a worker.
+        for grant in ("o::r-x", f"u:{os.getuid()}:rwx"):
+            subprocess.run(("/usr/bin/setfacl", "-d", "-m", grant, str(self.root)), check=True)
+            with self.subTest(grant=grant):
+                self.assertEqual(self.scan().files, 4)
+            subprocess.run(("/usr/bin/setfacl", "-k", str(self.root)), check=True)
         self.assertEqual(self.scan().files, 4)
 
     def test_root_below_a_world_writable_directory_is_never_admitted(self):

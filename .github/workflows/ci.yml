@@ -68,26 +68,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=src python3 tools/parallel_unittest.py -v -t . tests
-      - name: Probe default ACLs (temporary)
-        if: always() && matrix.python == '3.12'
-        shell: bash
-        run: |
-          set +e +o pipefail
-          work="$(mktemp -d -p "$HOME")"
-          mkdir "$work/inner"
-          python3 - "$work" <<'PY'
-          import os, sys
-          for path in ("/", "/home", "/home/runner", "/home/runner/work", "/tmp", "/opt", sys.argv[1], sys.argv[1] + "/inner"):
-              try:
-                  names = os.listxattr(path)
-              except OSError as error:
-                  names = repr(error)
-              print(path, oct(os.stat(path).st_mode & 0o7777), names)
-          PY
-          getfacl -p / /home /home/runner /home/runner/work "$work" 2>&1 > /tmp/acl-home.txt
-          sed -n '1,80p' /tmp/acl-home.txt
-          rm -rf "$work"
-          exit 0
       - name: Require real disposable-account termination on Linux
         if: always()
         shell: bash
