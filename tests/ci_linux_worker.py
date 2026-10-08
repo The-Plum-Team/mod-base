@@ -22,11 +22,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mod_base.build_ci import worker
+from mod_base.build_ci import identity, lifecycle, worker
 from mod_base.build_ci.worker import (WORKER_ACCOUNTS, WORKER_ROOT, WorkerExecutionError,
                                       allocate_worker_account, authenticate_worker_account,
                                       prepare_worker_boundary, terminate_worker)
-from tests.helpers import ci_plan
+from tests import ci_lifecycle_fixture as job_fixture
+from tests import ci_mod_harness as h
+from tests.helpers import ci_plan, ci_plan_inputs
 from tests.helpers import ci_envelope
 from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, materialize_build_export, verify_build_export
 from mod_base.io.tree import copy_regular_files
@@ -47,6 +49,9 @@ KIT = Path(__file__).resolve().parents[1]
 #: The interpreter's import roots: its installation and, when it runs from one, its virtual
 #: environment. On a hosted runner both are the one setup-python prefix.
 PYTHON_ROOTS = tuple(dict.fromkeys((sys.base_prefix, sys.prefix)))
+#: The candidate files ``ci_plan()`` binds, by staged name: a validator's input root holds them
+#: next to the plan.
+_, SOURCES = ci_plan_inputs()
 _FENCED = []
 
 
@@ -577,7 +582,7 @@ class LinuxWorkerTests(HostedWorkerCase):
         from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, authenticate_controller_sources,
                                                   materialize_controller_sources)
         from mod_base.build_ci.inputs import (VALIDATOR_INPUT_ROOT, execute_frozen_build_validator,
-                                              execute_frozen_target_validator, materialize_validation_plan)
+                                              execute_frozen_target_validator, materialize_validation_inputs)
         from tests.test_ci_controller import ControllerSourceTests
         from tests.helpers import ci_validation
         from mod_base.build_ci.validation import SEALED_VALIDATION_ROOT, VALIDATOR_OUTPUT_ROOT, verify_validation_export
@@ -627,7 +632,7 @@ class LinuxWorkerTests(HostedWorkerCase):
         plan = executing_plan
         sources = authenticate_controller_sources(api, identity=plan["identity"], protected_paths=protected)
         materialize_controller_sources(Path(str(CONTROLLER_VALIDATION_ROOT)), sources=sources, identity=plan["identity"])
-        materialize_validation_plan(Path(str(VALIDATOR_INPUT_ROOT)), plan=plan)
+        materialize_validation_inputs(Path(str(VALIDATOR_INPUT_ROOT)), sources=SOURCES, plan=plan)
         envelope = ci_envelope()
         envelope["identity"] = plan["identity"]
         envelope["plan_sha256"] = plan["plan_sha256"]
@@ -905,7 +910,7 @@ class LinuxWorkerTests(HostedWorkerCase):
 
     def runtime_candidate_copy(self, *, hardlink=False):
         """Real UID/source/copy/grant checks; synthetic bytes are not native/SDK/API approval."""
-        from mod_base.build_ci.inputs import VALIDATOR_INPUT_ROOT, materialize_validation_plan
+        from mod_base.build_ci.inputs import VALIDATOR_INPUT_ROOT, materialize_validation_inputs
         from mod_base.build_ci.runtime_inputs import RUNTIME_VALIDATION_ROOT
         from mod_base.build_ci.runtime_exports import verify_runtime_export
         from mod_base.build_ci.source import GitSourceEntry
@@ -918,7 +923,7 @@ class LinuxWorkerTests(HostedWorkerCase):
         runtime['files'] = [{'path': name, 'lane_id': 'lane-a',
             'role': 'native-report' if name.endswith('.json') else ('runtime-log' if name.endswith('.log') else 'crash-report'),
             'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()} for name, data in sorted(payloads.items())]
-        materialize_validation_plan(Path(str(VALIDATOR_INPUT_ROOT)), plan=plan)
+        materialize_validation_inputs(Path(str(VALIDATOR_INPUT_ROOT)), sources=SOURCES, plan=plan)
         build_root = Path(str(BUILD_VALIDATION_ROOT))
         build_root.mkdir(mode=0o700)
         for row in build['files']:
@@ -1139,13 +1144,37 @@ class LinuxWorkerTests(HostedWorkerCase):
         self.assertFalse(Path(str(BUILD_VALIDATION_ROOT)).exists())
         self.assert_quiescent()
 
-    def test_execution_reaps_an_orphan_holding_stdout_after_dispatcher_success(self):
+    def test_dispatcher_that_leaves_an_orphan_holding_stdout_fails_and_the_orphan_is_reaped(self):
+        # The contract fails a hook that leaves a process behind, even when the hook itself succeeded.
+        started = time.monotonic()
+        with self.assertRaisesRegex(WorkerExecutionError, "left a process behind") as caught:
+            self.run_dispatcher(
+                "import os,time\n"
+                "if os.fork() == 0:\n    time.sleep(300)\n    os._exit(0)\n"
+                "print('native-success', flush=True)\n")
+        self.assertEqual(caught.exception.result.returncode, 0)
+        self.assertIn(b"native-success", caught.exception.result.log)
+        self.assertLess(time.monotonic() - started, 30)  # The orphan was killed, not waited for.
+        self.assert_quiescent()
+
+    def test_children_a_dispatcher_waited_for_or_only_left_as_zombies_are_no_orphans(self):
         result = self.run_dispatcher(
-            "import os,time\n"
-            "if os.fork() == 0:\n    time.sleep(300)\n    os._exit(0)\n"
+            "import os,subprocess,sys\n"
+            "subprocess.run([sys.executable,'-I','-c','print(1)'],check=True)\n"
+            "for _ in range(20):\n    subprocess.Popen(['/usr/bin/true'])\n"  # Never waited for.
             "print('native-success', flush=True)\n")
         self.assertEqual(result.returncode, 0)
         self.assertIn(b"native-success", result.log)
+        self.assert_quiescent()
+
+    def test_dispatcher_starts_with_a_private_umask_whatever_the_login_default_is(self):
+        result = self.run_dispatcher(
+            "import os,sys\nfrom pathlib import Path\n"
+            "mask=os.umask(0)\nos.umask(mask)\n"
+            "home=Path(os.environ['HOME'])\n(home/'made').mkdir()\n(home/'made'/'leaf').write_bytes(b'x')\n"
+            "print('umask %03o dir %03o file %03o argv %s' % (mask, (home/'made').stat().st_mode & 0o777,"
+            " (home/'made'/'leaf').stat().st_mode & 0o777, sys.argv[1:]), flush=True)\n", extra=("--hook", "policy"))
+        self.assertEqual(result.log.strip(), b"umask 077 dir 700 file 600 argv ['--hook', 'policy']")
         self.assert_quiescent()
 
     def test_failed_execution_never_returns_success_and_reaps_its_uid(self):
@@ -1388,20 +1417,27 @@ class LinuxValidationPlanTests(unittest.TestCase):
         self.output = self.base / "input"
 
     def test_exact_private_plan_copy_and_existing_output_preservation(self):
-        from mod_base.build_ci.inputs import materialize_validation_plan, verify_validation_plan
+        from mod_base.build_ci.inputs import materialize_validation_inputs, verify_validation_plan
         plan = ci_plan()
-        self.assertEqual(materialize_validation_plan(self.output, plan=plan), plan)
+        materialize_validation_inputs(self.output, sources=SOURCES, plan=plan)
         self.assertEqual(verify_validation_plan(self.output, plan=plan), plan)
         self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o700)
-        self.assertEqual((self.output / grammar.CI_PLAN_NAME).read_bytes(), canonical_json(plan))
+        self.assertEqual({path.name: path.read_bytes() for path in self.output.iterdir()},
+                         {grammar.CI_PLAN_NAME: canonical_json(plan), **SOURCES})
         with self.assertRaises(MbError):
-            materialize_validation_plan(self.output, plan=plan)
+            materialize_validation_inputs(self.output, sources=SOURCES, plan=plan)
         self.assertEqual(verify_validation_plan(self.output, plan=plan), plan)
 
     def test_changed_plan_links_and_undeclared_import_files_are_refused(self):
-        from mod_base.build_ci.inputs import materialize_validation_plan, verify_validation_plan
+        from mod_base.build_ci.inputs import materialize_validation_inputs, verify_validation_plan
         plan = ci_plan()
-        materialize_validation_plan(self.output, plan=plan)
+        materialize_validation_inputs(self.output, sources=SOURCES, plan=plan)
+        for name in SOURCES:  # A candidate file with other bytes than the plan binds.
+            original = (self.output / name).read_bytes()
+            (self.output / name).write_bytes(original + b" ")
+            with self.subTest(changed=name), self.assertRaises(MbError):
+                verify_validation_plan(self.output, plan=plan)
+            (self.output / name).write_bytes(original)
         leaf = self.output / grammar.CI_PLAN_NAME
         leaf.write_bytes(b" " + canonical_json(plan))
         with self.assertRaises(MbError):
@@ -1424,10 +1460,10 @@ class LinuxValidationPlanTests(unittest.TestCase):
                 extra.unlink()
 
     def test_failed_independent_stage_verification_leaves_no_output(self):
-        from mod_base.build_ci.inputs import materialize_validation_plan
-        with patch("mod_base.build_ci.inputs.verify_validation_plan", side_effect=MbError("stage mismatch")), \
+        from mod_base.build_ci.inputs import materialize_validation_inputs
+        with patch("mod_base.build_ci.inputs.verify_validation_inputs", side_effect=MbError("stage mismatch")), \
                 self.assertRaises(MbError):
-            materialize_validation_plan(self.output, plan=ci_plan())
+            materialize_validation_inputs(self.output, sources=SOURCES, plan=ci_plan())
         self.assertFalse(self.output.exists())
         self.assertEqual(list(self.base.iterdir()), [])
 
@@ -2397,6 +2433,480 @@ class LinuxCandidateStagingTests(HostedWorkerCase):
                          b"")
         self.assertTrue(self.candidate_terminated())
         self.as_root("/usr/bin/test", "!", "-e", str(self.root / "repository" / "out"))
+
+
+class LinuxLifecycleCommandTests(unittest.TestCase):
+    """The job steps as a workflow runs them: real commands, accounts, sudo and root operations.
+
+    ``ci subject`` -> ``ci worker-prepare`` -> ``ci plan`` -> ``ci worker-finish`` on the synthetic
+    mod. Only the GitHub API is a fake. Every case starts without a boundary and without accounts
+    and removes both afterwards, so the cases do not depend on each other.
+    """
+
+    HOME = Path("/home/runner")
+    PLAN_HOOK = "[validator] synthetic derive_plan: ok, 1 files\n"
+
+    def setUp(self):
+        if sys.platform != "linux" or os.environ.get("GITHUB_ACTIONS") != "true" \
+                or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
+            raise AssertionError("UID integration tests require a fresh GitHub-hosted Linux runner")
+        import pwd
+
+        command("/usr/bin/sudo", "-n", "/usr/bin/true")
+        self.root = Path(str(WORKER_ROOT))
+        if self.root.parent.exists() or self.root.parent.is_symlink():
+            raise AssertionError("Linux fixture boundary already exists; refusing to repurpose it")
+        for name in WORKER_ACCOUNTS.values():
+            try:
+                pwd.getpwnam(name)
+            except KeyError:
+                continue
+            raise AssertionError("Linux fixture account already exists; refusing to repurpose it")
+        self.home_mode = stat.S_IMODE(self.HOME.stat().st_mode)
+        self.assertNotEqual(self.home_mode, 0o700, "the fixture needs a home whose closing can be observed")
+        self.addCleanup(self.cleanup)
+        directory = tempfile.TemporaryDirectory(prefix="mod-base-lifecycle-", dir=os.environ["RUNNER_TEMP"])
+        self.addCleanup(directory.cleanup)
+        self.temporary = Path(directory.name)
+        self.state = self.temporary / "state"
+        self.output = self.temporary / "github-output"
+        self.api, self.pull = h.github()
+        self.environment = {**h.environment(), "RUNNER_ENVIRONMENT": "github-hosted",
+                            "GITHUB_WORKSPACE": os.environ["GITHUB_WORKSPACE"],
+                            "RUNNER_TEMP": os.environ["RUNNER_TEMP"]}
+
+    def cleanup(self):
+        import pwd
+
+        for name in WORKER_ACCOUNTS.values():
+            try:
+                uid = pwd.getpwnam(name).pw_uid
+            except KeyError:
+                continue
+            for flag in ("-u", "-U"):
+                command("/usr/bin/sudo", "-n", "/usr/bin/pkill", "-KILL", flag, str(uid), accepted=(0, 1))
+            command("/usr/bin/sudo", "-n", "/usr/sbin/userdel", name)
+        command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--", "/tmp/mod-base-sandbox-boundary")
+        os.chmod(self.HOME, self.home_mode)
+
+    # -- helpers -------------------------------------------------------------------------------------
+
+    def job(self, *, faults=None, candidate=False, mod=None):
+        """The commands of one job on a copy of the synthetic mod; ``ci subject`` has run.
+
+        Without ``candidate`` the tested tree is served by the fake API. With it, the job has a
+        candidate checkout whose commit is the pull request's test merge.
+        """
+        self.mod = mod or h.materialize(self.temporary / "mod", faults=faults)
+        self.checkout = None
+        if candidate:
+            self.checkout = self.temporary / "candidate"
+            commit, tree = job_fixture.commit_candidate(self.mod, self.checkout)
+            job_fixture.retarget(self.api, self.pull, commit, tree)
+        else:
+            job_fixture.seed_tested_tree(self.api, self.mod)
+        self.commands = job_fixture.Commands(self.mod, self.state, self.api, self.environment)
+        self.commands.subject(self.output)
+        self.subject = identity.read_subject(self.state)["subject"]
+        return self.commands
+
+    def prepare(self, roles, *extra):
+        return self.commands.run("worker-prepare", "--roles", roles, "--python", sys.executable, *extra)
+
+    def plan(self, *extra):
+        source = () if self.checkout is None else ("--candidate", str(self.checkout))
+        return self.commands.run("plan", *source, "--github-output", str(self.output), *extra)
+
+    def finish(self):
+        return self.commands.run("worker-finish")
+
+    def expected_plan(self):
+        """The plan the pure planning functions give for the same subject, config and candidate
+        files, with ``derive_plan`` run as a plain process."""
+        index = len(list(self.temporary.glob("pure-*")))
+        sandbox = h.Sandbox(self.temporary / f"pure-{index}", protected=self.mod)
+        sandbox.subject = self.subject
+        return sandbox.derive_plan()
+
+    def account(self, role):
+        import pwd
+
+        try:
+            return pwd.getpwnam(WORKER_ACCOUNTS[role])
+        except KeyError:
+            return None
+
+    def as_account(self, role, *args):
+        """The exit status of a command run as the account (which may be locked)."""
+        record = self.account(role)
+        return command("/usr/bin/sudo", "-n", "--", "/usr/bin/setpriv", "--no-new-privs", f"--reuid={record.pw_uid}",
+                       f"--regid={record.pw_gid}", "--clear-groups", "--", "/usr/bin/env", "-i", "--chdir=/",
+                       "PATH=/usr/bin:/bin", *args, accepted=(0, 1), cwd="/").returncode
+
+    def assert_resting(self, *roles):
+        """Exactly ``roles`` have an account; each is locked, expired and owns no process."""
+        for role in WORKER_ACCOUNTS:
+            record = self.account(role)
+            if role not in roles:
+                self.assertIsNone(record, role)
+                continue
+            self.assertIsNotNone(record, role)
+            shadow = command("/usr/bin/sudo", "-n", "/usr/bin/getent", "shadow", record.pw_name).stdout.split(b":")
+            self.assertTrue(shadow[1].startswith(b"!"), role)
+            self.assertEqual(shadow[7], b"1", role)
+            for flag in ("-u", "-U"):
+                self.assertEqual(command("/usr/bin/sudo", "-n", "/usr/bin/pgrep", flag, str(record.pw_uid),
+                                         accepted=(0, 1)).stdout, b"", role)
+
+    def home(self):
+        return stat.S_IMODE(self.HOME.stat().st_mode)
+
+    def jdk(self, name):
+        """A stand-in JDK home below /opt: root's, closed, like a tool tree after the fence."""
+        home = Path("/opt") / f"mod-base-lifecycle-jdk-{os.getpid()}-{name}"
+        command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "--", str(home), str(home / "bin"))
+        command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(home / "release"))
+        self.addCleanup(command, "/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--", str(home))
+        return str(home)
+
+    def owner(self, path):
+        info = os.lstat(path)
+        return info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)
+
+    def assert_finished(self, *roles):
+        """``worker-finish`` succeeds, twice, and leaves the home as it was before the job."""
+        states = ", ".join(f"{role} {'locked' if role in roles else 'absent'}" for role in WORKER_ACCOUNTS)
+        for _ in range(2):
+            self.assertEqual(self.finish(), (0, f"worker-finish: {states}; no process left; runner home mode "
+                                                f"{self.home_mode:04o} restored\n", ""))
+            self.assertEqual(self.home(), self.home_mode)
+            self.assert_resting(*roles)
+
+    # -- the sequence ---------------------------------------------------------------------------------
+
+    def test_validator_job_plans_from_the_api_and_finishes(self):
+        commands = self.job()
+        code, stdout, stderr = self.prepare("validator")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertRegex(stdout, r"^worker-prepare: validator allocated and locked; \d+ tool entries admitted "
+                                 r"under \d+ roots\n$")
+        self.assertEqual(self.home(), 0o700)
+        self.assert_resting("validator")
+        validator = self.account("validator")
+        worker = lifecycle.read_worker(self.state)
+        self.assertEqual(set(worker.accounts), {"validator"})
+        self.assertEqual((worker.validator.uid, worker.validator.gid), (validator.pw_uid, validator.pw_gid))
+        self.assertEqual((worker.python, worker.java_homes, worker.boundary.original_mode),
+                         (sys.executable, (), self.home_mode))
+        self.assertEqual({path.name for path in self.state.iterdir()},
+                         {"identity.json", "worker-host.json", "worker.json"})
+        # The validator reads the protected adapter copy and nothing of the runner's.
+        controller = self.root / "controller"
+        dispatcher = controller / "scripts/ci/mod_base_build_dispatch.py"
+        self.assertEqual(self.owner(controller), (os.getuid(), validator.pw_gid, 0o750))
+        self.assertEqual(self.owner(dispatcher), (os.getuid(), validator.pw_gid, 0o640))
+        self.assertEqual(dispatcher.read_bytes(), (self.mod / "scripts/ci/mod_base_build_dispatch.py").read_bytes())
+        self.assertEqual({path.relative_to(controller).as_posix() for path in controller.rglob("*") if path.is_file()},
+                         {"scripts/ci/mod-base-build.json", "scripts/ci/mod_base_build_adapter.py",
+                          "scripts/ci/mod_base_build_dispatch.py", "scripts/ci/policy_suite.py"})
+        self.assertEqual(self.as_account("validator", "/usr/bin/test", "-r", str(dispatcher)), 0)
+        self.assertEqual(self.as_account("validator", "/usr/bin/test", "-w", str(dispatcher)), 1)
+        self.assertEqual(self.as_account("validator", "/usr/bin/test", "-w", str(controller)), 1)
+        for private in (self.state, self.mod, self.HOME, self.root / "root-request-grant-controller"):
+            self.assertEqual(self.as_account("validator", "/usr/bin/test", "-r", str(private)), 1, private)
+        self.assertEqual(self.api.request_count, 4)  # Preparing a worker reads nothing from the API.
+
+        expected = self.expected_plan()
+        sources = {"inventory": (self.mod / "release/inventory.json").read_bytes(),
+                   "scenario-contract": (self.mod / "e2e/scenario-contract.json").read_bytes(),
+                   "gradle-properties": (self.mod / "gradle.properties").read_bytes()}
+        self.assertEqual([item["name"] for item in expected["plan_inputs"]], ["gradle-properties"])
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual(stdout, self.PLAN_HOOK + f"plan: {expected['plan_sha256']} with 2 targets and 3 lanes\n")
+        self.assertEqual((self.state / "ci-plan.json").read_bytes(), canonical_json(expected))
+        self.assertEqual(self.owner(self.state / "ci-plan.json")[2], 0o600)
+        self.assertEqual(self.output.read_text(encoding="utf-8"),
+                         f"tested_sha={h.TESTED_SHA}\npr_number=7\nplan_sha256={expected['plan_sha256']}\n"
+                         'targets=["1.20.1","1.21.1"]\nlanes=["fabric-1.20.1","forge-1.20.1","fabric-1.21.1"]\n')
+        # Rule 4: the tested tree and one blob per candidate file, through a client with the pinned budget.
+        self.assertEqual(self.api.request_count, 4 + 1 + len(sources))
+        self.assertEqual(commands.budgets, [limits.MAX_CI_SUBJECT_REQUESTS, limits.MAX_CI_PLAN_REQUESTS])
+        self.assertEqual(self.api.mutations, [])
+        self.assert_resting("validator")
+        # Every later protected hook finds its complete input: the plan and the files it binds.
+        inputs = self.root / "validation-input"
+        self.assertEqual(self.owner(inputs), (os.getuid(), validator.pw_gid, 0o750))
+        self.assertEqual({path.name: path.read_bytes() for path in inputs.iterdir()},
+                         {"ci-plan.json": canonical_json(expected), **sources})
+        for leaf in inputs.iterdir():
+            self.assertEqual(self.owner(leaf), (os.getuid(), validator.pw_gid, 0o640))
+            self.assertEqual(self.as_account("validator", "/usr/bin/test", "-r", str(leaf)), 0)
+            self.assertEqual(self.as_account("validator", "/usr/bin/test", "-w", str(leaf)), 1)
+        # What the hook wrote was handed to the runner as a private copy and removed from its home.
+        derived = self.root / "derived-plan"
+        self.assertEqual(self.owner(derived), (os.getuid(), os.getgid(), 0o700))
+        self.assertEqual(self.owner(derived / "plan.json"), (os.getuid(), os.getgid(), 0o600))
+        self.assertEqual(self.as_account("validator", "/usr/bin/test", "-r", str(derived / "plan.json")), 1)
+        home = self.root / "validator-home"
+        self.assertEqual(sorted(command("/usr/bin/sudo", "-n", "/usr/bin/find", str(home), "-mindepth", "1",
+                                        "-maxdepth", "1", "-printf", "%f\\n").stdout.split()),
+                         [b"gradle-home", b"tmp"])
+
+        # A plan is derived once; the second attempt changes nothing.
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("ci-lifecycle: this job already has a plan", stderr)
+        self.assertEqual((self.state / "ci-plan.json").read_bytes(), canonical_json(expected))
+
+        self.assert_finished("validator")
+        # After the sweep the home is open again, so no hook can be started for this job any more.
+        (self.state / "ci-plan.json").unlink()
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("ci-worker: runner host fence identity or private mode changed", stderr)
+        self.assert_resting("validator")
+
+    def test_candidate_and_validator_job_plans_from_the_candidate_checkout_without_the_api(self):
+        commands = self.job(candidate=True)
+        # The working files are not what is tested: only the commit's objects are read.
+        (self.checkout / "release/inventory.json").write_bytes(b"{}\n")
+        (self.checkout / "e2e/scenario-contract.json").unlink()
+        code, stdout, stderr = self.prepare("candidate+validator")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertIn("candidate and validator allocated and locked", stdout)
+        self.assert_resting("candidate", "validator")
+        candidate, validator = self.account("candidate"), self.account("validator")
+        self.assertNotEqual((candidate.pw_uid, candidate.pw_gid), (validator.pw_uid, validator.pw_gid))
+        self.assertEqual(self.as_account("candidate", "/usr/bin/test", "-r", str(self.root / "controller")), 1)
+        expected = self.expected_plan()
+        self.assertEqual(expected["identity"]["tested_sha"], job_fixture.git(self.checkout, "rev-parse", "HEAD"))
+
+        wrong = "0" * 64
+        code, stdout, stderr = self.plan("--expect-sha256", wrong)
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, self.PLAN_HOOK)
+        self.assertEqual(stderr, "mod_base: plan-mismatch: this job derived another plan than the one the "
+                                 "generation agreed on\n")
+        self.assertFalse((self.state / "ci-plan.json").exists())
+        self.assertEqual(self.output.read_text(encoding="utf-8").count("\n"), 2)  # Only `ci subject` wrote.
+        self.assert_resting("candidate", "validator")
+        self.assertEqual(self.as_account("candidate", "/usr/bin/test", "-r", str(self.root / "validation-input")), 1)
+        self.assertEqual((self.api.request_count, commands.budgets), (4, [limits.MAX_CI_SUBJECT_REQUESTS]))
+        self.assert_finished("candidate", "validator")
+
+    def test_the_agreed_plan_hash_is_accepted_and_a_locked_validator_runs_the_next_protected_hook(self):
+        self.job(candidate=True)
+        self.assertEqual(self.prepare("candidate+validator")[0], 0)
+        expected = self.expected_plan()
+        code, stdout, stderr = self.plan("--expect-sha256", expected["plan_sha256"])
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual((self.state / "ci-plan.json").read_bytes(), canonical_json(expected))
+        self.assert_resting("candidate", "validator")
+        # What the next commands build on: the locked validator runs a hook against the plan, from
+        # the same adapter copy and input root, and finds no output of the hook before it.
+        from mod_base import runtime
+        job = lifecycle.open_job(runtime.build_invocation(self.mod, None, self.environment), self.state)
+        worker = lifecycle.open_worker(job)
+        plan = lifecycle.read_plan(job)
+        self.assertEqual(plan, expected)
+        log = []
+        result = lifecycle.run_protected_hook(job, worker, "derive_runtime", plan=plan, unit_id="forge-1.20.1",
+                                              log=log.append)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(log, ["[validator] synthetic derive_runtime forge-1.20.1: ok, 1 files\n"])
+        self.assertEqual(command("/usr/bin/sudo", "-n", "/usr/bin/find", str(self.root / "validator-home/validation"),
+                                 "-type", "f", "-printf", "%f %m\\n").stdout, b"runtime.json 600\n")
+        with self.assertRaises(MbError):  # A lane the plan does not hold never reaches the account.
+            lifecycle.run_protected_hook(job, worker, "derive_runtime", plan=plan, unit_id="quilt-1.20.1",
+                                         log=log.append)
+        self.assertEqual(len(log), 1)
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+
+    def test_a_hook_that_never_sets_its_umask_still_leaves_private_output(self):
+        mod = h.materialize(self.temporary / "mod")
+        dispatcher = mod / "scripts/ci/mod_base_build_dispatch.py"
+        source = dispatcher.read_text(encoding="utf-8")
+        self.assertEqual(source.count("    os.umask(0o077)\n"), 1)
+        dispatcher.write_text(source.replace(
+            "    os.umask(0o077)\n",
+            "    inherited = os.umask(0)\n    os.umask(inherited)\n"
+            "    print(f'synthetic inherited umask {inherited:03o}', flush=True)\n"), encoding="utf-8", newline="\n")
+        job_fixture.rewrite_config(mod)
+        self.job(mod=mod)
+        self.assertEqual(self.prepare("validator")[0], 0)
+        expected = self.expected_plan()
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual(stdout, "[validator] synthetic inherited umask 077\n" + self.PLAN_HOOK
+                         + f"plan: {expected['plan_sha256']} with 2 targets and 3 lanes\n")
+        self.assert_finished("validator")
+
+    def test_jdk_homes_are_admitted_recorded_in_order_and_the_first_is_a_hooks_java_home(self):
+        first, second = self.jdk("17"), self.jdk("21")
+        mod = h.materialize(self.temporary / "mod")
+        dispatcher = mod / "scripts/ci/mod_base_build_dispatch.py"
+        source = dispatcher.read_text(encoding="utf-8")
+        self.assertEqual(source.count("    os.umask(0o077)\n"), 1)
+        dispatcher.write_text(source.replace(
+            "    os.umask(0o077)\n",
+            "    os.umask(0o077)\n"
+            "    print('synthetic JAVA_HOME', os.environ.get('JAVA_HOME'), os.environ['PATH'].split(':')[1],"
+            " flush=True)\n"), encoding="utf-8", newline="\n")
+        job_fixture.rewrite_config(mod)
+        self.job(mod=mod)
+        code, stdout, stderr = self.prepare("validator", "--java-home", first, "--java-home", second)
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        worker = lifecycle.read_worker(self.state)
+        self.assertEqual((worker.java_homes, worker.java_home), ((first, second), first))
+        self.assertEqual(worker.tools.roots[-2:], (first, second))
+        self.assertEqual(len(set(worker.tools.roots)), len(worker.tools.roots))
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertTrue(stdout.startswith(f"[validator] synthetic JAVA_HOME {first} {first}/bin\n"), stdout)
+        self.assert_finished("validator")
+
+    def test_a_changed_config_or_tool_tree_after_prepare_stops_the_next_command(self):
+        home = self.jdk("drift")
+        self.job()
+        self.assertEqual(self.prepare("validator", "--java-home", home)[0], 0)
+        config = self.mod / "scripts/ci/mod-base-build.json"
+        original = config.read_bytes()
+        job_fixture.rewrite_config(self.mod, validator_seconds=7)
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("the protected Build config changed after the worker was prepared", stderr)
+        config.write_bytes(original)
+        # The interpreter and the JDKs are what the next root operation and the next hook run from.
+        command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(Path(home) / "bin/java"))
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertEqual(stderr, "mod_base: ci-worker: tool closure changed after protected admission\n")
+        self.assertFalse((self.state / "ci-plan.json").exists())
+        self.assertFalse((self.root / "validation-input").exists())
+        self.assertEqual(self.api.request_count, 4)  # Nothing was read for a worker that cannot be opened.
+        self.assert_resting("validator")
+        self.assert_finished("validator")
+
+    # -- faults ---------------------------------------------------------------------------------------
+
+    def fault(self, mode, *, error, log=None, timeout=None):
+        """A ``derive_plan`` that misbehaves is a clean rejection: no plan, both accounts locked,
+        nothing of theirs running, and the sweep still restores the home."""
+        mod = h.materialize(self.temporary / "mod", faults=[{"hook": "derive_plan", "unit": None, "mode": mode}])
+        if timeout is not None:
+            job_fixture.rewrite_config(mod, validator_seconds=timeout)
+        self.job(mod=mod, candidate=True)
+        self.assertEqual(self.prepare("candidate+validator")[0], 0)
+        started = time.monotonic()
+        code, stdout, stderr = self.plan()
+        self.assertEqual(code, 2, stdout + stderr)
+        self.assertRegex(stderr, error)
+        self.assertEqual(stderr.count("\n"), 1)
+        if log is not None:
+            self.assertEqual(stdout, log)
+        self.assertLess(time.monotonic() - started, 60)
+        self.assertFalse((self.state / "ci-plan.json").exists())
+        self.assertEqual(self.output.read_text(encoding="utf-8").count("\n"), 2)
+        self.assertFalse((self.root / "derived-plan").exists())
+        self.assertEqual(self.home(), 0o700)
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+
+    def test_failing_hook_is_rejected_with_its_log(self):
+        self.fault("fail", error=r"^mod_base: ci-worker: worker dispatcher returned failure\n$",
+                   log="[validator] synthetic derive_plan rejected: the release inventory requests this failure\n")
+
+    def test_hanging_hook_is_killed_at_the_protected_timeout(self):
+        self.fault("hang", timeout=3, error=r"^mod_base: ci-worker: worker execution timed out\n$", log="")
+
+    def test_hook_that_leaves_an_orphan_process_is_rejected_and_the_orphan_is_killed(self):
+        self.fault("orphan", error=r"^mod_base: ci-worker: worker dispatcher left a process behind\n$")
+
+    def test_hook_that_writes_an_extra_file_is_rejected_by_root(self):
+        self.fault("extra", error=r"^mod_base: ci-worker: root operation take-derived-plan failed with exit 2: ")
+        self.assertTrue(command("/usr/bin/sudo", "-n", "/usr/bin/test", "-e",
+                                str(self.root / "validator-home/validation/unplanned.txt")).returncode == 0)
+
+    def test_hook_that_omits_its_output_is_rejected_by_root(self):
+        self.fault("missing", error=r"^mod_base: ci-worker: root operation take-derived-plan failed with exit 2: ")
+
+    # -- prepare and finish in every state --------------------------------------------------------------
+
+    def test_second_worker_prepare_of_a_job_refuses_and_changes_nothing(self):
+        self.job()
+        self.assertEqual(self.prepare("candidate+validator")[0], 0)
+        accounts = {role: self.account(role).pw_uid for role in WORKER_ACCOUNTS}
+        record = (self.state / "worker.json").read_bytes()
+        for roles in ("candidate+validator", "validator"):
+            code, stdout, stderr = self.prepare(roles)
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertEqual(stderr, "mod_base: ci-state: cannot write the state record worker-host.json: "
+                                     "File exists\n")
+        self.assertEqual({role: self.account(role).pw_uid for role in WORKER_ACCOUNTS}, accounts)
+        self.assertEqual((self.state / "worker.json").read_bytes(), record)
+        self.assertEqual(self.home(), 0o700)
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+
+    def test_finish_after_a_prepare_that_failed_before_any_account_existed(self):
+        self.job()
+        code, stdout, stderr = self.prepare("candidate+validator", "--java-home", "/opt/mod-base-no-such-jdk")
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("ci-worker: cannot inspect protected host tool closure", stderr)
+        self.assertEqual(self.home(), 0o700)  # A failed prepare never opens the home again by itself.
+        self.assertFalse((self.state / "worker.json").exists())
+        self.assert_resting()
+        self.assertEqual(self.plan()[0], 2)  # No worker: nothing can be planned.
+        self.assert_finished()
+
+    def test_finish_after_a_prepare_that_failed_once_the_accounts_existed(self):
+        self.job()
+        with patch.object(lifecycle, "request_controller_grant", side_effect=MbError("injected failure")):
+            code, stdout, stderr = self.prepare("candidate+validator")
+        self.assertEqual((code, stdout, stderr), (2, "", "mod_base: rejected: injected failure\n"))
+        self.assertEqual(self.home(), 0o700)
+        self.assertFalse((self.state / "worker.json").exists())
+        self.assert_resting("candidate", "validator")  # The failed prepare locked what it had allocated.
+        self.assertEqual(self.as_account("validator", "/usr/bin/test", "-r", str(self.root / "controller")), 1)
+        self.assertEqual(self.plan()[0], 2)
+        self.assert_finished("candidate", "validator")
+
+    def test_finish_of_a_job_that_never_prepared_touches_nothing(self):
+        self.job()
+        untouched = (0, "worker-finish: candidate absent, validator absent; no process left; runner home "
+                        "untouched by this job\n", "")
+        self.assertEqual(self.finish(), untouched)
+        self.assertEqual(self.commands.run("worker-finish", state=self.temporary / "no-such-state"), untouched)
+        self.assertEqual(self.home(), self.home_mode)
+        self.assertFalse(self.root.parent.exists())
+        self.assert_resting()
+
+    def test_finish_stops_a_process_that_outlived_its_step_and_then_restores_the_home(self):
+        self.job()
+        self.assertEqual(self.prepare("candidate+validator")[0], 0)
+        # What a cancelled step leaves: processes of both accounts that nobody waits for any more.
+        for role in WORKER_ACCOUNTS:
+            record = self.account(role)
+            stray = subprocess.Popen(("/usr/bin/sudo", "-n", "--user", f"#{record.pw_uid}", "--", "/usr/bin/setsid",
+                                      "--fork", "/usr/bin/sleep", "600"), stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=HOST_ENV, cwd="/")
+            self.assertEqual(stray.wait(timeout=20), 0)
+            self.assertNotEqual(command("/usr/bin/sudo", "-n", "/usr/bin/pgrep", "-u", str(record.pw_uid)).stdout, b"")
+        self.assert_finished("candidate", "validator")
+
+    def test_finish_keeps_the_home_closed_when_an_account_is_not_the_one_this_kit_allocates(self):
+        self.job()
+        self.assertEqual(self.prepare("validator")[0], 0)
+        # A candidate account with another home: its UID is never signalled, and the home stays closed.
+        command("/usr/bin/sudo", "-n", "/usr/sbin/useradd", "--no-create-home", "--home-dir", "/nonexistent",
+                "--shell", "/bin/bash", "--user-group", WORKER_ACCOUNTS["candidate"])
+        code, stdout, stderr = self.finish()
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("$.account.home: worker passwd home changed", stderr)
+        self.assertEqual(self.home(), 0o700)
+        self.assert_resting("candidate", "validator")  # Both are locked all the same.
 
 
 if __name__ == "__main__":

@@ -16,19 +16,34 @@ from mod_base.build_ci.worker import WorkerAccount, WorkerError, WorkerResult
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
-from tests.helpers import ci_envelope, ci_plan
+from tests.helpers import ci_envelope, ci_plan, ci_plan_inputs
 
 
 class ValidationPlanTests(unittest.TestCase):
+    """The input root in mocks: order of the checks. ``tests/test_ci_lifecycle.py`` has real trees."""
+
     def test_exact_plan_inventory_and_bytes_are_both_required(self):
-        plan = ci_plan()
+        plan, sources = ci_plan_inputs()
         raw = canonical_json(plan)
+        digests = inputs.plan_source_digests(plan)
+        self.assertEqual(list(digests), ["inventory", "scenario-contract", "gradle-properties"])
+        self.assertEqual(digests, {name: hashlib.sha256(data).hexdigest() for name, data in sources.items()})
         record = {"path": grammar.CI_PLAN_NAME, "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-        for records, data, success in [([record], raw, True), ([], raw, False),
-                ([record, {**record, "path": "extra.json"}], raw, False),
-                ([{**record, "size": len(raw) + 1}], raw, False), ([record], b" " + raw, False)]:
-            with self.subTest(success=success, data=data[:1]), \
-                    patch.object(inputs, "validate_tree_entries"), \
+        inventory, scenario, extra = ({"path": name, "size": len(sources[name]), "sha256": digests[name]}
+                                      for name in digests)
+        complete = [record, extra, inventory, scenario]
+        for records, data, success in [(complete, raw, True), ([], raw, False), ([record], raw, False),
+                ([extra, inventory, scenario], raw, False), ([record, inventory, scenario], raw, False),
+                ([*complete, {**record, "path": "extra.json"}], raw, False),
+                ([{**record, "sha256": "0" * 64}, extra, inventory, scenario], raw, False),
+                ([record, extra, {**inventory, "sha256": digests["scenario-contract"]}, scenario], raw, False),
+                ([record, {**extra, "sha256": digests["inventory"]}, inventory, scenario], raw, False),
+                ([record, extra, inventory, {**scenario, "path": "scenario"}], raw, False),
+                ([record, {**extra, "path": "gradle.properties"}, inventory, scenario], raw, False),
+                ([record, extra, {**inventory, "size": limits.MAX_CI_PLAN_SOURCE_BYTES + 1}, scenario], raw, False),
+                (complete, b" " + raw, False)]:
+            with self.subTest(success=success, data=data[:1], records=[entry["path"] for entry in records]), \
+                    patch.object(inputs, "validate_tree_entries") as entries, \
                     patch.object(inputs, "file_records", return_value=records), \
                     patch.object(inputs, "read_child_file", return_value=data):
                 if success:
@@ -36,30 +51,56 @@ class ValidationPlanTests(unittest.TestCase):
                 else:
                     with self.assertRaises(MbError):
                         inputs.verify_validation_plan(Path("input"), plan=plan)
+                # Exactly the files of this state and their directory: no room for another entry.
+                entries.assert_called_once_with(Path("input"), max_entries=5)
 
     def test_entry_preflight_precedes_content_and_invalid_plan_precedes_copy(self):
+        plan, sources = ci_plan_inputs()
         with patch.object(inputs, "validate_tree_entries", side_effect=MbError("entries")), \
                 patch.object(inputs, "file_records") as records, self.assertRaises(MbError):
-            inputs.verify_validation_plan(Path("input"), plan=ci_plan())
+            inputs.verify_validation_plan(Path("input"), plan=plan)
         records.assert_not_called()
-        invalid = {**ci_plan(), "unknown": True}
-        with patch.object(inputs, "atomic_directory") as atomic, self.assertRaises(MbError):
-            inputs.materialize_validation_plan(Path("input"), plan=invalid)
-        atomic.assert_not_called()
+        without_extra = {name: data for name, data in sources.items() if name != "gradle-properties"}
+        # A malformed plan, a plan derived from other files, and bytes or names that are no candidate file.
+        for arguments in (dict(sources=sources, plan={**plan, "unknown": True}),
+                          dict(sources={**sources, "inventory": b"another inventory"}, plan=plan),
+                          dict(sources={**sources, "gradle-properties": b"version=2"}, plan=plan),
+                          dict(sources=without_extra, plan=plan),
+                          dict(sources={**sources, "another-input": b"x"}, plan=plan),
+                          dict(sources={**sources, "inventory": b""}),
+                          dict(sources={**sources, "scenario-contract": None}),
+                          dict(sources={**sources, "inventory": "inventory"}),
+                          dict(sources={"inventory": b"inventory"}),
+                          dict(sources={**sources, "ci-plan.json": b"{}"}),
+                          dict(sources={**sources, "Not A Token": b"x"}),
+                          dict(sources={**sources, **{f"extra-{index}": b"x" for index in range(limits.MAX_CI_PLAN_INPUTS)}}),
+                          dict(sources=list(sources)),
+                          dict(sources={**sources, "inventory": b"x" * (limits.MAX_CI_PLAN_SOURCE_BYTES + 1)})):
+            with self.subTest(arguments=str(arguments)[:70]), patch.object(inputs, "atomic_directory") as atomic, \
+                    self.assertRaises(MbError):
+                inputs.materialize_validation_inputs(Path("input"), **arguments)
+            atomic.assert_not_called()
 
     def test_independent_canonical_stage_is_verified_before_publication(self):
-        plan = ci_plan()
+        plan, sources = ci_plan_inputs()
         def atomic(output, writer):
             self.assertEqual(output, Path("input"))
             return writer(Path("stage"), 17)
-        with patch.object(inputs, "atomic_directory", side_effect=atomic), \
-                patch.object(inputs, "_write_controller_files") as writing, \
-                patch.object(inputs, "verify_validation_plan", return_value=plan) as checking:
-            self.assertEqual(inputs.materialize_validation_plan(Path("input"), plan=plan), plan)
-        descriptor, files = writing.call_args.args
-        self.assertEqual(descriptor, 17)
-        self.assertEqual((files[0].path, files[0].data), (grammar.CI_PLAN_NAME, canonical_json(plan)))
-        checking.assert_called_once_with(Path("stage"), plan=plan)
+        for staged_plan in (plan, None):
+            with self.subTest(plan=staged_plan is not None), \
+                    patch.object(inputs, "atomic_directory", side_effect=atomic), \
+                    patch.object(inputs, "_write_controller_files") as writing, \
+                    patch.object(inputs, "verify_validation_inputs") as checking:
+                inputs.materialize_validation_inputs(Path("input"), sources=sources, plan=staged_plan)
+            descriptor, files = writing.call_args.args
+            self.assertEqual(descriptor, 17)
+            expected = [("gradle-properties", sources["gradle-properties"]), ("inventory", sources["inventory"]),
+                        ("scenario-contract", sources["scenario-contract"])]
+            if staged_plan is not None:
+                expected.insert(0, (grammar.CI_PLAN_NAME, canonical_json(plan)))
+            self.assertEqual([(file.path, file.data) for file in files], expected)
+            checking.assert_called_once_with(Path("stage"), digests=inputs.plan_source_digests(plan),
+                                             plan=staged_plan)
 
 
 class InputExecutionTests(unittest.TestCase):
@@ -71,7 +112,8 @@ class InputExecutionTests(unittest.TestCase):
         envelope = ci_envelope() if envelope is None else envelope
         execution = WorkerResult(0, b"native verified", False)
         identities = ((1, 20), (1, 30))
-        with patch.object(inputs, "authenticate_worker_account", side_effect=[self.validator, self.candidate]), \
+        with patch.object(inputs, "authenticate_worker_account", return_value=self.validator), \
+                patch.object(inputs, "authenticate_peer_account", return_value=self.candidate), \
                 patch.object(inputs, "_read_inputs", side_effect=reads or [identities, identities]) as checking, \
                 patch.object(inputs, "execute_controller_validator", return_value=execution,
                              side_effect=execution_error) as execute, \
@@ -165,7 +207,8 @@ class TargetInputExecutionTests(unittest.TestCase):
             if execution_error:
                 raise execution_error
             return execution
-        with patch.object(inputs, "authenticate_worker_account", side_effect=[self.validator, self.candidate]), \
+        with patch.object(inputs, "authenticate_worker_account", return_value=self.validator), \
+                patch.object(inputs, "authenticate_peer_account", return_value=self.candidate), \
                 patch.object(inputs, "_read_inputs", side_effect=read) as checking, \
                 patch.object(inputs, "execute_controller_validator", side_effect=launch) as execute, \
                 patch.object(inputs, "terminate_worker", side_effect=lambda account: events.append("terminate")) as terminate:
@@ -229,37 +272,68 @@ class PlanHandoffTests(unittest.TestCase):
     def test_fixed_private_plan_copy_is_checked_before_and_after_group_read_grant(self):
         boundary = InputExecutionTests.boundary
         validator = InputExecutionTests.validator
-        candidate = InputExecutionTests.candidate
+        plan, _ = ci_plan_inputs()
+        digests = inputs.plan_source_digests(plan)
         def info(owner, group, mode, inode=30):
             return SimpleNamespace(st_dev=1, st_ino=inode, st_uid=owner, st_gid=group, st_mode=stat.S_IFDIR | mode)
-        for foreign, transfer_error, inode in [(False, None, 30), (True, None, 30),
-                                             (False, OSError("grant"), 30), (False, None, 31)]:
-            with self.subTest(foreign=foreign, inode=inode), ExitStack() as stack:
+        cases = [(False, None, 30, candidate, derived) for candidate in (InputExecutionTests.candidate, None)
+                 for derived in (False, True)]
+        cases += [(True, None, 30, None, False), (False, OSError("grant"), 30, None, False),
+                  (False, None, 31, None, False)]
+        for foreign, transfer_error, inode, candidate, derived in cases:
+            with self.subTest(foreign=foreign, inode=inode, candidate=candidate, derived=derived), \
+                    ExitStack() as stack:
                 stack.enter_context(patch.object(inputs, "authenticate_privileged_host_boundary"))
-                stack.enter_context(patch.object(inputs, "authenticate_worker_account", side_effect=[validator, candidate]))
-                stack.enter_context(patch.object(inputs, "terminate_worker"))
+                stack.enter_context(patch.object(inputs, "authenticate_worker_account", return_value=validator))
+                stack.enter_context(patch.object(inputs, "authenticate_peer_account", return_value=candidate))
+                kill = stack.enter_context(patch.object(inputs, "terminate_worker"))
                 stack.enter_context(patch.object(inputs, "_layout"))
                 stack.enter_context(patch.object(inputs, "_open_directory", return_value=12))
                 stack.enter_context(patch.object(inputs.os, "fstat", side_effect=[info(2000 if foreign else 1001,121,0o700), info(1001,2001,0o750,inode)]))
                 stack.enter_context(patch.object(inputs.os, "close"))
                 modes = stack.enter_context(patch.object(inputs.os, "fchmod", create=True))
                 stack.enter_context(patch.object(inputs.os, "fsync"))
-                checking = stack.enter_context(patch.object(inputs, "verify_validation_plan", return_value=ci_plan()))
+                checking = stack.enter_context(patch.object(inputs, "verify_validation_inputs"))
                 grant = stack.enter_context(patch.object(inputs, "grant_tree_read_access", side_effect=transfer_error))
                 stack.enter_context(patch.object(inputs, "authenticate_tree_read_access"))
+                def prepare():
+                    if derived:  # Before the plan exists: the candidate files alone.
+                        return inputs.prepare_plan_inputs(boundary=boundary, validator=validator, digests=digests)
+                    return inputs.prepare_validation_plan(boundary=boundary, validator=validator, plan=plan)
                 if not foreign and not transfer_error and inode == 30:
-                    self.assertEqual(inputs.prepare_validation_plan(boundary=boundary, validator=validator, plan=ci_plan()), ci_plan())
-                    self.assertEqual(checking.call_count, 2)
+                    self.assertEqual(prepare(), None if derived else plan)
+                    expected = unittest.mock.call(inputs.VALIDATOR_INPUT_ROOT, digests=digests,
+                                                  plan=None if derived else plan)
+                    self.assertEqual(checking.call_args_list, [expected, expected])
                     self.assertEqual(grant.call_args.kwargs["reader_gid"], 2001)
+                    self.assertEqual(grant.call_args.kwargs["max_files"], 3 + limits.MAX_CI_PLAN_INPUTS)
+                    # A job with the validator alone has no candidate to stop first.
+                    self.assertEqual(kill.call_args_list, [] if candidate is None else [unittest.mock.call(candidate)])
                     modes.assert_not_called()
                 else:
                     with self.assertRaises(MbError):
-                        inputs.prepare_validation_plan(boundary=boundary, validator=validator, plan=ci_plan())
+                        prepare()
                     if foreign:
                         modes.assert_not_called()
                         grant.assert_not_called()
                     else:
                         modes.assert_called_once_with(12, 0o700)
+
+    def test_digests_that_are_no_digests_or_not_the_plans_reject_before_any_account_is_touched(self):
+        boundary, validator = InputExecutionTests.boundary, InputExecutionTests.validator
+        plan, _ = ci_plan_inputs()
+        good = inputs.plan_source_digests(plan)
+        with patch.object(inputs, "authenticate_privileged_host_boundary"), \
+                patch.object(inputs, "authenticate_worker_account") as accounts:
+            for digests in ({**good, "inventory": "A" * 64}, {**good, "scenario-contract": "b" * 63},
+                            {**good, "gradle-properties": None}, {"inventory": "a" * 64},
+                            {**good, "ci-plan.json": "c" * 64}, {**good, "Bad Name": "c" * 64}, [], None,
+                            {**good, **{f"extra-{index}": "c" * 64 for index in range(limits.MAX_CI_PLAN_INPUTS)}}):
+                with self.subTest(digests=str(digests)[:60]), self.assertRaises(MbError):
+                    inputs.prepare_plan_inputs(boundary=boundary, validator=validator, digests=digests)
+            with self.assertRaises(MbError):
+                inputs.prepare_validation_plan(boundary=boundary, validator=validator, plan={**plan, "extra": 1})
+        accounts.assert_not_called()
 
 
 if __name__ == "__main__":

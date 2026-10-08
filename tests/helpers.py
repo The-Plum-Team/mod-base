@@ -766,6 +766,15 @@ def ci_plan() -> dict[str, Any]:
     return document
 
 
+def ci_plan_inputs() -> tuple[dict[str, Any], dict[str, bytes]]:
+    """:func:`ci_plan` with the bytes of every candidate file it binds by SHA-256, by staged name
+    (the inventory and the scenario contract in its identity, the extra input in ``plan_inputs``):
+    what ``validation-input/`` holds next to the plan."""
+
+    return ci_plan(), {"inventory": b"inventory", "scenario-contract": b"scenarios",
+                       "gradle-properties": b"gradle-properties"}
+
+
 def ci_staged_plan() -> dict[str, Any]:
     """The fixture plan in the shape both mods stage. ``target-a`` builds two lanes and has a
     manifest and an SBOM of its own (``lane_id`` null); ``target-c`` builds one lane and has no SBOM.
@@ -1083,6 +1092,17 @@ def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any
         arguments = {"validator": validator, "sources": sources, "plan": plan, "build": ci_envelope(),
                      "runtime": runtime, "lane_id": "lane-a", "run_id": 43, "run_attempt": 2,
                      "execution_nonce": h("execution-nonce")}
+    elif operation in ("grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs"):
+        from mod_base.build_ci.protocol import subject_of
+
+        identity = plan["identity"]
+        arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}, **{
+            "grant-controller": {"subject": subject_of(identity), "sources": sources},
+            "grant-plan-inputs": {"inputs": [{"name": "inventory", "sha256": identity["inventory_sha256"]},
+                                             {"name": "scenario-contract", "sha256": identity["scenario_sha256"]},
+                                             *plan["plan_inputs"]]},
+            "take-derived-plan": {},
+            "grant-validation-inputs": {"plan": plan}}[operation]}
     else:
         raise ValueError(f"no sample root request for {operation!r}")
     return {"kind": "mod-base.ci.root-request", "schema_version": 1, "operation": operation,

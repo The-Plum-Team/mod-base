@@ -47,8 +47,9 @@ instead of a reuse of the pull request's evidence.
   names in the table below. No variable of the runner reaches a hook: no `GITHUB_*`, no token.
 * The worker root is the parent directory of `HOME`. Every path below is relative to it.
 * A hook that exits non-zero, runs past its timeout or leaves a process behind fails the step.
-* Run with `umask 077` and create the output directory when it is missing. Output must be regular
-  files with one link; a symbolic link, a special file or a file outside the expected set fails
+* A hook starts with `umask 077` and creates its output directory when it is missing. Output must
+  be private regular files with one link (mode 0600 in 0700 directories, which is what that umask
+  gives); a symbolic link, a special file, another mode or a file outside the expected set fails
   the step.
 
 | Hook | Account, checkout | Extra environment | Reads | Must write |

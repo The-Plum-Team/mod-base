@@ -125,8 +125,10 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_IDENTITY_BYTES": (16 * KIB, "the private subject record of one job"),
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),
-    "MAX_CI_PLAN_INPUT_FILES": (1, "the plan input tree holds the plan only"),
-    "MAX_CI_PLAN_INPUT_ENTRIES": (2, "that file and its directory"),
+    "MAX_CI_WORKER_RECORD_BYTES": (256 * KIB, "the private worker record of one job"),
+    "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation without a candidate checkout may spend"),
+    "CI_GIT_READ_TIMEOUT_SECONDS": (60.0, "one object read from the candidate checkout"),
+    "MAX_CI_GIT_ANSWER_BYTES": (4 * KIB, "one object id or tree entry read from the candidate checkout"),
     "MAX_CI_PRIVATE_RECORD_ENTRIES": (2, "a private record directory and its one file"),
     "MAX_CI_POLICY_TESTS": (100_000, "tests one policy suite may discover"),
     "MAX_CI_POLICY_WORKERS": (256, "worker processes of the policy runner"),
@@ -171,6 +173,13 @@ KIT: dict[str, tuple[Any, str]] = {
 #: Computed from other bounds: name -> (value, the formula in words, the formula).
 DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
     "MAX_CI_ARTIFACTS_PER_GATE": (1000, "at most one artifact per job", lambda: limits.MAX_JOBS_PER_ATTEMPT),
+    "MAX_CI_PLAN_INPUT_FILES": (11, "the validator's input tree: the plan, the inventory, the scenario contract "
+                                    "and every extra plan input", lambda: 3 + limits.MAX_CI_PLAN_INPUTS),
+    "MAX_CI_PLAN_INPUT_ENTRIES": (12, "the files of the validator's input tree and its directory",
+                                  lambda: limits.MAX_CI_PLAN_INPUT_FILES + 1),
+    "MAX_CI_PLAN_INPUT_BYTES": (44 * MIB, "the plan and every candidate file it is derived from",
+                                lambda: (limits.MAX_CI_PLAN_BYTES
+                                         + (2 + limits.MAX_CI_PLAN_INPUTS) * limits.MAX_CI_PLAN_SOURCE_BYTES)),
     "MAX_CI_ROOT_REQUEST_BYTES": (
         153_092_096, "a tested-tree inventory as JSON rows (twice its Git listing), a plan, the owning "
                      "Build envelope, one runtime envelope, one record and 2 MiB of metadata",

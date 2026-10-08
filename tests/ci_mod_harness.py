@@ -182,14 +182,10 @@ class Sandbox:
                 for name, path in adapter.plan_sources(self.config.data).items()}
 
     def identity(self) -> dict[str, Any]:
-        """The identity of the hook environment. ``worker_environment`` only accepts a complete
-        identity, which does not exist before the plan does: until then the plan-bound hashes are
-        zeros (the environment itself carries none of them)."""
+        """The identity of the hook environment: the subject until the plan exists (``derive_plan``
+        runs for it), the plan's complete identity afterwards."""
 
-        if self.plan is not None:
-            return self.plan["identity"]
-        return {**self.subject, "policy_sha256": "0" * 64, "inventory_blob": "0" * 40, "inventory_sha256": "0" * 64,
-                "scenario_sha256": "0" * 64, "runtime_selection_sha256": "0" * 64}
+        return self.subject if self.plan is None else self.plan["identity"]
 
     def run(self, hook: str, *, unit_id: str | None = None, runtime: dict[str, str] | None = None,
             timeout: float = 60.0) -> subprocess.CompletedProcess[bytes]:

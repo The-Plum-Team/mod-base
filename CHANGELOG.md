@@ -15,6 +15,14 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   subject and writes the private identity record, pure plan construction with the policy digest,
   and a synthetic mod (`tests/fixtures/ci_mod`) that implements every hook. Planned output paths
   accept the mods' real file names (single inner spaces and `+`).
+- Add the first job steps of the disposable-worker lifecycle: `ci worker-prepare` (host fence,
+  accounts, the protected adapter copy for the validator), `ci plan` (runs `derive_plan` and writes
+  the plan of the job) and `ci worker-finish` (locks the accounts and reopens the runner home).
+  For a mod's hooks: a hook starts with `umask 077`, so its output is private unless it decides
+  otherwise; a hook that leaves a running process behind (a Gradle daemon, for one) fails its step
+  even when it exited zero; and every candidate file the protected config names is staged for
+  the protected hooks under its name in `validation-input/`, next to `ci-plan.json` once the plan
+  exists.
 - The unreleased Build kinds describe what Block Pops and Quick Skin really stage.
   `mod-base.build.plan`: an output's `lane_id` may be `null` for a file of the target as a whole
   (its staged manifest, a report, a log, one SBOM for all its lanes). Every lane has exactly one

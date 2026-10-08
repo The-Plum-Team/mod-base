@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from mod_base.build_ci import worker
+from mod_base.build_ci.protocol import subject_of
 from mod_base.errors import MbError
 from mod_base.model import limits
 from tests.helpers import ci_plan
@@ -209,6 +210,29 @@ class EnvironmentTests(unittest.TestCase):
             with self.subTest(change=list(change)), self.assertRaises(MbError):
                 self.environment(**change)
 
+    def test_a_subject_before_the_plan_gives_the_environment_of_its_complete_identity(self):
+        identity = ci_plan()["identity"]
+        subject = subject_of(identity)
+        self.assertNotEqual(subject, identity)
+        self.assertEqual(self.environment(identity=subject), self.environment())
+        self.assertEqual(worker.execution_subject(identity), subject)
+        self.assertEqual(worker.execution_subject(subject), subject)
+
+    def test_neither_a_partial_identity_nor_a_changed_subject_is_a_subject(self):
+        identity = ci_plan()["identity"]
+        subject = subject_of(identity)
+        plan_field = next(key for key in identity if key not in subject)
+        rejected = [None, [], "subject", {}, {key: value for key, value in subject.items() if key != "tested_sha"},
+                    {**subject, plan_field: identity[plan_field]}, {**identity, "unknown": "x"},
+                    {key: value for key, value in identity.items() if key != plan_field},
+                    {**subject, "tested_sha": "not-a-sha"}, {**identity, "policy_sha256": "0"},
+                    {**subject, "tested_parents": []}]
+        for value in rejected:
+            with self.subTest(value=value), self.assertRaises(MbError):
+                worker.execution_subject(value)
+            with self.subTest(environment=value), self.assertRaises(MbError):
+                self.environment(identity=value)
+
     def test_reviewed_runtime_inputs_are_passed_without_shell_interpolation(self):
         values = {"E2E_ROW_JSON": '{"data":"$(touch /outside)"}', "E2E_SCENARIOS": "example/server",
                   "LIBGL_ALWAYS_SOFTWARE": "1", "MB_LANE_ID": "lane-a", "SOURCE_DATE_EPOCH": "123"}
@@ -246,6 +270,63 @@ class AccountTests(unittest.TestCase):
         for role in (None, [], "runner"):
             with self.assertRaises(MbError):
                 worker.authenticate_worker_account(role)
+            with self.assertRaises(MbError):
+                worker.worker_account_exists(role)
+            with self.assertRaises(MbError):
+                worker.lock_worker_account(role)
+        with patch.object(worker.sys, "platform", "win32"), self.assertRaises(MbError):
+            worker.worker_account_exists("candidate")
+
+    def passwd(self, *names, failure=None):
+        def getpwnam(name):
+            if failure is not None:
+                raise failure
+            if name not in names:
+                raise KeyError(name)
+            return SimpleNamespace(pw_name=name)
+        return patch.dict(sys.modules, {"pwd": SimpleNamespace(getpwnam=getpwnam)})
+
+    def test_existence_is_the_passwd_entry_alone_and_a_failed_lookup_is_not_absence(self):
+        with patch.object(worker.sys, "platform", "linux"):
+            with self.passwd("modbase_validator"):
+                self.assertTrue(worker.worker_account_exists("validator"))
+                self.assertFalse(worker.worker_account_exists("candidate"))
+            with self.passwd(failure=OSError("passwd unreadable")), self.assertRaises(MbError):
+                worker.worker_account_exists("candidate")
+
+    def peer(self, account, *, existing, live=None, runner=(1001, 1001)):
+        validator = worker.WorkerAccount("validator", 2001, 2001, str(worker.WORKER_ROOT / "validator-home"))
+        live = {"candidate": ACCOUNT, "validator": validator, **(live or {})}
+        self.authenticated = []
+        def authenticate(role):
+            self.authenticated.append(role)
+            return live[role]
+        with patch.object(worker, "worker_account_exists", side_effect=lambda role: role in existing), \
+                patch.object(worker, "authenticate_worker_account", side_effect=authenticate):
+            return worker.authenticate_peer_account(account, runner_uid=runner[0], runner_gid=runner[1])
+
+    def test_peer_is_the_other_account_or_none_in_a_job_that_allocated_one(self):
+        validator = worker.WorkerAccount("validator", 2001, 2001, str(worker.WORKER_ROOT / "validator-home"))
+        self.assertEqual(self.peer(validator, existing={"candidate", "validator"}), ACCOUNT)
+        self.assertEqual(self.authenticated, ["candidate"])
+        self.assertEqual(self.peer(ACCOUNT, existing={"candidate", "validator"}), validator)
+        self.assertEqual(self.authenticated, ["validator"])
+        self.assertIsNone(self.peer(validator, existing={"validator"}))
+        self.assertEqual(self.authenticated, [])  # An absent peer is never looked up as an account.
+
+    def test_peer_and_runner_must_differ_in_user_and_group_from_every_account(self):
+        validator = worker.WorkerAccount("validator", 2001, 2001, str(worker.WORKER_ROOT / "validator-home"))
+        both = {"candidate", "validator"}
+        clashes = [dict(existing=both, live={"candidate": worker.WorkerAccount("candidate", 2001, 2000, ACCOUNT.home)}),
+                   dict(existing=both, live={"candidate": worker.WorkerAccount("candidate", 2000, 2001, ACCOUNT.home)}),
+                   dict(existing=both, runner=(2000, 1001)), dict(existing=both, runner=(1001, 2000)),
+                   dict(existing=both, runner=(2001, 1001)), dict(existing={"validator"}, runner=(1001, 2001))]
+        for clash in clashes:
+            with self.subTest(clash=clash), self.assertRaisesRegex(MbError, "not isolated"):
+                self.peer(validator, **clash)
+        for forged in (None, ("validator", 2001, 2001), worker.WorkerAccount("runner", 2001, 2001, "/home/runner")):
+            with self.subTest(forged=forged), self.assertRaises(MbError):
+                self.peer(forged, existing=both)
 
 
 class TerminationTests(unittest.TestCase):
@@ -326,6 +407,30 @@ class TerminationTests(unittest.TestCase):
              patch.object(worker, "_control") as run, self.assertRaises(MbError):
             worker.terminate_worker(ACCOUNT)
         run.assert_not_called()
+        with patch.object(worker, "authenticate_worker_account", return_value=other), \
+             patch.object(worker, "_control") as run, self.assertRaises(MbError):
+            worker.worker_processes(ACCOUNT)
+        run.assert_not_called()
+
+    def test_liveness_asks_for_running_states_by_effective_and_real_user_and_signals_nothing(self):
+        for answers, alive in (([b"", b""], False), ([b"123\n"], True), ([b"", b"77\n"], True)):
+            with self.subTest(answers=answers), \
+                    patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
+                    patch.object(worker, "_control", side_effect=list(answers)) as run:
+                self.assertIs(worker.worker_processes(ACCOUNT), alive)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(commands, [("/usr/bin/pgrep", "--runstates", "DIKPRSTWt", flag, "2000")
+                                        for flag in ("-u", "-U")][:len(answers)])
+            self.assertNotIn("Z", commands[0][2])  # A zombie runs nothing.
+            self.assertTrue(all(call.kwargs["accepted"] == frozenset({0, 1}) for call in run.call_args_list))
+
+    def test_lock_by_name_runs_one_usermod_and_requires_its_success(self):
+        with patch.object(worker, "_control", return_value=b"") as run:
+            worker.lock_worker_account("validator")
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ("/usr/bin/sudo", "-n", "/usr/sbin/usermod", "--lock",
+                                                 "--expiredate", "1970-01-02", "modbase_validator"))
+        self.assertEqual(run.call_args.kwargs["accepted"], frozenset({0}))
 
 
 class ControlPipeTests(unittest.TestCase):
@@ -370,17 +475,29 @@ class ControlPipeTests(unittest.TestCase):
 
 class ExecutionTests(unittest.TestCase):
     def execute(self, *, chunks=(b"native-output\n", b""), code=0, command=None, ready=True,
-                clock=None, termination_error=None, read_error=None, launch_error=None):
+                clock=None, termination_error=None, read_error=None, launch_error=None, abandoned=False,
+                liveness_error=None, late_exit=False):
         process = MagicMock()
-        process.poll.return_value = code
+        process.poll.return_value = None if late_exit else code
         process.wait.return_value = code
+        events = []
         selector = MagicMock()
         selector.select.return_value = [(None, None)] if ready else []
         argv = command if command is not None else (
             "/opt/python/bin/python3", "-I", "-B", str(worker.WORKER_ROOT / "repository/scripts/ci/dispatch.py"), "build-target")
         read = read_error if read_error is not None else list(chunks)
+        def observe(account):
+            events.append("observe")
+            if liveness_error is not None:
+                raise liveness_error
+            return abandoned
+        def kill(account):
+            events.append("terminate")
+            if termination_error is not None:
+                raise termination_error
         with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
-             patch.object(worker, "terminate_worker", side_effect=termination_error) as terminate, \
+             patch.object(worker, "worker_processes", side_effect=observe), \
+             patch.object(worker, "terminate_worker", side_effect=kill) as terminate, \
              patch.object(worker.subprocess, "Popen", return_value=process, side_effect=launch_error) as launch, \
              patch.object(worker.selectors, "DefaultSelector") as create, \
              patch.object(worker.os, "set_blocking", create=True), patch.object(worker.os, "read", side_effect=read), \
@@ -396,6 +513,14 @@ class ExecutionTests(unittest.TestCase):
                                                 "/usr/bin/setpriv", "--no-new-privs", "--", "/usr/bin/env"))
                 self.assertIn("-i", arguments)
                 self.assertEqual(arguments[-len(argv):], argv)
+                # The account's own process sets the private umask and then becomes the dispatcher.
+                wrapper = arguments[-len(argv) - 6:-len(argv)]
+                self.assertEqual(wrapper[:5], ("/opt/python/bin/python3", "-I", "-S", "-B", "-c"))
+                self.assertIn("os.umask(0o077)", wrapper[5])
+                self.assertIn("os.execv(sys.argv[1],sys.argv[1:])", wrapper[5])
+                self.assertIn("=", arguments[-len(argv) - 7])  # Directly after the closed environment.
+                # What the hook left behind is looked for once, before the sweep that would hide it.
+                self.assertEqual(events, ["observe", "terminate"])
                 self.assertEqual(launch.call_args.kwargs["env"], worker._HOST_ENV)
                 self.assertIn(f"--chdir={worker.WORKER_ROOT / 'repository'}", arguments)
                 self.assertEqual(launch.call_args.kwargs["cwd"].as_posix(), str(worker.WORKER_ROOT))
@@ -406,6 +531,7 @@ class ExecutionTests(unittest.TestCase):
                     self.assertEqual(terminate.call_args_list, [unittest.mock.call(ACCOUNT)] * 2)
                 else:
                     terminate.assert_called_once_with(ACCOUNT)
+                self.assertLessEqual(events.count("observe"), 1)
                 calls = [call.args for call in signals.call_args_list]
                 if calls:
                     self.assertIn((worker.signal.SIGTERM, worker.signal.SIG_IGN), calls)
@@ -417,6 +543,20 @@ class ExecutionTests(unittest.TestCase):
     def test_success_returns_only_after_account_termination_and_launcher_reap(self):
         result = self.execute()
         self.assertEqual(result, worker.WorkerResult(0, b"native-output\n", False))
+
+    def test_a_dispatcher_that_left_a_process_behind_fails_after_its_uid_was_swept(self):
+        for late_exit in (False, True):  # The exit is seen in the loop, or only after the output ended.
+            with self.subTest(late_exit=late_exit), \
+                    self.assertRaisesRegex(worker.WorkerExecutionError, "left a process behind") as caught:
+                self.execute(abandoned=True, late_exit=late_exit)
+            self.assertEqual(caught.exception.result, worker.WorkerResult(0, b"native-output\n", False))
+        self.assertEqual(self.execute(late_exit=True), worker.WorkerResult(0, b"native-output\n", False))
+        with self.assertRaisesRegex(worker.WorkerExecutionError, "returned failure"):
+            self.execute(abandoned=True, code=3)  # A failed hook is reported as failed, whatever it left.
+
+    def test_a_failed_liveness_query_is_no_success_and_the_uid_is_still_swept(self):
+        with self.assertRaises(worker.WorkerExecutionError):
+            self.execute(liveness_error=worker.WorkerError("pgrep failed"))
 
     def test_failed_dispatcher_preserves_bounded_diagnostics_and_never_returns_success(self):
         with self.assertRaises(worker.WorkerExecutionError) as caught:

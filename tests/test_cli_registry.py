@@ -85,6 +85,21 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                     "github_output": Path("out")}),
     "ci subject protected": (["ci", "subject", *REPO, "--state", "state", "--producer", "packaged", "--pr", "",
                               "--github-output", "out"], {"producer": "packaged", "pr": None}),
+    "ci worker-prepare": (["ci", "worker-prepare", *REPO, "--state", "state", "--roles", "candidate+validator",
+                           "--python", "/opt/python/bin/python3", "--java-home", "/opt/jdk/17",
+                           "--java-home", "/opt/jdk/21"],
+                          {"ci_command": "worker-prepare", "state": Path("state"), "roles": "candidate+validator",
+                           "python": "/opt/python/bin/python3", "java_home": ["/opt/jdk/17", "/opt/jdk/21"]}),
+    "ci worker-prepare validator": (["ci", "worker-prepare", *REPO, "--state", "state", "--roles", "validator",
+                                     "--python", "/opt/python/bin/python3"], {"roles": "validator", "java_home": []}),
+    "ci plan": (["ci", "plan", *REPO, "--state", "state"],
+                {"ci_command": "plan", "state": Path("state"), "candidate": None, "expect_sha256": None,
+                 "github_output": None}),
+    "ci plan candidate": (["ci", "plan", *REPO, "--state", "state", "--candidate", "candidate",
+                           "--expect-sha256", "ab" * 32, "--github-output", "out"],
+                          {"candidate": Path("candidate"), "expect_sha256": "ab" * 32, "github_output": Path("out")}),
+    "ci worker-finish": (["ci", "worker-finish", *REPO, "--state", "state"],
+                         {"ci_command": "worker-finish", "state": Path("state")}),
     "ci batch-prepare": (["ci", "batch-prepare", *REPO, "--state", "state", "--name", "run-1", "--allowed-paths",
                           "allowed.json", "--dry-run", "--github-output", "out", "12", "7"],
                          {"ci_command": "batch-prepare", "state": Path("state"), "name": "run-1",
@@ -166,6 +181,22 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "subject", *REPO, "--producer", "build", "--pr", "7", "--github-output", "o"],
             ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "7"],
             ["ci", "subject", "--state", "s", "--producer", "build", "--pr", "7", "--github-output", "o"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--python", "/opt/python/bin/python3"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "validator"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "candidate", "--python", "/opt/python/bin/python3"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "validator", "--python", "python3"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "validator", "--python", "/opt/x/../python3"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "validator", "--python", "/opt/python/bin/python3",
+             "--java-home", "jdk"],
+            ["ci", "worker-prepare", *REPO, "--roles", "validator", "--python", "/opt/python/bin/python3"],
+            ["ci", "plan", *REPO],
+            ["ci", "plan", *REPO, "--state", "s", "--expect-sha256", "AB" * 32],
+            ["ci", "plan", *REPO, "--state", "s", "--expect-sha256", "ab" * 31],
+            ["ci", "plan", *REPO, "--state", "s", "--candidate", ""],
+            ["ci", "plan", *REPO, "--state", "s", "--roles", "validator"],
+            ["ci", "worker-finish", *REPO],
+            ["ci", "worker-finish", "--state", "s"],
+            ["ci", "worker-finish", *REPO, "--state", "s", "--python", "/opt/python/bin/python3"],
             ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "run-1", "--allowed-paths", "a.json"],
             ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "Run/1", "--allowed-paths", "a.json", "7"],
             ["ci", "batch-prepare", *REPO, "--name", "run-1", "--allowed-paths", "a.json", "7"],
@@ -214,14 +245,15 @@ class CiVerbsTest(unittest.TestCase):
     def test_every_listed_module_adds_verbs_that_take_the_job_arguments(self) -> None:
         from mod_base.build_ci import commands
 
-        self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_batch"},
-                             set(commands.VERB_MODULES))
+        self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_worker",
+                              "mod_base.build_ci.commands_batch"}, set(commands.VERB_MODULES))
         self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
         for name in commands.VERB_MODULES:
             with self.subTest(module=name):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
-        self.assertLessEqual({"subject", "batch-prepare", "batch-settle"}, set(verbs))
+        self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-finish", "batch-prepare",
+                              "batch-settle"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

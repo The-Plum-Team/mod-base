@@ -1,8 +1,10 @@
-"""Inactive disposable-account primitives, ported from protected Block Pops controller code.
+"""Disposable accounts of one job, ported from protected Block Pops controller code.
 
-No command entry point exists here yet. A complete worker still needs
-authenticated copies, private boundary/cache ownership, source immutability,
-freeze and second-account validation. Environment clearing is not an isolation proof.
+The fixed boundary, the two fixed accounts, their closed environment and one fenced execution that
+always ends with the account terminated and locked. ``mod_base.build_ci.lifecycle`` composes them
+into the ``ci worker-*`` commands. A locked account still runs what the runner starts for it
+through ``sudo``: locking only ends every way in from outside. Environment clearing is not an
+isolation proof; the host fence and the tool admission are separate.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from mod_base.build_ci.protocol import validate_identity
+from mod_base.build_ci.protocol import subject_of, validate_identity, validate_subject
 from mod_base.errors import MbError
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
@@ -35,6 +37,13 @@ _DISPLAY_ENV = {
     "GALLIUM_DRIVER": ("llvmpipe",), "LIBGL_ALWAYS_SOFTWARE": ("1", "true"),
     "SDL_VIDEO_FORCE_EGL": ("1",), "__GLX_VENDOR_LIBRARY_NAME": ("mesa",),
 }
+#: Interpreter arguments that precede a dispatcher's own argv inside the account. ``sudo`` opens a
+#: session for the account, and the session sets its login umask (002 on Ubuntu: a private group),
+#: whatever the runner's own umask is. The private default therefore has to be set by the account's
+#: process itself, which then becomes the dispatcher.
+_PRIVATE_UMASK = ("-I", "-S", "-B", "-c", "import os,sys;os.umask(0o077);os.execv(sys.argv[1],sys.argv[1:])")
+#: Every state of a process that can still run. A zombie (``Z``) only waits to be collected.
+_LIVE_STATES = "DIKPRSTWt"
 
 
 class WorkerError(MbError):
@@ -81,11 +90,31 @@ def _path(value: str, label: str) -> str:
     return value
 
 
+def execution_subject(identity: Any) -> dict[str, Any]:
+    """The subject a hook runs for, from what its caller holds.
+
+    ``derive_plan`` runs before any plan exists and has the subject ``ci subject`` authenticated.
+    Every later hook has the complete identity of its plan: that is validated in full, as before,
+    and reduced to its subject part. Nothing else is accepted.
+    """
+
+    check(type(identity) is dict, "$.identity", "must be a subject or the complete identity of a plan")
+    try:
+        subject = subject_of(identity)
+    except KeyError:
+        subject = None
+    if subject != identity:
+        validate_identity(identity)
+        return subject_of(identity)
+    return validate_subject(subject)
+
+
 def worker_environment(*, role: str, python: str, java_home: str | None,
                        identity: dict[str, Any], run_id: int, run_attempt: int,
                        values: Mapping[str, str]) -> list[str]:
     """Build an env-i argument vector solely from explicit protected input, never ambient env.
 
+    ``identity`` is the subject or the complete plan identity (:func:`execution_subject`).
     Fixed MB_* identity names are translated by native protected dispatchers when necessary.
     Candidate installation/.pth/user sites stay under its private home/cache. Validator paths
     are separate and PYTHONSAFEPATH/PYTHONNOUSERSITE protect its initial interpreter import roots;
@@ -93,7 +122,7 @@ def worker_environment(*, role: str, python: str, java_home: str | None,
     """
 
     check(isinstance(role, str) and role in WORKER_ACCOUNTS, "$.role", "unknown worker role")
-    validate_identity(identity)
+    identity = execution_subject(identity)
     Int(1, lim.MAX_RUN_ID)(run_id, "$.run_id")
     Int(1, lim.MAX_RUN_ATTEMPT)(run_attempt, "$.run_attempt")
     _path(python, "$.python")
@@ -172,6 +201,44 @@ def authenticate_worker_account(role: str) -> WorkerAccount:
         return WorkerAccount(role, record.pw_uid, record.pw_gid, home)
     except (KeyError, OSError) as error:
         raise WorkerError("cannot authenticate disposable account") from error
+
+
+def worker_account_exists(role: str) -> bool:
+    """Whether the fixed account of ``role`` has a passwd entry, authentic or not."""
+
+    check(isinstance(role, str) and role in WORKER_ACCOUNTS, "$.role", "unknown worker role")
+    if sys.platform != "linux":
+        raise WorkerError("disposable workers require Linux")
+    import pwd
+
+    try:
+        pwd.getpwnam(WORKER_ACCOUNTS[role])
+    except KeyError:
+        return False
+    except OSError as error:
+        raise WorkerError("cannot establish whether a disposable account exists") from error
+    return True
+
+
+def authenticate_peer_account(account: WorkerAccount, *, runner_uid: int,
+                              runner_gid: int) -> WorkerAccount | None:
+    """The other fixed account when the job has one, isolated from ``account`` and the runner.
+
+    A job allocates the validator alone or both accounts (``ci worker-prepare --roles``). Only
+    root adds or removes a passwd entry, so a missing peer is a fact about the job and not
+    something a worker can arrange. Every account that exists must differ in user and group from
+    the other one and from the runner.
+    """
+
+    check(type(account) is WorkerAccount and account.role in WORKER_ACCOUNTS,
+          "$.account", "must be an authenticated worker account")
+    other = next(role for role in WORKER_ACCOUNTS if role != account.role)
+    peer = authenticate_worker_account(other) if worker_account_exists(other) else None
+    present = (account,) if peer is None else (account, peer)
+    if ((peer is not None and (peer.uid == account.uid or peer.gid == account.gid))
+            or any(entry.uid == runner_uid or entry.gid == runner_gid for entry in present)):
+        raise WorkerError("worker identities are not isolated from the runner and from each other")
+    return peer
 
 
 def prepare_worker_boundary(*, runner_environment: str) -> None:
@@ -299,9 +366,20 @@ def allocate_worker_account(role: str) -> WorkerAccount:
             except KeyError:
                 pass
             else:
-                _control(("/usr/bin/sudo", "-n", "/usr/sbin/usermod", "--lock", "--expiredate", "1970-01-02", name),
-                         timeout=lim.CI_TERMINATION_GRACE_SECONDS, accepted=frozenset({0}))
+                lock_worker_account(role)
         raise WorkerError("disposable account allocation failed; execution is forbidden") from None
+
+
+def lock_worker_account(role: str) -> None:
+    """Lock and expire the fixed account of ``role`` by name; no process is signalled.
+
+    For an account whose passwd entry cannot be authenticated: its UID may belong to something
+    else, so it must never be the target of a kill.
+    """
+
+    check(isinstance(role, str) and role in WORKER_ACCOUNTS, "$.role", "unknown worker role")
+    _control(("/usr/bin/sudo", "-n", "/usr/sbin/usermod", "--lock", "--expiredate", "1970-01-02",
+              WORKER_ACCOUNTS[role]), timeout=lim.CI_TERMINATION_GRACE_SECONDS, accepted=frozenset({0}))
 
 
 def _control(command: tuple[str, ...], *, timeout: float, accepted: frozenset[int],
@@ -386,12 +464,24 @@ def terminate_worker(account: WorkerAccount) -> None:
     try:
         sweep()
     finally:
-        _control(("/usr/bin/sudo", "-n", "/usr/sbin/usermod", "--lock", "--expiredate",
-                  "1970-01-02", WORKER_ACCOUNTS[account.role]),
-                 timeout=lim.CI_TERMINATION_GRACE_SECONDS, accepted=frozenset({0}))
+        lock_worker_account(account.role)
     # Locking is not proof of quiescence. A process may have appeared after the last pre-lock
     # observation; kill/check again while retaining the original whole-sweep deadline.
     sweep()
+
+
+def worker_processes(account: WorkerAccount) -> bool:
+    """Whether the account still owns a process that can run, by real or effective user.
+
+    Observation only: nothing is signalled. A zombie does not count; it runs nothing and only
+    waits for init to collect it.
+    """
+
+    check(type(account) is WorkerAccount, "$.account", "must be an authenticated worker account")
+    check(authenticate_worker_account(account.role) == account, "$.account", "worker account identity changed")
+    return any(_control(("/usr/bin/pgrep", "--runstates", _LIVE_STATES, selector, str(account.uid)),
+                        timeout=lim.CI_TERMINATION_GRACE_SECONDS, accepted=frozenset({0, 1})).strip()
+               for selector in ("-u", "-U"))
 
 
 def _execution_command(command: tuple[str, ...], python: str, role: str) -> Path:
@@ -421,10 +511,12 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
                    values: Mapping[str, str], timeout_seconds: int) -> WorkerResult:
     """Execute one protected-selected dispatcher and always terminate/lock its entire UID.
 
-    Only a zero exit after successful account quiescence returns. Failures/timeouts retain a
-    bounded diagnostic result on WorkerExecutionError. No process or raw log authorizes export.
+    Only a zero exit of a dispatcher that left no process behind, after successful account
+    quiescence, returns. Failures/timeouts retain a bounded diagnostic result on
+    WorkerExecutionError. No process or raw log authorizes export. The dispatcher starts with a
+    umask of 077, so what it creates is private unless it decides otherwise.
     Caller must first authenticate/copy the dispatcher/import closure and establish the private
-    filesystem boundary; the complete allocator/seal/second-validator lifecycle remains pending.
+    filesystem boundary.
     """
 
     check(isinstance(account, WorkerAccount), "$.account", "must be an authenticated worker account")
@@ -435,9 +527,18 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
     truncated = False
     code = None
     terminated = False
+    abandoned = False
 
     def interrupted(signum: int, _frame: Any) -> None:
         raise WorkerError(f"worker interrupted by signal {signum}")
+
+    def settle() -> None:
+        # The launcher has gone, so whatever the UID still runs was left behind by the hook.
+        # Look before the sweep kills it: the contract fails such a hook instead of tidying up.
+        nonlocal abandoned, terminated
+        abandoned = worker_processes(account)
+        terminate_worker(account)
+        terminated = True
 
     try:
         Int(1, lim.MAX_CI_WORKER_TIMEOUT_SECONDS)(timeout_seconds, "$.timeout_seconds")
@@ -449,7 +550,8 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
         deadline = time.monotonic() + timeout_seconds
         process = subprocess.Popen(
             ("/usr/bin/sudo", "-n", "--user", f"#{account.uid}", "--", "/usr/bin/setpriv",
-             "--no-new-privs", "--", "/usr/bin/env", "-i", f"--chdir={cwd.as_posix()}", *environment, *command),
+             "--no-new-privs", "--", "/usr/bin/env", "-i", f"--chdir={cwd.as_posix()}", *environment,
+             python, *_PRIVATE_UMASK, *command),
             cwd=Path(str(WORKER_ROOT)), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             env=dict(_HOST_ENV), close_fds=True)
         if process.stdout is None:
@@ -465,8 +567,7 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
                     if code is not None:
                         # A detached child can retain stdout after its dispatcher exits. Kill
                         # that UID now rather than waiting for EOF until the workload timeout.
-                        terminate_worker(account)
-                        terminated = True
+                        settle()
                         deadline = time.monotonic() + lim.CI_TERMINATION_GRACE_SECONDS
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -484,8 +585,12 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
         if remaining <= 0:
             raise WorkerError("worker execution timed out")
         code = process.wait(timeout=remaining)
+        if not terminated:
+            settle()  # The output ended before the exit was observed.
         if code != 0:
             raise WorkerError("worker dispatcher returned failure")
+        if abandoned:
+            raise WorkerError("worker dispatcher left a process behind")
     except (MbError, OSError, subprocess.SubprocessError, ValueError) as error:
         # Structural validators may quote hostile values. Keep those out of runner command
         # parsing; protected fixed WorkerError diagnostics contain no candidate text.

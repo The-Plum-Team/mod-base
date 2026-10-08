@@ -19,11 +19,13 @@ from pathlib import Path
 from typing import Any
 
 import mod_base
-from mod_base.build_ci.controller import CONTROLLER_VALIDATION_ROOT, ControllerSources
+from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, ControllerSources,
+                                          prepare_controller_validation)
 from mod_base.build_ci.handoff import _context, freeze_handed_off_build_validation
 from mod_base.build_ci.host import (HostBoundary, _canonical_path, authenticate_privileged_host_boundary,
                                     fence_worker_host)
-from mod_base.build_ci.inputs import _accounts, _inspect_inputs
+from mod_base.build_ci.inputs import (_accounts, _inspect_inputs, prepare_plan_inputs, prepare_validation_plan,
+                                      take_derived_plan)
 from mod_base.build_ci.root_request import (_inspect_sources, _restore_sources, _source_root_identity,
                                           read_root_request)
 from mod_base.build_ci.runtime_handoff import _context as _runtime_context, freeze_handed_off_runtime_validation
@@ -68,6 +70,42 @@ def _kit_binding(plan: dict[str, Any], kit: _Kit) -> None:
     bound = plan["identity"]["kit"]
     check(bound["tree_digest"] == kit.digest and bound["version"] == mod_base.__version__,
           "$.kit", "root request plan names another kit than the verified executing checkout")
+
+
+def _job(boundary: HostBoundary, arguments: dict[str, Any]) -> WorkerAccount:
+    """The live accounts must be the ones the runner named: the validator and, if the job has
+    one, the candidate. A candidate the request does not name must not exist."""
+    validator = authenticate_worker_account("validator")
+    candidate = _accounts(boundary, validator)
+    named = {"validator": {"uid": validator.uid, "gid": validator.gid},
+             "candidate": None if candidate is None else {"uid": candidate.uid, "gid": candidate.gid}}
+    check(named == {role: arguments[role] for role in named}, "$.request",
+          "root request names other disposable accounts than the host has")
+    return validator
+
+
+def _grant_controller(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    validator = _job(boundary, arguments)
+    subject = arguments["subject"]
+    _kit_binding({"identity": subject}, kit)
+    # The copy is still the runner's private stage: the request carries hashes, the bytes are read here.
+    sources = _restore_sources(arguments["sources"], subject)
+    prepare_controller_validation(boundary=boundary, validator=validator, sources=sources, identity=subject)
+
+
+def _grant_plan_inputs(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    prepare_plan_inputs(boundary=boundary, validator=_job(boundary, arguments),
+                        digests={item["name"]: item["sha256"] for item in arguments["inputs"]})
+
+
+def _take_derived_plan(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    take_derived_plan(boundary=boundary, validator=_job(boundary, arguments))
+
+
+def _grant_validation_inputs(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    validator = _job(boundary, arguments)
+    _kit_binding(arguments["plan"], kit)
+    prepare_validation_plan(boundary=boundary, validator=validator, plan=arguments["plan"])
 
 
 def _controller_sources(boundary: HostBoundary, validator: WorkerAccount, metadata: dict[str, Any],
@@ -158,6 +196,10 @@ _OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
     "stage-candidate": _stage_candidate,
     "freeze-build-validation": _freeze_build_validation,
     "freeze-runtime-validation": _freeze_runtime_validation,
+    "grant-controller": _grant_controller,
+    "grant-plan-inputs": _grant_plan_inputs,
+    "take-derived-plan": _take_derived_plan,
+    "grant-validation-inputs": _grant_validation_inputs,
 }
 
 

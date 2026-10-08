@@ -32,7 +32,9 @@ class BuildValidationBindingTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(patch.object(inputs, "authenticate_privileged_host_boundary"))
             stack.enter_context(patch.object(inputs, "authenticate_worker_account",
-                                             side_effect=[self.validator, self.candidate]))
+                                             return_value=self.validator))
+            stack.enter_context(patch.object(inputs, "authenticate_peer_account",
+                                             return_value=self.candidate))
             checking = stack.enter_context(patch.object(inputs, "_inspect_inputs",
                 side_effect=reads or [((1, 20), (1, 30)), ((1, 20), (1, 30))]))
             freezing_mock = stack.enter_context(patch.object(inputs, "freeze_validation_export",

@@ -55,7 +55,8 @@ class RuntimeValidationBindingTests(unittest.TestCase):
         with ExitStack() as stack:
             privilege = stack.enter_context(patch.object(runtime_inputs, 'authenticate_privileged_host_boundary',
                 side_effect=lambda boundary: events.append('privilege')))
-            stack.enter_context(patch.object(inputs, 'authenticate_worker_account', side_effect=[self.validator, self.candidate]))
+            stack.enter_context(patch.object(inputs, 'authenticate_worker_account', return_value=self.validator))
+            stack.enter_context(patch.object(inputs, 'authenticate_peer_account', return_value=self.candidate))
             inspecting = stack.enter_context(patch.object(runtime_inputs, '_inspect_inputs', side_effect=inspect))
             freezing = stack.enter_context(patch.object(runtime_inputs, 'freeze_validation_export', side_effect=freeze))
             terminate = stack.enter_context(patch.object(runtime_inputs, 'terminate_worker',

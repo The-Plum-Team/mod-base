@@ -198,8 +198,22 @@ MAX_CI_IDENTITY_BYTES = 16 * KIB
 #: API requests of one ``ci subject``: a pull request costs 4, a protected subject 5; the rest is
 #: room for retried attempts.
 MAX_CI_SUBJECT_REQUESTS = 16
-MAX_CI_PLAN_INPUT_FILES = 1
-MAX_CI_PLAN_INPUT_ENTRIES = 2
+#: The private ``worker.json`` state record ``ci worker-prepare`` writes: the accounts, the tool
+#: receipt and at most ``MAX_CI_TOOL_ROOTS`` paths of ``MAX_CI_TOOL_PATH_BYTES`` each, twice.
+MAX_CI_WORKER_RECORD_BYTES = 256 * KIB
+#: API requests of one ``ci plan`` without a candidate checkout: the tested tree and one blob per
+#: candidate file, so 3 without extra plan inputs and at most 11; the rest is room for retried
+#: attempts. With a checkout it spends none.
+MAX_CI_PLAN_REQUESTS = 24
+#: One read (``rev-parse``, ``ls-tree``, ``cat-file``) of the candidate checkout's object store.
+CI_GIT_READ_TIMEOUT_SECONDS = 60.0
+#: What such a read answers besides a blob: one object id, or one tree entry with its path.
+MAX_CI_GIT_ANSWER_BYTES = 4 * KIB
+#: ``validation-input/``: the candidate files a plan is derived from (the inventory, the scenario
+#: contract and the extra plan inputs) and, once it exists, the plan.
+MAX_CI_PLAN_INPUT_FILES = 3 + MAX_CI_PLAN_INPUTS
+MAX_CI_PLAN_INPUT_ENTRIES = MAX_CI_PLAN_INPUT_FILES + 1  # MB1 entry caps count the root.
+MAX_CI_PLAN_INPUT_BYTES = MAX_CI_PLAN_BYTES + (2 + MAX_CI_PLAN_INPUTS) * MAX_CI_PLAN_SOURCE_BYTES
 MAX_CI_PRIVATE_RECORD_ENTRIES = 2  # MB1 entry caps count the root: the directory plus its one leaf.
 MAX_CI_POLICY_TESTS = 100000
 MAX_CI_POLICY_WORKERS = 256

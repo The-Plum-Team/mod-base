@@ -62,21 +62,74 @@ class HostFenceTests(unittest.TestCase):
         with patch.object(host.sys, "platform", "win32"), self.assertRaises(MbError):
             host.protect_worker_host(**ARGS)
 
-    def protect(self, stamps, *, passwd_home="/home/runner", uid=1001, gid=121):
-        module = SimpleNamespace(getpwuid=lambda value: SimpleNamespace(pw_dir=passwd_home))
+    def protect(self, stamps, *, passwd_home="/home/runner", passwd_gid=121, uid=1001, gid=121, call=None):
+        module = SimpleNamespace(getpwuid=lambda value: SimpleNamespace(pw_dir=passwd_home, pw_gid=passwd_gid))
         with patch.object(host.sys, "platform", "linux"), patch.dict(sys.modules, {"pwd": module}), \
                 patch.object(host.os, "getuid", return_value=uid, create=True), \
                 patch.object(host.os, "getgid", return_value=gid, create=True), \
-                patch.object(host, "_open_directory", side_effect=[10, 11, 12]), \
+                patch.object(host, "_open_directory", side_effect=[10, 11, 12]) as opening, \
                 patch.object(host.os, "fstat", side_effect=stamps), \
                 patch.object(host.os, "fchmod", create=True) as chmod, \
-                patch.object(host.os, "fsync"), patch.object(host.os, "close"):
-            boundary = host.protect_worker_host(**ARGS)
-        chmod.assert_called_once_with(10, 0o700)
+                patch.object(host.os, "fsync"), patch.object(host.os, "close") as close:
+            try:
+                boundary = (call or host.protect_worker_host)(**ARGS)
+            finally:
+                # Whatever happened, every directory that was opened is closed again.
+                self.assertEqual(close.call_count, opening.call_count)
+        if call is None:
+            chmod.assert_called_once_with(10, 0o700)
+        else:
+            chmod.assert_not_called()
         return boundary
 
     def test_fence_binds_exact_runner_inode_and_closes_traversal(self):
         self.assertEqual(self.protect([metadata(mode=0o755), metadata(), metadata(), metadata()]), BOUNDARY)
+
+    def test_inspection_returns_the_same_receipt_without_touching_the_home(self):
+        self.assertEqual(self.protect([metadata(mode=0o755), metadata(), metadata()],
+                                      call=host.inspect_worker_host), BOUNDARY)
+        self.assertEqual(self.protect([metadata(mode=0o750), metadata(), metadata()], call=host.inspect_worker_host),
+                         host.HostBoundary("/home/runner", 1001, 121, 1, 10, 0o750))
+
+    def test_home_group_passwd_group_and_process_group_must_be_one(self):
+        # Every later receipt check compares these three; a host where they differ is refused first.
+        for stamps, extra in (([metadata(group=118)], {}), ([metadata()], {"passwd_gid": 118}),
+                              ([metadata()], {"gid": 118})):
+            for call in (None, host.inspect_worker_host):
+                with self.subTest(extra=extra, call=call), self.assertRaisesRegex(MbError, "group"):
+                    self.protect(list(stamps), call=call, **extra)
+
+    def restore(self, info, *, boundary=BOUNDARY, uid=1001, after=None):
+        with patch.object(host.sys, "platform", "linux"), \
+                patch.object(host.os, "getuid", return_value=uid, create=True), \
+                patch.object(host.os, "getgid", return_value=121, create=True), \
+                patch.object(host, "_open_directory", return_value=10) as opening, \
+                patch.object(host.os, "fstat", side_effect=[info, after or metadata(mode=boundary.original_mode)]), \
+                patch.object(host.os, "fchmod", create=True) as chmod, \
+                patch.object(host.os, "fsync"), patch.object(host.os, "close") as close:
+            try:
+                host.restore_worker_host(boundary)
+            finally:
+                self.assertEqual(close.call_count, opening.call_count)
+        opening.assert_called_once_with(("home", "runner"))
+        return chmod
+
+    def test_restore_gives_the_recorded_home_its_mode_back_and_may_run_twice(self):
+        self.restore(metadata()).assert_called_once_with(10, 0o755)
+        self.restore(metadata(mode=0o755)).assert_called_once_with(10, 0o755)
+
+    def test_restore_refuses_another_directory_owner_mode_or_runner(self):
+        for info in (metadata(inode=11), metadata(owner=2000), metadata(group=2000), metadata(mode=0o711)):
+            with self.subTest(info=info), self.assertRaises(MbError):
+                self.restore(info)
+        with self.assertRaises(MbError):
+            self.restore(metadata(), after=metadata())  # The mode did not take.
+        with self.assertRaisesRegex(MbError, "different runner"):
+            self.restore(metadata(), uid=2000)
+        with patch.object(host.sys, "platform", "linux"), patch.object(host, "_open_directory") as untouched, \
+                self.assertRaises(MbError):
+            host.restore_worker_host(host.HostBoundary("/home/runner", 0, 121, 1, 10, 0o755))
+        untouched.assert_not_called()
 
     def test_foreign_owner_passwd_home_root_uid_and_postchmod_change_are_rejected(self):
         cases = [([metadata(owner=2000)], {}), ([metadata(), metadata(owner=2000)], {}),

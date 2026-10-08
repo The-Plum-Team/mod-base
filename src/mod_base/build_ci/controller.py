@@ -1,4 +1,11 @@
-"""Inert protected-controller import-source admission; never imports candidate modules (MB11)."""
+"""The protected adapter copy of a job and the hooks the validator runs from it (MB11).
+
+Admission of the protected controller's import sources never imports a candidate module. The
+sources come from the API (:func:`authenticate_controller_sources`) or, inside a job, from the mod
+checkout the prologue verified (:func:`checkout_controller_sources`); a copy below the worker root
+is handed to the validator read-only, and :func:`execute_controller_validator` runs one protected
+hook of the adapter contract from it.
+"""
 
 from __future__ import annotations
 
@@ -9,15 +16,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mod_base.build_ci import adapter
 from mod_base.build_ci.authenticate import authenticate_source_identity
 from mod_base.build_ci.activation import ACTIVATION_PATH, validate_activation
-from mod_base.build_ci.config import BUILD_CONFIG_PATH, validate_build_config
+from mod_base.build_ci.config import BUILD_CONFIG_PATH, BuildConfig, validate_build_config
 from mod_base.build_ci.host import (HostBoundary, _open_directory, authenticate_host_boundary,
                                     authenticate_privileged_host_boundary)
-from mod_base.build_ci.protocol import check_output_paths, validate_identity, validate_plan
+from mod_base.build_ci.protocol import check_output_paths, validate_plan
 from mod_base.build_ci.source import GitSourceEntry, SourceError, verify_source_copy
 from mod_base.build_ci.worker import (WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult,
-                                      authenticate_worker_account, terminate_worker)
+                                      authenticate_peer_account, authenticate_worker_account,
+                                      execution_subject, terminate_worker)
 from mod_base.build_ci.toolchain import ToolTreeProof, execute_tool_fenced_worker
 from mod_base.github.api import GitHubApi
 from mod_base.github.contents import blob, commit_tree, exact_tree
@@ -27,8 +36,9 @@ from mod_base.io.tree import authenticate_tree_read_access, grant_source_read_ac
 from mod_base.model import grammar, limits
 
 
-CONTROLLER_VALIDATION_ROOT = WORKER_ROOT / "controller"
-VALIDATOR_HOOKS = frozenset({"verify_target", "verify_build", "verify_runtime"})
+CONTROLLER_VALIDATION_ROOT = WORKER_ROOT / adapter.CHECKOUT_DIRECTORY["validator"]
+#: The hooks the validator runs from the protected copy: every protected hook of the contract.
+VALIDATOR_HOOKS = frozenset(adapter.PROTECTED_HOOKS)
 
 
 @dataclass(frozen=True)
@@ -120,8 +130,32 @@ def authenticate_controller_sources(api: GitHubApi, *, identity: dict[str, Any],
     return ControllerSources(identity["controller_sha"], controller_tree, config_file, tuple(sources))
 
 
+def checkout_controller_sources(config: BuildConfig, *, controller_sha: str,
+                                controller_tree: str) -> ControllerSources:
+    """The source receipt of the protected adapter as the prologue-verified mod checkout holds it.
+
+    ``config`` is what :func:`mod_base.build_ci.config.load_build_config` read there: the config
+    bytes and every listed source, each compared with its configured hash. A job therefore needs
+    no API read for them. The Git blob ids of a receipt are computed from the same bytes, and
+    every mode is a plain file: the validator's copy is run through the interpreter, never
+    executed directly.
+    """
+
+    if type(config) is not BuildConfig:
+        raise SourceError("controller sources require the loaded protected Build config")
+
+    def file(path: str, data: bytes) -> ControllerFile:
+        oid = hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()  # noqa: S324 - Git id
+        return ControllerFile(path, "100644", oid, hashlib.sha256(data).hexdigest(), data)
+
+    return ControllerSources(controller_sha, controller_tree, file(BUILD_CONFIG_PATH, config.raw),
+                             tuple(file(source.path, source.data) for source in config.files))
+
+
 def _validate_sources(sources: ControllerSources, identity: dict[str, Any]) -> dict[str, Any]:
-    validate_identity(identity)
+    """``identity`` is the subject the sources belong to or the complete identity of its plan."""
+
+    identity = execution_subject(identity)
     if (type(sources) is not ControllerSources or sources.controller_sha != identity["controller_sha"]
             or not grammar.is_match(grammar.SHA1, sources.controller_tree)
             or type(sources.config) is not ControllerFile or sources.config.path != BUILD_CONFIG_PATH
@@ -325,10 +359,7 @@ def prepare_controller_validation(*, boundary: HostBoundary, validator: WorkerAc
         raise WorkerError("controller handoff requires the fixed validator identity")
     if authenticate_worker_account("validator") != validator:
         raise WorkerError("controller validator identity changed")
-    candidate = authenticate_worker_account("candidate")
-    if (candidate.uid == validator.uid or candidate.gid == validator.gid
-            or any(account.uid == boundary.uid or account.gid == boundary.gid for account in (candidate, validator))):
-        raise WorkerError("controller handoff identities are not isolated from runner and peer")
+    candidate = authenticate_peer_account(validator, runner_uid=boundary.uid, runner_gid=boundary.gid)
     descriptor = None
     admitted = False
     try:
@@ -345,7 +376,8 @@ def prepare_controller_validation(*, boundary: HostBoundary, validator: WorkerAc
         if (initial.st_uid, initial.st_gid, stat.S_IMODE(initial.st_mode)) != (boundary.uid, boundary.gid, 0o700):
             raise WorkerError("controller handoff copy must be fresh private runner-owned bytes")
         admitted = True
-        terminate_worker(candidate)
+        if candidate is not None:  # A job with the validator alone has no other account to stop.
+            terminate_worker(candidate)
         expected = verify_controller_source_copy(CONTROLLER_VALIDATION_ROOT, sources=sources, identity=identity)
         grant_source_read_access(CONTROLLER_VALIDATION_ROOT,
                                tracked_paths=tuple(sorted(file.path for file in (sources.config, *sources.files))),
@@ -399,14 +431,18 @@ def _authenticate_controller_read_copy(boundary: HostBoundary, validator: Worker
 
 def execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAccount,
                                  sources: ControllerSources, tools: ToolTreeProof,
-                                 plan: dict[str, Any], hook: str, unit_id: str | None,
+                                 plan: dict[str, Any] | None, hook: str, unit_id: str | None,
                                  python: str, java_home: str | None, run_id: int,
-                                 run_attempt: int) -> WorkerResult:
-    """Run one closed native verification hook from retained protected source evidence.
+                                 run_attempt: int, subject: dict[str, Any] | None = None) -> WorkerResult:
+    """Run one protected hook of the adapter contract from the protected adapter copy.
 
-    Protected caller must finish installer provenance, complete interpreter/import enrollment
-    and immutable native inputs first. Fixed hook argv/timeout are derived here; no arbitrary
-    command/environment is accepted. Exit zero/logs do not authorize receipts, upload or status.
+    ``derive_plan`` runs before any plan exists: it takes the ``subject`` that ``ci subject``
+    authenticated and no plan. Every other protected hook runs against the protected ``plan``,
+    for the target or lane the contract gives it, and takes its identity from that plan alone.
+    The argv, the unit environment and the timeout come from :mod:`mod_base.build_ci.adapter`
+    and the protected config; no command or environment is accepted from the caller. Exit zero
+    and logs do not authorize receipts, upload or status. The validator is terminated and locked
+    whatever happens.
     """
 
     if type(validator) is not WorkerAccount or validator.role != "validator":
@@ -414,34 +450,35 @@ def execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAcc
     if authenticate_worker_account("validator") != validator:
         raise WorkerError("controller execution validator identity changed")
     try:
-        validate_plan(plan)
-        config = _validate_sources(sources, plan["identity"])
-        if config["profile"] != plan["profile"] or type(hook) is not str or hook not in VALIDATOR_HOOKS:
-            raise WorkerError("controller verification hook or profile is invalid")
-        values = {}
-        if hook == "verify_build":
-            if unit_id is not None:
-                raise WorkerError("aggregate Build verification cannot select a unit")
+        if type(hook) is not str or hook not in VALIDATOR_HOOKS:
+            raise WorkerError("controller hook is not a protected hook of the adapter contract")
+        if hook == "derive_plan":
+            if plan is not None or subject is None:
+                raise WorkerError("plan derivation runs for a subject, before any plan")
+            identity = subject
         else:
-            key = "targets" if hook == "verify_target" else "lanes"
-            if type(unit_id) is not str or unit_id not in {unit["id"] for unit in plan[key]}:
-                raise WorkerError("controller verification unit is outside the protected plan")
-            values["MB_TARGET_ID" if hook == "verify_target" else "MB_LANE_ID"] = unit_id
+            if subject is not None:
+                raise WorkerError("a hook that runs against the plan takes its identity from the plan")
+            identity = validate_plan(plan)["identity"]
+        config = _validate_sources(sources, identity)
+        if plan is not None:
+            if config["profile"] != plan["profile"]:
+                raise WorkerError("controller hook profile differs from the protected plan")
+            adapter.plan_unit(plan, hook, unit_id)
+        values = adapter.hook_values(hook, unit_id=unit_id)
         authenticate_host_boundary(boundary)
-        candidate = authenticate_worker_account("candidate")
-        if (candidate.uid == validator.uid or candidate.gid == validator.gid
-                or any(account.uid == boundary.uid or account.gid == boundary.gid for account in (candidate, validator))):
-            raise WorkerError("controller execution identities are not isolated")
-        observed = _authenticate_controller_read_copy(boundary, validator, sources, plan["identity"])
+        authenticate_peer_account(validator, runner_uid=boundary.uid, runner_gid=boundary.gid)
+        observed = _authenticate_controller_read_copy(boundary, validator, sources, identity)
         if observed != config:
             raise WorkerError("controller pre-execution config changed")
-        dispatcher = str(CONTROLLER_VALIDATION_ROOT / config["adapter"]["dispatcher"])
+        command = adapter.hook_command(hook, python=python, checkout=str(CONTROLLER_VALIDATION_ROOT),
+                                       dispatcher=config["adapter"]["dispatcher"])
         result = execute_tool_fenced_worker(validator, boundary=boundary, tools=tools,
-                    command=(python, "-I", "-B", dispatcher, "--hook", hook), python=python,
-                    java_home=java_home, identity=plan["identity"], run_id=run_id,
+                    command=command, python=python,
+                    java_home=java_home, identity=identity, run_id=run_id,
                     run_attempt=run_attempt, values=values,
-                    timeout_seconds=config["timeouts"]["validator_seconds"])
-        if _authenticate_controller_read_copy(boundary, validator, sources, plan["identity"]) != config:
+                    timeout_seconds=adapter.hook_timeout_seconds(hook, config))
+        if _authenticate_controller_read_copy(boundary, validator, sources, identity) != config:
             raise WorkerError("controller post-execution config changed")
         return result
     except OSError as error:

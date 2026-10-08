@@ -54,7 +54,8 @@ class RuntimeInputTests(unittest.TestCase):
                 raise failure
             return execution
         with ExitStack() as stack:
-            stack.enter_context(patch.object(inputs, 'authenticate_worker_account', side_effect=[self.validator, self.candidate]))
+            stack.enter_context(patch.object(inputs, 'authenticate_worker_account', return_value=self.validator))
+            stack.enter_context(patch.object(inputs, 'authenticate_peer_account', return_value=self.candidate))
             checking = stack.enter_context(patch.object(runtime_inputs, '_read_inputs', side_effect=read))
             execute = stack.enter_context(patch.object(runtime_inputs, 'execute_controller_validator', side_effect=launch))
             terminate = stack.enter_context(patch.object(runtime_inputs, 'terminate_worker'))

@@ -57,7 +57,8 @@ class RuntimeReadHandoffTests(unittest.TestCase):
         with ExitStack() as stack:
             privilege = stack.enter_context(patch.object(runtime_inputs, 'authenticate_privileged_host_boundary',
                 side_effect=[None, MbError('Root changed') if fault == 'privilege' else None]))
-            stack.enter_context(patch.object(inputs, 'authenticate_worker_account', side_effect=[self.validator, self.candidate]))
+            stack.enter_context(patch.object(inputs, 'authenticate_worker_account', return_value=self.validator))
+            stack.enter_context(patch.object(inputs, 'authenticate_peer_account', return_value=self.candidate))
             terminate = stack.enter_context(patch.object(runtime_inputs, 'terminate_worker', side_effect=kill))
             build_read = stack.enter_context(patch.object(runtime_inputs, '_inspect_build_inputs',
                 return_value=((1, 20), (1, 30)), side_effect=MbError('Build changed') if fault == 'build-bytes' else None))

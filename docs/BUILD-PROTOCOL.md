@@ -113,6 +113,14 @@ The operations are the closed tuple `grammar.CI_ROOT_OPERATIONS`, mirrored by th
 | `stage-candidate` | `candidate`, `repository`, `tested_sha`, `tested_tree`, `inventory`, `source`, `overlay`, `gradle_seed` | Publishes the candidate's `repository/` (tracked source, curated `.git`, kit overlay) and seeds its Gradle home; runs once, before the candidate ever runs |
 | `freeze-build-validation` | `validator`, `sources`, `plan`, `envelope`, `run_id`, `run_attempt`, `execution_nonce` | Seals the Build or target verifier's receipt into `sealed-validation/` |
 | `freeze-runtime-validation` | `validator`, `sources`, `plan`, `build`, `runtime`, `lane_id`, `run_id`, `run_attempt`, `execution_nonce` | Seals one runtime lane verifier's receipt into `sealed-validation/` |
+| `grant-controller` | `validator`, `candidate`, `subject`, `sources` | Hands the runner's private `controller/` (the protected adapter closure) to the validator read-only |
+| `grant-plan-inputs` | `validator`, `candidate`, `inputs` | Hands the staged candidate files in `validation-input/` (each named with its SHA-256: the inventory, the scenario contract, then the extra plan inputs by name) to the validator read-only, before `derive_plan` |
+| `take-derived-plan` | `validator`, `candidate` | Copies the one file `derive_plan` wrote into the runner-private `derived-plan/` and removes the original |
+| `grant-validation-inputs` | `validator`, `candidate`, `plan` | Hands the complete `validation-input/` (the plan and every candidate file it binds) to the validator read-only |
+
+The last four are the operations of the worker lifecycle below. `candidate` is the uid and gid of
+the job's candidate account, or `null` in a job that allocated the validator alone; root requires
+the live accounts to be exactly the ones named and a candidate that is not named to be absent.
 
 `candidate` and `validator` are the uid and gid of the live fixed account and must differ from the
 runner's. For `stage-candidate`, `inventory` is the complete tested-tree inventory (one row of
@@ -128,6 +136,45 @@ kit's version and digest. `execution_nonce` names the `mod-base.ci.execution` re
 verifier run and must differ from the request nonce. Both freeze operations authenticate the
 read-only inputs before and after sealing and always terminate the validator. `host-fence` is
 described with the host fences below.
+
+## Worker lifecycle of a job
+
+Every step of a job is one `ci` command run by the runner (`build_ci.lifecycle`). The steps share
+the private state directory `ci subject` creates (`--state`, in `$RUNNER_TEMP`) and the fixed
+worker root. State records are canonical JSON, written once, read strictly, never replaced.
+
+1. `ci worker-prepare --roles validator|candidate+validator --python PATH [--java-home PATH]...`
+   admits the hosted layout and writes `worker-host.json` (the home's identity and original mode)
+   before it changes anything, so a second prepare of the job stops there and the last step can
+   always restore the home. It then creates the worker boundary, closes the runner home, runs
+   `host-fence`, admits the tool trees (the interpreter's prefix as named and as resolved, and
+   every JDK home), allocates the accounts, copies the protected adapter closure from the mod
+   checkout the prologue verified into `controller/` (no API read) and runs `grant-controller`.
+   It ends with every account terminated and locked and writes `worker.json`: the boundary, the
+   accounts, the interpreter, the JDK homes, the tool receipt and the SHA-256 of the protected
+   config.
+2. `ci plan [--candidate DIR] [--expect-sha256 HEX]` first opens the prepared worker, as every later
+   step does: the protected config is the recorded one, the home is still fenced, the accounts
+   are the recorded ones and the tool trees are unchanged. It reads the candidate files the
+   protected config names: from the Git objects of the candidate checkout when the job has one (its `HEAD`
+   must be the tested commit; the working files are never read), otherwise from the API at the
+   tested tree (one request for the tree and one per file). It stages them in `validation-input/`
+   under their names (`adapter.plan_sources`), runs `grant-plan-inputs`,
+   runs `derive_plan` as the validator, runs `take-derived-plan`, builds the plan around the one
+   file the hook wrote and compares its hash with `--expect-sha256` when given. It then stages the
+   input root again with the plan, runs `grant-validation-inputs` and writes `ci-plan.json` to
+   the state. Afterwards every protected hook of the job finds `validation-input/` complete.
+3. `ci worker-finish` (`if: always()`) terminates and locks every worker account the host has,
+   requires that neither owns a process once both are locked, and only then gives the runner home
+   its original mode back. It reads nothing but the state and the host, and it is safe to run
+   twice, after a prepare that failed anywhere and without one. An account entry it cannot
+   authenticate is locked by name, never signalled, and keeps the home closed.
+
+Between two hook runs both accounts are terminated and locked; `sudo` still starts the next hook
+for a locked account, so a job runs several hooks as the same account. A hook starts with a umask
+of 077, set inside the account because `sudo`'s session applies the login umask. A hook that exits
+non-zero, outlives its timeout or leaves a running process behind fails the step, and the account
+is swept in every case.
 
 ## Plan v1
 
@@ -316,12 +363,16 @@ are rechecked afterward. Duplicate keys, nonfinite values, noncanonical JSON and
 files reject even with matching declared hashes. Mod-owned closed report schemas and native
 semantics must separately be verified; generic JSON/byte admission does not confer validity.
 
-`build_ci.inputs` writes the existing `mod-base.build.plan` document as the sole `ci-plan.json`
-in the fixed `validation-input` directory. This adds no document kind/version. The independent
-atomic stage has a 4 MiB plan cap, one file and two entries including its root; undeclared import
-files, links and alternate canonical bytes reject. Protected-root handoff grants only the fixed
-validator group reads (0750 directories/0640 files), rechecking ownership, inode, absent ACLs and
-bytes. Complete import enrollment and genuine plan derivation remain protected caller obligations.
+`build_ci.inputs` writes the validator's input root, the fixed `validation-input` directory: the
+bytes of the candidate files a plan is derived from (`inventory`, `scenario-contract` and the
+extra plan inputs the protected config names, each under its staged name) and,
+once the plan exists, the existing `mod-base.build.plan` document as `ci-plan.json`, which binds
+every one of them by SHA-256. This adds no document kind/version. The independent atomic stage
+has a 4 MiB cap per file and holds exactly the files of its state (the candidate files before
+the plan, the plan as well with it) and no other entry; undeclared import files, links, changed candidate bytes and
+alternate canonical bytes reject. Protected-root handoff grants only the fixed validator group
+reads (0750 directories/0640 files), rechecking ownership, inode, absent ACLs and bytes. Complete
+import enrollment remains a protected caller obligation.
 
 `execute_frozen_build_validator` supports same-producer complete aggregate Build verification.
 It requires the retained plan and complete envelope, exact producing run/attempt, both fixed

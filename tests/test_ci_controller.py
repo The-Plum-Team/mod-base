@@ -10,8 +10,9 @@ from pathlib import Path, PurePath
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from mod_base.build_ci import controller
+from mod_base.build_ci import adapter, controller
 from mod_base.build_ci.host import HostBoundary
+from mod_base.build_ci.protocol import subject_of
 from mod_base.build_ci.worker import WorkerAccount, WorkerError, WorkerResult
 from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.errors import MbError
@@ -209,7 +210,8 @@ class ControllerReadHandoffTests(unittest.TestCase):
     candidate = WorkerAccount("candidate", 2000, 2000, "/tmp/candidate-home")
     validator = WorkerAccount("validator", 2001, 2001, "/tmp/validator-home")
 
-    def exercise(self, *, foreign=False, final_inode=30, grant_error=None, changed=False):
+    def exercise(self, *, foreign=False, final_inode=30, grant_error=None, changed=False, alone=False,
+                 subject=False):
         plan, api, _, protected = ControllerSourceTests().fixture(empty_module=True)
         sources = controller.authenticate_controller_sources(api, identity=plan["identity"], protected_paths=protected)
         expected = ci_config_with(sources)
@@ -229,7 +231,9 @@ class ControllerReadHandoffTests(unittest.TestCase):
             return called
         with ExitStack() as stack:
             host = stack.enter_context(patch.object(controller, "authenticate_privileged_host_boundary"))
-            stack.enter_context(patch.object(controller, "authenticate_worker_account", side_effect=[self.validator, self.candidate]))
+            stack.enter_context(patch.object(controller, "authenticate_worker_account", return_value=self.validator))
+            peer = stack.enter_context(patch.object(controller, "authenticate_peer_account",
+                                                    return_value=None if alone else self.candidate))
             stack.enter_context(patch.object(controller, "_open_directory", side_effect=[10, 11, 12]))
             stack.enter_context(patch.object(controller.os, "fstat", side_effect=info))
             stack.enter_context(patch.object(controller.os, "close"))
@@ -240,11 +244,17 @@ class ControllerReadHandoffTests(unittest.TestCase):
             grant = stack.enter_context(patch.object(controller, "grant_source_read_access", side_effect=record("grant", [])))
             check = stack.enter_context(patch.object(controller, "_verify_controller_copy",
                                                      side_effect=record("recheck", {} if changed else expected)))
+            identity = subject_of(plan["identity"]) if subject else plan["identity"]
             try:
                 self.assertEqual(controller.prepare_controller_validation(boundary=self.boundary,
-                                 validator=self.validator, sources=sources, identity=plan["identity"]), expected)
-                self.assertEqual(events, ["terminate", "verify", "grant", "recheck"])
-                kill.assert_called_once_with(self.candidate)
+                                 validator=self.validator, sources=sources, identity=identity), expected)
+                peer.assert_called_once_with(self.validator, runner_uid=1001, runner_gid=121)
+                if alone:
+                    self.assertEqual(events, ["verify", "grant", "recheck"])
+                    kill.assert_not_called()
+                else:
+                    self.assertEqual(events, ["terminate", "verify", "grant", "recheck"])
+                    kill.assert_called_once_with(self.candidate)
                 self.assertEqual(grant.call_args.args, (controller.CONTROLLER_VALIDATION_ROOT,))
                 self.assertEqual(grant.call_args.kwargs["reader_gid"], self.validator.gid)
                 self.assertEqual(len(grant.call_args.kwargs["tracked_paths"]), 5)
@@ -260,6 +270,23 @@ class ControllerReadHandoffTests(unittest.TestCase):
 
     def test_fixed_source_layout_account_and_access_order(self):
         self.exercise()
+
+    def test_a_job_with_the_validator_alone_has_no_candidate_to_stop(self):
+        self.exercise(alone=True)
+
+    def test_the_subject_of_a_job_without_a_plan_binds_the_same_copy(self):
+        self.exercise(subject=True)
+
+    def test_accounts_that_are_not_isolated_reject_before_directory_open(self):
+        plan, api, _, protected = ControllerSourceTests().fixture()
+        sources = controller.authenticate_controller_sources(api, identity=plan["identity"], protected_paths=protected)
+        with patch.object(controller, "authenticate_privileged_host_boundary"), \
+                patch.object(controller, "authenticate_worker_account", return_value=self.validator), \
+                patch.object(controller, "authenticate_peer_account", side_effect=WorkerError("not isolated")), \
+                patch.object(controller, "_open_directory") as opening, self.assertRaises(MbError):
+            controller.prepare_controller_validation(boundary=self.boundary, validator=self.validator,
+                                                      sources=sources, identity=plan["identity"])
+        opening.assert_not_called()
 
     def test_foreign_copy_grant_identity_and_final_config_failures_stay_private(self):
         for changed in ({"foreign": True}, {"grant_error": OSError("failed transfer")},
@@ -284,46 +311,81 @@ class ControllerExecutionTests(unittest.TestCase):
     candidate = ControllerReadHandoffTests.candidate
 
     def exercise(self, *, hook="verify_build", unit_id=None, pre_error=None, post_change=False,
-                 execution_error=None, cleanup_error=None):
+                 execution_error=None, cleanup_error=None, subject=None, without_plan=False, peer_error=None):
         plan, api, _, protected = ControllerSourceTests().fixture()
         sources = controller.authenticate_controller_sources(api, identity=plan["identity"], protected_paths=protected)
         config = ci_config_with(sources)
         tools = ToolTreeProof(("/opt/hostedtoolcache/python",), "a" * 64, 1, 2, 100)
         expected = WorkerResult(0, b"inert verifier result", False)
         reads = [config, {} if post_change else config]
-        with patch.object(controller, "authenticate_worker_account", side_effect=[self.validator, self.candidate]), \
+        identity = plan["identity"] if subject is None else subject
+        with patch.object(controller, "authenticate_worker_account", return_value=self.validator), \
+                patch.object(controller, "authenticate_peer_account", side_effect=peer_error,
+                             return_value=self.candidate) as peer, \
                 patch.object(controller, "authenticate_host_boundary"), \
                 patch.object(controller, "_authenticate_controller_read_copy", side_effect=pre_error or reads) as checking, \
                 patch.object(controller, "execute_tool_fenced_worker", side_effect=execution_error, return_value=expected) as execute, \
                 patch.object(controller, "terminate_worker", side_effect=cleanup_error) as terminate:
             try:
                 result = controller.execute_controller_validator(boundary=self.boundary, validator=self.validator,
-                         sources=sources, tools=tools, plan=plan, hook=hook, unit_id=unit_id,
-                         python="/opt/hostedtoolcache/python/bin/python", java_home=None, run_id=42, run_attempt=2)
+                         sources=sources, tools=tools, plan=None if without_plan else plan, hook=hook,
+                         unit_id=unit_id, python="/opt/hostedtoolcache/python/bin/python", java_home=None,
+                         run_id=42, run_attempt=2, **({} if subject is None else {"subject": subject}))
                 self.assertEqual(result, expected)
+                peer.assert_called_once_with(self.validator, runner_uid=1001, runner_gid=121)
+                self.assertEqual(execute.call_args.kwargs["identity"], identity)
+                self.assertEqual([call.args[3] for call in checking.call_args_list], [identity, identity])
                 argv = execute.call_args.kwargs["command"]
                 self.assertEqual(argv, ("/opt/hostedtoolcache/python/bin/python", "-I", "-B",
                                        str(controller.CONTROLLER_VALIDATION_ROOT / config["adapter"]["dispatcher"]),
                                        "--hook", hook))
                 self.assertEqual(execute.call_args.kwargs["timeout_seconds"], config["timeouts"]["validator_seconds"])
-                values = {} if hook == "verify_build" else {"MB_TARGET_ID" if hook == "verify_target" else "MB_LANE_ID": unit_id}
+                values = ({} if unit_id is None else
+                          {"MB_TARGET_ID" if hook == "verify_target" else "MB_LANE_ID": unit_id})
                 self.assertEqual(execute.call_args.kwargs["values"], values)
                 self.assertEqual(checking.call_count, 2)
             finally:
                 terminate.assert_called_once_with(self.validator)
-                if pre_error or hook not in controller.VALIDATOR_HOOKS or (hook == "verify_build" and unit_id is not None):
+                if (pre_error or peer_error or hook not in controller.VALIDATOR_HOOKS
+                        or (hook == "verify_build" and unit_id is not None)):
                     execute.assert_not_called()
 
     def test_closed_hooks_bind_dispatcher_units_timeout_and_sanitized_values(self):
-        for hook, unit in (("verify_build", None), ("verify_target", "target-a"), ("verify_runtime", "lane-a")):
+        self.assertEqual(controller.VALIDATOR_HOOKS, frozenset(adapter.PROTECTED_HOOKS))
+        for hook, unit in (("verify_build", None), ("verify_target", "target-a"), ("verify_runtime", "lane-a"),
+                           ("derive_runtime", "lane-a")):
             with self.subTest(hook=hook):
                 self.exercise(hook=hook, unit_id=unit)
 
+    def test_plan_derivation_runs_for_the_subject_and_never_for_a_plan(self):
+        plan = ControllerSourceTests().fixture()[0]
+        subject = subject_of(plan["identity"])
+        self.exercise(hook="derive_plan", subject=subject, without_plan=True)
+        rejected = [dict(hook="derive_plan"),                                    # a plan and no subject
+                    dict(hook="derive_plan", without_plan=True),                 # neither
+                    dict(hook="derive_plan", subject=subject),                   # both
+                    dict(hook="derive_plan", subject=subject, without_plan=True, unit_id="target-a"),
+                    dict(hook="derive_plan", subject=plan["identity"], without_plan=True, unit_id="lane-a"),
+                    dict(hook="derive_plan", subject={**subject, "tested_sha": "x"}, without_plan=True),
+                    dict(hook="verify_build", subject=subject),                  # the plan is the identity
+                    dict(hook="verify_build", without_plan=True),
+                    dict(hook="verify_build", subject=subject, without_plan=True),
+                    dict(hook="derive_runtime", subject=subject, without_plan=True, unit_id="lane-a")]
+        for arguments in rejected:
+            with self.subTest(arguments=list(arguments)), self.assertRaises(MbError):
+                self.exercise(**arguments)
+
     def test_planning_unknown_or_aggregate_unit_requests_reject_and_lock_without_launch(self):
         for hook, unit in (("derive_plan", None), ("sh", None), ("verify_build", "target-a"),
-                           ("verify_target", "foreign"), ("verify_runtime", None)):
+                           ("verify_target", "foreign"), ("verify_runtime", None), ("derive_runtime", None),
+                           ("derive_runtime", "target-a"), ("policy", None), ("build_target", "target-a"),
+                           ("run_lane", "lane-a"), (None, None)):
             with self.subTest(hook=hook), self.assertRaises(MbError):
                 self.exercise(hook=hook, unit_id=unit)
+
+    def test_accounts_that_are_not_isolated_never_launch(self):
+        with self.assertRaisesRegex(MbError, "not isolated"):
+            self.exercise(peer_error=WorkerError("worker identities are not isolated"))
 
     def test_admission_execution_postcheck_and_final_kill_failures_never_return_success(self):
         for args in ({"pre_error": WorkerError("unsafe sources")}, {"post_change": True},

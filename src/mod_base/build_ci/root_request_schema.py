@@ -13,8 +13,9 @@ from __future__ import annotations
 from typing import Any
 
 from mod_base import readable_schema_versions
+from mod_base.build_ci import adapter
 from mod_base.build_ci.host import HOST_RUNNER_HOME, _canonical_path
-from mod_base.build_ci.protocol import REPO, check_output_paths, repo_path, validate_plan
+from mod_base.build_ci.protocol import REPO, check_output_paths, repo_path, validate_plan, validate_subject
 from mod_base.build_ci.records import bind_build_envelope, validate_build_envelope
 from mod_base.build_ci.runtime_schema import validate_runtime_envelope
 from mod_base.build_ci.source import GitSourceEntry, validate_source_inventory
@@ -77,8 +78,9 @@ def _runtime(value: Any, path: str) -> dict[str, Any]:
 
 def _sources(arguments: dict[str, Any], path: str) -> None:
     """Closed controller-source metadata; the bytes are re-read from the protected copy in root."""
-    plan, sources = arguments["plan"], arguments["sources"]
-    check(sources["controller_sha"] == plan["identity"]["controller_sha"], path, "root controller differs")
+    sources = arguments["sources"]
+    identity = arguments["plan"]["identity"] if "plan" in arguments else arguments["subject"]
+    check(sources["controller_sha"] == identity["controller_sha"], path, "root controller differs")
     config = sources["config"]
     check(config["path"] == "scripts/ci/mod-base-build.json" and config["size"] <= limits.MAX_CI_CONFIG_BYTES,
           f"{path}.sources.config", "root source config differs or exceeds its existing cap")
@@ -120,6 +122,35 @@ def _candidate_staging(document: dict[str, Any], path: str) -> None:
     validate_source_inventory(tuple(GitSourceEntry(**entry) for entry in document["arguments"]["inventory"]))
 
 
+#: The accounts of a job, as its lifecycle operations name them: the validator and the candidate,
+#: which is ``null`` in a job that allocated the validator alone.
+_JOB = {"validator": _ACCOUNT, "candidate": Nullable(_ACCOUNT)}
+#: One staged candidate file of ``validation-input/``: its name there and the SHA-256 of its bytes.
+_INPUT = Obj({"name": Str(grammar.CI_UNIT_ID, max_len=80), "sha256": _SHA})
+
+
+def _job(document: dict[str, Any], path: str) -> None:
+    validator, candidate = document["arguments"]["validator"], document["arguments"]["candidate"]
+    check(candidate is None or (candidate["uid"] != validator["uid"] and candidate["gid"] != validator["gid"]),
+          f"{path}.candidate", "root request accounts are not isolated from each other")
+
+
+def _controller_grant(document: dict[str, Any], path: str) -> None:
+    _job(document, path)
+    _sources(document["arguments"], path)
+
+
+def _plan_inputs(document: dict[str, Any], path: str) -> None:
+    """The candidate files in the order a job stages them: the inventory, the scenario contract,
+    then the extra plan inputs of the protected config by name."""
+    _job(document, path)
+    names = [item["name"] for item in document["arguments"]["inputs"]]
+    extra = names[2:]
+    check(names[:2] == [adapter.INVENTORY_INPUT, adapter.SCENARIO_INPUT] and extra == sorted(set(extra))
+          and not set(extra) & adapter.RESERVED_INPUT_NAMES, f"{path}.inputs",
+          "must be the inventory, the scenario contract and the extra plan inputs sorted by name")
+
+
 #: Operation -> (closed argument object, cross-field checks over the whole request).
 _OPERATIONS = {
     "host-fence": (Obj({}), lambda document, path: None),
@@ -138,6 +169,11 @@ _OPERATIONS = {
         Obj({"validator": _ACCOUNT, "sources": _SOURCES, "plan": _plan, "build": _envelope,
              "runtime": _runtime, "lane_id": _UNIT, "run_id": _RUN, "run_attempt": _ATTEMPT,
              "execution_nonce": _SHA}), _runtime_validation),
+    "grant-controller": (Obj({**_JOB, "subject": validate_subject, "sources": _SOURCES}), _controller_grant),
+    "grant-plan-inputs": (
+        Obj({**_JOB, "inputs": List(_INPUT, min_items=2, max_items=2 + limits.MAX_CI_PLAN_INPUTS)}), _plan_inputs),
+    "take-derived-plan": (Obj(_JOB), _job),
+    "grant-validation-inputs": (Obj({**_JOB, "plan": _plan}), _job),
 }
 
 

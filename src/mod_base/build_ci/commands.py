@@ -19,6 +19,7 @@ from mod_base.github import api as github_api
 #: The modules that add verbs to ``ci``, in help order. One line per work area.
 VERB_MODULES = (
     "mod_base.build_ci.commands_subject",
+    "mod_base.build_ci.commands_worker",
     "mod_base.build_ci.commands_batch",
 )
 

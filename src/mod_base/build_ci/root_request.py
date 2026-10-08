@@ -20,18 +20,21 @@ import selectors
 import signal
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mod_base import SCHEMA_VERSIONS
+from mod_base.build_ci import adapter
 from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, ControllerFile, ControllerSources,
-                                          _validate_sources, _verify_controller_copy)
+                                          _validate_sources, _verify_controller_copy, verify_controller_source_copy)
 from mod_base.build_ci.handoff import _context, _read_private_record
 from mod_base.build_ci.host import (HostBoundary, _canonical_path, _open_directory, authenticate_host_boundary,
                                     authenticate_privileged_host_boundary, privileged_runner_identity)
-from mod_base.build_ci.inputs import _accounts, _inspect_inputs, _layout
+from mod_base.build_ci.inputs import (VALIDATOR_INPUT_ROOT, _accounts, _inspect_inputs, _layout,
+                                      plan_source_digests, verify_validation_inputs)
+from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.root_request_schema import validate_root_request
 from mod_base.build_ci.runtime_handoff import _context as _runtime_context
 from mod_base.build_ci.runtime_inputs import _inspect_inputs as _inspect_runtime_inputs, _retained
@@ -150,6 +153,96 @@ def request_host_fence(*, boundary: HostBoundary) -> str:
     request carries nothing but the home fence receipt.
     """
     return _publish("host-fence", boundary, {})
+
+
+def _job_arguments(boundary: HostBoundary, validator: WorkerAccount) -> dict[str, Any]:
+    """The live accounts of this job as a lifecycle request names them."""
+    candidate = _accounts(boundary, validator)
+    return {"validator": {"uid": validator.uid, "gid": validator.gid},
+            "candidate": None if candidate is None else {"uid": candidate.uid, "gid": candidate.gid}}
+
+
+def request_controller_grant(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources,
+                             subject: dict[str, Any]) -> str:
+    """Runner-only request to hand the protected adapter copy to the validator; return the nonce.
+
+    Made once per job, while ``controller/`` is still the runner's private copy of ``sources``.
+    The request names the subject and the metadata of every source; root re-reads the bytes.
+    """
+    try:
+        authenticate_host_boundary(boundary)
+        accounts = _job_arguments(boundary, validator)
+        root = Path(str(CONTROLLER_VALIDATION_ROOT))
+        expected = verify_controller_source_copy(root, sources=sources, identity=subject)
+
+        def closing() -> None:
+            check(verify_controller_source_copy(root, sources=sources, identity=subject) == expected
+                  and _job_arguments(boundary, validator) == accounts,
+                  "$.request", "controller copy or accounts changed during publication")
+
+        return _publish("grant-controller", boundary, {**accounts, "subject": copy.deepcopy(subject),
+                                                       "sources": _source_metadata(sources)},
+                        before_publish=closing)
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
+
+
+def request_plan_inputs_grant(*, boundary: HostBoundary, validator: WorkerAccount,
+                              digests: Mapping[str, str]) -> str:
+    """Runner-only request to hand the staged candidate files to the validator; return the nonce.
+
+    Made before ``derive_plan`` runs, while ``validation-input/`` is the runner's private stage.
+    ``digests`` is the SHA-256 of each staged file by name; the request lists them in the order a
+    job stages them: the inventory, the scenario contract, then the extra plan inputs by name.
+    """
+    check(isinstance(digests, Mapping), "$.inputs", "must map each staged name to its SHA-256")
+    fixed = (adapter.INVENTORY_INPUT, adapter.SCENARIO_INPUT)
+    names = [*(name for name in fixed if name in digests), *sorted(name for name in digests if name not in fixed)]
+    return _request_inputs("grant-plan-inputs", boundary, validator,
+                           {"inputs": [{"name": name, "sha256": digests[name]} for name in names]},
+                           dict(digests=dict(digests)))
+
+
+def request_validation_inputs_grant(*, boundary: HostBoundary, validator: WorkerAccount,
+                                    plan: dict[str, Any]) -> str:
+    """Runner-only request to hand the complete input root to the validator; return the nonce.
+
+    Made once the plan exists and ``validation-input/`` holds it, privately staged again, next to
+    every candidate file it binds.
+    """
+    return _request_inputs("grant-validation-inputs", boundary, validator, {"plan": copy.deepcopy(plan)},
+                           dict(digests=plan_source_digests(validate_plan(plan)), plan=plan))
+
+
+def _request_inputs(operation: str, boundary: HostBoundary, validator: WorkerAccount,
+                    arguments: dict[str, Any], expected: dict[str, Any]) -> str:
+    try:
+        authenticate_host_boundary(boundary)
+        accounts = _job_arguments(boundary, validator)
+        root = Path(str(VALIDATOR_INPUT_ROOT))
+        verify_validation_inputs(root, **expected)
+
+        def closing() -> None:
+            verify_validation_inputs(root, **expected)
+            check(_job_arguments(boundary, validator) == accounts, "$.request",
+                  "accounts changed during publication")
+
+        return _publish(operation, boundary, {**accounts, **arguments}, before_publish=closing)
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
+
+
+def request_derived_plan(*, boundary: HostBoundary, validator: WorkerAccount) -> str:
+    """Runner-only request for what ``derive_plan`` left in the validator's home; return the nonce.
+
+    Made after the hook returned and the validator was terminated. The request names only the
+    accounts: the output's place, name and bound are fixed in root.
+    """
+    try:
+        authenticate_host_boundary(boundary)
+        return _publish("take-derived-plan", boundary, _job_arguments(boundary, validator))
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
 
 
 def request_candidate_staging(*, boundary: HostBoundary, candidate: WorkerAccount, repository: str,

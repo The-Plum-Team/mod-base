@@ -34,7 +34,8 @@ RUNNER_HOME = "/home/runner"
 REPOSITORY = "The-Plum-Team/mod-base"
 PROGRAM = "tools/ci_privileged_bootstrap.py"
 ROOTS = ("src", "site", "requirements")
-OPERATIONS = ("host-fence", "stage-candidate", "freeze-build-validation", "freeze-runtime-validation")
+OPERATIONS = ("host-fence", "stage-candidate", "freeze-build-validation", "freeze-runtime-validation",
+              "grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs")
 ENTRY_FLAGS = ("--operation", "--kit", "--kit-digest", "--nonce")
 MAX_FILES = 20000
 MAX_ENTRIES = 40000

@@ -15,6 +15,8 @@ from tests.helpers import ci_root_request
 
 
 BUILD, RUNTIME = "freeze-build-validation", "freeze-runtime-validation"
+#: The operations of ``ci worker-prepare`` and ``ci plan``: each names the accounts of the job.
+LIFECYCLE = ("grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs")
 
 
 class RootRequestSchemaTests(unittest.TestCase):
@@ -93,6 +95,77 @@ class RootRequestSchemaTests(unittest.TestCase):
                 mutate(changed)
                 with self.subTest(operation=operation, index=index), self.assertRaises(MbError):
                     validate_root_request(changed)
+
+    def test_lifecycle_operations_name_the_accounts_of_the_job_and_nothing_that_selects_code(self):
+        for operation in LIFECYCLE:
+            document = ci_root_request(operation)
+            validate_root_request(document)
+            alone = copy.deepcopy(document)
+            alone["arguments"]["candidate"] = None  # A job that allocated the validator alone.
+            validate_root_request(alone)
+            for mutate in (lambda d: d["arguments"].pop("candidate"),
+                           lambda d: d["arguments"].pop("validator"),
+                           lambda d: d["arguments"].update(validator=None),
+                           lambda d: d["arguments"]["candidate"].update(uid=d["arguments"]["validator"]["uid"]),
+                           lambda d: d["arguments"]["candidate"].update(gid=d["arguments"]["validator"]["gid"]),
+                           lambda d: d["arguments"]["candidate"].update(uid=d["boundary"]["uid"]),
+                           lambda d: d["arguments"]["candidate"].update(gid=d["boundary"]["gid"]),
+                           lambda d: d["arguments"]["validator"].update(uid=d["boundary"]["uid"]),
+                           lambda d: d["arguments"]["candidate"].update(uid=limits.MIN_CI_WORKER_UID - 1),
+                           lambda d: d["arguments"]["candidate"].update(home="/tmp/other"),
+                           lambda d: d["arguments"].update(hook="derive_plan"),
+                           lambda d: d["arguments"].update(path="/tmp/export"),
+                           lambda d: d["arguments"].update(command=["sh"])):
+                changed = copy.deepcopy(document)
+                mutate(changed)
+                with self.subTest(operation=operation, changed=str(changed["arguments"])[:80]), \
+                        self.assertRaises(MbError):
+                    validate_root_request(changed)
+
+    def test_lifecycle_operations_bind_their_sources_digests_and_plan(self):
+        cases = {
+            "grant-controller": (
+                lambda d: d["arguments"]["sources"].update(controller_sha="e" * 40),
+                lambda d: d["arguments"]["subject"].update(controller_sha="e" * 40),
+                lambda d: d["arguments"]["subject"].update(policy_sha256="f" * 64),  # A subject, not an identity.
+                lambda d: d["arguments"]["subject"].pop("tested_tree"),
+                lambda d: d["arguments"]["sources"]["config"].update(path="scripts/ci/other.json"),
+                lambda d: d["arguments"]["sources"]["files"][0].update(path=".git/config"),
+                lambda d: d["arguments"]["sources"]["files"][0].update(data_base64=""),
+                lambda d: d["arguments"].update(plan=d["arguments"]["subject"])),
+            "grant-plan-inputs": (
+                lambda d: d["arguments"]["inputs"][0].update(sha256="A" * 64),
+                lambda d: d["arguments"]["inputs"][1].update(sha256="b" * 63),
+                lambda d: d["arguments"]["inputs"].pop(0),  # No inventory.
+                lambda d: d["arguments"]["inputs"].reverse(),
+                lambda d: d["arguments"]["inputs"].append({"name": "another", "sha256": "c" * 64}),  # Not sorted.
+                lambda d: d["arguments"]["inputs"].append(dict(d["arguments"]["inputs"][2])),
+                lambda d: d["arguments"]["inputs"][2].update(name="inventory"),
+                lambda d: d["arguments"]["inputs"][2].update(name="ci-plan.json"),
+                lambda d: d["arguments"]["inputs"][2].update(name="Gradle Properties"),
+                lambda d: d["arguments"]["inputs"][2].update(path="gradle.properties"),
+                lambda d: d["arguments"]["inputs"].extend(
+                    {"name": f"input-{index}", "sha256": "c" * 64} for index in range(limits.MAX_CI_PLAN_INPUTS)),
+                lambda d: d["arguments"].pop("inputs"),
+                lambda d: d["arguments"].update(inventory_sha256="a" * 64)),
+            "take-derived-plan": (
+                lambda d: d["arguments"].update(output="plan.json"),
+                lambda d: d["arguments"].update(inventory_sha256="a" * 64)),
+            "grant-validation-inputs": (
+                lambda d: d["arguments"]["plan"].update(plan_sha256="f" * 64),
+                lambda d: d["arguments"]["plan"]["identity"].update(inventory_sha256="f" * 64),
+                lambda d: d["arguments"].update(plan=None),
+                lambda d: d["arguments"].update(inventory_sha256="a" * 64)),
+        }
+        self.assertEqual(tuple(cases), LIFECYCLE)
+        for operation, mutations in cases.items():
+            for index, mutate in enumerate(mutations):
+                changed = ci_root_request(operation)
+                mutate(changed)
+                with self.subTest(operation=operation, index=index), self.assertRaises(MbError):
+                    validate_root_request(changed)
+        with patch.object(limits, "MAX_CI_PLAN_BYTES", 1), self.assertRaises(MbError):
+            validate_root_request(ci_root_request("grant-validation-inputs"))
 
     def test_runtime_request_keeps_its_cross_run_owning_build(self):
         arguments = ci_root_request(RUNTIME)["arguments"]

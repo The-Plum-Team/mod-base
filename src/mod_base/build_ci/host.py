@@ -84,15 +84,13 @@ def _open_directory(parts: tuple[str, ...], *, root: int | None = None) -> int:
         raise
 
 
-def protect_worker_host(*, runner_environment: str, runner_home: str,
-                        workspace: str, runner_temp: str) -> HostBoundary:
-    """Close traversal into the fixed runner home after authenticating the initial host layout.
+def _open_runner_home(runner_environment: str, runner_home: str, workspace: str,
+                      runner_temp: str) -> tuple[int, os.stat_result]:
+    """Authenticate the initial hosted layout; return a descriptor of the runner home and its metadata.
 
-    Call only from the protected prologue on a fresh admitted hosted runner, before candidate
-    execution. Candidate processes must start with a private cwd and no inherited host fds.
-    Toolchains outside the home remain accessible and must independently be protected against
-    worker writes/import poisoning; caches are copied before worker admission.
-    Failure after chmod deliberately leaves the home private. Never relax it while UIDs live.
+    Every later check of a receipt compares the home's group with the runner's passwd group and
+    with the group of what the runner creates. They are required to agree here, by name, so that a
+    host where they differ is refused before anything is changed.
     """
 
     if (sys.platform != "linux" or type(runner_environment) is not str
@@ -118,6 +116,8 @@ def protect_worker_host(*, runner_environment: str, runner_home: str,
         before = os.fstat(descriptor)
         if before.st_uid != os.getuid():
             raise WorkerError("runner home is not owned by the executing runner")
+        if not before.st_gid == account.pw_gid == os.getgid():
+            raise WorkerError("runner home group, the runner's passwd group and its process group differ")
         for path in paths:
             child = _open_directory(tuple(path.relative_to(home).parts), root=descriptor)
             try:
@@ -125,6 +125,42 @@ def protect_worker_host(*, runner_environment: str, runner_home: str,
                     raise WorkerError("host workspace/temp is not runner-owned")
             finally:
                 os.close(child)
+        return descriptor, before
+    except BaseException as error:
+        if descriptor is not None:
+            os.close(descriptor)
+        if isinstance(error, (OSError, KeyError)):
+            raise WorkerError("cannot establish private runner host fence") from error
+        raise
+
+
+def inspect_worker_host(*, runner_environment: str, runner_home: str,
+                        workspace: str, runner_temp: str) -> HostBoundary:
+    """The receipt :func:`protect_worker_host` will return, without changing the home.
+
+    ``ci worker-prepare`` records it before it changes anything, so that ``ci worker-finish`` can
+    restore the home whatever happens in between.
+    """
+
+    descriptor, before = _open_runner_home(runner_environment, runner_home, workspace, runner_temp)
+    os.close(descriptor)
+    return HostBoundary(HOST_RUNNER_HOME, before.st_uid, before.st_gid, before.st_dev,
+                        before.st_ino, stat.S_IMODE(before.st_mode))
+
+
+def protect_worker_host(*, runner_environment: str, runner_home: str,
+                        workspace: str, runner_temp: str) -> HostBoundary:
+    """Close traversal into the fixed runner home after authenticating the initial host layout.
+
+    Call only from the protected prologue on a fresh admitted hosted runner, before candidate
+    execution. Candidate processes must start with a private cwd and no inherited host fds.
+    Toolchains outside the home remain accessible and must independently be protected against
+    worker writes/import poisoning; caches are copied before worker admission.
+    Failure after chmod deliberately leaves the home private. Never relax it while UIDs live.
+    """
+
+    descriptor, before = _open_runner_home(runner_environment, runner_home, workspace, runner_temp)
+    try:
         os.fchmod(descriptor, 0o700)
         os.fsync(descriptor)
         after = os.fstat(descriptor)
@@ -134,8 +170,37 @@ def protect_worker_host(*, runner_environment: str, runner_home: str,
             raise WorkerError("runner home did not bind the private host fence")
         return HostBoundary(HOST_RUNNER_HOME, after.st_uid, after.st_gid, after.st_dev,
                             after.st_ino, stat.S_IMODE(before.st_mode))
-    except (OSError, KeyError) as error:
+    except OSError as error:
         raise WorkerError("cannot establish private runner host fence") from error
+    finally:
+        os.close(descriptor)
+
+
+def restore_worker_host(boundary: HostBoundary) -> None:
+    """Give the runner home the mode it had before the fence: the last act of a job.
+
+    Only once no worker account can run any more: both terminated and locked. The home must be
+    the recorded directory of the executing runner, still closed or already restored (a second
+    call changes nothing).
+    """
+
+    _validate_host_receipt(boundary)
+    if os.getgid() == 0 or boundary.uid != os.getuid():
+        raise WorkerError("host fence belongs to a different runner")
+    descriptor = None
+    try:
+        descriptor = _open_directory(("home", "runner"))
+        info = os.fstat(descriptor)
+        if ((info.st_dev, info.st_ino, info.st_uid, info.st_gid) !=
+                (boundary.device, boundary.inode, boundary.uid, boundary.gid)
+                or stat.S_IMODE(info.st_mode) not in {0o700, boundary.original_mode}):
+            raise WorkerError("runner home is not the fenced directory this job recorded")
+        os.fchmod(descriptor, boundary.original_mode)
+        os.fsync(descriptor)
+        if stat.S_IMODE(os.fstat(descriptor).st_mode) != boundary.original_mode:
+            raise WorkerError("runner home did not take its original mode back")
+    except OSError as error:
+        raise WorkerError("cannot restore the runner home") from error
     finally:
         if descriptor is not None:
             os.close(descriptor)
