@@ -75,6 +75,45 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=src python3 -m unittest -v tests.ci_linux_worker
+      - name: Probe the hosted runner layout (temporary)
+        if: always() && matrix.python == '3.12'
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "== identity"; id; getent passwd runner; umask
+          echo "== key paths"
+          stat -c '%a %U:%G %n' / /home /home/runner /home/runner/work /tmp /opt /opt/hostedtoolcache \
+            /opt/hostedtoolcache/Python /usr /usr/share /usr/local /usr/local/bin /usr/local/lib /usr/lib/jvm /etc 2>&1
+          echo "== python"
+          prefix="$(python3 -c 'import sys; print(sys.base_prefix)')"
+          python3 -c 'import os, site, sys; print(sys.executable, sys.base_prefix, os.__file__, site.getsitepackages())'
+          stat -c '%a %U:%G %n' "$prefix" "$prefix/bin" "$prefix"/bin/python3* "$prefix/lib" 2>&1
+          ls -la /opt/hostedtoolcache/Python/ /opt/hostedtoolcache | head -50
+          echo "== system python"
+          stat -c '%a %U:%G %n' /usr/bin/python3 /usr/lib/python3.12 /usr/lib/python3/dist-packages 2>&1
+          /usr/bin/python3 --version
+          echo "== java"; env | grep -E '^JAVA_HOME' | sort; ls -la /usr/lib/jvm 2>&1 | head -12
+          echo "== world-writable non-sticky directories, depth 3"
+          sudo find / -xdev -maxdepth 3 -type d -perm -0002 ! -perm -1000 2>/dev/null | head -60
+          echo "== world-writable sticky directories, depth 3"
+          sudo find / -xdev -maxdepth 3 -type d -perm -1002 2>/dev/null | head -20
+          echo "== world-writable entry counts"
+          for root in /opt /usr/share /usr/local /usr/lib /usr/bin /usr/sbin /etc /var; do
+            printf '%s total=%s writable=%s\n' "$root" "$(sudo find "$root" -xdev 2>/dev/null | wc -l)" \
+              "$(sudo find "$root" -xdev -perm -0002 ! -type l 2>/dev/null | wc -l)"
+          done
+          echo "== acl"; getfacl -p /opt /opt/hostedtoolcache /home/runner 2>&1 | head -40
+          echo "== git templates"
+          stat -c '%a %U:%G %n' /usr/share/git-core /usr/share/git-core/templates /usr/share/git-core/templates/hooks 2>&1
+          echo "== tools"; command -v setpriv useradd usermod userdel pkill pgrep chown setfacl getfacl git jq xvfb-run
+          git --version; sudo -n true && echo "passwordless sudo"
+          echo "== login.defs"; grep -E '^(UID_MIN|UID_MAX|SYS_UID_MIN|SYS_UID_MAX|USERGROUPS_ENAB|UMASK|HOME_MODE)' /etc/login.defs
+          echo "== kernel"; uname -r; cat /proc/sys/kernel/yama/ptrace_scope; findmnt -no TARGET,FSTYPE,OPTIONS / /tmp /mnt 2>&1 | head -5
+          echo "== environment names"; env | cut -d= -f1 | sort | tr '\n' ' '; echo
+          echo "== time to remove group/other write"
+          time sudo chmod -R go-w /opt
+          time sudo chmod -R go-w /usr/share
+          stat -c '%a %U:%G %n' /opt /opt/hostedtoolcache "$prefix" /usr/share
 
   test-gate:
     name: Test
