@@ -720,6 +720,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_GATE_REQUESTS`: the 96-request budget of one `ci seal-gate` (a Build gate costs 15, the packaged gate of a pull request 20 and the gate of a reuse run, which decides the reuse again, 47, whatever the number of targets and lanes).
 * `MAX_CI_COMMIT_PULLS`: 100, the pull requests GitHub associates with one pushed commit: the one page post-merge reuse reads to find the merge.
 * `MAX_CI_REUSE_ADMIT_REQUESTS`: 96, the request budget of `ci reuse-admit` (38 for an admitted reuse, 1 for a direct push, 11 when the merged tree differs, whatever the number of targets and lanes).
+* `CI_ARTIFACT_UPLOAD_SKEW_SECONDS`: Two seconds of tolerance for artifact creation versus upload-step bounds only; other chronology stays exact.
 * `CI_TEST_MERGE_WAIT_SECONDS`: Fifteen-second deadline for GitHub to compute a pending test merge.
 * `CI_TEST_MERGE_POLL_SECONDS`: Five-second interval between pending test-merge observations.
 * `MAX_CI_TEST_MERGE_POLLS`: Four observations, independently bounding the wait and request count.

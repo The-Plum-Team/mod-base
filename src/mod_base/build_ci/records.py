@@ -122,7 +122,11 @@ def validate_descriptor(value: Any, path: str = "$") -> dict[str, Any]:
     check((name.run_id, name.run_attempt) == (producer["run_id"], producer["run_attempt"]),
           f"{path}.artifact.name", "does not bind the producer run and attempt")
     window = producer["upload_window"]
-    check(window["started_at"] <= artifact["created_at"] <= window["completed_at"],
+    created = g.parse_timestamp(artifact["created_at"])
+    started, completed = g.parse_timestamp(window["started_at"]), g.parse_timestamp(window["completed_at"])
+    tolerance = lim.CI_ARTIFACT_UPLOAD_SKEW_SECONDS
+    check(-tolerance <= (created - started).total_seconds()
+          and (created - completed).total_seconds() <= tolerance,
           f"{path}.artifact.created_at", "artifact was not created within its authenticated upload window")
     check(artifact["created_at"] < artifact["expires_at"], f"{path}.artifact.expires_at", "artifact lifetime is empty")
     if name.kind in {"tested", "reuse"}:

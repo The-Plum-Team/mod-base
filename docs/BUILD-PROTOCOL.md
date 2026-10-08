@@ -102,7 +102,9 @@ A record that names an artifact holds a *descriptor* (`records.validate_descript
 `plan_sha256` and `profile`; the producer (`run_id`, `run_attempt`, `workflow_path`,
 `workflow_ref`, `api_head_sha`, `event`, `graph_sha256`, `upload_window`); and the artifact (`id`,
 `name`, `digest`, `size`, `created_at`, `expires_at`). The upload window is the upload step of the
-job that produced the artifact, and `created_at` must lie inside it. Timestamps are accepted in
+job that produced the artifact, and `created_at` must lie inside it within the two-second
+`CI_ARTIFACT_UPLOAD_SKEW_SECONDS` tolerance for the service and runner clocks. Upload, seal and job
+ordering and artifact expiry stay exact. Timestamps are accepted in
 the shapes the API returns and compared as whole-second UTC (`grammar.normalize_timestamp`).
 
 ## Document kinds

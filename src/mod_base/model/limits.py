@@ -350,6 +350,9 @@ MAX_CI_BATCH_SETTLE_REQUESTS = 48 + 6 * MAX_CI_BATCH_MEMBERS
 #: The archive of one ``mb-ci-*`` artifact of any kind and profile: Quick Skin's bundle admission
 #: cap, which is tighter than the 2 GiB Block Pops' evaluator admits (``tests/test_ci_limits.py``).
 MAX_CI_BUNDLE_COMPRESSED_BYTES = 512 * MIB
+#: Artifact-service creation time versus runner upload-step time only. Seal/job ordering and
+#: artifact expiry remain exact; the two services may disagree by a couple of seconds.
+CI_ARTIFACT_UPLOAD_SKEW_SECONDS = 2
 MAX_CI_EXPORT_FILES = 10_000
 MAX_CI_EXPORT_ENTRIES = 20_000
 MAX_CI_EXPORT_FILE_BYTES = GIB

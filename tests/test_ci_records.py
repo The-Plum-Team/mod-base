@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import timedelta
 import unittest
 
 from mod_base.build_ci.authenticate import authenticate_merged_pr_identity
@@ -169,6 +170,37 @@ class DescriptorTests(unittest.TestCase):
                           ("tested", 42, 2, "other"), ("results", 42, 2, "lane-a")):
             with self.assertRaises(MbError):
                 grammar.ci_artifact_name(*arguments)
+
+    def test_artifact_creation_accepts_exact_clock_skew_boundaries_only(self):
+        tolerance = limits.CI_ARTIFACT_UPLOAD_SKEW_SECONDS
+        for edge, direction in (("started_at", -1), ("completed_at", 1)):
+            for distance in (0, 1, tolerance, tolerance + 1):
+                descriptor = ci_descriptor()
+                moment = grammar.parse_timestamp(descriptor["producer"]["upload_window"][edge])
+                descriptor["artifact"]["created_at"] = (moment + timedelta(seconds=direction * distance)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ")
+                with self.subTest(edge=edge, distance=distance):
+                    if distance <= tolerance:
+                        self.assertEqual(validate_descriptor(descriptor), descriptor)
+                    else:
+                        with self.assertRaisesRegex(MbError, "authenticated upload window"):
+                            validate_descriptor(descriptor)
+
+    def test_creation_tolerance_does_not_relax_upload_order_or_expiry(self):
+        descriptor = ci_descriptor()
+        window = descriptor["producer"]["upload_window"]
+        window["completed_at"] = window["started_at"]
+        descriptor["artifact"]["created_at"] = window["started_at"]
+        window["started_at"] = (grammar.parse_timestamp(window["started_at"]) + timedelta(seconds=1)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        with self.assertRaisesRegex(MbError, "upload window is reversed"):
+            validate_descriptor(descriptor)
+        for seconds in (0, -1):
+            descriptor = ci_descriptor()
+            descriptor["artifact"]["expires_at"] = (grammar.parse_timestamp(descriptor["artifact"]["created_at"])
+                                                     + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            with self.subTest(seconds=seconds), self.assertRaisesRegex(MbError, "artifact lifetime is empty"):
+                validate_descriptor(descriptor)
 
     def test_digest_and_exact_producer_attempt_are_mandatory(self):
         mutations = [lambda d: d["artifact"].pop("digest"),

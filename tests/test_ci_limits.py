@@ -126,6 +126,7 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_PLAN_INPUTS": (8, "candidate files a protected Build configuration may name for plan derivation beside "
                               "the inventory and the scenario contract; Quick Skin needs one (gradle.properties)"),
     "MAX_CI_IDENTITY_BYTES": (16 * KIB, "the private subject record of one job"),
+    "CI_ARTIFACT_UPLOAD_SKEW_SECONDS": (2, "artifact-service creation clock versus runner upload-step clock only"),
     "CI_TEST_MERGE_WAIT_SECONDS": (15, "maximum wait for GitHub to compute a pending PR test merge"),
     "CI_TEST_MERGE_POLL_SECONDS": (5, "interval between observations of a pending PR test merge"),
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
