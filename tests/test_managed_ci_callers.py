@@ -658,6 +658,17 @@ class CallerGraphTests(unittest.TestCase):
                         self.assertEqual(results, listed_results(producer, mode))
             self.assertEqual(reached, set(MODES[producer]), "every mode of the closed set is reached")
 
+    def test_the_attest_only_shape_is_no_run_of_the_build_caller(self) -> None:
+        """Attest-only dispatches stay on the mods' own route: the caller owns no such job, and no
+        event leaves both the deferral and the Build call skipped behind a successful guard."""
+
+        with self.assertRaisesRegex(AssertionError, "lists a job that no caller job owns"):
+            listed_results("build", "attest-only")
+        for label, (github, job_outputs, _modes) in SCENARIOS["build"].items():
+            results = simulate(self.documents[BUILD_CALLER], github, job_outputs=job_outputs)
+            with self.subTest(scenario=label):
+                self.assertEqual(sorted((results["deferred"], results["shared"])), ["skipped", "success"])
+
     def test_the_listings_show_the_steps_of_the_caller_owned_jobs(self) -> None:
         guard = [item["name"] for item in self.documents[GUARD_CALLER]["jobs"]["verify"]["steps"]]
         self.assertEqual(guard, [GUARD_STEP])
