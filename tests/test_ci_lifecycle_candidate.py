@@ -15,12 +15,14 @@ import json
 import os
 import shutil
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from mod_base import runtime
+from mod_base import __version__, runtime
 from mod_base.build_ci import identity, lifecycle, worker_overlay
 from mod_base.build_ci.host import HostBoundary
 from mod_base.build_ci.root_request_operations import candidate_generated_roots
@@ -29,10 +31,11 @@ from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.build_ci.worker import WorkerAccount
 from mod_base.build_ci.worker_preparation import _tree_id
 from mod_base.errors import MbError
+from mod_base.github.fake import FakeGitHub
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json
 from mod_base.pin import (ACTIONS_LOCK, STAGED_LOCK, STAMP_NAME, actions_listing, kit_tree_digest, staged_listing,
-                          stamp_document)
+                          parse_pin, stamp_document, verify_released)
 from tests import ci_candidate_fixture as candidate_fixture
 from tests import ci_lifecycle_fixture as fixture
 from tests import ci_mod_harness as h
@@ -208,6 +211,42 @@ class InventoryTests(CandidateCase):
 
 
 class KitOverlayTests(CandidateCase):
+    def resolve_staged_candidate(self, sha: str, version: str) -> None:
+        """Run the managed bootstrap over the actual overlay a candidate job supplies."""
+        tested = h.materialize(self.temporary / "tested")
+        (tested / ".github/workflows/kit.yml").write_text(
+            "name: Kit pin\non: workflow_dispatch\njobs:\n  kit:\n"
+            f"    uses: The-Plum-Team/mod-base/.github/workflows/build.yml@{sha} # {version}\n",
+            encoding="utf-8", newline="\n")
+        job = self.begin(tested)
+        # Even a candidate pin whose immutable tag and ancestry pass the existing
+        # protected admission cannot resolve the overlay of a different executing pin.
+        api = FakeGitHub(repository="The-Plum-Team/mod-base")
+        api.add_compare(sha, "main", {"status": "ahead", "behind_by": 0, "ahead_by": 1})
+        api.add_ref("tags/" + version, sha, annotated_tag_sha="5" * 40)
+        verify_released(parse_pin(self.checkout), api)
+        overlay = self.checkout / "out/mod-base-kit"
+        lifecycle.stage_kit_overlay(job, overlay)
+        result = subprocess.run(
+            (sys.executable, "-I", "-B", str(job.kit_root / "template/managed/scripts/ci/mod_base_kit.py"),
+             "path", "--repo", str(self.checkout)),
+            cwd=self.checkout, env={"HOME": str(self.temporary), "CI": "true", "PYTHONDONTWRITEBYTECODE": "1"},
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", timeout=60, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(overlay))
+
+    def test_an_unchanged_candidate_pin_resolves_the_lifecycle_overlay(self) -> None:
+        self.resolve_staged_candidate(h.KIT_SHA, "v" + __version__)
+
+    # Scope decision: ordinary K1-K6 generations keep the protected pin. Supporting a
+    # candidate's future pin needs separate overlay admission before Q/B adopts that
+    # upgrade route; do not relax bootstrap verification or change the executing pin.
+    # See BUILD-PROTOCOL.md, "Candidate kit pin limitation".
+    @unittest.expectedFailure  # Candidate overlay admission must distinguish the future pin from the executing pin.
+    def test_a_candidate_kit_bump_resolves_the_lifecycle_overlay(self) -> None:
+        self.resolve_staged_candidate("4" * 40, "v1.0.4")
+
     def test_the_staged_kit_is_the_verified_checkout_with_the_stamp_root_admits(self) -> None:
         job = self.begin()
         overlay = self.temporary / "kit"

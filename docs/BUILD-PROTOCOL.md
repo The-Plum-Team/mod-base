@@ -203,6 +203,23 @@ page was written: they are described as specified.
 | 9. "Upload sealed outputs", `actions/upload-artifact` | The only step that uploads. Its start and end are the upload window of the artifact's descriptor. |
 | 10. `ci worker-finish`, also after a failure once step 2 succeeded | Terminates and locks both accounts, requires that neither owns a process and only then reopens the runner home. |
 
+**Candidate kit pin limitation.** `lifecycle.stage_kit_overlay` currently stages the protected
+executing pin from the job's subject. An ordinary generation whose candidate retains that pin
+resolves the overlay successfully. A candidate that bumps its pin cannot use this path: the
+managed bootstrap rejects the staged old pin, even if the future pin's release tag and ancestry
+pass protected admission. The real staging/bootstrap regression is
+`tests/test_ci_lifecycle_candidate.py::KitOverlayTests::test_a_candidate_kit_bump_resolves_the_lifecycle_overlay`
+(expected failure); the adjacent unchanged-pin test passes.
+
+The scope decision is to keep ordinary K1–K6 generations on the protected pin and leave future-pin
+staging unsupported until it is implemented before Q/B adopts that upgrade route. The design's
+distinction between the protected executing pin and an approved candidate's future pin still
+applies. Completion needs protected admission and staging of the candidate overlay separately
+from the executing kit, with the stage record naming the kit actually supplied. The existing
+bootstrap `stage` operation supports that distinction, but the worker lifecycle does not compose
+it. K4's activation and bootstrap tests are not complete proof of future kit upgrades; a hosted
+canary cannot supply this missing behavior. Do not bypass pin verification to make a bump pass.
+
 The verbs of every job after the prologue, in step order (`workflow.CI_JOB_VERBS`, without the
 step the note below the table describes):
 

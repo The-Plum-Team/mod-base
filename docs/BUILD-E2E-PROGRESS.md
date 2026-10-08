@@ -56,6 +56,13 @@ it is meant to work and marks it.
 
 ## Known behaviour
 
+Candidate staging supplies the protected executing kit pin. An unchanged candidate pin works;
+a future-pin bump is rejected by the managed bootstrap even after release-tag/ancestry admission.
+This is a demonstrated expected failure in `test_ci_lifecycle_candidate.KitOverlayTests`, with the
+scope decision and missing contract in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md), "Candidate kit pin
+limitation". It must be implemented before Q/B adopts that upgrade route; K4 and the canary do not
+establish support for it.
+
 A pull request is tested on the commit of the default branch that was its base when the run
 started. When the default branch moves, the runs of that pull request that are in flight reject
 ("protected executing controller has moved"), and a status evaluation that needs the plan fails in
