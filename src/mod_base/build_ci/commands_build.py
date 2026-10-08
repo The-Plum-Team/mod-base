@@ -139,7 +139,7 @@ def run_assemble(args: argparse.Namespace) -> int:
                                                    run_attempt=job.run_attempt, output=inputs,
                                                    source_config_sha256=config_sha256)
         envelope = assemble_build_export(inputs, partitions=partitions, plan=job.plan, run_id=job.run_id,
-                                         run_attempt=job.run_attempt, output=BUILD_VALIDATION_ROOT)
+                                         run_attempt=job.run_attempt, output=Path(BUILD_VALIDATION_ROOT))
     identity.write_state_record(args.state, PARTITIONS_NAME, canonical_json(
         {"descriptors": descriptors, "envelope_sha256": canonical_sha256(envelope)}))
     sys.stdout.write(f"assemble: {len(partitions)} target partitions of run {job.run_id} attempt {job.run_attempt} "
