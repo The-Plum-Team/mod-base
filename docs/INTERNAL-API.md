@@ -2713,7 +2713,7 @@ the job arguments, read the subject and the plan of the job from `--state`, buil
 through `commands.api_client` with an explicit request budget and write nothing to GitHub.
 
 * `BUILD_RUN`, `WAIT_SECONDS`: the argparse types of `--build-run-id` (a run id as `int`, `same-run`, or the empty string as `None`) and `--wait-seconds` (1 to 5400).
-* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register both verbs. `select-build [--wait-seconds N] [--build-run-id ID|same-run] --output FILE --github-output FILE` (outputs `found`, `build_run_id` and, when found, `selection`: the record on one line). `fetch-build --selection FILE`.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register both verbs. `select-build [--wait-seconds N] [--build-run-id ID|same-run] --output FILE --github-output FILE` (outputs `found`, `run_id` and, when found, `selection`: the record on one line). `fetch-build --selection FILE`.
 * `def job_plan(state: Path) -> dict[str, Any]`: The plan `ci plan` left in the job's state directory (`ci-plan.json`), strictly decoded and validated.
 * `def run_select_build(args: argparse.Namespace) -> int`: The `select-build` handler: `selection.select_build` for this run attempt; a selection is written to `--output` (a new file of this user) and to `ci-selection.json` in the state directory.
 * `def run_fetch_build(args: argparse.Namespace) -> int`: The `fetch-build` handler: `selection.fetch_build` into `exports.BUILD_VALIDATION_ROOT`; the bound record is kept as `ci-selection.json` in the state directory.

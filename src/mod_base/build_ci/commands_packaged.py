@@ -14,9 +14,10 @@ The subject ``ci subject`` authenticated and ``--build-run-id`` choose the route
   ``--build-run-id same-run`` authenticates the Build this run built for itself.
 
 A selection writes the canonical ``mod-base.ci.selection`` record to ``--output`` (a new file) and
-to ``ci-selection.json`` in the state directory, and outputs ``found=true``, ``build_run_id`` and
-``selection`` (the record on one line, for the jobs that consume it). Nothing to select writes no
-record and outputs ``found=false`` with an empty ``build_run_id``.
+to ``ci-selection.json`` in the state directory, and outputs ``found=true``, ``run_id`` (the run
+of that Build, which the callee workflows hand to every later job) and ``selection`` (the record
+on one line). Nothing to select writes no record and outputs ``found=false`` with an empty
+``run_id``.
 
 ``fetch-build`` runs in every lane job and in the aggregate job, immediately before the Build is
 used. It takes the record of this run attempt's ``input`` job as ``--selection``, re-validates
@@ -132,12 +133,12 @@ def run_select_build(args: argparse.Namespace) -> int:
                                       temporary_root=args.state, build_run_id=args.build_run_id,
                                       wait_seconds=args.wait_seconds)
     if document is None:
-        cli.write_github_output(args.github_output, {"found": False, "build_run_id": ""})
+        cli.write_github_output(args.github_output, {"found": False, "run_id": ""})
         return 0
     raw = canonical_json(document)
     _write_new(args.output, raw)
     identity.write_state_record(args.state, selection.SELECTION_NAME, raw)
-    cli.write_github_output(args.github_output, {"found": True, "build_run_id": document["build"]["producer"]["run_id"],
+    cli.write_github_output(args.github_output, {"found": True, "run_id": document["build"]["producer"]["run_id"],
                                                  "selection": raw.decode("utf-8").rstrip("\n")})
     return 0
 

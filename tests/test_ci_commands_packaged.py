@@ -147,7 +147,7 @@ class SelectBuildCommandTests(CommandTestCase):
         request = {key: value for key, value in document["request"].items() if key != "nonce"}
         self.assertEqual(request, {"run_id": 43, "run_attempt": 2, "workflow_path": PACKAGED,
                                    "workflow_ref": grammar.workflow_ref(h.REPOSITORY, PACKAGED, h.BRANCH)})
-        self.assertEqual(self.outputs(), {"found": "true", "build_run_id": str(world.bundle["producer"]["run_id"]),
+        self.assertEqual(self.outputs(), {"found": "true", "run_id": str(world.bundle["producer"]["run_id"]),
                                           "selection": raw.decode("utf-8").rstrip("\n")})
         self.assertEqual((world.api.request_count, world.budgets), (requests, [limits.MAX_CI_SELECT_BUILD_REQUESTS]))
         self.assertLess(requests, 60)
@@ -197,7 +197,7 @@ class SelectBuildCommandTests(CommandTestCase):
                     world.add_run("build", listing)
                 state = world.state("select")
                 self.assertEqual(self.select(world, state), (0, ""))
-                self.assertEqual(self.output.read_text(encoding="utf-8"), "found=false\nbuild_run_id=\n")
+                self.assertEqual(self.output.read_text(encoding="utf-8"), "found=false\nrun_id=\n")
                 self.assertFalse(self.record.exists())
                 self.assertEqual(sorted(path.name for path in state.iterdir()),
                                  [grammar.CI_PLAN_NAME, identity.IDENTITY_NAME])
