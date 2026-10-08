@@ -1587,51 +1587,65 @@ class LinuxBuildTransportTests(unittest.TestCase):
     def test_real_complete_target_set_is_one_private_publication(self):
         if sys.platform != "linux":
             raise AssertionError("real target-set transport tests require Linux")
-        from tests.test_ci_transport import target_set_fixture
+        from tests.test_ci_transport import target_set_world
         from mod_base.build_ci.transport import download_target_set
-        plan, api, descriptors, partitions, *_ = target_set_fixture()
+        world = target_set_world()
         with tempfile.TemporaryDirectory(prefix="mod-base-target-set-") as directory:
             output = Path(directory) / "inputs"
-            self.assertEqual(download_target_set(api, descriptors=descriptors, plan=plan,
-                workflow_path=".github/workflows/build-gate.yml", run_id=42, run_attempt=2, output=output), partitions)
+            self.assertEqual(download_target_set(world.api, descriptors=world.descriptors, plan=world.plan,
+                                                 run_id=42, run_attempt=2, output=output), world.partitions)
             self.assertEqual(sorted(path.name for path in output.iterdir()), ["target-0", "target-1"])
-            for index, partition in enumerate(partitions):
-                self.assertEqual(verify_build_export(output / f"target-{index}", plan=plan), partition["envelope"])
+            for index, partition in enumerate(world.partitions):
+                self.assertEqual(verify_build_export(output / f"target-{index}", plan=world.plan),
+                                 partition["envelope"])
             self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o700)
             self.assertEqual(list(Path(directory).iterdir()), [output])
 
     def test_real_late_target_zip_failure_leaves_no_partial_inputs_or_stage(self):
         if sys.platform != "linux":
             raise AssertionError("real target-set transport tests require Linux")
-        from tests.test_ci_transport import target_set_fixture
+        from tests.test_ci_transport import target_set_world
         from mod_base.build_ci.transport import download_target_set
-        plan, api, descriptors, *_ = target_set_fixture()
-        selected = descriptors[1]["artifact"]
+        world = target_set_world()
+        # The second archive is what its descriptor and the API say it is, so it is rejected by the
+        # extractor after the first target was really written into the stage.
+        selected = world.descriptors[1]["artifact"]
         data = b"not a ZIP"
         selected.update(size=len(data), digest="sha256:" + hashlib.sha256(data).hexdigest())
-        api.add_artifact({"id": selected["id"], "name": selected["name"], "size_in_bytes": len(data),
-                         "digest": selected["digest"], "created_at": selected["created_at"],
-                         "expires_at": selected["expires_at"], "expired": False,
-                         "workflow_run": {"id": 42, "head_branch": "master", "head_sha": "2" * 40}}, data)
+        world.archives[selected["id"]] = data
+        world.set_artifact(selected["id"], size_in_bytes=len(data), digest=selected["digest"])
         with tempfile.TemporaryDirectory(prefix="mod-base-target-set-") as directory:
             with self.assertRaises(MbError):
-                download_target_set(api, descriptors=descriptors, plan=plan,
-                    workflow_path=".github/workflows/build-gate.yml", run_id=42, run_attempt=2,
-                    output=Path(directory) / "inputs")
+                download_target_set(world.api, descriptors=world.descriptors, plan=world.plan,
+                                    run_id=42, run_attempt=2, output=Path(directory) / "inputs")
             self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_real_same_attempt_target_download_before_aggregate_completion(self):
         if sys.platform != "linux":
             raise AssertionError("real target transport tests require Linux")
-        from tests.test_ci_transport import transport_fixture
-        from mod_base.build_ci.transport import download_target_partition
-        plan, api, descriptor, envelope, *_ = transport_fixture(target=True)
+        from tests.helpers import ci_run_descriptor
+        from tests.test_ci_transport import ASSEMBLE, GATE, World, build_archive
+        from mod_base.build_ci.transport import download_target_set
+        # One target is read as a set of one: its job has sealed and uploaded, the assembling job of
+        # the same attempt is the reader and still runs, and the run has no conclusion yet.
+        world = World()
+        world.add_run("build", "build-full", status="in_progress", conclusion=None)
+        jobs = [job for job in world.jobs[42] if job["name"] != GATE]
+        assemble = next(job for job in jobs if job["name"] == ASSEMBLE)
+        assemble.update(status="in_progress", conclusion=None, completed_at=None)
+        assemble["steps"] = assemble["steps"][:1]
+        world.set_jobs(42, jobs)
+        producer = ci_run_descriptor(world.plan, "build", "full", "target", unit_id="target-a")["producer"]
+        data, envelope = build_archive(world.plan, producer, target_id="target-a")
+        descriptor = world.publish(world.describe("build", "full", "target", data, unit_id="target-a",
+                                                  artifact_id=110), data)
         with tempfile.TemporaryDirectory(prefix="mod-base-target-download-") as directory:
             output = Path(directory) / "output"
-            self.assertEqual(download_target_partition(api, descriptor=descriptor, plan=plan,
-                workflow_path=".github/workflows/build-gate.yml", run_id=42, run_attempt=2,
-                target_id="target-a", output=output), envelope)
-            self.assertEqual(verify_build_export(output, plan=plan), envelope)
+            self.assertEqual(download_target_set(world.api, descriptors=[descriptor], plan=world.plan,
+                                                 run_id=42, run_attempt=2, output=output),
+                             [{"descriptor": descriptor, "envelope": envelope}])
+            self.assertEqual([path.name for path in output.iterdir()], ["target-0"])
+            self.assertEqual(verify_build_export(output / "target-0", plan=world.plan), envelope)
             self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o700)
             self.assertEqual(list(Path(directory).iterdir()), [output])
 
@@ -1644,8 +1658,7 @@ class LinuxBuildTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="mod-base-build-download-") as directory:
             base = Path(directory)
             output = base / "output"
-            observed = download_completed_build(api, descriptor=descriptor, plan=plan,
-                                                workflow_path=".github/workflows/build-gate.yml", output=output)
+            observed = download_completed_build(api, descriptor=descriptor, plan=plan, output=output)
             self.assertEqual(observed, envelope)
             self.assertEqual(verify_build_export(output, plan=plan), envelope)
             self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o700)
@@ -1671,8 +1684,7 @@ class LinuxBuildTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="mod-base-build-download-") as directory:
             output = Path(directory) / "output"
             with self.assertRaises(MbError):
-                download_completed_build(api, descriptor=descriptor, plan=plan,
-                                         workflow_path=".github/workflows/build-gate.yml", output=output)
+                download_completed_build(api, descriptor=descriptor, plan=plan, output=output)
             self.assertEqual(list(Path(directory).iterdir()), [])
 
 
@@ -1680,13 +1692,13 @@ class LinuxBuildAssemblyTests(unittest.TestCase):
     def inputs(self, directory):
         if sys.platform != "linux":
             raise AssertionError("real complete Build assembly requires Linux")
-        from tests.test_ci_transport import target_set_fixture
+        from tests.test_ci_transport import target_set_world
         from mod_base.build_ci.transport import download_target_set
-        plan, api, descriptors, *_ = target_set_fixture()
+        world = target_set_world()
         root = Path(directory) / "inputs"
-        partitions = download_target_set(api, descriptors=descriptors, plan=plan,
-            workflow_path=".github/workflows/build-gate.yml", run_id=42, run_attempt=2, output=root)
-        return plan, partitions, root
+        partitions = download_target_set(world.api, descriptors=world.descriptors, plan=world.plan,
+                                         run_id=42, run_attempt=2, output=root)
+        return world.plan, partitions, root
 
     def test_real_transport_and_complete_independent_byte_assembly(self):
         from mod_base.build_ci.exports import assemble_build_export
@@ -1780,31 +1792,29 @@ class LinuxGateTransportTests(unittest.TestCase):
     def test_real_build_and_packaged_record_extraction_and_api_binding(self):
         if sys.platform != "linux":
             raise AssertionError("real tested-record transport requires Linux")
-        from tests.test_ci_gate_transport import gate_transport_fixture
+        from tests.test_ci_gate_timeline import gate_world
         from mod_base.build_ci.transport import download_gate_receipt
         for kind in ("build", "packaged"):
-            plan, api, document, descriptor, *_ = gate_transport_fixture(kind)
+            world = gate_world(kind)
             with self.subTest(kind=kind), tempfile.TemporaryDirectory(prefix="mod-base-gate-download-") as directory:
-                observed = download_gate_receipt(api, descriptor=descriptor, plan=plan, gate=kind,
-                    workflow_path=descriptor["producer"]["workflow_path"],
-                    build_workflow_path=".github/workflows/build-gate.yml", temporary_root=Path(directory))
-                self.assertEqual(observed, document)
+                observed = download_gate_receipt(world.api, descriptor=world.seals[kind], plan=world.plan,
+                                                 gate=kind, temporary_root=Path(directory))
+                self.assertEqual(observed, world.documents[kind])
                 self.assertEqual(list(Path(directory).iterdir()), [])
-                self.assertEqual(api.mutations, [])
+                self.assertEqual(world.api.mutations, [])
 
     def test_real_wrong_filename_and_noncanonical_record_leave_no_residue(self):
         if sys.platform != "linux":
             raise AssertionError("real tested-record transport requires Linux")
-        from tests.test_ci_gate_transport import gate_transport_fixture
+        from tests.test_ci_gate_timeline import gate_world
+        from tests.test_ci_gate_transport import reseal
         from mod_base.build_ci.transport import download_gate_receipt
-        for fixture in (gate_transport_fixture(filename="other.json"),
-                        gate_transport_fixture(raw=canonical_json(gate_transport_fixture()[2]) + b"\n")):
-            plan, api, _, descriptor, *_ = fixture
+        for world in (reseal(gate_world(), "build", filename="other.json"),
+                      reseal(gate_world(), "build", raw=canonical_json(gate_world().documents["build"]) + b"\n")):
             with tempfile.TemporaryDirectory(prefix="mod-base-gate-reject-") as directory:
                 with self.assertRaises(MbError):
-                    download_gate_receipt(api, descriptor=descriptor, plan=plan, gate="build",
-                        workflow_path=".github/workflows/build-gate.yml",
-                        build_workflow_path=".github/workflows/build-gate.yml", temporary_root=Path(directory))
+                    download_gate_receipt(world.api, descriptor=world.seals["build"], plan=world.plan,
+                                          gate="build", temporary_root=Path(directory))
                 self.assertEqual(list(Path(directory).iterdir()), [])
 
 
@@ -1812,36 +1822,35 @@ class LinuxLatestBuildDownloadTests(unittest.TestCase):
     def test_real_newest_selection_download_and_atomic_copy(self):
         if sys.platform != "linux":
             raise AssertionError("real latest Build download requires Linux")
-        from tests.test_ci_latest_download import latest_download_fixture
+        from tests.test_ci_transport import build_world
         from mod_base.build_ci.selection import download_latest_pr_build
-        fixture = latest_download_fixture()
+        world = build_world()
         with tempfile.TemporaryDirectory(prefix="mod-base-latest-build-") as directory:
             output = Path(directory) / "output"
-            observed = download_latest_pr_build(fixture[1], plan=fixture[0],
-                workflow_path=".github/workflows/build-gate.yml", output=output)
-            self.assertEqual(observed, {"descriptor": fixture[2], "envelope": fixture[3]})
-            for file in fixture[3]["files"]:
+            observed = download_latest_pr_build(world.api, plan=world.plan, output=output)
+            self.assertEqual(observed, {"descriptor": world.bundle, "envelope": world.envelope})
+            for file in world.envelope["files"]:
                 self.assertEqual((output / file["path"]).read_bytes(), (file["path"] + "\n").encode())
             self.assertEqual(list(Path(directory).iterdir()), [output])
-            self.assertEqual(fixture[1].mutations, [])
+            self.assertEqual(world.api.mutations, [])
 
     def test_new_run_after_real_copy_prevents_publication_and_cleans_stage(self):
         if sys.platform != "linux":
             raise AssertionError("real latest Build race requires Linux")
-        from tests.test_ci_latest_download import latest_download_fixture, supersede
+        from tests.test_ci_latest_download import supersede
+        from tests.test_ci_transport import build_world
         from mod_base.build_ci import exports
         from mod_base.build_ci.selection import download_latest_pr_build
-        fixture = latest_download_fixture()
+        world = build_world()
         original = exports.copy_regular_files
         def copying(*args, **kwargs):
             result = original(*args, **kwargs)
-            supersede(fixture)
+            supersede(world)
             return result
         with tempfile.TemporaryDirectory(prefix="mod-base-latest-race-") as directory, \
                 patch.object(exports, "copy_regular_files", side_effect=copying):
             with self.assertRaises(MbError):
-                download_latest_pr_build(fixture[1], plan=fixture[0],
-                    workflow_path=".github/workflows/build-gate.yml", output=Path(directory) / "output")
+                download_latest_pr_build(world.api, plan=world.plan, output=Path(directory) / "output")
             self.assertEqual(list(Path(directory).iterdir()), [])
 
 
