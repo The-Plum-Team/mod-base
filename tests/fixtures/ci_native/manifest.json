@@ -1,0 +1,92 @@
+{
+  "profiles": {
+    "block-pops": {
+      "commit": "47a890ae46a2878fb08d29a932803ab91bccdcd9",
+      "derived": {
+        "jobs.json": {
+          "derivation": "Jobs API listing of attempt 1 of the pull request runs of PR 50, merged as the reviewed commit; their controller c80bc92ac78c4f19aa22c836713b3b6e08eb6707 has the .github, scripts, release and e2e trees of the reviewed commit. Equal to scripts/ci/e2e_job_graph.py expected_jobs(event='pull_request_target') at the reviewed commit.",
+          "sha256": "6c053f36f1423f6f26fe7658cb3182940a677f3d44057e1ca26ef79ba9a5af32",
+          "size": 4253
+        },
+        "measured.json": {
+          "derivation": "Artifact metadata and ZIP central directories of the runs it names, read on the date it names. Block Pops keeps these artifacts one day, so the measured runs are newer than the reviewed commit (controller_sha); the lane set and the staged file names are unchanged.",
+          "sha256": "aff2391ee26697dccbd12efaff73609cd61c3a291ad43043141645d92eedf3cb",
+          "size": 5655
+        },
+        "outputs.json": {
+          "derivation": "scripts/release/artifact_manifest.py stage_scoped_release, per lane of target 1.20.1: files/<production jar name>, harness/<harness jar name> and the scoped manifest artifacts.json.",
+          "sha256": "82d118bf881bcac73ad504b49e1cd5c50583553db7f29452d2d763a561b927c9",
+          "size": 1089
+        },
+        "targets.json": {
+          "derivation": "scripts/release/matrix.py MatrixDocument.select_lanes(scope='full') in the order of scripts/release/build_matrix.py plan_build; a target is the lanes that share 'minecraft'; production_jar and harness_jar are LaneConfiguration.production_jar and harness_jar; runtime_id and pr_scenarios are MatrixDocument.projection('pr-anchors') (gha_matrix).",
+          "sha256": "652022b42e5348f01862864b014ad795f31638b82ccd4659267312b9eb464e4d",
+          "size": 10570
+        }
+      },
+      "native": {
+        "release-matrix.json": {
+          "blob": "af5264d4ce14ec77ecb7e1f9d0f61cc70e913c48",
+          "path": "release/release-matrix.json",
+          "sha256": "1c6e8f99d9b7db6d9979050dbb002e42e9bab98df418ef92738f4620e8c1bc03",
+          "size": 40525
+        },
+        "scenario-contract.json": {
+          "blob": "58c1a47b019b1f12a56d068c13fafe4da1baa163",
+          "path": "e2e/scenario-contract.json",
+          "sha256": "7f8ef00dc50735d55e62b8cb1facc5abe7881461294c595e1f15ee6e8a5596e8",
+          "size": 19840
+        }
+      },
+      "repository": "The-Plum-Team/Block-Pops-Minecraft-Mod",
+      "tree": "1e959a94f46ef8f2d660cdcb7bc299e8a139baf9"
+    },
+    "quick-skin": {
+      "commit": "c0cdc01ab20f1eac663c628011520c76fc7e3d7a",
+      "derived": {
+        "jobs.json": {
+          "derivation": "Jobs API listing of attempt 1 of the pull request runs of PR 2072, whose tested merge b55bb8cc21d6a7696226b30334ece8e4917f9e6b has the tree of the reviewed commit.",
+          "sha256": "766d4889fec40c6ad3fe81de659fe12e91c5ba366c2a592072125a7229231656",
+          "size": 9390
+        },
+        "measured.json": {
+          "derivation": "Artifact metadata and ZIP central directories of the same two runs, read on the date it names.",
+          "sha256": "beb10c02c78746e3cfc9444f5961ef3b0ef6eef855c518a7aba3e80cd0783af7",
+          "size": 7248
+        },
+        "outputs.json": {
+          "derivation": "scripts/release/verify_release.py build_manifest(target='1.20.1'): files/<production jar name>, harness/<harness jar name>, sbom/quick-skin.cdx.json (artifact_manifest.SBOM_FILENAME) and the manifest artifacts.json.",
+          "sha256": "1efb0c955745e3e88bb0b59bb8a442c534f45851b16e8a56f8cd90b8c2700dd1",
+          "size": 922
+        },
+        "targets.json": {
+          "derivation": "scripts/release/build_matrix.py build_plan: targets by 'artifact_version' in numeric order with their artifact nodes; production_jar and harness_jar are scripts/release/verify_release.py resolve_template over the inventory templates with mod_version from gradle.properties; runtime_id and pr_scenarios are scripts/release/matrix.py gha_matrix(kind='pr-anchors').",
+          "sha256": "57b1f6e35059a768c5f804ba151cd9134dac1494ee0266860118fb5d94434e36",
+          "size": 18337
+        }
+      },
+      "native": {
+        "gradle.properties": {
+          "blob": "cc7a2c5841eabeea55e2479e6dd7a7d15eba4a81",
+          "path": "gradle.properties",
+          "sha256": "5a45330f2c0a6e1afdc69ea37698b6c45cdf26c01058768361cd53f58d018d6b",
+          "size": 5683
+        },
+        "release-matrix.json": {
+          "blob": "7e8e5588403e3dadaf8975e8a174344657ecb117",
+          "path": "release/release-matrix.json",
+          "sha256": "b04ab9cee2f507d3455a6ec9811ad2eacbe8a3d3505e0e6f4164157a25c61416",
+          "size": 45490
+        },
+        "scenario-contract.json": {
+          "blob": "3a600f51eb4d7ed9cb6c6a8f170c477fefb80c40",
+          "path": "e2e/scenario-contract.json",
+          "sha256": "eafcdc1ff5549ee2bc3973e319ba91bd02e49daaf67f0839bcefc52ca5cff961",
+          "size": 152454
+        }
+      },
+      "repository": "The-Plum-Team/Quick-Skin-Mod",
+      "tree": "0dcc51f8f3648364eae58d95a947058dcdf41702"
+    }
+  }
+}

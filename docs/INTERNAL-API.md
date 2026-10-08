@@ -658,6 +658,7 @@ Adapter host, config and retention:
 * `MAX_ICON_BYTES`, `MAX_ICON_DIMENSION`, `MAX_PROJECT_LINKS`, `MAX_LABEL_ENTRIES`
 * `MAX_COPY_PARAGRAPHS`, `MAX_TEMPLATE_PATHS`
 * `RETENTION_DAYS`, `MAX_ANCHOR_RETENTION_DAYS`, `MAX_BASELINE_RETENTION_DAYS`
+* `CI_RETENTION_DAYS`: retention days of every `mb-ci-*` artifact kind (target 1; build, runtime and results 7; tested and reuse 90); Pages rotation never sees these names.
 
 Protected Build/runtime (independent ceilings, no change to Pages budgets):
 
@@ -693,7 +694,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_BATCH_DOCUMENT_BYTES`: 64 MiB strict batch JSON cap; decoded member/file/path bounds remain independent.
 * `MAX_CI_BATCH_PUSH_RECEIPT_BYTES`: 4 KiB closed single-ref Git porcelain observation cap; separate from worker logs and manifest transport.
 * `MAX_CI_BATCH_PATCH_FILES`, `MAX_CI_BATCH_PATCH_ENTRIES`, `MAX_CI_BATCH_PATCH_PATH_BYTES`: Combined two-source-tree bounds for native batch policy inventory; no source/API/transport cap is widened.
-* `MAX_CI_BUNDLE_COMPRESSED_BYTES`, `MAX_CI_FANIN_BYTES`, `MAX_CI_EXPORTS`
+* `MAX_CI_BUNDLE_COMPRESSED_BYTES`: 512 MiB archive cap of one `mb-ci-*` artifact of any kind and profile (`tests/test_ci_limits.py` pins every Build/E2E bound with the native bound it preserves).
 * `MAX_CI_EXPORT_FILES`, `MAX_CI_EXPORT_ENTRIES`, `MAX_CI_EXPORT_FILE_BYTES`, `MAX_CI_EXPORT_TREE_BYTES`
 * `MAX_CI_TARGET_DOWNLOAD_BYTES`, `MAX_CI_TARGET_INPUT_ENTRIES`: Additional aggregate compressed-download and physical wrapped-input bounds; do not widen native/runtime fan-in or original logical export limits.
 * `MAX_CI_ORIGINAL_INPUT_ENTRIES`: original Build/runtime private parent plus the two existing bounded child closures.
@@ -703,7 +704,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_EXECUTION_LOG_CHARS`, `MAX_CI_EXECUTION_BYTES`: bounded canonical base64 log and whole local execution-handoff JSON; independent of artifact/receipt transport limits.
 * `MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE`: closed original Build input report byte caps by profile;
   Block Pops 8 MiB, Quick Skin 4 MiB; independent of validator-output `MAX_CI_REPORT_BYTES`.
-* `MAX_CI_PNG_BYTES`, `MAX_CI_JAR_BYTES`, `MAX_CI_JAR_ENTRIES`
+* `MAX_CI_PNG_BYTES`, `MAX_CI_JAR_BYTES`
 
 ## `mod_base.model.canonical`
 

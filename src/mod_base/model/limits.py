@@ -255,9 +255,9 @@ MAX_CI_BATCH_PUSH_RECEIPT_BYTES = 4096
 MAX_CI_BATCH_PATCH_FILES = 2 * MAX_CI_SOURCE_FILES
 MAX_CI_BATCH_PATCH_ENTRIES = 2 * MAX_CI_SOURCE_ENTRIES
 MAX_CI_BATCH_PATCH_PATH_BYTES = 2 * MAX_CI_SOURCE_LIST_BYTES
+#: The archive of one ``mb-ci-*`` artifact of any kind and profile: Quick Skin's bundle admission
+#: cap, which is tighter than the 2 GiB Block Pops' evaluator admits (``tests/test_ci_limits.py``).
 MAX_CI_BUNDLE_COMPRESSED_BYTES = 512 * MIB
-MAX_CI_FANIN_BYTES = 512 * MIB
-MAX_CI_EXPORTS = 16
 MAX_CI_EXPORT_FILES = 10_000
 MAX_CI_EXPORT_ENTRIES = 20_000
 MAX_CI_EXPORT_FILE_BYTES = GIB
@@ -265,6 +265,8 @@ MAX_CI_EXPORT_TREE_BYTES = 2 * GIB
 # Additional complete-target transport bounds, independent of native/runtime fan-in limits.
 MAX_CI_TARGET_DOWNLOAD_BYTES = 4 * GIB
 MAX_CI_TARGET_INPUT_ENTRIES = (MAX_CI_EXPORT_FILES + MAX_CI_TARGETS) * (MAX_BUNDLE_PATH_DEPTH + 1) + 1
+#: One lane's whole runtime export. The mods apply these numbers to each evidence profile (one
+#: scenario of a lane), so a lane with several scenarios is counted more strictly here.
 MAX_CI_RUNTIME_FILES = 512
 MAX_CI_RUNTIME_BYTES = 256 * MIB
 # Original Block Pops aggregate fan-in bounds; lane limits above remain unchanged.
@@ -283,8 +285,9 @@ MAX_CI_LOG_BYTES = 16 * MIB
 MAX_CI_EXECUTION_LOG_CHARS = 4 * ((MAX_CI_LOG_BYTES + 2) // 3)
 MAX_CI_EXECUTION_BYTES = MAX_CI_EXECUTION_LOG_CHARS + 64 * KIB
 MAX_CI_PNG_BYTES = 32 * MIB
+#: A production or harness JAR as one export file. Its entry count and its expanded and nested-archive
+#: limits stay with the mod's own protected verifier, which is the code that opens it.
 MAX_CI_JAR_BYTES = 256 * MIB
-MAX_CI_JAR_ENTRIES = 8192
 
 # -- Retention (days) per artifact kind (SPEC §3.0 artifact table) ---------------------------------
 RETENTION_DAYS = {
@@ -299,3 +302,14 @@ RETENTION_DAYS = {
 }
 MAX_ANCHOR_RETENTION_DAYS = 90
 MAX_BASELINE_RETENTION_DAYS = 90
+#: Retention (days) of every ``mb-ci-*`` artifact kind (``grammar.CI_ARTIFACT_PREFIXES``): transient
+#: target partitions one day, staged Build bundles and raw runtime artifacts seven, sealed tested and
+#: reuse records ninety. Pages rotation never sees these names.
+CI_RETENTION_DAYS = {
+    "target": 1,
+    "build": 7,
+    "runtime": 7,
+    "results": 7,
+    "tested": 90,
+    "reuse": 90,
+}

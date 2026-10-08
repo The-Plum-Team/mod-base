@@ -1,0 +1,544 @@
+{
+  "lanes": [
+    {
+      "artifact_node": "fabric-1.20.1",
+      "harness_jar": "fabric/versions/1.20.1/build/libs/Quick Skin E2E - Fabric - 1.20.1-0.0.0.jar",
+      "java": 17,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.20.1/build/libs/Quick Skin - Fabric - 1.20.1-3.1.0.jar",
+      "runtime_id": "fabric-1_20_1--1_20_1--pr-behavior",
+      "runtime_java": 17,
+      "runtime_version": "1.20.1",
+      "target": "1.20.1"
+    },
+    {
+      "artifact_node": "forge-1.20.1",
+      "harness_jar": "forge/versions/1.20.1/build/libs/Quick Skin E2E - Forge - 1.20.1-0.0.0.jar",
+      "java": 17,
+      "loader": "forge",
+      "mod_version": "3.1.0",
+      "production_jar": "forge/versions/1.20.1/build/libs/Quick Skin - Forge - 1.20.1-3.1.0.jar",
+      "runtime_id": "forge-1_20_1--1_20_1--pr-behavior",
+      "runtime_java": 17,
+      "runtime_version": "1.20.1",
+      "target": "1.20.1"
+    },
+    {
+      "artifact_node": "fabric-1.21.1",
+      "harness_jar": "fabric/versions/1.21.1/build/libs/Quick Skin E2E - Fabric - 1.21.1-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.1/build/libs/Quick Skin - Fabric - 1.21.1-3.1.0.jar",
+      "runtime_id": "fabric-1_21_1--1_21_1--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.1",
+      "target": "1.21.1"
+    },
+    {
+      "artifact_node": "neoforge-1.21.1",
+      "harness_jar": "neoforge/versions/1.21.1/build/libs/Quick Skin E2E - NeoForge - 1.21.1-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.1/build/libs/Quick Skin - NeoForge - 1.21.1-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_1--1_21_1--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.1",
+      "target": "1.21.1"
+    },
+    {
+      "artifact_node": "fabric-1.21.2",
+      "harness_jar": "fabric/versions/1.21.2/build/libs/Quick Skin E2E - Fabric - 1.21.2-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.2/build/libs/Quick Skin - Fabric - 1.21.2-3.1.0.jar",
+      "runtime_id": "fabric-1_21_2--1_21_2--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.2",
+      "target": "1.21.2"
+    },
+    {
+      "artifact_node": "neoforge-1.21.2",
+      "harness_jar": "neoforge/versions/1.21.2/build/libs/Quick Skin E2E - NeoForge - 1.21.2-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.2/build/libs/Quick Skin - NeoForge - 1.21.2-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_2--1_21_2--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.2",
+      "target": "1.21.2"
+    },
+    {
+      "artifact_node": "fabric-1.21.3",
+      "harness_jar": "fabric/versions/1.21.3/build/libs/Quick Skin E2E - Fabric - 1.21.3-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.3/build/libs/Quick Skin - Fabric - 1.21.3-3.1.0.jar",
+      "runtime_id": "fabric-1_21_3--1_21_3--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.3",
+      "target": "1.21.3"
+    },
+    {
+      "artifact_node": "neoforge-1.21.3",
+      "harness_jar": "neoforge/versions/1.21.3/build/libs/Quick Skin E2E - NeoForge - 1.21.3-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.3/build/libs/Quick Skin - NeoForge - 1.21.3-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_3--1_21_3--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.3",
+      "target": "1.21.3"
+    },
+    {
+      "artifact_node": "fabric-1.21.4",
+      "harness_jar": "fabric/versions/1.21.4/build/libs/Quick Skin E2E - Fabric - 1.21.4-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.4/build/libs/Quick Skin - Fabric - 1.21.4-3.1.0.jar",
+      "runtime_id": "fabric-1_21_4--1_21_4--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.4",
+      "target": "1.21.4"
+    },
+    {
+      "artifact_node": "neoforge-1.21.4",
+      "harness_jar": "neoforge/versions/1.21.4/build/libs/Quick Skin E2E - NeoForge - 1.21.4-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.4/build/libs/Quick Skin - NeoForge - 1.21.4-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_4--1_21_4--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.4",
+      "target": "1.21.4"
+    },
+    {
+      "artifact_node": "fabric-1.21.5",
+      "harness_jar": "fabric/versions/1.21.5/build/libs/Quick Skin E2E - Fabric - 1.21.5-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.5/build/libs/Quick Skin - Fabric - 1.21.5-3.1.0.jar",
+      "runtime_id": "fabric-1_21_5--1_21_5--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.5",
+      "target": "1.21.5"
+    },
+    {
+      "artifact_node": "neoforge-1.21.5",
+      "harness_jar": "neoforge/versions/1.21.5/build/libs/Quick Skin E2E - NeoForge - 1.21.5-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.5/build/libs/Quick Skin - NeoForge - 1.21.5-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_5--1_21_5--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.5",
+      "target": "1.21.5"
+    },
+    {
+      "artifact_node": "fabric-1.21.6",
+      "harness_jar": "fabric/versions/1.21.6/build/libs/Quick Skin E2E - Fabric - 1.21.6-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.6/build/libs/Quick Skin - Fabric - 1.21.6-3.1.0.jar",
+      "runtime_id": "fabric-1_21_6--1_21_6--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.6",
+      "target": "1.21.6"
+    },
+    {
+      "artifact_node": "neoforge-1.21.6",
+      "harness_jar": "neoforge/versions/1.21.6/build/libs/Quick Skin E2E - NeoForge - 1.21.6-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.6/build/libs/Quick Skin - NeoForge - 1.21.6-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_6--1_21_6--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.6",
+      "target": "1.21.6"
+    },
+    {
+      "artifact_node": "fabric-1.21.7",
+      "harness_jar": "fabric/versions/1.21.7/build/libs/Quick Skin E2E - Fabric - 1.21.7-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.7/build/libs/Quick Skin - Fabric - 1.21.7-3.1.0.jar",
+      "runtime_id": "fabric-1_21_7--1_21_7--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.7",
+      "target": "1.21.7"
+    },
+    {
+      "artifact_node": "neoforge-1.21.7",
+      "harness_jar": "neoforge/versions/1.21.7/build/libs/Quick Skin E2E - NeoForge - 1.21.7-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.7/build/libs/Quick Skin - NeoForge - 1.21.7-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_7--1_21_7--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.7",
+      "target": "1.21.7"
+    },
+    {
+      "artifact_node": "fabric-1.21.8",
+      "harness_jar": "fabric/versions/1.21.8/build/libs/Quick Skin E2E - Fabric - 1.21.8-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.8/build/libs/Quick Skin - Fabric - 1.21.8-3.1.0.jar",
+      "runtime_id": "fabric-1_21_8--1_21_8--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.8",
+      "target": "1.21.8"
+    },
+    {
+      "artifact_node": "neoforge-1.21.8",
+      "harness_jar": "neoforge/versions/1.21.8/build/libs/Quick Skin E2E - NeoForge - 1.21.8-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.8/build/libs/Quick Skin - NeoForge - 1.21.8-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_8--1_21_8--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.8",
+      "target": "1.21.8"
+    },
+    {
+      "artifact_node": "fabric-1.21.9",
+      "harness_jar": "fabric/versions/1.21.9/build/libs/Quick Skin E2E - Fabric - 1.21.9-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.9/build/libs/Quick Skin - Fabric - 1.21.9-3.1.0.jar",
+      "runtime_id": "fabric-1_21_9--1_21_9--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.9",
+      "target": "1.21.9"
+    },
+    {
+      "artifact_node": "neoforge-1.21.9",
+      "harness_jar": "neoforge/versions/1.21.9/build/libs/Quick Skin E2E - NeoForge - 1.21.9-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.9/build/libs/Quick Skin - NeoForge - 1.21.9-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_9--1_21_9--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.9",
+      "target": "1.21.9"
+    },
+    {
+      "artifact_node": "fabric-1.21.10",
+      "harness_jar": "fabric/versions/1.21.10/build/libs/Quick Skin E2E - Fabric - 1.21.10-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.10/build/libs/Quick Skin - Fabric - 1.21.10-3.1.0.jar",
+      "runtime_id": "fabric-1_21_10--1_21_10--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.10",
+      "target": "1.21.10"
+    },
+    {
+      "artifact_node": "neoforge-1.21.10",
+      "harness_jar": "neoforge/versions/1.21.10/build/libs/Quick Skin E2E - NeoForge - 1.21.10-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.10/build/libs/Quick Skin - NeoForge - 1.21.10-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_10--1_21_10--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.10",
+      "target": "1.21.10"
+    },
+    {
+      "artifact_node": "fabric-1.21.11",
+      "harness_jar": "fabric/versions/1.21.11/build/libs/Quick Skin E2E - Fabric - 1.21.11-0.0.0.jar",
+      "java": 21,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/1.21.11/build/libs/Quick Skin - Fabric - 1.21.11-3.1.0.jar",
+      "runtime_id": "fabric-1_21_11--1_21_11--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.11",
+      "target": "1.21.11"
+    },
+    {
+      "artifact_node": "neoforge-1.21.11",
+      "harness_jar": "neoforge/versions/1.21.11/build/libs/Quick Skin E2E - NeoForge - 1.21.11-0.0.0.jar",
+      "java": 21,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/1.21.11/build/libs/Quick Skin - NeoForge - 1.21.11-3.1.0.jar",
+      "runtime_id": "neoforge-1_21_11--1_21_11--pr-behavior",
+      "runtime_java": 21,
+      "runtime_version": "1.21.11",
+      "target": "1.21.11"
+    },
+    {
+      "artifact_node": "fabric-26.1",
+      "harness_jar": "fabric/versions/26.1/build/libs/Quick Skin E2E - Fabric - 26.1-0.0.0.jar",
+      "java": 25,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/26.1/build/libs/Quick Skin - Fabric - 26.1-3.1.0.jar",
+      "runtime_id": "fabric-26_1--26_1--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.1",
+      "target": "26.1"
+    },
+    {
+      "artifact_node": "neoforge-26.1",
+      "harness_jar": "neoforge/versions/26.1/build/libs/Quick Skin E2E - NeoForge - 26.1-0.0.0.jar",
+      "java": 25,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/26.1/build/libs/Quick Skin - NeoForge - 26.1-3.1.0.jar",
+      "runtime_id": "neoforge-26_1--26_1--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.1",
+      "target": "26.1"
+    },
+    {
+      "artifact_node": "fabric-26.1.1",
+      "harness_jar": "fabric/versions/26.1.1/build/libs/Quick Skin E2E - Fabric - 26.1.1-0.0.0.jar",
+      "java": 25,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/26.1.1/build/libs/Quick Skin - Fabric - 26.1.1-3.1.0.jar",
+      "runtime_id": "fabric-26_1_1--26_1_1--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.1.1",
+      "target": "26.1.1"
+    },
+    {
+      "artifact_node": "neoforge-26.1.1",
+      "harness_jar": "neoforge/versions/26.1.1/build/libs/Quick Skin E2E - NeoForge - 26.1.1-0.0.0.jar",
+      "java": 25,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/26.1.1/build/libs/Quick Skin - NeoForge - 26.1.1-3.1.0.jar",
+      "runtime_id": "neoforge-26_1_1--26_1_1--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.1.1",
+      "target": "26.1.1"
+    },
+    {
+      "artifact_node": "fabric-26.1.2",
+      "harness_jar": "fabric/versions/26.1.2/build/libs/Quick Skin E2E - Fabric - 26.1.2-0.0.0.jar",
+      "java": 25,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/26.1.2/build/libs/Quick Skin - Fabric - 26.1.2-3.1.0.jar",
+      "runtime_id": "fabric-26_1_2--26_1_2--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.1.2",
+      "target": "26.1.2"
+    },
+    {
+      "artifact_node": "neoforge-26.1.2",
+      "harness_jar": "neoforge/versions/26.1.2/build/libs/Quick Skin E2E - NeoForge - 26.1.2-0.0.0.jar",
+      "java": 25,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/26.1.2/build/libs/Quick Skin - NeoForge - 26.1.2-3.1.0.jar",
+      "runtime_id": "neoforge-26_1_2--26_1_2--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.1.2",
+      "target": "26.1.2"
+    },
+    {
+      "artifact_node": "fabric-26.2",
+      "harness_jar": "fabric/versions/26.2/build/libs/Quick Skin E2E - Fabric - 26.2-0.0.0.jar",
+      "java": 25,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/26.2/build/libs/Quick Skin - Fabric - 26.2-3.1.0.jar",
+      "runtime_id": "fabric-26_2--26_2--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.2",
+      "target": "26.2"
+    },
+    {
+      "artifact_node": "neoforge-26.2",
+      "harness_jar": "neoforge/versions/26.2/build/libs/Quick Skin E2E - NeoForge - 26.2-0.0.0.jar",
+      "java": 25,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/26.2/build/libs/Quick Skin - NeoForge - 26.2-3.1.0.jar",
+      "runtime_id": "neoforge-26_2--26_2--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.2",
+      "target": "26.2"
+    },
+    {
+      "artifact_node": "fabric-26.3",
+      "harness_jar": "fabric/versions/26.3/build/libs/Quick Skin E2E - Fabric - 26.3-0.0.0.jar",
+      "java": 25,
+      "loader": "fabric",
+      "mod_version": "3.1.0",
+      "production_jar": "fabric/versions/26.3/build/libs/Quick Skin - Fabric - 26.3-3.1.0.jar",
+      "runtime_id": "fabric-26_3--26_3--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.3",
+      "target": "26.3"
+    },
+    {
+      "artifact_node": "neoforge-26.3",
+      "harness_jar": "neoforge/versions/26.3/build/libs/Quick Skin E2E - NeoForge - 26.3-0.0.0.jar",
+      "java": 25,
+      "loader": "neoforge",
+      "mod_version": "3.1.0",
+      "production_jar": "neoforge/versions/26.3/build/libs/Quick Skin - NeoForge - 26.3-3.1.0.jar",
+      "runtime_id": "neoforge-26_3--26_3--pr-behavior",
+      "runtime_java": 25,
+      "runtime_version": "26.3",
+      "target": "26.3"
+    }
+  ],
+  "pr_scenarios": [
+    "phase0-smoke",
+    "propagation",
+    "propagation-live",
+    "full",
+    "server-policy",
+    "session",
+    "feature-navigation"
+  ],
+  "runtime_key": "runtime_version",
+  "target_key": "artifact_version",
+  "targets": [
+    {
+      "id": "1.20.1",
+      "lanes": [
+        "fabric-1.20.1",
+        "forge-1.20.1"
+      ]
+    },
+    {
+      "id": "1.21.1",
+      "lanes": [
+        "fabric-1.21.1",
+        "neoforge-1.21.1"
+      ]
+    },
+    {
+      "id": "1.21.2",
+      "lanes": [
+        "fabric-1.21.2",
+        "neoforge-1.21.2"
+      ]
+    },
+    {
+      "id": "1.21.3",
+      "lanes": [
+        "fabric-1.21.3",
+        "neoforge-1.21.3"
+      ]
+    },
+    {
+      "id": "1.21.4",
+      "lanes": [
+        "fabric-1.21.4",
+        "neoforge-1.21.4"
+      ]
+    },
+    {
+      "id": "1.21.5",
+      "lanes": [
+        "fabric-1.21.5",
+        "neoforge-1.21.5"
+      ]
+    },
+    {
+      "id": "1.21.6",
+      "lanes": [
+        "fabric-1.21.6",
+        "neoforge-1.21.6"
+      ]
+    },
+    {
+      "id": "1.21.7",
+      "lanes": [
+        "fabric-1.21.7",
+        "neoforge-1.21.7"
+      ]
+    },
+    {
+      "id": "1.21.8",
+      "lanes": [
+        "fabric-1.21.8",
+        "neoforge-1.21.8"
+      ]
+    },
+    {
+      "id": "1.21.9",
+      "lanes": [
+        "fabric-1.21.9",
+        "neoforge-1.21.9"
+      ]
+    },
+    {
+      "id": "1.21.10",
+      "lanes": [
+        "fabric-1.21.10",
+        "neoforge-1.21.10"
+      ]
+    },
+    {
+      "id": "1.21.11",
+      "lanes": [
+        "fabric-1.21.11",
+        "neoforge-1.21.11"
+      ]
+    },
+    {
+      "id": "26.1",
+      "lanes": [
+        "fabric-26.1",
+        "neoforge-26.1"
+      ]
+    },
+    {
+      "id": "26.1.1",
+      "lanes": [
+        "fabric-26.1.1",
+        "neoforge-26.1.1"
+      ]
+    },
+    {
+      "id": "26.1.2",
+      "lanes": [
+        "fabric-26.1.2",
+        "neoforge-26.1.2"
+      ]
+    },
+    {
+      "id": "26.2",
+      "lanes": [
+        "fabric-26.2",
+        "neoforge-26.2"
+      ]
+    },
+    {
+      "id": "26.3",
+      "lanes": [
+        "fabric-26.3",
+        "neoforge-26.3"
+      ]
+    }
+  ]
+}

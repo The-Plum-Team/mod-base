@@ -1,0 +1,41 @@
+{
+  "manifest": "artifacts.json",
+  "stage": "build/release",
+  "target": "1.20.1",
+  "units": [
+    {
+      "gradle": {
+        "harness": [
+          "fabric/versions/1.20.1/build/libs/BlockPops E2E - Fabric - 1.20.1-0.0.0.jar"
+        ],
+        "production": [
+          "fabric/versions/1.20.1/build/libs/BlockPops - Fabric - 1.20.1-1.1.3.jar"
+        ]
+      },
+      "id": "fabric-1.20.1",
+      "scope": "lane",
+      "staged": [
+        "artifacts.json",
+        "files/BlockPops - Fabric - 1.20.1-1.1.3.jar",
+        "harness/BlockPops E2E - Fabric - 1.20.1-0.0.0.jar"
+      ]
+    },
+    {
+      "gradle": {
+        "harness": [
+          "forge/versions/1.20.1/build/libs/BlockPops E2E - Forge - 1.20.1-0.0.0.jar"
+        ],
+        "production": [
+          "forge/versions/1.20.1/build/libs/BlockPops - Forge - 1.20.1-1.1.3.jar"
+        ]
+      },
+      "id": "forge-1.20.1",
+      "scope": "lane",
+      "staged": [
+        "artifacts.json",
+        "files/BlockPops - Forge - 1.20.1-1.1.3.jar",
+        "harness/BlockPops E2E - Forge - 1.20.1-0.0.0.jar"
+      ]
+    }
+  ]
+}
