@@ -480,6 +480,19 @@ class CiCalleePolicyTests(unittest.TestCase):
                     for output, value in job.get("outputs", {}).items():
                         self.assertRegex(value, JOB_OUTPUT, f"{job_id}.{output}")
 
+    def test_a_job_that_waits_for_a_build_outlives_the_wait(self) -> None:
+        # The first selection of a run may poll for the whole bounded wait. A job that ends sooner would
+        # cancel a selection that is still entitled to an answer, and the run would fail for no reason of
+        # its own. A later job names the run that was selected and waits for nothing.
+        waiting = [(name, job_id, job) for name, job_id, job in iter_ci_jobs()
+                   if any(step_verb(item) == "select-build" and "$SELECTED_RUN_ID" not in item["run"]
+                          for item in job["steps"])]
+        self.assertEqual({(name, job_id) for name, job_id, _ in waiting},
+                         {("select-build", "select"), ("packaged-e2e", "input")})
+        for name, job_id, job in waiting:
+            with self.subTest(callee=name, job=job_id):
+                self.assertGreaterEqual(int(job["timeout-minutes"]) * 60, lim.CI_BUILD_WAIT_SECONDS + 600)
+
     def test_jobs_are_the_registry_jobs_with_their_names_and_permissions(self) -> None:
         for name in CI_CALLEES:
             jobs = ci_callee(name)["jobs"]

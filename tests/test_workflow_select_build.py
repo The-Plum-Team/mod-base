@@ -65,7 +65,7 @@ class SelectBuildStructureTests(unittest.TestCase):
         self.assertEqual(list(self.jobs), ["select"])
         job = self.jobs["select"]
         self.assertEqual([key for key in ("needs", "if", "strategy") if key in job], [])
-        self.assertEqual(job["timeout-minutes"], "15")
+        self.assertEqual(job["timeout-minutes"], "100")
 
     def test_steps_run_in_order_and_only_the_two_deciding_steps_are_conditional(self) -> None:
         steps = self.jobs["select"]["steps"]

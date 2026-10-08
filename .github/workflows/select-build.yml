@@ -7,9 +7,11 @@ name: mod-base select-build
 # authenticates the protected subject, derives the plan and decides what the run consumes. On a
 # push whose evidence `ci reuse-admit` admits, that is the result its pull request was tested
 # with: the mode is `reuse` and no Build is selected. Otherwise the mode is `full` and `ci
-# select-build` looks, without waiting, for the exact existing Build of this subject: found is
-# `true` with the run of that Build, or `false`, and then the caller builds in the same run
-# before it calls packaged-e2e.yml. The job runs no candidate code and uploads nothing: its
+# select-build` looks for the exact existing Build of this subject. A push starts the Build caller
+# beside this run, so a Build run that is still in progress is waited for, within the bounded
+# wait a pull request has; nothing else is waited for. Found is `true` with the run of that
+# Build, or `false`, and then the caller builds in the same run before it calls
+# packaged-e2e.yml. The job runs no candidate code and uploads nothing: its
 # selection record stays in its private state, and packaged-e2e.yml selects the same run again by
 # its id.
 on:
@@ -39,7 +41,7 @@ jobs:
   select:
     name: Select exact Build source
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 100
     permissions:
       actions: read
       contents: read
