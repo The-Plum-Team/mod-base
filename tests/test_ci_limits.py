@@ -137,6 +137,8 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_COMMAND_ARGUMENTS": (256, "arguments of one hook command"),
     "MAX_CI_COMMAND_BYTES": (256 * KIB, "their bytes"),
     "CI_PROCESS_READ_BYTES": (64 * KIB, "one read from a worker's output pipe"),
+    "CI_ROOT_OPERATION_TIMEOUT_SECONDS": (1800.0, "one root operation of the privileged bootstrap"),
+    "MAX_CI_ROOT_DIAGNOSTIC_BYTES": (4 * KIB, "the stderr a failed root operation may report"),
     "MAX_CI_SOURCE_LIST_BYTES": (64 * MIB, "one Git tree listing"),
     "MAX_CI_GIT_REF_BYTES": (4 * KIB, "one loose ref"),
     "MAX_CI_GIT_REF_LIST_BYTES": (64 * MIB, "the packed and shallow ref lists"),
@@ -154,8 +156,10 @@ KIT: dict[str, tuple[Any, str]] = {
 DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
     "MAX_CI_ARTIFACTS_PER_GATE": (1000, "at most one artifact per job", lambda: limits.MAX_JOBS_PER_ATTEMPT),
     "MAX_CI_ROOT_REQUEST_BYTES": (
-        10_551_296, "plan + envelope + 2 MiB of source metadata + 64 KiB",
-        lambda: limits.MAX_CI_PLAN_BYTES + limits.MAX_CI_ENVELOPE_BYTES + 2 * MIB + 64 * KIB),
+        153_092_096, "a tested-tree inventory as JSON rows (twice its Git listing), a plan, the owning "
+                     "Build envelope, one runtime envelope, one record and 2 MiB of metadata",
+        lambda: (2 * limits.MAX_CI_SOURCE_LIST_BYTES + limits.MAX_CI_PLAN_BYTES + limits.MAX_CI_ENVELOPE_BYTES
+                 + limits.MAX_CI_RUNTIME_ENVELOPE_BYTES + limits.MAX_CI_RECORD_BYTES + 2 * MIB)),
     "MAX_CI_GIT_METADATA_FILES": (200_000, "the source tree bound", lambda: limits.MAX_CI_SOURCE_FILES),
     "MAX_CI_GIT_METADATA_ENTRIES": (250_000, "the source tree bound", lambda: limits.MAX_CI_SOURCE_ENTRIES),
     "MAX_CI_GIT_METADATA_FILE_BYTES": (2 * GIB, "the source tree bound", lambda: limits.MAX_CI_SOURCE_FILE_BYTES),
@@ -169,9 +173,6 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
     "MAX_CI_TARGET_INPUT_ENTRIES": (
         174_353, "every export file and target directory with all its parent directories, and the root",
         lambda: (limits.MAX_CI_EXPORT_FILES + limits.MAX_CI_TARGETS) * (limits.MAX_BUNDLE_PATH_DEPTH + 1) + 1),
-    "MAX_CI_RUNTIME_ROOT_REQUEST_BYTES": (
-        14_745_600, "a Build root request and one runtime envelope",
-        lambda: limits.MAX_CI_ROOT_REQUEST_BYTES + limits.MAX_CI_RUNTIME_ENVELOPE_BYTES),
     "MAX_CI_RUNTIME_ENTRIES": (
         69_650, "every aggregate file and the envelope with all their parent directories, and the root",
         lambda: (limits.MAX_CI_RUNTIME_AGGREGATE_FILES + 1) * (limits.MAX_BUNDLE_PATH_DEPTH + 1) + 1),
@@ -181,23 +182,6 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
                                    lambda: 4 * ((limits.MAX_CI_LOG_BYTES + 2) // 3)),
     "MAX_CI_EXECUTION_BYTES": (22_435_160, "that log and 64 KiB of record",
                                lambda: limits.MAX_CI_EXECUTION_LOG_CHARS + 64 * KIB),
-}
-
-#: Bounds of the private interpreter and installation tower, which architecture decision D4 deletes
-#: with its modules. A row stays pinned for as long as its constant exists; delete this table once
-#: none does.
-TOWER: dict[str, Any] = {
-    "MAX_CI_KIT_INSTALL_RECORD_BYTES": 4 * KIB,
-    "MAX_CI_PYTHON_ARCHIVE_BYTES": 128 * MIB,
-    "MAX_CI_PYTHON_EXPANDED_BYTES": 512 * MIB,
-    "MAX_CI_PYTHON_COMPRESSION_RATIO": 200,
-    "MAX_CI_PYTHON_ARCHIVE_HEADERS": 20_000,
-    "MAX_CI_PYTHON_TAR_PADDING_BYTES": 10 * KIB,
-    "MAX_CI_PYTHON_LOCK_BYTES": 4 * KIB,
-    "MAX_CI_PYTHON_RELEASE_ASSETS": 128,
-    "MAX_CI_BOOTSTRAP_BYTES": 256 * KIB,
-    "MAX_CI_BOOTSTRAP_LOCK_BYTES": 1 * MIB,
-    "CI_PRIVILEGED_ENTRY_TIMEOUT_SECONDS": 20.0,
 }
 
 PINNED = {**NATIVE, **PLATFORM, **KIT, **{name: row[:2] for name, row in DERIVED.items()}}
@@ -262,17 +246,12 @@ class PinnedBoundsTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(getattr(limits, name), value)
                 self.assertIs(type(getattr(limits, name)), type(value))
-        for name, value in TOWER.items():
-            if hasattr(limits, name):
-                with self.subTest(name=name):
-                    self.assertEqual(getattr(limits, name), value)
-                    self.assertIs(type(getattr(limits, name)), type(value))
 
     def test_every_bound_is_pinned_once(self) -> None:
-        tables = (NATIVE, PLATFORM, KIT, DERIVED, TOWER)
+        tables = (NATIVE, PLATFORM, KIT, DERIVED)
         self.assertEqual(sum(len(table) for table in tables), len({name for table in tables for name in table}))
         present = ci_bounds()
-        unpinned = sorted(present - set(PINNED) - set(TOWER))
+        unpinned = sorted(present - set(PINNED))
         self.assertEqual(unpinned, [], "add each bound to the table that says what it preserves")
         stale = sorted(set(PINNED) - present)
         self.assertEqual(stale, [], "a pinned bound no longer exists in model/limits.py")
