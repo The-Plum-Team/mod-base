@@ -1088,8 +1088,10 @@ class LinuxWorkerTests(HostedWorkerCase):
         candidate = authenticate_worker_account("candidate")
         checkout = Path(__file__).resolve().parents[1]
         paths = ("tools/parallel_unittest.py", "src/mod_base/__init__.py", "src/mod_base/errors.py",
-                 "src/mod_base/model/__init__.py", "src/mod_base/model/limits.py",
-                 "src/mod_base/build_ci/__init__.py", "src/mod_base/build_ci/policy.py")
+                 "src/mod_base/model/__init__.py", "src/mod_base/model/canonical.py",
+                 "src/mod_base/model/grammar.py", "src/mod_base/model/limits.py",
+                 "src/mod_base/model/validators.py", "src/mod_base/build_ci/__init__.py",
+                 "src/mod_base/build_ci/policy.py", "src/mod_base/build_ci/protocol.py")
         code = self.root / "policy-code"
         code.mkdir(mode=0o700)
         for name in paths:
