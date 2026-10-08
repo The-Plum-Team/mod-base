@@ -240,8 +240,14 @@ class CiVerbsTest(unittest.TestCase):
             parser.set_defaults(handler=lambda args: 0)
 
         module.add_verbs = add_verbs  # type: ignore[attr-defined]
-        with mock.patch.dict(sys.modules, {"fake_verbs": module}), \
-                mock.patch.object(commands, "VERB_MODULES", (*commands.VERB_MODULES, "fake_verbs")):
+        # Exactly this one name is registered and removed. mock.patch.dict(sys.modules, ...) would put
+        # the whole table back, and so also forget every verb module `ci` first imports in here while
+        # the mod_base.build_ci package keeps each one as an attribute. Whatever this process imports
+        # next then mixes two copies of them: `from mod_base.build_ci import batch` is the forgotten
+        # copy, `from mod_base.build_ci.batch_git import ...` executes a second one.
+        sys.modules["fake_verbs"] = module
+        self.addCleanup(sys.modules.pop, "fake_verbs", None)
+        with mock.patch.object(commands, "VERB_MODULES", (*commands.VERB_MODULES, "fake_verbs")):
             self.assertLessEqual({"subject", "probe"}, set(self.verbs()))
             namespace = parse(["ci", "probe", "--repo", "mod", "--state", "state"])
             self.assertEqual((namespace.ci_command, namespace.state, namespace.config), ("probe", Path("state"), None))
