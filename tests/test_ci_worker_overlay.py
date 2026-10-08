@@ -1,119 +1,223 @@
-"""Candidate-only overlay copying; explicit seams establish no physical/root activation."""
+"""Kit overlay admission and mode normalisation over real directories.
 
+Nothing here replaces a part of the module: every overlay is a real tree owned by the test user,
+one of them this checkout's kit as a mod's bootstrap stages it. Copying into a really allocated
+candidate runs as root in ``tests/ci_linux_worker.py``.
+"""
+
+import hashlib
+import importlib.util
+import os
 import stat
+import sys
+import tempfile
 import unittest
-from contextlib import ExitStack, nullcontext
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from mod_base.build_ci import worker_overlay as overlay
-from mod_base.build_ci.worker import WorkerError
-from mod_base.pin import Pin
-from tests.test_ci_gradle_cache import ACCOUNT
-from tests.helpers import ci_stat as info
+from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount
+from mod_base.errors import MbError
+from mod_base.model import limits
+from mod_base.model.canonical import canonical_json
+from mod_base.pin import ACTIONS_LOCK, STAGED_LOCK, STAMP_NAME, Pin, kit_tree_digest, stamp_document
+from tests.test_ci_gradle_cache import CANDIDATE
 from tests.test_ci_host import BOUNDARY
 
 
+LINUX = sys.platform == "linux"
+KIT = Path(__file__).resolve().parents[1]
 PIN = Pin("a" * 40, "v1.0.3", ())
-DIGEST = "sha256:" + "b" * 64
-SOURCE = Path("/home/runner/seed-overlay")
-RECORDS = [{"path": "src/mod_base/__init__.py", "size": 0, "sha256": "a" * 64}]
+#: The smallest kit: an importable package and an empty lock for the absent template/ and tools/.
+FILES = {"src/mod_base/__init__.py": b"", STAGED_LOCK: b""}
 
 
-class WorkerOverlayTests(unittest.TestCase):
-    def seams(self, stack):
-        host = stack.enter_context(patch.object(overlay, "authenticate_privileged_host_boundary"))
-        account = stack.enter_context(patch.object(overlay, "authenticate_worker_account", return_value=ACCOUNT))
-        quiet = stack.enter_context(patch.object(overlay, "_quiet"))
-        terminate = stack.enter_context(patch.object(overlay, "terminate_worker"))
-        release = stack.enter_context(patch.object(overlay, "verify_released"))
-        admit = stack.enter_context(patch.object(overlay, "_admit", return_value=RECORDS))
-        copied = stack.enter_context(patch.object(overlay, "copy_regular_data_files", return_value=RECORDS))
-        grant = stack.enter_context(patch.object(overlay, "grant_regular_data_read_access", return_value=RECORDS))
-        plain = stack.enter_context(patch.object(overlay, "_plain"))
-        def directory(parts, *, root=None):
-            return 7 if parts[-1] == "seed-overlay" else 8 if parts[-1] == "repository" else 9 if parts[-1] == "out" else 10
-        stack.enter_context(patch.object(overlay, "_open_directory", side_effect=directory))
-        stats = {7: info(inode=7, uid=BOUNDARY.uid), 8: info(inode=8, uid=BOUNDARY.uid),
-                 9: info(inode=9), 10: info(inode=10, uid=ACCOUNT.uid, gid=ACCOUNT.gid)}
-        stack.enter_context(patch.object(overlay.os, "fstat", side_effect=lambda fd: stats[fd]))
-        stack.enter_context(patch.object(overlay.os, "close"))
-        for name in ("fchown", "fchmod", "mkdir"):
-            stack.enter_context(patch.object(overlay.os, name, create=True))
-        def publish(path, writer):
-            self.assertEqual(path.as_posix(), str(overlay.WORKER_ROOT / "repository/out/mod-base-kit"))
-            return writer(path.parent / ".mod-base-kit.building-fixture", 10)
-        atomic = stack.enter_context(patch.object(overlay, "atomic_directory", side_effect=publish))
-        return host, account, quiet, terminate, release, admit, copied, grant, plain, atomic, stats
+def authored_digest(files: dict[str, bytes]) -> str:
+    """kit-digest-v1 from authored bytes, never from what a tree on disk happens to hold."""
+    listing = "".join(f"{hashlib.sha256(data).hexdigest()}  ./{name}\n" for name, data in sorted(files.items())
+                      if name.split("/")[0] in ("src", "site", "requirements"))
+    return "sha256:" + hashlib.sha256(listing.encode("ascii")).hexdigest()
 
-    def test_exclusive_candidate_copy_preserves_empty_files_and_rechecks_pin(self):
-        with ExitStack() as stack:
-            host, account, quiet, terminate, release, admit, copied, grant, plain, atomic, stats = self.seams(stack)
-            api = object()
-            self.assertEqual(RECORDS, overlay.stage_privileged_worker_overlay(api, SOURCE, boundary=BOUNDARY,
-                account=ACCOUNT, pin=PIN, expected_digest=DIGEST))
-            self.assertEqual(3, release.call_count)
-            copied.assert_called_once_with(SOURCE, 10, **overlay._BOUNDS)
-            grant.assert_called_once()
-            plain.assert_called_once_with(10, ACCOUNT)
-            self.assertEqual(1, atomic.call_count)
-            terminate.assert_not_called()
 
-    def test_release_source_copy_and_handoff_failures_lock_the_worker(self):
-        for kind in ("release", "source", "copy", "handoff", "plain", "late-release", "binding"):
-            with self.subTest(kind=kind), ExitStack() as stack:
-                host, account, quiet, terminate, release, admit, copied, grant, plain, atomic, stats = self.seams(stack)
-                if kind in ("release", "source", "plain"):
-                    {"release": release, "source": admit, "plain": plain}[kind].side_effect = WorkerError("admission")
-                elif kind == "copy":
-                    copied.return_value = []
-                elif kind == "handoff":
-                    grant.return_value = []
-                elif kind == "late-release":
-                    release.side_effect = [None, None, WorkerError("pin drift")]
-                else:
-                    def mutate(*args, **kwargs):
-                        stats[7] = info(inode=70, uid=BOUNDARY.uid)
-                        return RECORDS
-                    copied.side_effect = mutate
-                with self.assertRaises(WorkerError):
-                    overlay.stage_privileged_worker_overlay(object(), SOURCE, boundary=BOUNDARY,
-                        account=ACCOUNT, pin=PIN, expected_digest=DIGEST)
-                terminate.assert_called_once_with(ACCOUNT)
+def write_overlay(root: Path, files: dict[str, bytes], *, pin: Pin = PIN, digest: str | None = None) -> str:
+    """A staged kit: plain 0644 files below 0755 directories, the three digested roots and a stamp."""
+    digest = authored_digest(files) if digest is None else digest
+    root.mkdir(mode=0o755)
+    root.chmod(0o755)
+    for name in ("src", "site", "requirements"):
+        (root / name).mkdir()
+        (root / name).chmod(0o755)
+    add_files(root, files)
+    add_files(root, {STAMP_NAME: canonical_json(stamp_document(pin, digest))})
+    return digest
 
-    def test_invalid_role_pin_digest_or_source_never_copies(self):
-        for kind in ("role", "pin", "digest", "outside", "account"):
-            with self.subTest(kind=kind), ExitStack() as stack:
-                host, account, quiet, terminate, release, admit, copied, grant, plain, atomic, stats = self.seams(stack)
-                pin, digest, source, candidate = PIN, DIGEST, SOURCE, ACCOUNT
-                if kind == "role": host.side_effect = WorkerError("role")
-                elif kind == "pin": pin = Pin(PIN.sha, "v../escape", ())
-                elif kind == "digest": digest = "unknown"
-                elif kind == "outside": source = Path("/tmp/unprotected")
-                else: candidate = object()
-                with self.assertRaises(Exception):
-                    overlay.stage_privileged_worker_overlay(object(), source, boundary=BOUNDARY,
-                        account=candidate, pin=pin, expected_digest=digest)
-                copied.assert_not_called()
 
-    def test_admission_binds_stamp_digest_locks_and_non_executable_source(self):
-        names = [*overlay.DIGESTED_DIRS, overlay.STAMP_NAME]
-        with ExitStack() as stack:
-            stack.enter_context(patch.object(overlay, "_paths", return_value=(RECORDS[0]["path"],)))
-            stack.enter_context(patch.object(overlay, "_open_directory", return_value=7))
-            stack.enter_context(patch.object(overlay.os, "close"))
-            stack.enter_context(patch.object(overlay.os, "scandir", side_effect=lambda fd: nullcontext(iter(SimpleNamespace(name=name) for name in names))))
-            stack.enter_context(patch.object(overlay, "validate_tree_entries"))
-            records = stack.enter_context(patch.object(overlay, "regular_data_records", return_value=RECORDS))
-            stamp = stack.enter_context(patch.object(overlay, "read_stamp", return_value=overlay.stamp_document(PIN, DIGEST)))
-            digest = stack.enter_context(patch.object(overlay, "kit_tree_digest", return_value=DIGEST))
-            locks = stack.enter_context(patch.object(overlay, "verify_staged_files"))
-            self.assertEqual(RECORDS, overlay._admit(SOURCE, PIN, DIGEST))
-            locks.assert_called_once_with(SOURCE)
-            for kind in ("stamp", "digest", "extra-root"):
-                with self.subTest(kind=kind):
-                    stamp.return_value = {} if kind == "stamp" else overlay.stamp_document(PIN, DIGEST)
-                    digest.return_value = "sha256:" + "c" * 64 if kind == "digest" else DIGEST
-                    if kind == "extra-root": names.append("credentials")
-                    with self.assertRaises(WorkerError): overlay._admit(SOURCE, PIN, DIGEST)
+def add_files(root: Path, files: dict[str, bytes]) -> None:
+    for name, data in files.items():
+        parent = root
+        for part in name.split("/")[:-1]:
+            parent = parent / part
+            parent.mkdir(exist_ok=True)
+            parent.chmod(0o755)
+        (root / name).write_bytes(data)
+        (root / name).chmod(0o644)
+
+
+@unittest.skipUnless(LINUX, "overlay admission walks real no-follow descriptors on Linux")
+class OverlayAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.root = self.base / "overlay"
+        self.digest = write_overlay(self.root, FILES)
+
+    def refuse(self, reason, *, pin=PIN, digest=None):
+        with self.assertRaisesRegex(MbError, reason):
+            overlay._admit(self.root, pin, self.digest if digest is None else digest)
+
+    def test_a_stamped_kit_is_admitted_with_every_byte_recorded(self):
+        stamp = canonical_json(stamp_document(PIN, self.digest))
+        expected = [{"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+                    for name, data in sorted({**FILES, STAMP_NAME: stamp}.items())]
+        self.assertEqual(overlay._admit(self.root, PIN, self.digest), expected)
+        self.assertEqual(overlay._paths(self.root), tuple(sorted({**FILES, STAMP_NAME: stamp})))
+
+    def test_the_kit_a_bootstrap_stages_from_this_checkout_is_admitted(self):
+        spec = importlib.util.spec_from_file_location(
+            "mod_base_kit_overlay_fixture", KIT / "template" / "managed" / "scripts" / "ci" / "mod_base_kit.py")
+        bootstrap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bootstrap)
+        staged = self.base / "staged"
+        bootstrap.copy_kit(KIT, staged)
+        digest = kit_tree_digest(KIT)
+        (staged / STAMP_NAME).write_bytes(canonical_json(stamp_document(PIN, digest)))
+        records = overlay._admit(staged, PIN, digest)
+        paths = [record["path"] for record in records]
+        self.assertEqual(paths, sorted(paths))
+        for name in (STAMP_NAME, "src/mod_base/__init__.py", STAGED_LOCK, ACTIONS_LOCK,
+                     "tools/ci_privileged_bootstrap.py", "template/managed/scripts/ci/mod_base_kit.py"):
+            self.assertIn(name, paths)
+        self.assertEqual({path.split("/")[0] for path in paths},
+                         {STAMP_NAME, "src", "site", "requirements", "template", "tools", "actions"})
+
+    def test_another_pin_version_digest_or_a_changed_byte_is_refused(self):
+        self.refuse("differs from the independently bound pin/digest", pin=Pin("b" * 40, "v1.0.3", ()))
+        self.refuse("differs from the independently bound pin/digest", pin=Pin("a" * 40, "v1.0.4", ()))
+        self.refuse("differs from the independently bound pin/digest", digest="sha256:" + "0" * 64)
+        add_files(self.root, {"src/mod_base/added.py": b"unbound = True\n"})
+        self.refuse("differs from the independently bound pin/digest")
+
+    def test_roots_outside_the_closed_kit_layout_are_refused(self):
+        for name, data in (("credentials", b"token"), ("docs/README.md", b"text"), (".git/config", b"[core]\n")):
+            with self.subTest(name=name):
+                self.setUp()
+                add_files(self.root, {name: data})
+                self.refuse("unexpected root")
+        for name in ("site", STAMP_NAME):
+            with self.subTest(missing=name):
+                self.setUp()
+                (self.root / name).rmdir() if name == "site" else (self.root / name).unlink()
+                self.refuse("missing required roots")
+
+    def test_staged_directories_must_match_the_locks_inside_the_digest(self):
+        add_files(self.root, {"tools/run.py": b"print('unlocked')\n"})
+        self.refuse("do not match")
+        self.setUp()
+        add_files(self.root, {"actions/extra/action.yml": b"name: Unbound\n"})
+        self.refuse("is not bound by")
+
+    def test_bytecode_search_path_files_and_noncanonical_names_are_refused(self):
+        for name in ("src/mod_base/__pycache__/module.cpython-312.pyc", "src/mod_base/module.pyc",
+                     "src/mod_base/module.pyo", "src/evil.pth", "src/a b.py"):
+            with self.subTest(name=name):
+                self.setUp()
+                add_files(self.root, {name: b"data"})
+                self.refuse("bytecode or a noncanonical path")
+        self.setUp()
+        add_files(self.root, {"src/mod_base/native.pyd": b"MZ"})
+        self.refuse("excessive files or bytecode")
+
+    def test_links_executables_and_special_files_are_refused(self):
+        module = self.root / "src" / "mod_base" / "__init__.py"
+        mutations = {
+            "executable": lambda: module.chmod(0o755),
+            "symlink": lambda: (self.root / "src" / "linked.py").symlink_to(module),
+            "directory symlink": lambda: (self.root / "src" / "linked").symlink_to(self.root / "site"),
+            "hard link": lambda: os.link(module, self.base / "second-name"),
+            "fifo": lambda: os.mkfifo(self.root / "src" / "pipe", 0o644),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                self.setUp()
+                module = self.root / "src" / "mod_base" / "__init__.py"
+                mutate()
+                with self.assertRaises(MbError):
+                    overlay._admit(self.root, PIN, self.digest)
+
+    def test_discovery_is_bounded_in_depth(self):
+        with patch.object(limits, "MAX_CI_TOOL_TREE_DEPTH", 1):
+            self.refuse("exceeds its depth cap")
+
+
+@unittest.skipUnless(LINUX, "mode normalisation uses real descriptors on Linux")
+class OverlayModeTests(unittest.TestCase):
+    """``_plain`` gives a handed-over copy the 0644/0755 modes a mod's bootstrap expects."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve() / "copy"
+        write_overlay(self.root, FILES)
+        for directory, names, files in os.walk(self.root):
+            for name in files:
+                os.chmod(os.path.join(directory, name), 0o600)
+            os.chmod(directory, 0o700)
+        self.owner = WorkerAccount("candidate", os.getuid(), os.getgid(), str(WORKER_ROOT / "candidate-home"))
+
+    def normalise(self, account):
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            overlay._plain(descriptor, account)
+        finally:
+            os.close(descriptor)
+
+    def test_every_file_becomes_0644_and_every_directory_0755(self):
+        self.normalise(self.owner)
+        modes = {stat.S_IMODE(os.lstat(self.root).st_mode)}
+        for directory, names, files in os.walk(self.root):
+            modes.update(stat.S_IMODE(os.lstat(os.path.join(directory, name)).st_mode) for name in names)
+            self.assertEqual({stat.S_IMODE(os.lstat(os.path.join(directory, name)).st_mode) for name in files} - {0o644},
+                             set())
+        self.assertEqual(modes, {0o755})
+        self.assertEqual((self.root / "src" / "mod_base" / "__init__.py").read_bytes(), b"")
+
+    def test_entries_of_another_owner_links_and_special_files_are_refused(self):
+        with self.assertRaisesRegex(MbError, "ownership changed"):
+            self.normalise(WorkerAccount("candidate", os.getuid() + 1, os.getgid(), self.owner.home))
+        self.assertEqual(stat.S_IMODE(os.lstat(self.root).st_mode), 0o700)
+        (self.root / "src" / "linked.py").symlink_to(self.root / STAMP_NAME)
+        with self.assertRaisesRegex(MbError, "link or special file"):
+            self.normalise(self.owner)
+        (self.root / "src" / "linked.py").unlink()
+        os.link(self.root / STAMP_NAME, self.root.parent / "second-name")
+        with self.assertRaisesRegex(MbError, "link or special file"):
+            self.normalise(self.owner)
+
+    def test_the_walk_is_bounded_in_depth(self):
+        with patch.object(limits, "MAX_CI_TOOL_TREE_DEPTH", 1), self.assertRaisesRegex(MbError, "exceeds its depth cap"):
+            self.normalise(self.owner)
+
+
+@unittest.skipUnless(LINUX, "the staging entries are Linux-only")
+class RootOnlyTests(unittest.TestCase):
+    def test_staging_refuses_the_unprivileged_runner_before_it_looks_at_the_overlay(self):
+        if os.getuid() == 0:
+            self.skipTest("the unit suite runs as the unprivileged runner")
+        with self.assertRaisesRegex(MbError, "requires protected root setup"):
+            overlay.stage_privileged_worker_overlay(Path("/home/runner/absent-overlay"), boundary=BOUNDARY,
+                                                    account=CANDIDATE, pin=PIN, expected_digest=authored_digest(FILES))
+
+
+if __name__ == "__main__":
+    unittest.main()

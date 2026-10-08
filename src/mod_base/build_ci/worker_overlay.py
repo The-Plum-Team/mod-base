@@ -1,4 +1,8 @@
-"""Exclusive candidate-only kit overlay copying by the old protected implementation (MB11)."""
+"""Exclusive candidate-only kit overlay copying by the old protected implementation (MB11).
+
+Root admits the overlay bytes against the pin, stamp and digest it is given and never calls the
+GitHub API: that the pin is a released kit commit is for the runner-side caller to establish.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +15,11 @@ from typing import Any
 from mod_base.build_ci.gradle_cache import _quiet, _stamp
 from mod_base.build_ci.host import HostBoundary, _canonical_path, _open_directory, authenticate_privileged_host_boundary
 from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, authenticate_worker_account, terminate_worker
-from mod_base.github.api import GitHubApi
 from mod_base.io.atomic_directory import atomic_directory
 from mod_base.io.tree import copy_regular_data_files, grant_regular_data_read_access, regular_data_records, validate_tree_entries
 from mod_base.model import grammar, limits
 from mod_base.pin import (DIGESTED_DIRS, KIT_PATH_NAME, OVERLAY_PATH, STAMP_NAME, Pin, kit_tree_digest,
-                          read_stamp, stamp_document, verify_released, verify_staged_files)
+                          read_stamp, stamp_document, verify_staged_files)
 
 
 _BOUNDS = {"max_files": limits.MAX_CI_KIT_INSTALL_FILES, "max_entries": limits.MAX_CI_KIT_INSTALL_ENTRIES,
@@ -151,17 +154,19 @@ def _plain(root: int, account: WorkerAccount) -> None:
     walk(root)
 
 
-def stage_privileged_worker_overlay(api: GitHubApi, overlay: Path, *, boundary: HostBoundary,
-                                    account: WorkerAccount, pin: Pin, expected_digest: str) -> list[dict[str, Any]]:
-    """Copy the old bootstrap's authenticated overlay to a fresh candidate's fixed kit path.
+def stage_privileged_worker_overlay(overlay: Path, *, boundary: HostBoundary, account: WorkerAccount,
+                                    pin: Pin, expected_digest: str) -> list[dict[str, Any]]:
+    """Root-only: copy a staged kit overlay to the fresh candidate's fixed ``out/mod-base-kit``.
 
     The caller authenticates its own executing code/runtime, candidate source and upgrade route,
-    and supplies the digest from an authenticated checkout/bootstrap, never first observed bytes.
-    Released tag/ancestry is independently rechecked; future candidate code is never imported.
-    This confers no protected-code, native or App authority on the copied future pin.
+    that the pin is a released kit commit, and supplies the digest from an authenticated
+    checkout/bootstrap, never first observed bytes. The candidate's private repository must
+    exist; its ``out`` directory is created when the tested tree has none and belongs to the
+    candidate either way, so a build can write beside the overlay. Future candidate code is
+    never imported. This confers no protected-code, native or App authority on the copied pin.
     """
     authenticate_privileged_host_boundary(boundary)
-    actual = authenticate_worker_account("worker")
+    actual = authenticate_worker_account("candidate")
     if type(account) is not WorkerAccount or account != actual or account.uid == boundary.uid:
         raise WorkerError("worker overlay requires the fresh candidate account")
     source = parent = output_parent = None
@@ -181,24 +186,33 @@ def stage_privileged_worker_overlay(api: GitHubApi, overlay: Path, *, boundary: 
         original = os.fstat(source)
         if original.st_uid not in (0, boundary.uid) or original.st_mode & 0o022:
             raise WorkerError("worker overlay source root has unsafe permissions")
-        verify_released(pin, api)
         expected = _admit(overlay, pin, expected_digest)
         repository = WORKER_ROOT / "repository"
         parent = _open_directory(tuple(repository.parts[1:]))
         repository_info = os.fstat(parent)
-        if repository_info.st_uid not in (0, boundary.uid, account.uid) or repository_info.st_mode & 0o022:
-            raise WorkerError("candidate overlay parent is not protected")
+        private = (account.uid, account.gid, 0o700)
+        if (repository_info.st_uid, repository_info.st_gid, stat.S_IMODE(repository_info.st_mode)) != private:
+            raise WorkerError("overlay destination requires the admitted private candidate repository")
         try:
-            os.mkdir("out", 0o755, dir_fd=parent)
+            os.mkdir("out", 0o700, dir_fd=parent)
+            created = True
         except FileExistsError:
-            pass
+            created = False  # The tested tree tracks files in it: the source phase published it.
         output_parent = _open_directory(("out",), root=parent)
+        if created:
+            # Root made it inside the quiescent candidate's repository: hand it over at once, so a
+            # build can write beside the overlay as in every other directory the candidate owns.
+            os.fchown(output_parent, account.uid, account.gid)
+            os.fchmod(output_parent, 0o700)
+            os.fsync(output_parent)
         output_info = os.fstat(output_parent)
+        if (output_info.st_uid, output_info.st_gid, stat.S_IMODE(output_info.st_mode)) != private:
+            raise WorkerError("candidate out directory is not the candidate's private directory")
         destination = Path(str(repository / OVERLAY_PATH))
 
         def recheck() -> None:
             authenticate_privileged_host_boundary(boundary)
-            if authenticate_worker_account("worker") != account:
+            if authenticate_worker_account("candidate") != account:
                 raise WorkerError("overlay worker identity changed")
             _quiet(account)
             current = _open_directory(tuple(path.parts[1:]))
@@ -211,9 +225,9 @@ def stage_privileged_worker_overlay(api: GitHubApi, overlay: Path, *, boundary: 
                 out_info = os.fstat(out)
                 if (_stamp(os.fstat(current)) != _stamp(original) or _stamp(os.fstat(source)) != _stamp(original)
                         or (info.st_dev, info.st_ino) != (repository_info.st_dev, repository_info.st_ino)
-                        or info.st_uid not in (0, boundary.uid, account.uid) or info.st_mode & 0o022
+                        or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != private
                         or (out_info.st_dev, out_info.st_ino) != (output_info.st_dev, output_info.st_ino)
-                        or out_info.st_uid not in (0, boundary.uid, account.uid) or out_info.st_mode & 0o022):
+                        or (out_info.st_uid, out_info.st_gid, stat.S_IMODE(out_info.st_mode)) != private):
                     raise WorkerError("overlay source or output parent changed")
             finally:
                 for descriptor in (out, repo, current):
@@ -239,7 +253,6 @@ def stage_privileged_worker_overlay(api: GitHubApi, overlay: Path, *, boundary: 
             _plain(stage_fd, account)
             if _admit(stage, pin, expected_digest) != expected:
                 raise WorkerError("copied worker overlay differs")
-            verify_released(pin, api)
             recheck()
             return initial.st_dev, initial.st_ino
 
@@ -253,7 +266,6 @@ def stage_privileged_worker_overlay(api: GitHubApi, overlay: Path, *, boundary: 
                 raise WorkerError("published worker overlay identity differs")
             if _admit(destination, pin, expected_digest) != expected or _admit(overlay, pin, expected_digest) != expected:
                 raise WorkerError("published worker overlay bytes differ")
-            verify_released(pin, api)
             recheck()
             named = _open_directory(tuple(destination.parts[1:]))
             try:

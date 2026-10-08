@@ -96,7 +96,8 @@ never uploaded. The runner publishes one canonical request per operation, exclus
 `mod-base-worker/root-request-<operation>/ci-root-request.json` (runner-owned 0700 directory,
 0600 single-link file). It has exactly `kind`, `schema_version`, `operation`, `nonce`, `boundary`
 (the fenced home: fixed path, uid, gid, device, inode, original mode) and `arguments`, a closed
-object per operation. Nothing in it names a program, a hook, a command or a destination path.
+object per operation. Nothing in it names a program, a hook, a command or a destination path;
+only `stage-candidate` names directories, and only ones root reads below the fenced runner home.
 Root reads it with the private record reader (no-follow directories, exact owner, group and mode,
 single link, stable identity and timestamps, canonical bytes), requires the nonce and operation
 it was started with, requires the boundary to name the derived runner and to be the live 0700
@@ -109,11 +110,17 @@ The operations are the closed tuple `grammar.CI_ROOT_OPERATIONS`, mirrored by th
 | Operation | Arguments | Effect |
 |---|---|---|
 | `host-fence` | none | Closes the hosted image's world-writable trees and proves that none is left; runs before any worker account exists |
+| `stage-candidate` | `candidate`, `repository`, `tested_sha`, `tested_tree`, `inventory`, `source`, `overlay`, `gradle_seed` | Publishes the candidate's `repository/` (tracked source, curated `.git`, kit overlay) and seeds its Gradle home; runs once, before the candidate ever runs |
 | `freeze-build-validation` | `validator`, `sources`, `plan`, `envelope`, `run_id`, `run_attempt`, `execution_nonce` | Seals the Build or target verifier's receipt into `sealed-validation/` |
 | `freeze-runtime-validation` | `validator`, `sources`, `plan`, `build`, `runtime`, `lane_id`, `run_id`, `run_attempt`, `execution_nonce` | Seals one runtime lane verifier's receipt into `sealed-validation/` |
 
-`validator` is the uid and gid of the live fixed account and must differ from the runner's.
-`sources` is controller source metadata only (controller SHA and tree, the config and each
+`candidate` and `validator` are the uid and gid of the live fixed account and must differ from the
+runner's. For `stage-candidate`, `inventory` is the complete tested-tree inventory (one row of
+`path`, `mode`, `size` and `git_blob` per tracked blob or link, in ascending path order, under the
+existing source caps), `source` is the runner's checkout of `tested_sha`, `overlay` holds the
+staged kit's `path` with its pin (`sha`, `version`) and `tree_digest`, and `gradle_seed` is a
+restored cache directory or null; "Candidate checkout staging" below says what root requires of
+them. `sources` is controller source metadata only (controller SHA and tree, the config and each
 import file with path, mode, Git blob, SHA-256 and size); root rebuilds the bytes from the
 validator's protected controller copy and verifies the whole copy. `plan`, `envelope`, `build`
 and `runtime` are the existing kinds under their existing caps; the plan must name the executing
@@ -1068,178 +1075,91 @@ does not allocate OS accounts. GitHub defines the fixture's hosted-runner guard 
 No run of this fixture has yet passed on this Windows development host or been submitted to CI;
 it is a required future result, not completed boundary evidence.
 
-## Inactive private Gradle seed handoff
+## Candidate checkout staging
 
-`build_ci.gradle_cache.stage_privileged_gradle_cache` is protected Root setup before a fresh
-candidate UID starts. It binds actual Root/fenced runner home and the exact worker passwd
-identity, rejects active UID processes and requires its allocated Gradle home to be empty.
-A protected-policy restored seed must be below the private runner home, with conventional
-`caches`/`wrapper` directories only. Root-level Gradle properties, configuration or credential
-files and other roots reject. Preserve the original Block Pops bounds: 250000 entries, 200000
-files, 2 GiB per file and 20 GiB total. Standard bounded no-follow file-tree admission rejects
-links, special/hard-linked files and unsafe paths before content copying.
+The root operation `stage-candidate` gives the fresh candidate account everything it may see,
+before it has ever run: its own copy of the tested tree at `repository/`, a curated
+`repository/.git`, the kit overlay at `repository/out/mod-base-kit` and, when the runner restored
+one, a Gradle cache seed in `candidate-home/gradle-home`. The runner publishes the request with
+`root_request.request_candidate_staging` after both accounts were allocated; root runs
+`worker_preparation.prepare_privileged_worker_checkout` from it and calls no API. Authenticating
+the tested commit and tree, reading the tree's inventory and establishing that the overlay's pin
+is a released kit commit are the runner's work before the request exists.
 
-The original empty cache inode is held and temporarily made Root-private; all data leaves are
-new independent files. Source inventory/bytes and named/opened source/destination bindings
-are rechecked around copying, then the newly populated independent copy is normalized to private
-worker-owned 0700 directories/0600 files, removing ACLs and transferring its root last. Existing
-candidate cache contents are never adopted or overwritten. The fixed worker environment already
-selects this allocated `gradle-home`. Failure locks/terminates the admitted worker and returns no
-execution authority; partial private data can remain. No source file mode or privileged code is
-executed during handoff. Domain wrapper/bootstrap behavior and full native parity still require
-Linux/native evidence; this does not approve cached executables or dependency bytes for Root.
+The three directories a request names (`source`, `overlay.path`, `gradle_seed`) are read, never
+written. Each must be a canonical path strictly below `/home/runner`, owned by root or the runner
+and closed to group and others, and none may contain another. Before the first effect root
+requires:
 
-A protected restore/save policy must supply secret-free data, authenticate its origin and exclude
-concurrent writers; filename/size/hash checks cannot prove absence of secrets in arbitrary bytes.
-Actual safe restoration with inaccessible runtime/cache/action credentials, no earlier candidate
-UID activity and complete original caller/helper/runtime provenance remain mandatory. No workflow
-calls this helper yet. Unit OS/account/copy seams are explicit. A required Linux component fixture
-adds real temporary independent copy, private ownership/modes and configuration-root refusal with
-outer host/account/location/quiescence seams. Its captured body compiles locally, without sudo or
-execution, and proves neither production credential isolation nor full fixed-host admission.
+- no `repository/` below the worker root and an empty allocated Gradle home: a second staging,
+  or one for a candidate that already ran, never reuses a populated root;
+- the inventory to hash to `tested_tree`. The Git tree name is recomputed from the rows (a tree
+  lists blobs, links and subtrees by name and object name, a directory sorting as `name/`), so a
+  request cannot pair a tree with another tree's inventory, and root needs no object store;
+- no tracked path at `out`, at or below `out/mod-base-kit`, or differing from either only in case;
+- the checkout to hold exactly the inventory: every tracked byte and Git mode, tracked links as
+  literal bytes, and no undeclared path, hard link, special file or linked directory;
+- the checkout's `.git/HEAD` to be detached at exactly `tested_sha`, and its metadata to fit the
+  profile below;
+- the overlay to be a closed stamped kit that matches its pin, digest and staged-file locks.
 
+Anything else is refused with nothing published. The phases then run in a fixed order. Each
+publishes exclusively (an existing destination is never adopted or replaced) and re-checks the
+held and named originals, every published root, the host fence, the passwd identity of the
+candidate and that no process runs under its uid. At the end the complete tracked source is
+verified again with only the overlay as generated data, together with the Git and cache bytes,
+their private ownership and the unchanged originals. Any failure terminates and locks the
+candidate, and later phases do not run; after a failure in a later phase inert output of earlier
+ones can remain. The returned inventories confer no execution authority.
 
-## Inactive candidate-only kit overlay
+**Source.** Tracked files are copied into a root-private stage, published at `repository/` and
+then handed to the candidate with ACLs removed: directories and executable files 0700, other files
+0600, the root last. Links keep their literal bytes and change owner without being followed; no
+link target is read, chmodded or chowned, and a target outside the copy gains nothing: the runner
+home stays closed to the candidate. The original `.git` is not copied here.
 
-`build_ci.worker_overlay.stage_privileged_worker_overlay` lets the original protected Root
-implementation copy a bootstrap-authenticated stamped kit into the fresh candidate repository's
-fixed `out/mod-base-kit` path. Admit the supplied protected pin/digest, released tag/main ancestry,
-closed bounded roots, staged locks and all original source/candidate/output directory bindings.
-The old caller/runtime and candidate upgrade route must already be admitted independently.
-Exclusively publish independent regular files, preserving empty files and mandatory empty
-src/site/requirements directories. Remove ACLs and grant the fresh worker ownership; normalize
-plain 0644 files/0755 directories, bounded by entry/depth caps with named/opened identity checks.
-Recheck source/copy/stamp/locks and release admission around publication. No copied code is
-imported and the future pin gains no protected-code, native or App authority. On failure,
-terminate/lock the worker; a late published candidate-only copy may remain without authority.
+**Git metadata.** Root never runs Git and never parses object or index bytes. From the original
+self-contained SHA-1 files-backend `.git` it selects the index, loose objects, conventional
+pack/idx/rev/bitmap/keep/mtimes files, heads/tags/remotes/pull refs, packed refs and an optional
+shallow boundary. The original HEAD, config, hooks, logs, description, FETCH_HEAD/ORIG_HEAD, info
+and branches are never copied, so no credential, include, filter or hook is inherited. The whole
+bounded closure is inspected for type, owner, mode and case aliases without reading unselected
+contents; links, hard links, special entries, alternates, grafts, replacement refs, worktree,
+commondir, reftable, split-index, partial-clone, submodule and LFS stores are refused. Loose and
+packed refs and the shallow list have bounded visible-ASCII shape and duplicate checks (4 KiB per
+line, LF counted before lines are split). The copy gets a detached HEAD at the tested commit and a
+fixed non-bare configuration: file mode and symlink tracking, no autocrlf, hooks and fsmonitor
+disabled, and a credential-free `origin` for the repository. It is published at `repository/.git`
+as the candidate's private 0700/0600 data. The index is the original's: the candidate's first
+`git status` refreshes it against its own files.
 
-New MB1 regular-data inventory/copy/handoff APIs admit zero-byte files and count empty directories
-without changing export readers' nonempty-file contract. Cache data now uses those APIs too;
-its prior export helpers incorrectly rejected the empty-file fixture. Empty directories are
-omitted by generic copying; the overlay recreates the required bootstrap skeleton. Cache handoff
-retains 0700/0600 modes, original BP caps and the protected secret-free restoration prerequisite.
+**Gradle seed.** Optional. A seed root holds only the conventional `caches` and `wrapper`
+directories; Gradle properties, init scripts and every other root entry are refused by name.
+Below them only structure is checked (no link, no special or hard-linked file, the original Block
+Pops caps of 250000 entries, 200000 files, 2 GiB per file and 20 GiB in all), because a cache
+names its entries freely. The allocated cache must be empty; it is held, made root-private for the
+copy and handed back as the candidate's 0700/0600 data. The seed is admitted when this phase
+starts, so a refused seed leaves the source and Git copies behind for a candidate that is locked.
+Names, sizes and hashes cannot prove that arbitrary cache bytes hold no secret: a protected
+restore policy must supply secret-free data and exclude concurrent writers.
 
-The required Linux overlay component probe derives digest expectations from authored fixture
-bytes before inspecting the source, then checks real temporary atomic copying, distinct file
-inodes, empty files/roots, worker ownership/modes and refusal to overwrite an existing overlay.
-Host/account/location/quiescence/release checks are explicit outer seams. Its body and the repaired
-Gradle probe were captured and compiled on Windows, without Root or copied-code execution.
-Actual Linux execution, complete privileged runtime enrollment and production integration remain
-mandatory; this component fixture cannot prove them.
+**Kit overlay.** The overlay is a kit as a mod's bootstrap stages it: `src/`, `site/` and
+`requirements/`, optionally `template/`, `tools/` and `actions/`, and `MOD_BASE_KIT.json`. No
+bytecode, `.pth`, executable, link or name outside the kit path grammar is admitted; the stamp
+must equal the pin and digest of the request, kit-digest-v1 must equal that digest and the staged
+directories must match the locks inside it. `out` is created when the tested tree tracks nothing
+in it and is the candidate's own 0700 directory either way, so a build writes beside the overlay.
+The copy is published at `out/mod-base-kit` with plain 0644 files and 0755 directories, the modes
+a bootstrap expects. No copied code is imported by root, and a pin other than the executing kit's
+gains no protected-code, native or App authority by being copied.
 
-
-## Inactive private candidate source publication
-
-`build_ci.worker_source.stage_privileged_worker_source` binds actual Root/fenced home and exact
-fresh quiescent worker identity. Its original caller/runtime and independently authenticated
-protected tested-tree inventory/source are required before invocation. Admit original protected
-checkout bytes/Git modes, retain its no-follow root and the original protected worker-parent
-inode, then exclusively publish a new independent source copy at the fixed worker repository.
-Existing output is never adopted or overwritten. Opaque original Git metadata is omitted;
-protected credential-free Git metadata replacement remains a separate integration requirement.
-
-The additive MB1 `privatize_source_copy` admits the complete declared file/parent closure and
-protected source ownership before mutation. Reject undeclared/Git/special/hard-linked entries;
-remove regular-file/directory ACLs, assign worker-owned private 0700 directories/executable files
-and 0600 nonexecutables, and retain exact source hashes/Git modes. Symbolic links retain literal
-bytes; their owners change with descriptor-relative no-follow chown. No target is read or
-chmodded/chowned and literal targets are not authorized privileged paths. Source links may
-be dangling or point outside the copy, as in the existing Git reader; host isolation and native
-policy remain mandatory. Root remains protected/private until descendants and exact content
-have passed. Recheck metadata/ACLs, held/named entry/root identity and root-last transfer.
-
-Worker-source setup rechecks original checkout, destination inode/ownership/private mode, source
-records, account/quiescence/host and original parent around publication/handoff. Any admitted
-failure locks/terminates the worker and returns no authority. A late inert source copy may remain.
-No Git or candidate code is executed. Future overlay/cache setup can use this repository; complete
-setup/import/native execution/freeze/validator lifecycle and production workflow admission remain
-incomplete. Original code/runtime provenance, excluded other writers and no earlier UID activity
-are caller preconditions; a pgrep observation proves only current absence of UID processes.
-
-The required Linux source component probe derives Git expectations from authored fixture bytes,
-then exercises real temporary atomic source copying, distinct inodes, empty/executable sources,
-literal external symlink ownership, private permissions, Git-metadata omission and overwrite
-refusal. It checks that the outside Root-owned sentinel's inode/ownership/mode/ctime/bytes are
-unchanged. Host/account/location/quiescence seams remain explicit. Its body has been captured
-and compiled on Windows without allocating an account or invoking Root/copied code; real Linux
-execution and complete boundary/native evidence remain required.
-
-
-## Inactive candidate Git metadata curation
-
-`build_ci.worker_git.stage_privileged_worker_git` is protected Root setup for a fresh quiescent
-candidate. Its input is independently authenticated original self-contained SHA-1 files-backend
-checkout metadata under private runner home. The caller must already bind its commit/tree/index,
-tracked candidate source, original code/runtime and writer exclusion; the helper never invokes
-Git or parses object/index bytes with a privileged executable. Data hashes observed here prove
-copy reproduction, not object-graph/native or privileged tool approval.
-
-The initial profile selects the index, loose objects, conventional pack/idx/rev/bitmap/keep/mtimes
-files, heads/tags/remotes/pull refs, packed refs and an optional shallow boundary. Source HEAD,
-config, hooks, logs, description, FETCH_HEAD/ORIG_HEAD, info and branches are omitted. Inspect
-all bounded metadata/type/ownership/alias closure without reading unselected file contents;
-reject links/hard links/special entries, external object alternates/http-alternates/grafts,
-replacement refs, worktree/commondir/reftable/split-index/partial-clone and unsupported pack stores.
-Loose/packed refs and shallow boundaries have separate bounded ASCII/shape/duplicate checks.
-List parsing permits only visible ASCII and LF, caps LF count before allocating lines, and caps
-each line at 4 KiB before field/flag splitting; control-byte separators and oversized headers reject.
-Optional derived object-info caches are omitted. These restrictions define the initial inactive
-profile and require native consumer conformance before activation.
-
-The independently admitted tested commit supplies detached HEAD. A grammar-bound GitHub repo
-supplies a fixed file-backend non-bare configuration with filemode/symlink tracking, no autocrlf,
-hooks disabled and fsmonitor false, plus only a credential-free origin URL/fetch refspec. Source
-configuration is never parsed or copied, so its credentials/includes/filters/hooks are not
-inherited from that file. Worker/system environment and credential-file isolation remain separate
-mandatory boundaries; generated configuration alone cannot prove them. File/entry/byte caps
-reuse the original source ceilings; loose refs cap at 4 KiB and packed/shallow lists at 64 MiB.
-The core data layout follows [Git's repository layout](https://git-scm.com/docs/gitrepository-layout);
-configuration semantics follow [Git config](https://git-scm.com/docs/git-config).
-
-Exclusively stage independent selected files in the fixed worker-owned private repository .git;
-then add known HEAD/config and required objects/refs roots. Recheck selected source records,
-ref texts and original source/candidate-parent/role bindings, remove ACLs and transfer a private
-0700/0600 copy to worker ownership. Recheck published inode/name/metadata/content and source
-again. Failed admission locks/terminates worker; late inert output may remain. Existing .git is
-never removed, adopted or overwritten. Protected post-execution Git restoration/index refresh,
-worker Git startup, original tool/runtime enrollment and native parity remain incomplete.
-
-New additive MB1 selected-data readers/copy support empty selected files without reading other
-contents. They bound the complete no-follow source closure, validate paths/caps before opening,
-and retain stable selected single-link bytes around copying. The new data copy requires an empty
-private stage; existing selected export-copy APIs keep their old whole-inventory/nonempty and
-incremental-stage behavior.
-
-Known authored SHA-1 loose object/tree/commit/index bytes and the generated configuration pass
-real local test-user Git HEAD/tree, clean status and tag reads. This is fixture-format evidence,
-not privileged runtime or actual copied consumer metadata proof. A required Linux component
-probe uses those fixture bytes for real temporary metadata curation/private handoff, checking
-independent inodes, known HEAD/config/data, omission of source token/hook fixtures and overwrite
-refusal. Outer checkout/role/account/location/quiescence seams are explicit; no Git or copied
-program executes as Root. Its body was captured/compiled locally without invoking Root.
-Actual Linux copying, native consumers and full boundary/production integration remain required.
-
-### Inactive composed candidate checkout preparation
-
-`build_ci.worker_preparation.prepare_privileged_worker_checkout` composes exclusive tracked
-source, curated Git metadata, Gradle cache and proposed kit overlay publication before any
-candidate process starts. It derives inventory through `authenticate_source_inventory`, binds
-Git to the retained original source .git, rejects tracked reserved overlay collisions, retains
-the originally allocated cache inode before effects and retains every published root. Separate
-nonoverlapping protected source/cache/overlay origins are required. Each phase rechecks original
-and copied held/named roots and actual host/account/quiescence. Final source bytes/Git modes,
-Git/cache data and private metadata, original seed data, overlay stamp/digest/locks and live
-source/released-pin identity are checked together. Invalid pins/digests reject before source
-access. Any admitted failure terminates/locks the worker; later stages do not run.
-
-Returned source/Git/gradle/overlay inventories confer no execution authority. Original protected
-caller/runtime, self-contained original Git graph/index/source admission, native request/policy
-and upgrade route, secret-free restoration, excluded writers and no earlier UID execution remain
-caller prerequisites. The controller must arrange separate original staging roots. Actual worker
-startup, complete runtime/credential boundary, post-execution lifecycle, hosted Linux evidence,
-native adapters and production workflow wiring remain mandatory incomplete work. The required
-Linux composition fixture uses real temporary data helpers with explicit outer admission seams;
-compiling its body locally does not establish Linux execution or the full boundary.
+`tests/ci_linux_worker.py` (`LinuxCandidateStagingTests`) runs the operation through the installed
+bootstrap against really allocated accounts: a real shallow detached Git checkout is staged; the
+candidate reads it byte for byte, builds, writes generated roots and beside the overlay, and
+reaches neither the original nor what a tracked link names; a linked, hard-linked, undeclared or
+changed file, a moved HEAD, another tree's inventory, another overlay digest and overlapping roots
+are refused with nothing published; a second staging refuses the populated root, as does a first
+one for a candidate whose cache already holds bytes.
 
 ### Closed caller rendering foundation
 

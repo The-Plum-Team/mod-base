@@ -148,6 +148,20 @@ def _texts(root: Path, paths: tuple[str, ...]) -> None:
                     previous = True
 
 
+def _admit(root: Path, boundary: HostBoundary, tested_commit: str) -> tuple[str, ...]:
+    """Select the metadata to copy; require safe ref text and a HEAD detached at the tested commit.
+
+    A checkout whose HEAD moved (another commit, or a branch) is not the checkout that was
+    authenticated, whatever its work tree holds. No object or index byte is read here.
+    """
+    paths = _selection(root, boundary)
+    _texts(root, paths)
+    head = read_child_file(root, 'HEAD', max_bytes=limits.MAX_CI_GIT_REF_BYTES)
+    if head != (tested_commit + '\n').encode('ascii'):
+        raise WorkerError('Git source HEAD is not detached at the tested commit')
+    return paths
+
+
 def _configuration(repository: str) -> bytes:
     grammar.require(grammar.REPOSITORY, repository, 'repository')
     return ('[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n'
@@ -159,16 +173,17 @@ def _configuration(repository: str) -> bytes:
 
 def stage_privileged_worker_git(root: Path, *, boundary: HostBoundary, account: WorkerAccount,
                                 repository: str, tested_commit: str) -> list[dict[str, Any]]:
-    """Curate original protected Git data, exclusively publishing candidate-owned .git.
+    """Root-only: curate the original checkout's Git data into a candidate-owned .git.
 
     Caller independently authenticates original self-contained SHA-1 checkout/commit/tree/index,
-    tracked worker source, original code/runtime, excluded writers and no earlier UID activity.
-    Never parse object/index bytes with Git or execute copied data as Root. Fixed configuration
-    replaces source config, HEAD is the admitted detached commit; no hooks/logs/credentials copy.
-    Data copying is not independent object-graph/native/privileged Git execution approval.
+    tracked candidate source, original code/runtime, excluded writers and no earlier UID activity.
+    The original HEAD must be detached at ``tested_commit``. Never parse object/index bytes with
+    Git or execute copied data as Root. Fixed configuration replaces source config, HEAD is the
+    admitted detached commit; no hooks/logs/credentials copy. Data copying is not independent
+    object-graph/native/privileged Git execution approval.
     """
     authenticate_privileged_host_boundary(boundary)
-    actual = authenticate_worker_account('worker')
+    actual = authenticate_worker_account('candidate')
     if type(account) is not WorkerAccount or account != actual or account.uid == boundary.uid:
         raise WorkerError('Git staging requires the fresh candidate account')
     source = parent = installed = None
@@ -185,8 +200,7 @@ def stage_privileged_worker_git(root: Path, *, boundary: HostBoundary, account: 
         original = os.fstat(source)
         if original.st_uid not in (0, boundary.uid) or original.st_mode & 0o022:
             raise WorkerError('Git source root is not protected')
-        paths = _selection(root, boundary)
-        _texts(root, paths)
+        paths = _admit(root, boundary, tested_commit)
         expected = selected_regular_data_records(root, paths=paths, **_BOUNDS)
         packet = {'HEAD': (tested_commit + '\n').encode('ascii'), 'config': configuration}
         final = sorted(expected + [{'path': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
@@ -201,7 +215,7 @@ def stage_privileged_worker_git(root: Path, *, boundary: HostBoundary, account: 
         destination = Path(str(checkout / '.git'))
         def recheck() -> None:
             authenticate_privileged_host_boundary(boundary)
-            if authenticate_worker_account('worker') != account:
+            if authenticate_worker_account('candidate') != account:
                 raise WorkerError('Git staging worker identity changed')
             _quiet(account)
             current = _open_directory(tuple(path.parts[1:]))
@@ -234,9 +248,9 @@ def stage_privileged_worker_git(root: Path, *, boundary: HostBoundary, account: 
                 raise WorkerError('Git private ownership handoff changed data')
             authenticate_tree_private_access(stage, owner_uid=account.uid, owner_gid=account.gid,
                                               max_entries=limits.MAX_CI_GIT_METADATA_ENTRIES)
-            if _selection(root, boundary) != paths or selected_regular_data_records(root, paths=paths, **_BOUNDS) != expected:
+            if (_admit(root, boundary, tested_commit) != paths
+                    or selected_regular_data_records(root, paths=paths, **_BOUNDS) != expected):
                 raise WorkerError('Git source changed around publication')
-            _texts(root, paths)
             recheck()
             return info.st_dev, info.st_ino
         recheck()
@@ -248,10 +262,9 @@ def stage_privileged_worker_git(root: Path, *, boundary: HostBoundary, account: 
             raise WorkerError('Git publication original inode changed')
         authenticate_tree_private_access(destination, owner_uid=account.uid, owner_gid=account.gid,
                                           max_entries=limits.MAX_CI_GIT_METADATA_ENTRIES)
-        if (regular_data_records(destination, **_BOUNDS) != final or _selection(root, boundary) != paths
+        if (regular_data_records(destination, **_BOUNDS) != final or _admit(root, boundary, tested_commit) != paths
                 or selected_regular_data_records(root, paths=paths, **_BOUNDS) != expected):
             raise WorkerError('Git publication/source data changed')
-        _texts(root, paths)
         recheck()
         named = _open_directory(tuple(destination.parts[1:]))
         try:

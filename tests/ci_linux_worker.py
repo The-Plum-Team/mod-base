@@ -1923,304 +1923,480 @@ class LinuxBuildArchiveTests(unittest.TestCase):
                 stream_child_file(root, "payload", max_bytes=len(data), consume=lambda _: self.fail("hard link read"))
 
 
-class LinuxGradleCacheCopyTests(unittest.TestCase):
-    """Real temporary independent cache copies, with explicit outer account/location seams."""
+#: What a checkout step leaves in the environment of the commands below; no user or system Git
+#: configuration takes part, and the dates make the fixture's commits the same on every run.
+STAGING_GIT_ENV = {**HOST_ENV, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_TERMINAL_PROMPT": "0", "GIT_AUTHOR_NAME": "Fixture",
+                   "GIT_AUTHOR_EMAIL": "fixture@example.invalid", "GIT_COMMITTER_NAME": "Fixture",
+                   "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+                   "GIT_AUTHOR_DATE": "2026-01-02T03:04:05Z", "GIT_COMMITTER_DATE": "2026-01-02T03:04:05Z"}
+STAGING_REPOSITORY = "owner/project"
+#: Run as the candidate inside its repository: every path outside ``.git`` and the kit overlay with
+#: its type, mode, owner, link count and bytes.
+STAGING_LISTING = r"""
+import json, os, stat, sys
+os.chdir(sys.argv[1])
+found = {}
+for directory, names, files in os.walk("."):
+    names[:] = sorted(name for name in names
+                      if os.path.normpath(os.path.join(directory, name)) not in (".git", "out/mod-base-kit"))
+    for name in (*names, *files):
+        path = os.path.normpath(os.path.join(directory, name))
+        info = os.lstat(path)
+        row = {"mode": stat.S_IMODE(info.st_mode), "owner": [info.st_uid, info.st_gid], "links": info.st_nlink,
+               "inode": info.st_ino}
+        if stat.S_ISLNK(info.st_mode):
+            row.update(kind="link", target=os.readlink(path), mode=None, links=None)
+        elif stat.S_ISREG(info.st_mode):
+            with open(path, "rb") as stream:
+                row.update(kind="file", hex=stream.read().hex())
+        else:
+            row.update(kind="directory" if stat.S_ISDIR(info.st_mode) else "special", links=None)
+        found[path] = row
+print(json.dumps(found, sort_keys=True))
+"""
+#: Run as the candidate: the staged kit must be a complete overlay by the kit's own rules.
+STAGING_KIT_PROBE = r"""
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from pathlib import Path
+from mod_base import pin
+root = Path(sys.argv[1])
+stamp = pin.read_stamp(root)
+assert pin.kit_tree_digest(root) == stamp["tree_digest"]
+pin.verify_staged_files(root)
+print(json.dumps(stamp, sort_keys=True))
+"""
 
-    def test_private_seed_copy_and_configuration_rejection(self):
-        if sys.platform != "linux" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-            raise AssertionError("Gradle seed copying requires the hosted Linux fixture")
-        root = Path(__file__).resolve().parents[1]
-        program = (
-            "import importlib.util,sys,pathlib,os,tempfile,stat\n"
-            f"root=pathlib.Path({str(root)!r})\n"
-            "package=root/'src/mod_base'\n"
-            "spec=importlib.util.spec_from_file_location('mod_base',package/'__init__.py',submodule_search_locations=[str(package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['mod_base']=module;spec.loader.exec_module(module)\n"
-            "from mod_base.build_ci import gradle_cache as cache\n"
-            "from mod_base.build_ci.worker import WorkerAccount\n"
-            "from mod_base.io.tree import regular_data_records\n"
-            "from mod_base.errors import MbError\n"
-            "from unittest.mock import patch\n"
-            "from types import SimpleNamespace\n"
-            "assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0\n"
-            "with tempfile.TemporaryDirectory(prefix='mod-base-gradle-seed-') as directory:\n"
-            " base=pathlib.Path(directory);seed=base/'seed';seed.mkdir(mode=0o700)\n"
-            " (seed/'caches').mkdir();(seed/'wrapper').mkdir()\n"
-            " (seed/'caches/module.jar').write_bytes(b'known cache bytes');(seed/'wrapper/empty').write_bytes(b'')\n"
-            " original=regular_data_records(seed,**cache._BOUNDS)\n"
-            " worker_root=base/'worker';home=worker_root/'worker-home';home.mkdir(parents=True)\n"
-            " target=home/'gradle-home';target.mkdir(mode=0o700);os.chown(target,2001,2001)\n"
-            " account=WorkerAccount('worker',2001,2001,str(home));boundary=SimpleNamespace(home=str(base),uid=1001,gid=121)\n"
-            " def role(receipt): assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0\n"
-            " with patch.object(cache,'WORKER_ROOT',pathlib.PurePosixPath(worker_root)),patch.object(cache,'authenticate_privileged_host_boundary',role),\\\n"
-            "      patch.object(cache,'authenticate_worker_account',return_value=account),patch.object(cache,'_quiet'),patch.object(cache,'terminate_worker') as terminate:\n"
-            "  assert cache.stage_privileged_gradle_cache(seed,boundary=boundary,account=account)==original\n"
-            "  assert (target/'caches/module.jar').read_bytes()==b'known cache bytes' and (target/'wrapper/empty').read_bytes()==b''\n"
-            "  assert (target/'caches/module.jar').stat().st_ino!=(seed/'caches/module.jar').stat().st_ino\n"
-            "  assert target.stat().st_uid==target.stat().st_gid==2001 and stat.S_IMODE(target.stat().st_mode)==0o700\n"
-            "  assert stat.S_IMODE((target/'caches/module.jar').stat().st_mode)==0o600\n"
-            "  terminate.assert_not_called()\n"
-            "  (seed/'gradle.properties').write_bytes(b'credential fixture')\n"
-            "  try: cache.stage_privileged_gradle_cache(seed,boundary=boundary,account=account)\n"
-            "  except MbError: pass\n"
-            "  else: raise AssertionError('configuration seed accepted')\n"
-            "  terminate.assert_called_once_with(account)\n"
-            "  assert (target/'caches/module.jar').read_bytes()==b'known cache bytes'\n"
-            "print('private independent Gradle cache copy probe passed')\n"
+
+def staging_git(*args, cwd):
+    result = subprocess.run(("/usr/bin/git", *args), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=60, env=STAGING_GIT_ENV, check=False, cwd=cwd)
+    if result.returncode != 0:
+        raise AssertionError(f"Git fixture command {args[0]} failed: {result.stderr.decode(errors='replace')[-600:]}")
+    return result.stdout
+
+
+def staged_kit(output, pin):
+    """A kit overlay as a mod's bootstrap stages one: its own copy of this checkout, plus the stamp."""
+    import importlib.util
+    from mod_base.pin import STAMP_NAME, kit_tree_digest, stamp_document
+    spec = importlib.util.spec_from_file_location(
+        "mod_base_kit_staging_fixture", KIT / "template" / "managed" / "scripts" / "ci" / "mod_base_kit.py")
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    bootstrap.copy_kit(KIT, output)
+    digest = kit_tree_digest(output)
+    (output / STAMP_NAME).write_bytes(canonical_json(stamp_document(pin, digest)))
+    return digest
+
+
+class LinuxCandidateStagingTests(HostedWorkerCase):
+    """The ``stage-candidate`` root operation against a really allocated candidate, with no seam.
+
+    Every case publishes the runner's private request and starts this checkout's bootstrap through
+    ``sudo``, exactly as a workflow step will. The original checkout is a real Git checkout made the
+    way ``actions/checkout`` makes one for a commit: fetched shallow into a fresh repository and
+    detached at the tested commit.
+    """
+
+    def staging_fixture(self, *, tracked_out=False):
+        from types import SimpleNamespace
+        from mod_base.pin import Pin
+        base = Path(tempfile.mkdtemp(prefix="mod-base-staging-", dir=os.environ["RUNNER_TEMP"]))
+        self.addCleanup(shutil.rmtree, base, True)
+        secret = base / "runner-secret"
+        secret.write_bytes(b"only the runner and root read this\n")
+        secret.chmod(0o600)
+        files = {
+            ".gitignore": ("100644", b"/build/\n/.gradle/\n/out/reports/\n/out/mod-base-kit/\n"),
+            "README.md": ("100644", b"# Staging fixture\n"),
+            "binary.bin": ("100644", bytes(range(256)) + b"\r\n\x1a\x00tail"),
+            "build.sh": ("100755", b"#!/bin/sh\nset -eu\nmkdir -p build/libs out/reports .gradle\n"
+                                   b"cat src/main/resource.txt > build/libs/artifact.txt\n"
+                                   b"printf 'report\\n' > out/reports/summary.txt\n"
+                                   b"printf 'state\\n' > .gradle/state\n"),
+            "docs/latest": ("120000", b"../README.md"),
+            "leak": ("120000", os.fsencode(secret)),
+            "src/main/empty": ("100644", b""),
+            "src/main/resource.txt": ("100644", b"resource\n"),
+        }
+        if tracked_out:
+            files["out/notes.txt"] = ("100644", b"tracked beside the overlay\n")
+        upstream = base / "upstream"
+        upstream.mkdir()
+        staging_git("init", "-q", "--initial-branch=main", ".", cwd=upstream)
+        for subject in ("first", "second"):
+            (upstream / "README.md").write_bytes(subject.encode() + b"\n")
+            staging_git("add", "-A", cwd=upstream)
+            staging_git("commit", "-q", "-m", subject, cwd=upstream)
+        for name, (mode, data) in files.items():
+            leaf = upstream / name
+            leaf.parent.mkdir(parents=True, exist_ok=True)
+            if mode == "120000":
+                os.symlink(data, os.fsencode(leaf))
+            else:
+                leaf.write_bytes(data)
+                leaf.chmod(0o755 if mode == "100755" else 0o644)
+        staging_git("add", "-A", cwd=upstream)
+        staging_git("commit", "-q", "-m", "tested", cwd=upstream)
+        commit = staging_git("rev-parse", "HEAD", cwd=upstream).decode().strip()
+        source = base / "candidate"
+        source.mkdir()
+        staging_git("init", "-q", ".", cwd=source)
+        staging_git("remote", "add", "origin", f"https://github.com/{STAGING_REPOSITORY}", cwd=source)
+        # A token-bearing header and a hook, as a credential-persisting checkout or an earlier step
+        # could leave them: neither may reach the candidate.
+        staging_git("config", "--local", "http.https://github.com/.extraheader",
+                    "AUTHORIZATION: basic fixture-secret", cwd=source)
+        hook = source / ".git" / "hooks" / "post-checkout"
+        hook.write_bytes(b"#!/bin/sh\necho hook ran >&2\nexit 1\n")
+        # A real repository arrives as a pack; this small one would be unpacked without the limit.
+        staging_git("-c", "protocol.version=2", "-c", "fetch.unpackLimit=1", "fetch", "-q", "--no-tags", "--depth=2",
+                    upstream.as_uri(), "+refs/heads/main:refs/remotes/origin/main", cwd=source)
+        staging_git("checkout", "-q", "--force", "--detach", commit, cwd=source)
+        hook.chmod(0o755)
+        staging_git("tag", "v1", commit, cwd=source)
+        self.assertEqual((source / ".git" / "HEAD").read_bytes(), commit.encode() + b"\n")
+        self.assertTrue((source / ".git" / "shallow").is_file())
+        packs = sorted(os.listdir(source / ".git" / "objects" / "pack"))
+        self.assertTrue({name.rsplit(".", 1)[-1] for name in packs} >= {"pack", "idx"}, packs)
+        tree = staging_git("rev-parse", "HEAD^{tree}", cwd=source).decode().strip()
+        inventory = parse_source_inventory(staging_git("ls-tree", "-r", "-l", "-z", "--full-tree", tree, cwd=source))
+        # The inventory Git reports is the authored one: every later comparison is against bytes
+        # this test wrote, never against what a copy happens to hold.
+        self.assertEqual([(entry.path, entry.mode, entry.size, entry.git_blob) for entry in inventory],
+                         [(name, mode, len(data), hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest())
+                          for name, (mode, data) in sorted(files.items())])
+        pin = Pin("a" * 40, "v1.0.3", ())
+        overlay = base / "kit-overlay"
+        digest = staged_kit(overlay, pin)
+        seed = base / "gradle-seed"
+        cached = {"caches/modules-2/files-2.1/net.fabricmc/yarn/1.20.1+build.10/2d1f/yarn-1.20.1+build.10-v2.jar": b"yarn",
+                  "caches/modules-2/modules-2.lock": b"",
+                  "wrapper/dists/gradle-8.8-bin/5e/gradle-8.8/lib/gradle-launcher-8.8.jar": b"launcher"}
+        for name, data in cached.items():
+            (seed / name).parent.mkdir(parents=True, exist_ok=True)
+            (seed / name).write_bytes(data)
+        return SimpleNamespace(base=base, secret=secret, files=files, source=source, commit=commit, tree=tree,
+                               parent=staging_git("rev-parse", "HEAD^", cwd=source).decode().strip(),
+                               inventory=inventory, pin=pin, overlay=overlay, digest=digest, seed=seed, cached=cached)
+
+    def stage(self, fixture, **changed):
+        """Publish the request and run the root operation, as one lifecycle step does."""
+        from mod_base.build_ci.root_request import request_candidate_staging, root_request_path, run_root_operation
+        from mod_base.pin import kit_tree_digest
+        arguments = dict(repository=STAGING_REPOSITORY, tested_sha=fixture.commit, tested_tree=fixture.tree,
+                         inventory=fixture.inventory, source=fixture.source, overlay=fixture.overlay,
+                         pin=fixture.pin, expected_digest=fixture.digest, gradle_seed=fixture.seed)
+        arguments.update(changed)
+        # One request per operation exists at a time; a step that asks again has dropped the old one.
+        shutil.rmtree(Path(str(root_request_path("stage-candidate"))), ignore_errors=True)
+        nonce = request_candidate_staging(boundary=self.host_boundary,
+                                          candidate=authenticate_worker_account("candidate"), **arguments)
+        started = time.monotonic()
+        try:
+            run_root_operation("stage-candidate", python=sys.executable, kit_root=KIT,
+                               kit_digest=kit_tree_digest(KIT), nonce=nonce)
+        finally:
+            print(f"candidate staging root operation: {time.monotonic() - started:.2f}s", file=sys.stderr)
+
+    def as_candidate(self, *args, accepted=(0,)):
+        account = authenticate_worker_account("candidate")
+        return self.as_worker("candidate", f"HOME={account.home}", "GIT_CONFIG_GLOBAL=/dev/null",
+                              "GIT_CONFIG_NOSYSTEM=1", *args, accepted=accepted)
+
+    def as_root(self, *args, accepted=(0,)):
+        return command("/usr/bin/sudo", "-n", "--", *args, accepted=accepted)
+
+    def published(self):
+        """What exists below the worker root besides the fixture's own directories."""
+        return sorted(set(os.listdir(self.root)) - {"candidate-home", "validator-home", "root-request-host-fence",
+                                                    "root-request-stage-candidate"})
+
+    def candidate_terminated(self):
+        """Whether the candidate was swept and locked: its account then expired on 1970-01-02."""
+        shadow = self.as_root("/usr/bin/getent", "shadow", WORKER_ACCOUNTS["candidate"]).stdout.decode()
+        return shadow.rstrip("\n").split(":")[7] == "1"
+
+    def test_candidate_reads_builds_and_writes_in_its_checkout_and_never_reaches_the_original(self):
+        import json
+        from mod_base.pin import stamp_document
+        fixture = self.staging_fixture()
+        account = authenticate_worker_account("candidate")
+        owner = [account.uid, account.gid]
+        repository = self.root / "repository"
+        secret_before = fixture.secret.stat()
+        self.stage(fixture)
+        self.assertEqual(self.published(), ["repository"])
+        self.assertFalse(self.candidate_terminated())
+
+        # Tracked files: byte for byte the authored tree, with Git's modes, owned by the candidate.
+        listed = json.loads(self.as_candidate("/usr/bin/python3", "-I", "-B", "-c", STAGING_LISTING,
+                                              str(repository)).stdout)
+        expected = {"out": {"kind": "directory", "mode": 0o700, "owner": owner, "links": None}}
+        for name, (mode, data) in fixture.files.items():
+            parts = name.split("/")
+            for count in range(1, len(parts)):
+                expected["/".join(parts[:count])] = {"kind": "directory", "mode": 0o700, "owner": owner, "links": None}
+            if mode == "120000":
+                expected[name] = {"kind": "link", "target": os.fsdecode(data), "mode": None, "owner": owner,
+                                  "links": None}
+            else:
+                expected[name] = {"kind": "file", "hex": data.hex(), "mode": 0o700 if mode == "100755" else 0o600,
+                                  "owner": owner, "links": 1}
+        inodes = {path: row.pop("inode") for path, row in listed.items()}
+        self.assertEqual(listed, expected)
+        for name in fixture.files:
+            self.assertNotEqual(inodes[name], os.lstat(fixture.source / name).st_ino)
+
+        # The curated .git: the tested commit and tree, a clean work tree, no source config or hook.
+        def in_checkout(script):
+            return self.as_candidate("/bin/sh", "-euc", f'cd "$1"\n{script}', "sh", str(repository)).stdout.decode()
+        self.assertEqual(sorted(in_checkout("ls -A .git").split()),
+                         ["HEAD", "config", "index", "objects", "refs", "shallow"])
+        self.assertEqual(sorted(in_checkout("ls -A .git/objects/pack").split()),
+                         sorted(os.listdir(fixture.source / ".git" / "objects" / "pack")))
+        self.assertEqual(in_checkout("git rev-parse HEAD 'HEAD^{tree}'").split(), [fixture.commit, fixture.tree])
+        self.assertEqual(in_checkout("git status --porcelain=v1 --untracked-files=all"), "")
+        self.assertEqual(in_checkout("git describe --tags"), "v1\n")
+        self.assertEqual(in_checkout("git cat-file -p HEAD:src/main/resource.txt"), "resource\n")
+        self.assertEqual(in_checkout("git config --get remote.origin.url"),
+                         f"https://github.com/{STAGING_REPOSITORY}.git\n")
+        self.assertEqual(in_checkout("git config --get core.hooksPath"), "/dev/null\n")
+        self.assertEqual(in_checkout("cat .git/HEAD"), fixture.commit + "\n")
+        self.assertNotIn("fixture-secret", in_checkout("cat .git/config"))
+
+        # The kit overlay is complete by the kit's own rules, for the pin the runner named.
+        stamp = json.loads(self.as_candidate("/usr/bin/python3", "-I", "-B", "-c", STAGING_KIT_PROBE,
+                                             str(repository / "out" / "mod-base-kit")).stdout)
+        self.assertEqual(stamp, stamp_document(fixture.pin, fixture.digest))
+        self.assertEqual(in_checkout("stat -c '%U %a' out/mod-base-kit out/mod-base-kit/src/mod_base/__init__.py"),
+                         f"{WORKER_ACCOUNTS['candidate']} 755\n{WORKER_ACCOUNTS['candidate']} 644\n")
+
+        # It builds: the tracked script runs, writes generated roots and beside the overlay, and
+        # leaves the work tree clean.
+        self.assertEqual(in_checkout("./build.sh && cat build/libs/artifact.txt out/reports/summary.txt .gradle/state"),
+                         "resource\nreport\nstate\n")
+        self.assertEqual(in_checkout("printf beside > out/beside.txt && cat out/beside.txt"), "beside")
+        self.assertEqual(in_checkout("git status --porcelain=v1 --untracked-files=all"), "?? out/beside.txt\n")
+
+        # The seeded cache is the candidate's own private copy.
+        home = Path(account.home)
+        for name, data in fixture.cached.items():
+            self.assertEqual(self.as_candidate("/usr/bin/cat", str(home / "gradle-home" / name)).stdout, data)
+        self.as_candidate("/usr/bin/touch", str(home / "gradle-home" / "caches" / "modules-2" / "written.lock"))
+        self.assertEqual(self.as_root("/usr/bin/stat", "-c", "%u:%g %a", str(home / "gradle-home"),
+                                      str(home / "gradle-home" / "caches" / "modules-2" / "modules-2.lock")).stdout,
+                         f"{account.uid}:{account.gid} 700\n{account.uid}:{account.gid} 600\n".encode())
+
+        # The original stays the runner's: the candidate reaches neither it nor what a tracked link
+        # names, and staging never touched the link's target.
+        for path in (fixture.source / "README.md", fixture.overlay / "MOD_BASE_KIT.json",
+                     fixture.seed / "caches" / "modules-2" / "modules-2.lock", fixture.secret):
+            self.as_candidate("/usr/bin/cat", str(path), accepted=(1,))
+        self.as_candidate("/usr/bin/ls", str(fixture.source), accepted=(2,))
+        self.as_candidate("/usr/bin/cat", str(repository / "leak"), accepted=(1,))
+        secret_after = fixture.secret.stat()
+        self.assertEqual((secret_after.st_ino, secret_after.st_uid, secret_after.st_gid, secret_after.st_mode,
+                          secret_after.st_ctime_ns),
+                         (secret_before.st_ino, secret_before.st_uid, secret_before.st_gid, secret_before.st_mode,
+                          secret_before.st_ctime_ns))
+        self.assertEqual(fixture.secret.read_bytes(), b"only the runner and root read this\n")
+        # Nobody but the candidate enters the checkout: not the validator, not even the runner.
+        self.as_worker("validator", "/usr/bin/ls", str(repository), accepted=(2,))
+        with self.assertRaises(PermissionError):
+            os.listdir(repository)
+        self.assertEqual(staging_git("status", "--porcelain=v1", "--untracked-files=all", cwd=fixture.source), b"")
+
+    def test_second_staging_refuses_the_populated_root_and_locks_the_candidate(self):
+        fixture = self.staging_fixture()
+        repository = self.root / "repository"
+        self.stage(fixture)
+        self.as_candidate("/bin/sh", "-euc", 'cd "$1" && ./build.sh', "sh", str(repository))
+        before = self.as_root("/usr/bin/find", str(repository), "-printf", "%p %i %T@ %s\\n").stdout
+        self.assertIn(b"/repository/out/reports/summary.txt ", before)
+        with self.assertRaisesRegex(MbError, "candidate repository already exists; refusing to reuse a populated root"):
+            self.stage(fixture)
+        with self.assertRaisesRegex(MbError, "candidate repository already exists"):
+            self.stage(fixture, gradle_seed=None)
+        self.assertEqual(self.as_root("/usr/bin/find", str(repository), "-printf", "%p %i %T@ %s\\n").stdout, before)
+        self.assertEqual(self.published(), ["repository"])
+        # A refused staging ends the candidate: whatever it left running is swept and it is locked.
+        self.assertTrue(self.candidate_terminated())
+
+    def test_unfaithful_checkouts_are_refused_before_anything_is_published(self):
+        fixture = self.staging_fixture(tracked_out=True)
+        source, account = fixture.source, authenticate_worker_account("candidate")
+        moved = fixture.base / "moved"
+        other_tree = staging_git("rev-parse", fixture.parent + "^{tree}", cwd=source).decode().strip()
+
+        def link_file():
+            os.rename(source / "src" / "main" / "resource.txt", moved)
+            os.symlink(moved, source / "src" / "main" / "resource.txt")
+
+        def unlink_file():
+            os.unlink(source / "src" / "main" / "resource.txt")
+            os.rename(moved, source / "src" / "main" / "resource.txt")
+
+        def link_directory():
+            os.rename(source / "src", moved)
+            os.symlink(moved, source / "src")
+
+        def unlink_directory():
+            os.unlink(source / "src")
+            os.rename(moved, source / "src")
+
+        def on_a_branch():
+            staging_git("update-ref", "refs/heads/work", fixture.commit, cwd=source)
+            staging_git("symbolic-ref", "HEAD", "refs/heads/work", cwd=source)
+
+        def off_the_branch():
+            staging_git("update-ref", "--no-deref", "HEAD", fixture.commit, cwd=source)
+            staging_git("update-ref", "-d", "refs/heads/work", cwd=source)
+
+        cases = (
+            ("tracked file replaced by a symlink", link_file, unlink_file, {},
+             "tracked source differs from the protected tested tree"),
+            ("tracked directory replaced by a symlink", link_directory, unlink_directory, {},
+             "path has an unsafe parent component"),
+            ("planted symlink", lambda: os.symlink("/etc/hostname", source / "planted"),
+             lambda: os.unlink(source / "planted"), {}, "source contains an undeclared path"),
+            ("hard link", lambda: os.link(source / "README.md", moved), lambda: os.unlink(moved), {},
+             "tracked source has multiple hard links"),
+            ("undeclared file", lambda: (source / "src" / "main" / "untracked.txt").write_bytes(b"x"),
+             lambda: os.unlink(source / "src" / "main" / "untracked.txt"), {}, "source contains an undeclared path"),
+            ("changed byte", lambda: (source / "README.md").write_bytes(b"# Staging fixturE\n"),
+             lambda: (source / "README.md").write_bytes(b"# Staging fixture\n"), {},
+             "tracked source differs from the protected tested tree"),
+            ("HEAD moved to another commit",
+             lambda: staging_git("update-ref", "--no-deref", "HEAD", fixture.parent, cwd=source),
+             lambda: staging_git("update-ref", "--no-deref", "HEAD", fixture.commit, cwd=source), {},
+             "Git source HEAD is not detached at the tested commit"),
+            ("HEAD moved to a branch", on_a_branch, off_the_branch, {},
+             "Git source HEAD is not detached at the tested commit"),
+            ("inventory of another tree", lambda: None, lambda: None, {"tested_tree": other_tree},
+             "source inventory is not the inventory of the tested tree"),
+            ("another commit named", lambda: None, lambda: None, {"tested_sha": fixture.parent},
+             "Git source HEAD is not detached at the tested commit"),
+            ("overlay of another digest", lambda: None, lambda: None, {"expected_digest": "sha256:" + "0" * 64},
+             "worker kit overlay differs from the independently bound pin/digest"),
+            ("overlapping roots", lambda: None, lambda: None, {"gradle_seed": fixture.overlay / "src"},
+             "source/cache/overlay roots overlap"),
         )
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", program, cwd=root)
-        self.assertEqual(result.stdout.strip(), b"private independent Gradle cache copy probe passed")
+        for name, mutate, restore, changed, message in cases:
+            with self.subTest(name=name):
+                mutate()
+                try:
+                    with self.assertRaisesRegex(MbError, message):
+                        self.stage(fixture, **changed)
+                finally:
+                    restore()
+                self.assertEqual(self.published(), [])
+                self.assertEqual(sorted(self.as_root("/usr/bin/find", account.home, "-mindepth", "1", "-printf",
+                                                     "%P %U %m\\n").stdout.decode().splitlines()),
+                                 [f"gradle-home {account.uid} 700", f"tmp {account.uid} 700"])
+                self.assertTrue(self.candidate_terminated())
 
+        # The same checkout, restored, stages: every refusal above was for its own defect. This
+        # tree tracks a file below out/, so the directory comes with the source, and no seed is
+        # given, so the allocated cache stays empty.
+        self.stage(fixture, gradle_seed=None)
+        repository = self.root / "repository"
+        self.assertEqual(self.as_root("/usr/bin/stat", "-c", "%u:%g %a %n", str(repository), str(repository / "out"),
+                                      str(repository / "out" / "notes.txt"), str(repository / "out" / "mod-base-kit"),
+                                      str(Path(account.home) / "gradle-home")).stdout.decode().splitlines(),
+                         [f"{account.uid}:{account.gid} 700 {repository}", f"{account.uid}:{account.gid} 700 {repository}/out",
+                          f"{account.uid}:{account.gid} 600 {repository}/out/notes.txt",
+                          f"{account.uid}:{account.gid} 755 {repository}/out/mod-base-kit",
+                          f"{account.uid}:{account.gid} 700 {account.home}/gradle-home"])
+        self.assertEqual(self.as_root("/usr/bin/cat", str(repository / "out" / "notes.txt")).stdout,
+                         b"tracked beside the overlay\n")
+        self.assertEqual(self.as_root("/usr/bin/find", str(Path(account.home) / "gradle-home"), "-mindepth", "1").stdout,
+                         b"")
 
-class LinuxWorkerOverlayCopyTests(unittest.TestCase):
-    """Real temporary overlay publication; outer provenance/account seams remain explicit."""
+    def test_request_refuses_what_root_could_never_admit_and_publishes_one_private_record(self):
+        import dataclasses
+        import json
+        from mod_base.build_ci.root_request import request_candidate_staging, root_request_path
+        from mod_base.pin import Pin
+        fixture = self.staging_fixture()
+        candidate = authenticate_worker_account("candidate")
+        valid = dict(boundary=self.host_boundary, candidate=candidate, repository=STAGING_REPOSITORY,
+                     tested_sha=fixture.commit, tested_tree=fixture.tree, inventory=fixture.inventory,
+                     source=fixture.source, overlay=fixture.overlay, pin=fixture.pin,
+                     expected_digest=fixture.digest, gradle_seed=fixture.seed)
+        request = Path(str(root_request_path("stage-candidate")))
+        cases = {
+            "the validator as candidate": {"candidate": authenticate_worker_account("validator")},
+            "an account that was never allocated": {"candidate": dataclasses.replace(candidate, uid=candidate.uid + 7)},
+            "another runner's fence": {"boundary": dataclasses.replace(self.host_boundary,
+                                                                       inode=self.host_boundary.inode + 1)},
+            "a source outside the fenced home": {"source": self.root / "elsewhere"},
+            "a source given as text": {"source": str(fixture.source)},
+            "an overlay outside the fenced home": {"overlay": Path("/opt/kit-overlay")},
+            "a seed outside the fenced home": {"gradle_seed": Path("/var/cache/gradle")},
+            "an unsorted inventory": {"inventory": tuple(reversed(fixture.inventory))},
+            "an inventory given as a list": {"inventory": list(fixture.inventory)},
+            "an empty inventory": {"inventory": ()},
+            "a pin without its tag form": {"pin": Pin("a" * 40, "1.0.3", ())},
+            "a digest without its algorithm": {"expected_digest": "0" * 64},
+            "a branch name for the commit": {"tested_sha": "main"},
+            "a repository with a path": {"repository": STAGING_REPOSITORY + "/tree/main"},
+        }
+        for name, changed in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(MbError):
+                    request_candidate_staging(**{**valid, **changed})
+                self.assertFalse(request.exists())
+        nonce = request_candidate_staging(**valid)
+        self.assertRegex(nonce, r"\A[0-9a-f]{64}\Z")
+        self.assertEqual(os.listdir(request), [grammar.CI_ROOT_REQUEST_NAME])
+        record = request / grammar.CI_ROOT_REQUEST_NAME
+        for path, mode in ((request, 0o700), (record, 0o600)):
+            info = path.lstat()
+            self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)), (os.getuid(), os.getgid(), mode))
+        raw = record.read_bytes()
+        document = json.loads(raw)
+        self.assertEqual(raw, canonical_json(document))
+        self.assertEqual((document["operation"], document["nonce"]), ("stage-candidate", nonce))
+        self.assertEqual(document["arguments"],
+                         {"candidate": {"uid": candidate.uid, "gid": candidate.gid}, "repository": STAGING_REPOSITORY,
+                          "tested_sha": fixture.commit, "tested_tree": fixture.tree,
+                          "inventory": [{"path": entry.path, "mode": entry.mode, "size": entry.size,
+                                         "git_blob": entry.git_blob} for entry in fixture.inventory],
+                          "source": str(fixture.source), "gradle_seed": str(fixture.seed),
+                          "overlay": {"path": str(fixture.overlay), "sha": fixture.pin.sha, "version": "1.0.3",
+                                      "tree_digest": fixture.digest}})
+        # A request is data: nothing is staged until the bootstrap runs, and one never replaces another.
+        self.assertEqual(self.published(), [])
+        with self.assertRaises(MbError):
+            request_candidate_staging(**valid)
+        self.assertEqual(record.read_bytes(), raw)
 
-    def test_empty_sources_roots_and_plain_candidate_ownership(self):
-        if sys.platform != "linux" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-            raise AssertionError("worker overlay copying requires the hosted Linux fixture")
-        root = Path(__file__).resolve().parents[1]
-        program = (
-            "import importlib.util,sys,pathlib,os,tempfile,stat,hashlib\n"
-            f"root=pathlib.Path({str(root)!r})\n"
-            "package=root/'src/mod_base'\n"
-            "spec=importlib.util.spec_from_file_location('mod_base',package/'__init__.py',submodule_search_locations=[str(package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['mod_base']=module;spec.loader.exec_module(module)\n"
-        ) + r"""
-from mod_base.build_ci import worker_overlay as overlay
-from mod_base.build_ci.worker import WorkerAccount
-from mod_base.pin import Pin, stamp_document, STAMP_NAME
-from mod_base.model.canonical import canonical_json
-from mod_base.errors import MbError
-from unittest.mock import patch
-from types import SimpleNamespace
-assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
-# Expectations derive from authored fixture bytes, before any unknown copied tree is inspected.
-fixture={'src/mod_base/__init__.py':b'', 'src/mod_base/template/staged_files.sha256':b''}
-listing=''.join(hashlib.sha256(data).hexdigest()+'  ./'+path+'\n' for path,data in sorted(fixture.items()))
-digest='sha256:'+hashlib.sha256(listing.encode('ascii')).hexdigest()
-pin=Pin('a'*40,'v1.0.3',())
-with tempfile.TemporaryDirectory(prefix='mod-base-worker-overlay-') as directory:
- base=pathlib.Path(directory);seed=base/'seed';seed.mkdir(mode=0o700)
- for top in ('src','site','requirements'): (seed/top).mkdir(mode=0o755)
- for path,data in fixture.items():
-  leaf=seed/path;leaf.parent.mkdir(parents=True,exist_ok=True);leaf.write_bytes(data);leaf.chmod(0o644)
- (seed/STAMP_NAME).write_bytes(canonical_json(stamp_document(pin,digest)))
- worker_root=base/'worker';repository=worker_root/'repository';repository.mkdir(parents=True)
- account=WorkerAccount('worker',2001,2001,str(worker_root/'worker-home'))
- boundary=SimpleNamespace(home=str(base),uid=1001,gid=121)
- def role(receipt): assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
- with patch.object(overlay,'WORKER_ROOT',pathlib.PurePosixPath(worker_root)),patch.object(overlay,'authenticate_privileged_host_boundary',role),patch.object(overlay,'authenticate_worker_account',return_value=account),patch.object(overlay,'_quiet'),patch.object(overlay,'verify_released') as release,patch.object(overlay,'terminate_worker') as terminate:
-  observed=overlay.stage_privileged_worker_overlay(object(),seed,boundary=boundary,account=account,pin=pin,expected_digest=digest)
-  target=repository/'out/mod-base-kit'
-  assert len(observed)==3 and release.call_count==3
-  for path,data in fixture.items():
-   leaf=target/path;assert leaf.read_bytes()==data and leaf.stat().st_ino!=(seed/path).stat().st_ino
-   assert leaf.stat().st_uid==leaf.stat().st_gid==2001 and stat.S_IMODE(leaf.stat().st_mode)==0o644
-  for top in ('src','site','requirements'):
-   info=(target/top).stat();assert info.st_uid==info.st_gid==2001 and stat.S_IMODE(info.st_mode)==0o755
-  terminate.assert_not_called()
-  try: overlay.stage_privileged_worker_overlay(object(),seed,boundary=boundary,account=account,pin=pin,expected_digest=digest)
-  except MbError: pass
-  else: raise AssertionError('existing candidate overlay overwritten')
-  terminate.assert_called_once_with(account)
-  assert (target/'src/mod_base/__init__.py').read_bytes()==b''
-print('independent plain worker overlay copy probe passed')
-"""
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", program, cwd=root)
-        self.assertEqual(result.stdout.strip(), b"independent plain worker overlay copy probe passed")
+    def test_candidate_that_already_wrote_its_cache_is_refused_with_nothing_published(self):
+        fixture = self.staging_fixture()
+        account = authenticate_worker_account("candidate")
+        self.as_candidate("/usr/bin/touch", str(Path(account.home) / "gradle-home" / "left-by-an-earlier-run"))
+        for seed in (fixture.seed, None):
+            with self.subTest(seeded=seed is not None):
+                with self.assertRaisesRegex(MbError, "allocated Gradle cache is not empty; refusing reuse"):
+                    self.stage(fixture, gradle_seed=seed)
+                self.assertEqual(self.published(), [])
+        self.assertTrue(self.candidate_terminated())
 
-
-class LinuxWorkerSourceCopyTests(unittest.TestCase):
-    """Real temporary tracked-source handoff with explicit outer role/account/location seams."""
-
-    def test_private_source_preserves_git_modes_and_never_chowns_link_target(self):
-        if sys.platform != "linux" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-            raise AssertionError("worker source copying requires the hosted Linux fixture")
-        root = Path(__file__).resolve().parents[1]
-        program = (
-            "import importlib.util,sys,pathlib,os,tempfile,stat,hashlib\n"
-            f"root=pathlib.Path({str(root)!r})\n"
-            "package=root/'src/mod_base'\n"
-            "spec=importlib.util.spec_from_file_location('mod_base',package/'__init__.py',submodule_search_locations=[str(package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['mod_base']=module;spec.loader.exec_module(module)\n"
-        ) + r"""
-from mod_base.build_ci import worker_source as source
-from mod_base.build_ci.source import GitSourceEntry
-from mod_base.build_ci.worker import WorkerAccount
-from mod_base.errors import MbError
-from unittest.mock import patch
-from types import SimpleNamespace
-assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
-with tempfile.TemporaryDirectory(prefix='mod-base-worker-source-') as directory:
- base=pathlib.Path(directory);seed=base/'seed';seed.mkdir(mode=0o700)
- outside=base/'outside';outside.write_bytes(b'protected sentinel');outside.chmod(0o600)
- target_bytes=os.fsencode(outside)
- fixture={'dir/empty':('100644',b''),'link':('120000',target_bytes),'script.sh':('100755',b'known script bytes')}
- # Git expectations are authored before any unknown source/copy hashes are read.
- inventory=tuple(GitSourceEntry(path,mode,len(data),hashlib.sha1(b'blob '+str(len(data)).encode('ascii')+b'\0'+data).hexdigest()) for path,(mode,data) in sorted(fixture.items()))
- for path,(mode,data) in fixture.items():
-  leaf=seed/path;leaf.parent.mkdir(parents=True,exist_ok=True)
-  if mode=='120000': os.symlink(data,leaf)
-  else: leaf.write_bytes(data);leaf.chmod(0o755 if mode=='100755' else 0o644)
- (seed/'.git').mkdir();(seed/'.git/config').write_bytes(b'opaque metadata must not be copied')
- worker_root=base/'worker';worker_root.mkdir()
- account=WorkerAccount('worker',2001,2001,str(worker_root/'worker-home'))
- boundary=SimpleNamespace(home=str(base),uid=1001,gid=121)
- before=outside.stat()
- def role(receipt): assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
- with patch.object(source,'WORKER_ROOT',pathlib.PurePosixPath(worker_root)),patch.object(source,'authenticate_privileged_host_boundary',role),patch.object(source,'authenticate_worker_account',return_value=account),patch.object(source,'_quiet'),patch.object(source,'terminate_worker') as terminate:
-  observed=source.stage_privileged_worker_source(seed,boundary=boundary,account=account,inventory=inventory)
-  repository=worker_root/'repository'
-  assert len(observed)==3 and not (repository/'.git').exists()
-  assert repository.stat().st_uid==repository.stat().st_gid==2001 and stat.S_IMODE(repository.stat().st_mode)==0o700
-  for path,(mode,data) in fixture.items():
-   leaf=repository/path;info=leaf.lstat()
-   assert info.st_uid==info.st_gid==2001 and info.st_ino!=(seed/path).lstat().st_ino
-   if mode=='120000': assert os.readlink(os.fsencode(leaf))==data
-   else: assert leaf.read_bytes()==data and stat.S_IMODE(info.st_mode)==(0o700 if mode=='100755' else 0o600)
-  after=outside.stat();assert (after.st_dev,after.st_ino,after.st_uid,after.st_gid,after.st_mode,after.st_ctime_ns)==(before.st_dev,before.st_ino,before.st_uid,before.st_gid,before.st_mode,before.st_ctime_ns)
-  assert outside.read_bytes()==b'protected sentinel'
-  terminate.assert_not_called()
-  try: source.stage_privileged_worker_source(seed,boundary=boundary,account=account,inventory=inventory)
-  except MbError: pass
-  else: raise AssertionError('existing worker repository overwritten')
-  terminate.assert_called_once_with(account)
-print('independent private worker source copy probe passed')
-"""
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", program, cwd=root)
-        self.assertEqual(result.stdout.strip(), b"independent private worker source copy probe passed")
-
-
-class LinuxWorkerGitCopyTests(unittest.TestCase):
-    """Real temporary Git-data curation with explicit outer checkout/role/account seams."""
-
-    def test_private_metadata_has_known_head_config_objects_and_no_source_tokens_or_hooks(self):
-        if sys.platform != "linux" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-            raise AssertionError("worker Git copying requires the hosted Linux fixture")
-        root = Path(__file__).resolve().parents[1]
-        program = (
-            "import importlib.util,sys,pathlib,os,tempfile,stat,hashlib\n"
-            f"root=pathlib.Path({str(root)!r})\n"
-            "package=root/'src/mod_base'\n"
-            "spec=importlib.util.spec_from_file_location('mod_base',package/'__init__.py',submodule_search_locations=[str(package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['mod_base']=module;spec.loader.exec_module(module)\n"
-        ) + r"""
-from mod_base.build_ci import worker_git as git
-from mod_base.build_ci.worker import WorkerAccount
-from mod_base.errors import MbError
-from unittest.mock import patch
-from types import SimpleNamespace
-spec=importlib.util.spec_from_file_location('authored_git_fixture',root/'tests/test_ci_git_fixture.py')
-fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)
-commit,tree,known=fixture.git_fixture()
-assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
-with tempfile.TemporaryDirectory(prefix='mod-base-worker-git-') as directory:
- base=pathlib.Path(directory);seed=base/'source-git';seed.mkdir(mode=0o700)
- for name,data in {**known,'HEAD':(commit+'\n').encode(),'config':b'[http]\n extraheader = fixture secret\n'}.items():
-  leaf=seed/name;leaf.parent.mkdir(parents=True,exist_ok=True);leaf.write_bytes(data);leaf.chmod(0o644)
- (seed/'hooks').mkdir();(seed/'hooks/post-checkout').write_bytes(b'fixture hook must not execute');(seed/'hooks/post-checkout').chmod(0o755)
- worker_root=base/'worker';repository=worker_root/'repository';repository.mkdir(mode=0o700,parents=True);os.chown(repository,2001,2001)
- account=WorkerAccount('worker',2001,2001,str(worker_root/'worker-home'))
- boundary=SimpleNamespace(home=str(base),uid=1001,gid=121)
- def role(receipt):assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
- with patch.object(git,'WORKER_ROOT',pathlib.PurePosixPath(worker_root)),patch.object(git,'authenticate_privileged_host_boundary',role),patch.object(git,'authenticate_worker_account',return_value=account),patch.object(git,'_quiet'),patch.object(git,'terminate_worker') as terminate:
-  observed=git.stage_privileged_worker_git(seed,boundary=boundary,account=account,repository='owner/project',tested_commit=commit)
-  output=repository/'.git'
-  assert output.stat().st_uid==output.stat().st_gid==2001 and stat.S_IMODE(output.stat().st_mode)==0o700
-  assert (output/'HEAD').read_bytes()==(commit+'\n').encode() and (output/'config').read_bytes()==git._configuration('owner/project')
-  assert not (output/'hooks').exists() and b'fixture secret' not in (output/'config').read_bytes()
-  for name,data in known.items():
-   leaf=output/name;info=leaf.stat()
-   assert leaf.read_bytes()==data and info.st_ino!=(seed/name).stat().st_ino
-   assert info.st_uid==info.st_gid==2001 and stat.S_IMODE(info.st_mode)==0o600
-  assert len(observed)==len(known)+2
-  terminate.assert_not_called()
-  try:git.stage_privileged_worker_git(seed,boundary=boundary,account=account,repository='owner/project',tested_commit=commit)
-  except MbError:pass
-  else:raise AssertionError('existing Git metadata overwritten')
-  terminate.assert_called_once_with(account)
-print('independent private worker Git data copy probe passed')
-"""
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", program, cwd=root)
-        self.assertEqual(result.stdout.strip(), b"independent private worker Git data copy probe passed")
-
-
-class LinuxWorkerPreparationTests(unittest.TestCase):
-    """Real temporary composed copying; outer API/checkout/host/account/runtime seams remain."""
-
-    def test_composed_source_git_cache_overlay_and_reserved_root_binding(self):
-        if sys.platform != "linux" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-            raise AssertionError("composed worker preparation requires the hosted Linux fixture")
-        root = Path(__file__).resolve().parents[1]
-        program = (
-            "import importlib.util,sys,pathlib,os,tempfile,stat,hashlib\n"
-            f"root=pathlib.Path({str(root)!r})\n"
-            "package=root/'src/mod_base'\n"
-            "spec=importlib.util.spec_from_file_location('mod_base',package/'__init__.py',submodule_search_locations=[str(package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['mod_base']=module;spec.loader.exec_module(module)\n"
-        ) + r"""
-from mod_base.build_ci import worker_preparation as prep,worker_source,worker_git,gradle_cache,worker_overlay
-from mod_base.build_ci.source import GitSourceEntry
-from mod_base.build_ci.worker import WorkerAccount
-from mod_base.model.canonical import canonical_json
-from mod_base.pin import Pin,stamp_document,STAMP_NAME
-from mod_base.errors import MbError
-from unittest.mock import patch
-from contextlib import ExitStack
-from types import SimpleNamespace
-spec=importlib.util.spec_from_file_location('authored_git_fixture',root/'tests/test_ci_git_fixture.py')
-fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)
-commit,tree,git_files=fixture.git_fixture()
-file_data=b'known tracked bytes\n'
-blob=hashlib.sha1(b'blob '+str(len(file_data)).encode()+b'\0'+file_data).hexdigest()
-inventory=(GitSourceEntry('file','100644',len(file_data),blob),)
-kit_files={'src/mod_base/__init__.py':b'','src/mod_base/template/staged_files.sha256':b''}
-listing=''.join(hashlib.sha256(data).hexdigest()+'  ./'+name+'\n' for name,data in sorted(kit_files.items()))
-digest='sha256:'+hashlib.sha256(listing.encode('ascii')).hexdigest();pin=Pin('a'*40,'v1.0.3',())
-identity={'repository':'owner/project','tested_sha':commit,'tested_tree':tree}
-assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
-with tempfile.TemporaryDirectory(prefix='mod-base-worker-preparation-') as directory:
- base=pathlib.Path(directory);source=base/'source';source.mkdir(mode=0o700);(source/'file').write_bytes(file_data)
- git_source=source/'.git';git_source.mkdir(mode=0o700)
- for name,data in {**git_files,'HEAD':(commit+'\n').encode(),'config':b'[http]\n extraheader = fixture secret\n'}.items():
-  leaf=git_source/name;leaf.parent.mkdir(parents=True,exist_ok=True);leaf.write_bytes(data);leaf.chmod(0o644)
- seed=base/'gradle-seed';seed.mkdir(mode=0o700);(seed/'caches').mkdir();(seed/'wrapper').mkdir()
- (seed/'caches/module.jar').write_bytes(b'known Gradle cache');(seed/'wrapper/empty').write_bytes(b'')
- overlay=base/'overlay';overlay.mkdir(mode=0o700)
- for top in ('src','site','requirements'):(overlay/top).mkdir()
- for name,data in kit_files.items():
-  leaf=overlay/name;leaf.parent.mkdir(parents=True,exist_ok=True);leaf.write_bytes(data);leaf.chmod(0o644)
- (overlay/STAMP_NAME).write_bytes(canonical_json(stamp_document(pin,digest)))
- worker_root=base/'worker';home=worker_root/'worker-home';home.mkdir(parents=True,mode=0o700);os.chown(home,2001,2001)
- cache=home/'gradle-home';cache.mkdir(mode=0o700);os.chown(cache,2001,2001);cache_id=(cache.stat().st_dev,cache.stat().st_ino)
- account=WorkerAccount('worker',2001,2001,str(home));boundary=SimpleNamespace(home=str(base),uid=1001,gid=121)
- def role(receipt):assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
- with ExitStack() as stack:
-  for component in (prep,worker_source,worker_git,gradle_cache,worker_overlay):
-   stack.enter_context(patch.object(component,'WORKER_ROOT',pathlib.PurePosixPath(worker_root)))
-   stack.enter_context(patch.object(component,'authenticate_privileged_host_boundary',role))
-   stack.enter_context(patch.object(component,'authenticate_worker_account',return_value=account))
-   stack.enter_context(patch.object(component,'_quiet'))
-   stack.enter_context(patch.object(component,'terminate_worker'))
-  stack.enter_context(patch.object(prep,'authenticate_source_inventory',return_value=inventory))
-  final_api=stack.enter_context(patch.object(prep,'authenticate_source_identity'))
-  stack.enter_context(patch.object(prep,'verify_released'));stack.enter_context(patch.object(worker_overlay,'verify_released'))
-  observed=prep.prepare_privileged_worker_checkout(object(),source,seed,overlay,boundary=boundary,account=account,identity=identity,pin=pin,expected_digest=digest)
-  repository=worker_root/'repository'
-  assert set(observed)=={'source','git','gradle','overlay'} and (repository/'file').read_bytes()==file_data
-  assert (repository/'.git/HEAD').read_bytes()==(commit+'\n').encode() and b'fixture secret' not in (repository/'.git/config').read_bytes()
-  assert (cache/'caches/module.jar').read_bytes()==b'known Gradle cache' and (cache/'wrapper/empty').read_bytes()==b''
-  assert (cache.stat().st_dev,cache.stat().st_ino)==cache_id
-  assert (repository/'out/mod-base-kit/site').is_dir() and (repository/'out/mod-base-kit/requirements').is_dir()
-  assert (repository/'out/mod-base-kit/src/mod_base/__init__.py').read_bytes()==b''
-  for private in (repository,repository/'.git',cache):
-   info=private.stat();assert info.st_uid==info.st_gid==2001 and stat.S_IMODE(info.st_mode)==0o700
-  assert (repository/'file').stat().st_ino!=(source/'file').stat().st_ino
-  final_api.assert_called_once()
-print('composed private worker checkout preparation probe passed')
-"""
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", program, cwd=root)
-        self.assertEqual(result.stdout.strip(), b"composed private worker checkout preparation probe passed")
+    def test_seed_with_configuration_is_refused_and_the_candidate_never_runs(self):
+        fixture = self.staging_fixture()
+        account = authenticate_worker_account("candidate")
+        (fixture.seed / "gradle.properties").write_bytes(b"orgSecret=fixture credential\n")
+        with self.assertRaisesRegex(MbError, "Gradle seed includes a configuration/credential or unexpected root"):
+            self.stage(fixture)
+        # The seed is admitted when its phase starts, after source and Git data were published:
+        # nothing of it was copied, the overlay phase never ran and the candidate is locked.
+        self.assertEqual(self.as_root("/usr/bin/find", str(Path(account.home) / "gradle-home"), "-mindepth", "1").stdout,
+                         b"")
+        self.assertTrue(self.candidate_terminated())
+        self.as_root("/usr/bin/test", "!", "-e", str(self.root / "repository" / "out"))
 
 
 if __name__ == "__main__":

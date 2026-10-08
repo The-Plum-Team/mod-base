@@ -2,8 +2,10 @@
 
 One document kind carries every operation of ``grammar.CI_ROOT_OPERATIONS``. Its ``operation``
 names fixed protected code and its ``arguments`` are a closed object per operation: no field holds
-a program, a hook or a destination path. Validation proves shape and internal consistency only;
-physical admission of the host, the accounts, the sources and the frozen inputs happens in root.
+a program, a hook or a destination path. ``stage-candidate`` alone names directories, and only ones
+root reads: the runner's own checkout, kit overlay and Gradle seed below its fenced home.
+Validation proves shape and internal consistency only; physical admission of the host, the
+accounts, the sources and the frozen inputs happens in root.
 """
 
 from __future__ import annotations
@@ -11,12 +13,15 @@ from __future__ import annotations
 from typing import Any
 
 from mod_base import readable_schema_versions
-from mod_base.build_ci.protocol import check_output_paths, repo_path, validate_plan
+from mod_base.build_ci.host import HOST_RUNNER_HOME, _canonical_path
+from mod_base.build_ci.protocol import REPO, check_output_paths, repo_path, validate_plan
 from mod_base.build_ci.records import bind_build_envelope, validate_build_envelope
 from mod_base.build_ci.runtime_schema import validate_runtime_envelope
+from mod_base.build_ci.source import GitSourceEntry, validate_source_inventory
+from mod_base.build_ci.worker import WorkerError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
-from mod_base.model.validators import Const, Int, List, Obj, Str, check, fail
+from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check, fail
 
 
 _SHA = Str(grammar.SHA256, max_len=64)
@@ -37,6 +42,18 @@ _ACCOUNT = Obj({"uid": _WORKER_ID, "gid": _WORKER_ID})
 _SOURCES = Obj({"controller_sha": _OID, "controller_tree": _OID, "config": _FILE,
                 "files": List(_FILE, min_items=3, max_items=limits.MAX_CI_ADAPTER_FILES,
                               unique_by=lambda file: file["path"])})
+_TRACKED = Obj({"path": repo_path, "mode": Str(choices=("100644", "100755", "120000")),
+                "size": Int(0, limits.MAX_CI_SOURCE_FILE_BYTES), "git_blob": _OID})
+
+
+def _home_path(value: Any, path: str) -> str:
+    """A directory root will read: canonical, absolute and strictly below the fenced runner home."""
+    try:
+        _canonical_path(value)
+    except WorkerError:
+        raise fail(path, "must be a canonical absolute POSIX path") from None
+    check(value.startswith(HOST_RUNNER_HOME + "/"), path, "must be below the fenced runner home")
+    return value
 
 
 def _plan(value: Any, path: str) -> dict[str, Any]:
@@ -98,9 +115,22 @@ def _runtime_validation(document: dict[str, Any], path: str) -> None:
     check(document["nonce"] != arguments["execution_nonce"], path, "root request needs a separate entry nonce")
 
 
+def _candidate_staging(document: dict[str, Any], path: str) -> None:
+    """The inventory is a complete one of the existing kind; root binds it to the tree and the bytes."""
+    validate_source_inventory(tuple(GitSourceEntry(**entry) for entry in document["arguments"]["inventory"]))
+
+
 #: Operation -> (closed argument object, cross-field checks over the whole request).
 _OPERATIONS = {
     "host-fence": (Obj({}), lambda document, path: None),
+    "stage-candidate": (
+        Obj({"candidate": _ACCOUNT, "repository": REPO,
+             "tested_sha": _OID, "tested_tree": _OID,
+             "inventory": List(_TRACKED, min_items=1, max_items=limits.MAX_CI_SOURCE_FILES),
+             "source": _home_path, "gradle_seed": Nullable(_home_path),
+             "overlay": Obj({"path": _home_path, "sha": _OID, "version": Str(grammar.VERSION, max_len=20),
+                             "tree_digest": Str(grammar.DIGEST, max_len=71)})}),
+        _candidate_staging),
     "freeze-build-validation": (
         Obj({"validator": _ACCOUNT, "sources": _SOURCES, "plan": _plan, "envelope": _envelope,
              "run_id": _RUN, "run_attempt": _ATTEMPT, "execution_nonce": _SHA}), _build_validation),

@@ -17,15 +17,17 @@ from mod_base.model import limits
 
 def stage_privileged_worker_source(root: Path, *, boundary: HostBoundary, account: WorkerAccount,
                                    inventory: tuple[GitSourceEntry, ...]) -> list[dict[str, Any]]:
-    """Exclusively copy protected-tested-tree source into the fixed candidate repository.
+    """Root-only: exclusively copy the tested tree's tracked files into the candidate repository.
 
-    Caller admits its original code/runtime, authenticated tested-tree inventory/source, native
-    policy, excluded writers and no previous candidate UID execution. Git metadata is omitted;
-    literal links are copied as data and never followed for ownership or privileged execution.
-    This does not authorize imports, native execution, validation or upload.
+    Caller admits its original code/runtime, the tested-tree inventory, native policy, excluded
+    writers and no previous candidate UID execution. The checkout must hold exactly the inventory:
+    an undeclared path, a hard link or a file of another type or mode is refused before anything
+    is published. Git metadata is omitted; tracked links are copied as data and never followed
+    for ownership or privileged execution. This does not authorize imports, native execution,
+    validation or upload.
     """
     authenticate_privileged_host_boundary(boundary)
-    actual = authenticate_worker_account('worker')
+    actual = authenticate_worker_account('candidate')
     if type(account) is not WorkerAccount or account != actual or account.uid == boundary.uid:
         raise WorkerError("source staging requires the fresh candidate account")
     source = parent = installed = None
@@ -48,7 +50,7 @@ def stage_privileged_worker_source(root: Path, *, boundary: HostBoundary, accoun
         destination = Path(str(WORKER_ROOT / 'repository'))
         def recheck() -> None:
             authenticate_privileged_host_boundary(boundary)
-            if authenticate_worker_account('worker') != account:
+            if authenticate_worker_account('candidate') != account:
                 raise WorkerError("source staging worker identity changed")
             _quiet(account)
             named_source = _open_directory(tuple(path.parts[1:]))

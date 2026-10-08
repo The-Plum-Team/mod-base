@@ -167,6 +167,16 @@ the release change. Pages formats, `ADAPTER_API` and `pixel_metrics_version` rem
   remains reachable on the root filesystem outside the worker boundary. Tool roots are admitted
   by ownership and mode wherever they live (`TOOL_INSTALL_PREFIXES` and `TOOL_LINK_PREFIXES` are
   gone), and a directory that carries a default ACL is never part of an admitted tool tree.
+- Stage the candidate's checkout through the new root operation `stage-candidate`. The staging
+  modules could never run: they asked for a `worker` role and a `worker-home` that do not exist
+  (the roles are `candidate` and `validator`), left `repository/out` to root so a build could not
+  write beside the kit overlay, and read the tested tree and the pin's release through the GitHub
+  API as root. The runner now passes the tested commit, tree and complete inventory in its private
+  request (`root_request.request_candidate_staging`); root recomputes the tree's Git name from the
+  inventory, requires the checkout to hold exactly those bytes with a HEAD detached at the tested
+  commit, and publishes tracked source, a curated `.git`, the kit overlay and an optional Gradle
+  seed for the candidate alone. `out` belongs to the candidate, the seed is optional, and a
+  populated root is never reused.
 - Add a local-only execution handoff v1 kind and private runner-to-root Build result data
   channel, with strict binary-log/context/nonce binding and independent receipt freeze.
   Genuine execution/native validity and enrolled root-program/import provenance remain required.

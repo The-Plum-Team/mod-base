@@ -1,128 +1,28 @@
-"""Private Gradle handoff orchestration; OS/data seams do not establish hosted isolation."""
+"""Gradle seed admission over real temporary caches.
+
+Nothing here replaces a part of the module: every case walks, reads or copies real files. The
+handoff to the candidate needs root and a really allocated account and runs in
+``tests/ci_linux_worker.py``.
+"""
 
 import hashlib
 import os
-import stat
+import sys
 import tempfile
 import unittest
-from contextlib import ExitStack, nullcontext
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 from mod_base.build_ci import gradle_cache as cache
-from mod_base.build_ci.worker import WorkerAccount, WorkerError
+from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount
 from mod_base.errors import MbError
 from mod_base.io import tree
 from mod_base.model import limits
-from tests.helpers import ci_stat as info
 from tests.test_ci_host import BOUNDARY
 
 
-ACCOUNT = WorkerAccount("worker", 2001, 2001, "/tmp/mod-base-sandbox-boundary/mod-base-worker/worker-home")
-SEED = Path("/home/runner/gradle-seed")
-RECORDS = [{"path": "caches/module.jar", "size": 3, "sha256": "a" * 64}]
-
-
-class GradleCacheTests(unittest.TestCase):
-    def seams(self, stack):
-        host = stack.enter_context(patch.object(cache, "authenticate_privileged_host_boundary"))
-        account = stack.enter_context(patch.object(cache, "authenticate_worker_account", return_value=ACCOUNT))
-        quiet = stack.enter_context(patch.object(cache, "_quiet"))
-        close = stack.enter_context(patch.object(cache.os, "close"))
-        stack.enter_context(patch.object(cache, "_open_directory", side_effect=lambda parts: 7 if parts[-1] == "gradle-seed" else 8))
-        stats = {7: info(inode=7, uid=BOUNDARY.uid, gid=BOUNDARY.gid, mode=stat.S_IFDIR | 0o700),
-                 8: info(inode=8, uid=ACCOUNT.uid, gid=ACCOUNT.gid, mode=stat.S_IFDIR | 0o700)}
-        stack.enter_context(patch.object(cache.os, "fstat", side_effect=lambda fd: stats[fd]))
-        listing = SimpleNamespace(names=["caches", "wrapper"], occupied=False)
-        def scan(fd):
-            names = listing.names if fd == 7 else ["existing"] if listing.occupied else []
-            return nullcontext(iter(SimpleNamespace(name=name, stat=lambda **kw: info()) for name in names))
-        stack.enter_context(patch.object(cache.os, "scandir", side_effect=scan))
-        for name in ("fchown", "fchmod"):
-            stack.enter_context(patch.object(cache.os, name, create=True))
-        records = stack.enter_context(patch.object(cache, "_records", return_value=RECORDS))
-        copied = stack.enter_context(patch.object(cache, "copy_regular_data_files", return_value=RECORDS))
-        private = stack.enter_context(patch.object(cache, "privatize_regular_data_copy", return_value=RECORDS))
-        access = stack.enter_context(patch.object(cache, "authenticate_tree_private_access"))
-        terminate = stack.enter_context(patch.object(cache, "terminate_worker"))
-        return host, account, quiet, stats, listing, records, copied, private, access, terminate
-
-    def test_private_copy_matches_source_and_bp_caps_before_handoff(self):
-        with ExitStack() as stack:
-            host, account, quiet, stats, listing, records, copied, private, access, terminate = self.seams(stack)
-            self.assertEqual(RECORDS, cache.stage_privileged_gradle_cache(SEED, boundary=BOUNDARY, account=ACCOUNT))
-            self.assertEqual(4, records.call_count)
-            self.assertEqual((250000, 200000, 2 * 1024**3, 20 * 1024**3),
-                (cache._BOUNDS["max_entries"], cache._BOUNDS["max_files"], cache._BOUNDS["max_file_bytes"], cache._BOUNDS["max_total_bytes"]))
-            copied.assert_called_once_with(SEED, 8, **cache._BOUNDS)
-            self.assertEqual(private.call_args.kwargs, {"source_owner_uid": 0, "owner_uid": ACCOUNT.uid,
-                                                       "owner_gid": ACCOUNT.gid, **cache._BOUNDS})
-            self.assertGreaterEqual(quiet.call_count, 5)
-            access.assert_called_once()
-            terminate.assert_not_called()
-
-    def test_bad_role_or_account_never_touches_the_cache(self):
-        with ExitStack() as stack:
-            host, account, quiet, *rest = self.seams(stack)
-            host.side_effect = WorkerError("role")
-            with self.assertRaises(WorkerError):
-                cache.stage_privileged_gradle_cache(SEED, boundary=BOUNDARY, account=ACCOUNT)
-            account.assert_not_called()
-            host.side_effect = None
-            with self.assertRaises(WorkerError):
-                cache.stage_privileged_gradle_cache(SEED, boundary=BOUNDARY, account=object())
-            quiet.assert_not_called()
-
-    def test_wrong_source_shape_path_or_existing_cache_locks_the_worker(self):
-        for kind in ("credentials", "config", "path", "occupied", "owner", "quiet"):
-            with self.subTest(kind=kind), ExitStack() as stack:
-                host, account, quiet, stats, listing, records, copied, private, access, terminate = self.seams(stack)
-                seed = SEED
-                if kind in ("credentials", "config"):
-                    listing.names = ["caches", ".credentials" if kind == "credentials" else "gradle.properties"]
-                elif kind == "path":
-                    seed = Path("/tmp/unprotected")
-                elif kind == "occupied":
-                    listing.occupied = True
-                elif kind == "owner":
-                    stats[8] = info(inode=8, uid=1001, mode=stat.S_IFDIR | 0o700)
-                else:
-                    quiet.side_effect = WorkerError("running UID")
-                with self.assertRaises(WorkerError):
-                    cache.stage_privileged_gradle_cache(seed, boundary=BOUNDARY, account=ACCOUNT)
-                copied.assert_not_called()
-                terminate.assert_called_once_with(ACCOUNT)
-
-    def test_copy_source_handoff_and_os_failures_never_return_cache_authority(self):
-        for kind in ("copied", "source", "handoff", "private", "os"):
-            with self.subTest(kind=kind), ExitStack() as stack:
-                host, account, quiet, stats, listing, records, copied, private, access, terminate = self.seams(stack)
-                if kind == "copied":
-                    copied.return_value = []
-                elif kind == "source":
-                    records.side_effect = [RECORDS, []]
-                elif kind == "handoff":
-                    private.return_value = []
-                elif kind == "private":
-                    access.side_effect = WorkerError("wrong private ownership")
-                else:
-                    copied.side_effect = OSError("read failed")
-                with self.assertRaises(WorkerError):
-                    cache.stage_privileged_gradle_cache(SEED, boundary=BOUNDARY, account=ACCOUNT)
-                terminate.assert_called_once_with(ACCOUNT)
-
-    def test_directory_substitution_is_rejected(self):
-        with ExitStack() as stack:
-            host, account, quiet, stats, listing, records, copied, private, access, terminate = self.seams(stack)
-            def mutate(*args, **kwargs):
-                stats[7] = info(inode=70, uid=BOUNDARY.uid, gid=BOUNDARY.gid, mode=stat.S_IFDIR | 0o700)
-                return RECORDS
-            copied.side_effect = mutate
-            with self.assertRaises(WorkerError):
-                cache.stage_privileged_gradle_cache(SEED, boundary=BOUNDARY, account=ACCOUNT)
-            private.assert_not_called()
-            terminate.assert_called_once_with(ACCOUNT)
+#: A candidate as passwd would describe it; no test here lets code act for this account.
+CANDIDATE = WorkerAccount("candidate", 2001, 2001, str(WORKER_ROOT / "candidate-home"))
+LINUX = sys.platform == "linux"
 
 
 class SeedInventoryTests(unittest.TestCase):
@@ -193,3 +93,71 @@ class SeedInventoryTests(unittest.TestCase):
                 self.setUp()
                 mutate()
                 self.refused()
+
+
+@unittest.skipUnless(LINUX, "seed admission walks real no-follow descriptors on Linux")
+class SeedRootTests(unittest.TestCase):
+    """What may sit at the root of a seed: the two conventional directories, by name and type."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.seed = Path(temporary.name).resolve() / "seed"
+        self.seed.mkdir()
+
+    def check(self):
+        descriptor = os.open(self.seed, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            cache._seed_roots(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def test_caches_and_wrapper_directories_alone_are_a_seed(self):
+        self.check()  # A cache that was never filled is a seed with nothing to copy.
+        (self.seed / "caches").mkdir()
+        self.check()
+        (self.seed / "wrapper").mkdir()
+        (self.seed / "caches" / "gradle.properties").write_bytes(b"below a cache directory this is data")
+        self.check()
+
+    def test_configuration_credentials_and_any_other_root_entry_are_refused_by_name(self):
+        (self.seed / "caches").mkdir()
+        entries = {
+            "gradle.properties": lambda path: path.write_bytes(b"orgSecret=fixture\n"),
+            "init.d": lambda path: path.mkdir(),
+            "daemon": lambda path: path.mkdir(),
+            "Caches": lambda path: path.mkdir(),
+            ".tmp": lambda path: path.mkdir(),
+        }
+        for name, create in entries.items():
+            with self.subTest(name=name):
+                create(self.seed / name)
+                with self.assertRaisesRegex(MbError, "configuration/credential or unexpected root"):
+                    self.check()
+                (self.seed / name).rmdir() if (self.seed / name).is_dir() else (self.seed / name).unlink()
+        self.check()
+
+    def test_a_conventional_name_must_be_a_real_directory(self):
+        elsewhere = self.seed.parent / "elsewhere"
+        elsewhere.mkdir()
+        for name, create in (("file", lambda path: path.write_bytes(b"not a directory")),
+                             ("symlink", lambda path: path.symlink_to(elsewhere)),
+                             ("fifo", lambda path: os.mkfifo(path))):
+            with self.subTest(name=name):
+                create(self.seed / "wrapper")
+                with self.assertRaisesRegex(MbError, "root child is not a real directory"):
+                    self.check()
+                (self.seed / "wrapper").unlink()
+
+
+@unittest.skipUnless(LINUX, "the staging entries are Linux-only")
+class RootOnlyTests(unittest.TestCase):
+    def test_staging_refuses_the_unprivileged_runner_before_it_looks_at_the_seed(self):
+        if os.getuid() == 0:
+            self.skipTest("the unit suite runs as the unprivileged runner")
+        with self.assertRaisesRegex(MbError, "requires protected root setup"):
+            cache.stage_privileged_gradle_cache(Path("/home/runner/absent-seed"), boundary=BOUNDARY, account=CANDIDATE)
+
+
+if __name__ == "__main__":
+    unittest.main()

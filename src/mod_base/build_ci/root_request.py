@@ -35,7 +35,8 @@ from mod_base.build_ci.inputs import _accounts, _inspect_inputs, _layout
 from mod_base.build_ci.root_request_schema import validate_root_request
 from mod_base.build_ci.runtime_handoff import _context as _runtime_context
 from mod_base.build_ci.runtime_inputs import _inspect_inputs as _inspect_runtime_inputs, _retained
-from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError
+from mod_base.build_ci.source import GitSourceEntry, validate_source_inventory
+from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, authenticate_worker_account
 from mod_base.errors import single_line
 from mod_base.io.atomic_directory import atomic_directory, write_new
 from mod_base.io.secure_json import loads
@@ -43,6 +44,7 @@ from mod_base.io.tree import authenticate_tree_private_access, authenticate_tree
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.validators import check
+from mod_base.pin import Pin
 
 
 ROOT_PROGRAM = "tools/ci_privileged_bootstrap.py"
@@ -148,6 +150,46 @@ def request_host_fence(*, boundary: HostBoundary) -> str:
     request carries nothing but the home fence receipt.
     """
     return _publish("host-fence", boundary, {})
+
+
+def request_candidate_staging(*, boundary: HostBoundary, candidate: WorkerAccount, repository: str,
+                              tested_sha: str, tested_tree: str, inventory: tuple[GitSourceEntry, ...],
+                              source: Path, overlay: Path, pin: Pin, expected_digest: str,
+                              gradle_seed: Path | None = None) -> str:
+    """Runner-only request to stage the candidate's checkout; return the request nonce.
+
+    Made once, after both accounts were allocated and before the candidate ever runs. The caller
+    has authenticated the tested commit and tree, holds the tree's complete inventory and has
+    established that ``pin`` is a released kit commit: root repeats none of that, because it
+    never calls the API. ``source`` is the runner's checkout of the tested commit, detached at it;
+    ``overlay`` a staged kit of ``pin`` with its stamp, of digest ``expected_digest``;
+    ``gradle_seed`` an optional restored cache. All three lie below the fenced runner home, where
+    root reads them and no worker account reaches them.
+    """
+    try:
+        authenticate_host_boundary(boundary)
+
+        def accounts() -> None:
+            check(_accounts(boundary, authenticate_worker_account("validator")) == candidate,
+                  "$.candidate", "staging requires the live fixed candidate account")
+
+        accounts()
+        validate_source_inventory(inventory)
+        if (not isinstance(source, Path) or not isinstance(overlay, Path)
+                or not (gradle_seed is None or isinstance(gradle_seed, Path))
+                or type(pin) is not Pin or type(pin.version) is not str or not pin.version.startswith("v")):
+            raise WorkerError("candidate staging requires protected source paths and a kit pin")
+        arguments = {"candidate": {"uid": candidate.uid, "gid": candidate.gid}, "repository": repository,
+                     "tested_sha": tested_sha, "tested_tree": tested_tree,
+                     "inventory": [{"path": entry.path, "mode": entry.mode, "size": entry.size,
+                                    "git_blob": entry.git_blob} for entry in inventory],
+                     "source": source.as_posix(),
+                     "gradle_seed": None if gradle_seed is None else gradle_seed.as_posix(),
+                     "overlay": {"path": overlay.as_posix(), "sha": pin.sha, "version": pin.version[1:],
+                                 "tree_digest": expected_digest}}
+        return _publish("stage-candidate", boundary, arguments, before_publish=accounts)
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
 
 
 def request_build_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount,

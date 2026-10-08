@@ -1061,6 +1061,19 @@ def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any
     validator = {"uid": 2001, "gid": 2001}
     if operation == "host-fence":
         arguments = {}
+    elif operation == "stage-candidate":
+        data = b"known tracked bytes\n"
+        blob = hashlib.sha1(b"blob %d\x00" % len(data) + data)
+        # The one-file inventory hashes to the tree named beside it, as root requires.
+        tree = hashlib.sha1(b"tree 32\x00" + b"100644 file\x00" + blob.digest())
+        arguments = {"candidate": {"uid": 2002, "gid": 2002}, "repository": plan["identity"]["repository"],
+                     "tested_sha": plan["identity"]["tested_sha"], "tested_tree": tree.hexdigest(),
+                     "inventory": [{"path": "file", "mode": "100644", "size": len(data),
+                                    "git_blob": blob.hexdigest()}],
+                     "source": "/home/runner/work/project/project/candidate",
+                     "gradle_seed": "/home/runner/work/_temp/gradle-seed",
+                     "overlay": {"path": "/home/runner/work/_temp/kit-overlay", "sha": "a" * 40,
+                                 "version": "1.0.3", "tree_digest": "sha256:" + "b" * 64}}
     elif operation == "freeze-build-validation":
         arguments = {"validator": validator, "sources": sources, "plan": plan, "envelope": ci_envelope(),
                      "run_id": 42, "run_attempt": 2, "execution_nonce": h("execution-nonce")}
@@ -1147,6 +1160,7 @@ def sample_documents() -> dict[str, dict[str, Any]]:
         "ci-root-request": ci_root_request(),
         "ci-root-request-runtime": ci_root_request("freeze-runtime-validation"),
         "ci-root-request-fence": ci_root_request("host-fence"),
+        "ci-root-request-staging": ci_root_request("stage-candidate"),
         "expectation": expectation(),
         "handoff": handoff(),
         "compact": compact(),
@@ -1181,6 +1195,7 @@ VALID_FIXTURE_KINDS = {
     "ci-root-request": "mod-base.ci.root-request",
     "ci-root-request-runtime": "mod-base.ci.root-request",
     "ci-root-request-fence": "mod-base.ci.root-request",
+    "ci-root-request-staging": "mod-base.ci.root-request",
     "expectation": "mod-base.evidence.expectation",
     "handoff": "mod-base.evidence.handoff",
     "compact": "mod-base.evidence.compact",

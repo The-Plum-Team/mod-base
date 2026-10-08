@@ -34,7 +34,7 @@ def _stamp(info: os.stat_result) -> tuple[int, ...]:
 def _quiet(account: WorkerAccount) -> None:
     if _control(("/usr/bin/pgrep", "-u", str(account.uid)), timeout=limits.CI_TERMINATION_GRACE_SECONDS,
                 accepted=frozenset({1})) != b"":
-        raise WorkerError("Gradle seed staging requires a quiescent fresh worker UID")
+        raise WorkerError("candidate staging requires a quiescent fresh candidate UID")
 
 
 def _records(seed: Path) -> list[dict[str, Any]]:
@@ -42,19 +42,33 @@ def _records(seed: Path) -> list[dict[str, Any]]:
     return regular_data_records(seed, **_BOUNDS)
 
 
+def _seed_roots(seed: int) -> None:
+    """A seed root holds the conventional ``caches`` and ``wrapper`` directories and nothing else.
+
+    ``gradle.properties``, ``init.d`` and every other configuration or credential a Gradle user
+    home may carry are refused by name, before any byte below the root is read.
+    """
+    with os.scandir(seed) as entries:
+        for entry in entries:
+            if entry.name not in {"caches", "wrapper"}:
+                raise WorkerError("Gradle seed includes a configuration/credential or unexpected root")
+            if not stat.S_ISDIR(entry.stat(follow_symlinks=False).st_mode):
+                raise WorkerError("Gradle seed root child is not a real directory")
+
+
 def stage_privileged_gradle_cache(seed: Path, *, boundary: HostBoundary,
                                  account: WorkerAccount) -> list[dict[str, Any]]:
-    """Populate the originally empty allocated cache, then grant private worker access.
+    """Root-only: populate the candidate's empty allocated cache from a seed, then hand it over.
 
-    Root original caller/runtime enrollment is required. Only conventional caches/wrapper seed
-    directories are copied; configuration/credential paths at the seed root reject. This shape
-    check cannot certify absence of secrets in arbitrary data: protected restoration policy owns
-    that prerequisite. Any admitted staging failure terminates/locks the worker and returns no
-    execution authority. Partial bytes can remain inaccessible in the fixed private cache.
+    Only the conventional caches/wrapper seed directories are copied; configuration/credential
+    paths at the seed root reject. This shape check cannot certify absence of secrets in arbitrary
+    data: protected restoration policy owns that prerequisite. Any admitted staging failure
+    terminates/locks the candidate and returns no execution authority. Partial bytes can remain
+    inaccessible in the fixed private cache.
     """
 
     authenticate_privileged_host_boundary(boundary)
-    actual = authenticate_worker_account("worker")
+    actual = authenticate_worker_account("candidate")
     if type(account) is not WorkerAccount or account != actual or account.uid == boundary.uid:
         raise WorkerError("Gradle cache handoff requires the fresh candidate account")
     source = destination = None
@@ -69,16 +83,9 @@ def stage_privileged_gradle_cache(seed: Path, *, boundary: HostBoundary,
         original = os.fstat(source)
         if original.st_uid not in (0, boundary.uid) or original.st_mode & 0o022:
             raise WorkerError("Gradle seed root has unsafe ownership or permissions")
-        with os.scandir(source) as entries:
-            names = set()
-            for entry in entries:
-                if entry.name not in {"caches", "wrapper"} or entry.name in names:
-                    raise WorkerError("Gradle seed includes a configuration/credential or unexpected root")
-                names.add(entry.name)
-                if not stat.S_ISDIR(entry.stat(follow_symlinks=False).st_mode):
-                    raise WorkerError("Gradle seed root child is not a real directory")
+        _seed_roots(source)
         expected = _records(seed)
-        target = Path(str(WORKER_ROOT / "worker-home" / "gradle-home"))
+        target = Path(str(WORKER_ROOT / "candidate-home" / "gradle-home"))
         destination = _open_directory(tuple(target.parts[1:]))
         allocated = os.fstat(destination)
         if (not stat.S_ISDIR(allocated.st_mode) or (allocated.st_uid, allocated.st_gid) != (account.uid, account.gid)
@@ -93,7 +100,7 @@ def stage_privileged_gradle_cache(seed: Path, *, boundary: HostBoundary,
 
         def recheck() -> None:
             authenticate_privileged_host_boundary(boundary)
-            if authenticate_worker_account("worker") != account:
+            if authenticate_worker_account("candidate") != account:
                 raise WorkerError("Gradle cache worker identity changed")
             _quiet(account)
             current = _open_directory(tuple(path.parts[1:]))
