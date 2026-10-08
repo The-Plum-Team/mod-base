@@ -43,6 +43,42 @@ from mod_base.io.tree import copy_source_files, source_records
 
 
 HOST_ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+KIT = Path(__file__).resolve().parents[1]
+#: The interpreter's import roots: its installation and, when it runs from one, its virtual
+#: environment. On a hosted runner both are the one setup-python prefix.
+PYTHON_ROOTS = tuple(dict.fromkeys((sys.base_prefix, sys.prefix)))
+_FENCED = []
+
+
+def fence_host(boundary):
+    """Run the real root operation: this checkout's bootstrap, through sudo, for a published request."""
+    from mod_base.build_ci.root_request import request_host_fence, run_root_operation
+    from mod_base.pin import kit_tree_digest
+    digest = kit_tree_digest(KIT)
+    nonce = request_host_fence(boundary=boundary)
+    started = time.monotonic()
+    try:
+        run_root_operation("host-fence", python=sys.executable, kit_root=KIT, kit_digest=digest, nonce=nonce)
+    finally:
+        # The first line of a run is the cost of closing the image; later ones only walk it.
+        print(f"host fence root operation: {time.monotonic() - started:.2f}s", file=sys.stderr)
+
+
+def fence_host_once(boundary):
+    """The fence changes the host for good; the first fixture of a process pays for it.
+
+    A failure is kept as well: every later fixture then fails at once with the first error
+    instead of walking the image again.
+    """
+    if not _FENCED:
+        try:
+            fence_host(boundary)
+        except MbError as error:
+            _FENCED.append(error)
+            raise
+        _FENCED.append(None)
+    elif _FENCED[0] is not None:
+        raise AssertionError("the host fence of this process already failed") from _FENCED[0]
 
 
 def command(*args, accepted=(0,), cwd=None):
@@ -53,7 +89,11 @@ def command(*args, accepted=(0,), cwd=None):
     return result
 
 
-class LinuxWorkerTests(unittest.TestCase):
+class HostedWorkerCase(unittest.TestCase):
+    """A fresh boundary, the runner's home fence, the host fence and (by default) both accounts."""
+
+    allocate = True
+
     def setUp(self):
         if sys.platform != "linux" or os.environ.get("GITHUB_ACTIONS") != "true" \
                 or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
@@ -80,9 +120,9 @@ class LinuxWorkerTests(unittest.TestCase):
         self.host_boundary = protect_worker_host(runner_environment="github-hosted", runner_home="/home/runner",
                                                   workspace=os.environ["GITHUB_WORKSPACE"],
                                                   runner_temp=os.environ["RUNNER_TEMP"])
-        for role, name in WORKER_ACCOUNTS.items():
-            account = allocate_worker_account(role)
-            self.accounts.append((role, account.uid, account.gid))
+        if self.allocate:
+            fence_host_once(self.host_boundary)
+            self.allocate_accounts()
         self.private = self.boundary / "private-controller-probe"
         self.private.write_bytes(b"inert private fixture")
         self.private.chmod(0o600)
@@ -94,11 +134,10 @@ class LinuxWorkerTests(unittest.TestCase):
         self.host_marker.write_bytes(b"inert host boundary fixture")
         self.host_marker.chmod(0o644)
 
-    def test_existing_boundary_is_not_adopted_or_replaced(self):
-        with self.assertRaises(MbError):
-            prepare_worker_boundary(runner_environment="github-hosted")
-        self.assertEqual(stat.S_IMODE(self.boundary.stat().st_mode), 0o711)
-        self.assertEqual(stat.S_IMODE(self.root.stat().st_mode), 0o711)
+    def allocate_accounts(self):
+        for role in WORKER_ACCOUNTS:
+            account = allocate_worker_account(role)
+            self.accounts.append((role, account.uid, account.gid))
 
     def cleanup(self):
         import pwd
@@ -146,6 +185,142 @@ class LinuxWorkerTests(unittest.TestCase):
                        "--no-new-privs", "--", "/usr/bin/env", "-i", f"--chdir={account.home}",
                        "PATH=/usr/bin:/bin", *args, accepted=accepted, cwd=self.root)
 
+
+class LinuxHostFenceTests(HostedWorkerCase):
+    """The real root fence over a stand-in with a hosted image's modes, before any account exists."""
+
+    allocate = False
+
+    def setUp(self):
+        super().setUp()
+        self.planted = []
+        self.addCleanup(lambda: [command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--", str(path))
+                                 for path in self.planted])
+
+    def plant(self, parent):
+        """A runner-owned tree as the image build leaves the tool cache: 0777, default ACL other::rwx."""
+        root = Path(parent) / f"mod-base-fence-standin-{os.getpid()}-{len(self.planted)}"
+        self.planted.append(root)
+        command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "--", str(root))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chown", f"{os.getuid()}:{os.getgid()}", "--", str(root))
+        (root / "Python/3.99.0/x64/bin").mkdir(parents=True)
+        (root / "Python/3.99.0/x64/lib").mkdir()
+        (root / "Python/3.99.0/x64/bin/python3").write_bytes(b"inert stand-in interpreter")
+        (root / "Python/3.99.0/x64/lib/os.py").write_bytes(b"inert stand-in module\n")
+        (root / "Python/3.99.0/x64/bin/python").symlink_to("python3")
+        (root / "Ruby").mkdir()
+        command("/usr/bin/setfacl", "-R", "-d", "-m", "u::rwx,u:runner:rwx,g::rwx,m::rwx,o::rwx", str(root))
+        # What is installed below a default ACL inherits an access ACL with a named user and a mask.
+        (root / "Python/3.99.0/x64/lib/inherited").mkdir()
+        (root / "Python/3.99.0/x64/lib/inherited/module.py").write_bytes(b"inert stand-in module\n")
+        for path in (root, *root.rglob("*")):
+            if not path.is_symlink():
+                path.chmod(0o777)
+        (root / "Ruby").chmod(0o1777)
+        return root
+
+    def test_hosted_like_tree_is_closed_before_accounts_and_no_worker_can_write_it(self):
+        root = self.plant("/opt")
+        prefix = root / "Python/3.99.0/x64"
+        inherited = prefix / "lib/inherited/module.py"
+        self.assertIn("system.posix_acl_default", os.listxattr(prefix))
+        self.assertIn("system.posix_acl_access", os.listxattr(inherited))
+        with self.assertRaisesRegex(MbError, "group/other write"):
+            inspect_worker_toolchains(boundary=self.host_boundary, roots=(str(prefix),))
+        fence_host(self.host_boundary)
+        # The inherited access ACL stays, capped by its mask: mode bits are all a later check needs.
+        self.assertIn("system.posix_acl_access", os.listxattr(inherited))
+        self.assertEqual(stat.S_IMODE(inherited.stat().st_mode), 0o755)
+        for path in (root, *root.rglob("*")):
+            if path.is_symlink():
+                continue
+            info = path.stat()
+            self.assertEqual(stat.S_IMODE(info.st_mode) & 0o022, 0, path)
+            self.assertEqual(info.st_uid, os.getuid())
+            if path.is_dir():
+                self.assertNotIn("system.posix_acl_default", os.listxattr(path), path)
+        self.assertEqual(stat.S_IMODE((root / "Ruby").stat().st_mode), 0o1755)
+        self.assertEqual(stat.S_IMODE((prefix / "bin/python3").stat().st_mode), 0o755)
+        self.assertEqual((prefix / "bin/python3").read_bytes(), b"inert stand-in interpreter")
+        (prefix / "lib/created-after").mkdir()
+        (prefix / "lib/created-after.py").write_bytes(b"")
+        for name in ("lib/created-after", "lib/created-after.py"):
+            self.assertEqual(stat.S_IMODE((prefix / name).stat().st_mode) & 0o022, 0)
+        # The same stand-in is now an admissible tool root, wherever it lives.
+        proof = inspect_worker_toolchains(boundary=self.host_boundary, roots=(str(prefix),))
+        self.assertEqual(proof.files, 5)
+        _execution_tool_paths(proof, self.host_boundary, str(prefix / "bin/python"), str(prefix))
+        for sticky in ("/tmp", "/var/tmp"):
+            self.assertEqual(stat.S_IMODE(Path(sticky).stat().st_mode), 0o1777)
+        self.allocate_accounts()
+        for role in WORKER_ACCOUNTS:
+            for path in (root, prefix, prefix / "bin", prefix / "bin/python3", prefix / "lib/os.py", inherited,
+                         inherited.parent, root / "Ruby", Path("/opt"), Path("/usr/local/bin"), Path("/usr/share")):
+                with self.subTest(role=role, path=path):
+                    self.assertEqual(self.as_worker(role, "/usr/bin/test", "-w", str(path), accepted=(0, 1)).returncode, 1)
+            self.assertEqual(self.as_worker(role, "/usr/bin/cat", str(prefix / "lib/os.py")).stdout,
+                             b"inert stand-in module\n")
+            self.assertEqual(self.as_worker(role, "/usr/bin/touch", str(prefix / "lib/planted.pth"),
+                                            accepted=(0, 1)).returncode, 1)
+            self.assertEqual(self.as_worker(role, "/usr/bin/test", "-w", "/tmp").returncode, 0)
+
+    def test_anything_world_writable_left_outside_the_fenced_trees_fails_closed(self):
+        from mod_base.build_ci.root_request import root_request_path
+        for kind in ("directory", "file"):
+            with self.subTest(kind=kind):
+                stray = Path("/var/lib") / f"mod-base-fence-stray-{os.getpid()}-{kind}"
+                self.planted.append(stray)
+                command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "--", str(stray))
+                leaf = stray if kind == "directory" else stray / "leaf"
+                if kind == "file":
+                    command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(leaf))
+                command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0777" if kind == "directory" else "0666", "--", str(leaf))
+                with self.assertRaises(MbError) as caught:
+                    fence_host(self.host_boundary)
+                self.assertIn("world-writable", str(caught.exception))
+                self.assertIn(str(leaf), str(caught.exception))
+                self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o777 if kind == "directory" else 0o666)
+                command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--", str(stray))
+                # One request per operation and boundary: the failed one is never reused.
+                shutil.rmtree(Path(str(root_request_path("host-fence"))))
+        # A world-writable file only its existing owner can reach is no entry for a later account.
+        hidden = Path(os.environ["RUNNER_TEMP"]) / f"mod-base-fence-hidden-{os.getpid()}"
+        hidden.mkdir(mode=0o700)
+        self.addCleanup(shutil.rmtree, hidden)
+        (hidden / "cache.lock").write_bytes(b"")
+        (hidden / "cache.lock").chmod(0o666)
+        fence_host(self.host_boundary)
+
+    def test_default_acl_the_fence_cannot_remove_fails_the_operation_with_the_tool_diagnostic(self):
+        root = self.plant("/opt")
+        prefix = root / "Python/3.99.0/x64"
+        locked = prefix / "lib"
+        locked.chmod(0o755)  # No write bit is left on it: only the default ACL, which the proof cannot see.
+        command("/usr/bin/sudo", "-n", "/usr/bin/chattr", "+i", "--", str(locked))
+        self.addCleanup(command, "/usr/bin/sudo", "-n", "/usr/bin/chattr", "-i", "--", str(locked))
+        with self.assertRaisesRegex(MbError, "host fence command failed: setfacl: .*Operation not permitted"):
+            fence_host(self.host_boundary)
+        self.assertIn("system.posix_acl_default", os.listxattr(locked))
+        # Everything else was closed, and the tool scan refuses the directory the fence could not finish.
+        self.assertEqual(stat.S_IMODE((prefix / "bin/python3").stat().st_mode), 0o755)
+        with self.assertRaisesRegex(MbError, "default ACL"):
+            inspect_worker_toolchains(boundary=self.host_boundary, roots=(str(prefix),))
+
+    def test_fence_refuses_to_run_once_a_worker_account_exists(self):
+        fence_host_once(self.host_boundary)
+        self.allocate_accounts()
+        shutil.rmtree(Path(str(WORKER_ROOT / "root-request-host-fence")), ignore_errors=True)
+        with self.assertRaisesRegex(MbError, "before any worker account exists"):
+            fence_host(self.host_boundary)
+
+
+class LinuxWorkerTests(HostedWorkerCase):
+    def test_existing_boundary_is_not_adopted_or_replaced(self):
+        with self.assertRaises(MbError):
+            prepare_worker_boundary(runner_environment="github-hosted")
+        self.assertEqual(stat.S_IMODE(self.boundary.stat().st_mode), 0o711)
+        self.assertEqual(stat.S_IMODE(self.root.stat().st_mode), 0o711)
+
     def test_host_home_workspace_temp_and_public_marker_are_inaccessible(self):
         authenticate_host_boundary(self.host_boundary)
         self.assertEqual(stat.S_IMODE(Path(self.host_boundary.home).stat().st_mode), 0o700)
@@ -168,7 +343,7 @@ class LinuxWorkerTests(unittest.TestCase):
                     self.assertEqual(self.as_worker(role, "/usr/bin/test", "-w", str(path), accepted=(0, 1)).returncode, 1)
 
     def test_complete_real_python_tool_tree_is_admitted_before_fenced_dispatch(self):
-        proof = inspect_worker_toolchains(boundary=self.host_boundary, roots=(sys.base_prefix,))
+        proof = inspect_worker_toolchains(boundary=self.host_boundary, roots=PYTHON_ROOTS)
         self.assertGreater(proof.files, 0)
         self.assertGreater(proof.entries, proof.files)
         _execution_tool_paths(proof, self.host_boundary, sys.executable, sys.base_prefix)
@@ -485,7 +660,7 @@ class LinuxWorkerTests(unittest.TestCase):
                  f"prepare_validation_plan(boundary={self.host_boundary!r},validator={validator!r},plan={plan!r})\n")
         setup = "from pathlib import Path\n" + setup
         command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", setup, cwd=self.root)
-        tools = inspect_worker_toolchains(boundary=self.host_boundary, roots=(sys.base_prefix,))
+        tools = inspect_worker_toolchains(boundary=self.host_boundary, roots=PYTHON_ROOTS)
         execute = execute_frozen_target_validator if hook == "verify_target" else execute_frozen_build_validator
         arguments = {"target_id": unit_id} if hook == "verify_target" else {}
         bound = execute(boundary=self.host_boundary, validator=validator, **arguments,

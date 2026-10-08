@@ -3,9 +3,14 @@
 Syscall mocks here are protocol tests; the required Linux fixture exercises actual UID access.
 """
 
+import os
+import shutil
 import stat
+import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -134,3 +139,157 @@ class HostFenceTests(unittest.TestCase):
                 with self.subTest(boundary=boundary), self.assertRaises(MbError):
                     host.authenticate_host_boundary(boundary)
         opening.assert_not_called()
+
+
+@unittest.skipUnless(sys.platform == "linux" and all(map(os.path.exists, ("/usr/bin/find", "/usr/bin/setfacl"))),
+                     "the fence runs GNU find, chmod and setfacl")
+class HostFenceCommandTests(unittest.TestCase):
+    """The fence's two real commands over a hosted-like tree the current user owns.
+
+    The root-only composition over the fixed image trees runs in ``tests/ci_linux_worker.py``.
+    """
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="mod-base-fence-")
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(lambda: subprocess.run(("/usr/bin/chmod", "-R", "u+rwX", directory.name), check=False))
+        # One level below the private temporary directory: a real fence that proves this host at
+        # the same moment never enters it, so it cannot trip over this stand-in.
+        self.base = Path(directory.name) / "host"
+        self.base.mkdir()
+        self.base.chmod(0o755)
+        self.tree = self.base / "opt"
+        (self.tree / "toolcache/Python/bin").mkdir(parents=True)
+        (self.tree / "toolcache/Python/bin/python3").write_bytes(b"elf")
+        (self.tree / "toolcache/Python/odd name\n+.py").write_bytes(b"")
+        (self.tree / "toolcache/Python/link").symlink_to("bin/python3")
+        (self.tree / "toolcache/Ruby").mkdir()
+        os.mkfifo(self.tree / "toolcache/pipe")
+        for path in sorted(self.tree.rglob("*"), reverse=True):
+            if not path.is_symlink():
+                path.chmod(0o777)
+        (self.tree / "toolcache/Ruby").chmod(0o1777)
+        self.tree.chmod(0o777)
+        subprocess.run(("/usr/bin/setfacl", "-R", "-d", "-m", "o::rwx", str(self.tree / "toolcache")), check=True)
+        self.skip = str(self.base / "boundary")
+
+    def entries(self):
+        found, complete = host._reachable_writable_entries(str(self.base), skip=self.skip)
+        self.assertTrue(complete)
+        return sorted(found)
+
+    def default_acls(self):
+        return [str(path) for path in (self.tree, *self.tree.rglob("*")) if path.is_dir() and not path.is_symlink()
+                and "system.posix_acl_default" in os.listxattr(path)]
+
+    def test_hosted_like_tree_is_closed_and_a_second_run_changes_nothing(self):
+        tree = str(self.tree)
+        self.assertEqual(self.entries(), sorted([tree, tree + "/toolcache", tree + "/toolcache/Python",
+                                                 tree + "/toolcache/Python/bin", tree + "/toolcache/Python/bin/python3",
+                                                 tree + "/toolcache/Python/odd name\n+.py"]))
+        self.assertEqual(len(self.default_acls()), 4)
+        fresh = self.tree / "toolcache/Python/created-before"
+        fresh.mkdir()
+        self.assertTrue(fresh.stat().st_mode & stat.S_IWOTH)  # What a default ACL does to new entries.
+        host._close_writable_trees((tree,))
+        self.assertEqual(self.entries(), [])
+        self.assertEqual(self.default_acls(), [])
+        for path in (self.tree, *self.tree.rglob("*")):
+            if path.is_symlink():
+                continue
+            mode = stat.S_IMODE(path.lstat().st_mode)
+            if stat.S_ISFIFO(path.lstat().st_mode):
+                self.assertEqual(mode, 0o777, path)  # Special files are neither changed nor reported.
+            else:
+                self.assertEqual(mode & 0o022, 0, path)
+        self.assertEqual(stat.S_IMODE((self.tree / "toolcache/Ruby").stat().st_mode), 0o1755)
+        self.assertEqual(stat.S_IMODE((self.tree / "toolcache/Python/bin/python3").stat().st_mode), 0o755)
+        self.assertEqual((self.tree / "toolcache/Python/bin/python3").read_bytes(), b"elf")
+        later = self.tree / "toolcache/Python/created-after"
+        later.mkdir()
+        self.assertFalse(later.stat().st_mode & stat.S_IWOTH)
+        stamps = {path: path.lstat().st_ctime_ns for path in self.tree.rglob("*")}
+        host._close_writable_trees((tree,))
+        self.assertEqual({path: path.lstat().st_ctime_ns for path in self.tree.rglob("*")}, stamps)
+
+    def test_proof_reports_only_reachable_non_sticky_entries_on_the_same_filesystem(self):
+        host._close_writable_trees((str(self.tree),))
+        sticky = self.base / "tmp"
+        sticky.mkdir()
+        sticky.chmod(0o1777)
+        (sticky / "inside").mkdir()
+        (sticky / "inside").chmod(0o777)
+        private = self.base / "home"
+        private.mkdir()
+        (private / "cache.lock").write_bytes(b"")
+        (private / "cache.lock").chmod(0o666)
+        (private / "open").mkdir()
+        (private / "open").chmod(0o777)
+        private.chmod(0o700)
+        boundary = self.base / "boundary"
+        (boundary / "candidate-home").mkdir(parents=True)
+        (boundary / "candidate-home").chmod(0o777)
+        loose = self.base / "var/lib/loose"
+        loose.mkdir(parents=True)
+        (loose / "file").write_bytes(b"x")
+        (loose / "file").chmod(0o666)
+        (loose / "link").symlink_to("file")
+        # Sticky directories are kept but entered; an owner-only directory and the boundary are not.
+        self.assertEqual(self.entries(), sorted([str(sticky / "inside"), str(loose / "file")]))
+        private.chmod(0o710)
+        self.assertEqual(self.entries(), sorted([str(sticky / "inside"), str(loose / "file"),
+                                                 str(private / "cache.lock"), str(private / "open")]))
+        private.chmod(0o700)
+        os.link(private / "cache.lock", loose / "alias")
+        self.assertIn(str(loose / "alias"), self.entries())
+
+    def test_mount_points_of_other_filesystems_are_not_root_filesystem_entries(self):
+        if not os.path.ismount("/dev/shm") or not stat.S_IMODE(os.stat("/dev/shm").st_mode) & stat.S_IWOTH:
+            self.skipTest("no world-writable tmpfs mount to look at")
+        found, complete = host._reachable_writable_entries("/dev", skip=self.skip)
+        self.assertTrue(complete)
+        self.assertNotIn("/dev/shm", found)
+
+    def test_report_is_bounded_and_an_incomplete_listing_is_never_a_clean_result(self):
+        wide = self.base / "wide"
+        wide.mkdir()
+        for index in range(40):
+            (wide / f"entry-{index:03d}-{'x' * 100}").write_bytes(b"")
+            (wide / f"entry-{index:03d}-{'x' * 100}").chmod(0o666)
+        with patch.object(limits, "MAX_CI_HOST_FENCE_REPORT_BYTES", 1024):
+            found, complete = host._reachable_writable_entries(str(wide), skip=self.skip)
+        self.assertFalse(complete)
+        self.assertTrue(0 < len(found) < 40)
+        self.assertTrue(all(name.startswith(str(wide) + "/entry-") and name.endswith("x" * 100) for name in found))
+
+    def test_failed_or_missing_command_is_a_rejection_with_its_first_diagnostic(self):
+        with self.assertRaisesRegex(MbError, r"command failed: \(no message\)$"):
+            host._fence_command(("/usr/bin/false",))
+        with self.assertRaisesRegex(MbError, "could not complete"):
+            host._fence_command(("/usr/bin/mod-base-no-such-command",))
+        with self.assertRaisesRegex(MbError, r"command failed: \S*find: .*missing.*No such file or directory"):
+            host._close_writable_trees((str(self.base / "missing"),))
+        self.assertEqual(host._fence_command(("/usr/bin/printf", "kept")), (b"kept", True))
+        # A program the walk runs fails the walk, and both streams are drained while only stdout
+        # decides completeness.
+        with self.assertRaisesRegex(MbError, r"command failed: \S*rmdir: .*python3.*Not a directory"):
+            host._fence_command(("/usr/bin/find", str(self.tree), "-type", "f", "-name", "python3",
+                                 "-exec", "/usr/bin/rmdir", "--", "{}", "+"))
+        self.assertEqual((self.tree / "toolcache/Python/bin/python3").read_bytes(), b"elf")
+        with patch.object(limits, "MAX_CI_HOST_FENCE_REPORT_BYTES", 16):
+            self.assertEqual(host._fence_command(("/usr/bin/sh", "-c", "printf %s 0123456789abcdef; printf %64s >&2")),
+                             (b"0123456789abcdef", True))
+            self.assertEqual(host._fence_command(("/usr/bin/sh", "-c", "printf %s 0123456789abcdefg")),
+                             (b"0123456789abcdef", False))
+
+    def test_command_that_outlives_its_bound_is_killed_and_rejected(self):
+        with patch.object(limits, "CI_HOST_FENCE_TIMEOUT_SECONDS", 0.3), \
+                self.assertRaisesRegex(MbError, "timed out"):
+            host._fence_command(("/usr/bin/sleep", "30"))
+
+    def test_root_only_fence_refuses_the_unprivileged_runner_before_any_command(self):
+        with self.assertRaisesRegex(MbError, "requires protected root setup"):
+            host.fence_worker_host(boundary=BOUNDARY)
+        self.assertEqual(stat.S_IMODE(self.tree.stat().st_mode), 0o777)
+        self.assertEqual(host.HOST_FENCE_TREES, ("/opt", "/usr/share", "/usr/local", "/usr/lib/jvm", "/var/lib/gems"))
+        self.assertTrue(shutil.which("chmod", path="/usr/bin"))

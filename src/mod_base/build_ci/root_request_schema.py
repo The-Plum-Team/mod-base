@@ -100,6 +100,7 @@ def _runtime_validation(document: dict[str, Any], path: str) -> None:
 
 #: Operation -> (closed argument object, cross-field checks over the whole request).
 _OPERATIONS = {
+    "host-fence": (Obj({}), lambda document, path: None),
     "freeze-build-validation": (
         Obj({"validator": _ACCOUNT, "sources": _SOURCES, "plan": _plan, "envelope": _envelope,
              "run_id": _RUN, "run_attempt": _ATTEMPT, "execution_nonce": _SHA}), _build_validation),

@@ -108,6 +108,7 @@ The operations are the closed tuple `grammar.CI_ROOT_OPERATIONS`, mirrored by th
 
 | Operation | Arguments | Effect |
 |---|---|---|
+| `host-fence` | none | Closes the hosted image's world-writable trees and proves that none is left; runs before any worker account exists |
 | `freeze-build-validation` | `validator`, `sources`, `plan`, `envelope`, `run_id`, `run_attempt`, `execution_nonce` | Seals the Build or target verifier's receipt into `sealed-validation/` |
 | `freeze-runtime-validation` | `validator`, `sources`, `plan`, `build`, `runtime`, `lane_id`, `run_id`, `run_attempt`, `execution_nonce` | Seals one runtime lane verifier's receipt into `sealed-validation/` |
 
@@ -117,8 +118,9 @@ import file with path, mode, Git blob, SHA-256 and size); root rebuilds the byte
 validator's protected controller copy and verifies the whole copy. `plan`, `envelope`, `build`
 and `runtime` are the existing kinds under their existing caps; the plan must name the executing
 kit's version and digest. `execution_nonce` names the `mod-base.ci.execution` record of the
-verifier run and must differ from the request nonce. Both operations authenticate the read-only
-inputs before and after sealing and always terminate the validator.
+verifier run and must differ from the request nonce. Both freeze operations authenticate the
+read-only inputs before and after sealing and always terminate the validator. `host-fence` is
+described with the host fences below.
 
 ## Plan v1
 
@@ -948,6 +950,31 @@ Only the dedicated Linux
 fixture restores its prior home mode after every allocated identity is deleted and every probe
 is reaped. Production never relaxes the fence while disposable identities/processes remain.
 
+The home fence says nothing about the image. Measured on a hosted `ubuntu-24.04` runner, `/opt`
+with all of `/opt/hostedtoolcache`, `/usr/share`, `/usr/local` (including `/usr/local/bin`, the
+head of sudo's PATH) and `/usr/lib/jvm` are mode 0777, the `/opt` trees carry default ACLs that
+give `other::rwx` to every new entry, and ten world-writable regular files sit under
+`/var/lib/gems`. Any local account could replace the interpreter, a JDK or a command that root
+runs. The root operation `host-fence` (`host.fence_worker_host`) closes this before any worker
+account exists and refuses to run once either fixed account is present. One `find -xdev` walk
+over the members of `HOST_FENCE_TREES` the host has (`/opt`, `/usr/share`, `/usr/local`,
+`/usr/lib/jvm`, `/var/lib/gems`) runs `chmod go-w` on every directory and regular file that has
+a group or other write bit and `setfacl -k` on every directory. Links are neither followed nor
+changed, and a second run changes nothing. A second walk over the root filesystem then lists
+every world-writable directory without the sticky bit and every world-writable regular file. It
+does not enter the worker boundary, nor a directory that only its owner can search when that
+owner is an existing account, because an account created later can never be that owner.
+Anything listed fails the operation with the count and the first path. So do a listing larger
+than 64 KiB, a tree that is not a real directory and a command that fails (reported with the
+start of what it wrote to stderr) or runs longer than 600 seconds. Sticky directories outside the fenced
+trees, such as `/tmp` and `/var/tmp`, stay world-writable; a sticky directory inside a fenced
+tree loses its write bits like any other entry. Other filesystems, special files and
+group-writable entries outside the fenced trees are not examined: a worker account has a fresh
+primary group and no other. On the measured runner `chmod -R go-w` over those trees took about
+7.5 seconds. The required Linux fixture runs the real operation over a runner-owned stand-in
+below `/opt` with the measured modes and default ACLs, and requires a stray world-writable entry
+elsewhere and a default ACL that cannot be removed to fail it.
+
 Required Linux probes use deliberately inert marker files and a separately launched benign
 runner-UID process. They check host directory/file denial, /proc environment/memory and ptrace
 denial, and closing even an explicitly inheritable host descriptor. Fixture UID probes use a
@@ -955,18 +982,19 @@ private cwd so they cannot bypass home traversal through an inherited protected 
 These tests have not run on the Windows development host.
 
 `build_ci.toolchain` inspects the complete permission/identity closure of protected-selected
-Python/JDK roots below /opt/hostedtoolcache or /usr/lib/jvm. Every ancestor and link target is
-checked through no-follow directory descriptors. Only root/runner-owned entries are admitted;
-group/other writable files/directories and special entries reject. Link targets stay within
-the supported tool/system prefixes (/opt/hostedtoolcache, /usr/lib/jvm, /usr, /lib, /lib64, /etc).
+Python/JDK roots after the host fence. A root may live anywhere and no prefix is special: what
+admits a root is that it, every entry below it, every ancestor and every link target with its
+own ancestors pass the same rules. Every ancestor and link target is checked through no-follow
+directory descriptors. Only root/runner-owned entries are admitted; group/other writable
+files/directories, special entries and directories that carry a default ACL reject.
 Global source file/entry/byte/metadata caps apply, alongside 16 roots, 40 link hops and depth 64.
 Directory identities bound alias cycles. Mutable installations fail closed; this primitive
-does not chmod system tools or install dependencies. Protected setup must prepare them first.
+does not chmod system tools or install dependencies. The host fence must have run first.
 
 The immutable ToolTreeProof fingerprints metadata, permissions and identities, not file contents
 or installer provenance. `execute_tool_fenced_worker` reinspects that closure, binds the selected
 Python/JDK paths and their resolved destinations to explicitly admitted roots, then rechecks
-the host fence before dispatch. An allowed system-prefix link target does not enroll its
+the host fence before dispatch. A link target outside the enrolled roots does not enroll its
 surrounding interpreter/import tree. Internal aliases and aliases between explicitly enrolled
 roots remain supported, including an enrolled root that resolves to another installation path.
 Python must resolve to a nonempty regular file executable by the fresh worker UID; JAVA_HOME

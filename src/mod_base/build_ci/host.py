@@ -1,26 +1,37 @@
 """Host filesystem fence for the initial GitHub-hosted Linux worker profile (MB11).
 
-Explicit protected inputs only. This hides the runner home and its workspace/action/temp
-trees; it is not a VM boundary or a proof about files outside the admitted host layout.
+Explicit protected inputs only. Two fences exist. The runner closes its own home, which hides the
+workspace, action and temp trees. Root then closes the image itself (``fence_worker_host``): a
+hosted ``ubuntu-24.04`` image ships its tool cache, ``/usr/share``, ``/usr/local`` and the JDKs
+world-writable, so any local account could replace the interpreter, a JDK or a command on root's
+PATH. Neither fence is a VM boundary.
 """
 
 from __future__ import annotations
 
 import os
+import selectors
 import stat
+import subprocess
 import sys
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from mod_base.build_ci.worker import (WorkerAccount, WorkerError, WorkerResult,
+from mod_base.build_ci.worker import (WORKER_ACCOUNTS, WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult,
                                       execute_worker, terminate_worker)
-from mod_base.errors import MbError
+from mod_base.errors import MbError, single_line
 from mod_base.model import limits
 
 
 HOST_RUNNER_HOME = "/home/runner"
+#: The trees a hosted ``ubuntu-24.04`` image leaves writable by everyone (measured on a runner):
+#: the tool cache and the rest of ``/opt``, ``/usr/share``, ``/usr/local`` (the head of root's PATH),
+#: the JDKs and one gem. A tree an image does not have is skipped.
+HOST_FENCE_TREES = ("/opt", "/usr/share", "/usr/local", "/usr/lib/jvm", "/var/lib/gems")
+_FENCE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
 
 
 @dataclass(frozen=True)
@@ -207,6 +218,140 @@ def authenticate_privileged_host_boundary(boundary: HostBoundary) -> None:
     except (OSError, KeyError) as error:
         raise WorkerError("cannot bind runner passwd identity from root setup") from error
     _authenticate_home_receipt(boundary)
+
+
+def _fence_command(command: tuple[str, ...]) -> tuple[bytes, bool]:
+    """Run one fixed administrative command; return its bounded stdout and whether all of it fit.
+
+    A command that cannot start, exits non-zero or outlives its bound is a rejection. A non-zero
+    exit carries the start of what the command, or a program it ran, wrote to stderr.
+    """
+
+    process = None
+    output, diagnostic = bytearray(), bytearray()
+    complete = True
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, env=dict(_FENCE_ENV), cwd="/", close_fds=True)
+        if process.stdout is None or process.stderr is None:
+            raise WorkerError("host fence command pipes unavailable")
+        deadline = time.monotonic() + limits.CI_HOST_FENCE_TIMEOUT_SECONDS
+        with selectors.DefaultSelector() as selector:
+            for stream, kept in ((process.stdout, output), (process.stderr, diagnostic)):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, kept)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                ready = selector.select(remaining) if remaining > 0 else []
+                if not ready:
+                    raise WorkerError("host fence command timed out")
+                for key, _ in ready:
+                    chunk = os.read(key.fd, limits.CI_PROCESS_READ_BYTES)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    # Keep the first bounded bytes of each stream and keep draining both.
+                    room = limits.MAX_CI_HOST_FENCE_REPORT_BYTES - len(key.data)
+                    key.data.extend(chunk[:room])
+                    complete = complete and (key.data is diagnostic or len(chunk) <= room)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise WorkerError("host fence command timed out")
+        if process.wait(timeout=remaining) != 0:
+            raise WorkerError("host fence command failed: "
+                              + single_line(diagnostic.decode("utf-8", "replace"), limit=300))
+        return bytes(output), complete
+    except (OSError, subprocess.SubprocessError) as error:
+        raise WorkerError("host fence command could not complete") from error
+    finally:
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=limits.CI_TERMINATION_GRACE_SECONDS)
+            except (OSError, subprocess.SubprocessError) as error:
+                raise WorkerError("host fence command did not reap") from error
+            finally:
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+
+
+def _close_writable_trees(trees: tuple[str, ...]) -> None:
+    """One walk: drop group/other write from directories and regular files, and every default ACL.
+
+    Only entries that carry a write bit are changed, so a second run leaves metadata alone. Links
+    are never followed or changed, and the walk stays on each tree's own filesystem. A default
+    ACL would hand ``other::rwx`` to whatever is created in the tree afterwards.
+    """
+
+    _fence_command(("/usr/bin/find", *trees, "-xdev", "-ignore_readdir_race",
+                    "(", "(", "-type", "d", "-o", "-type", "f", ")", "-perm", "/0022",
+                    "-exec", "/usr/bin/chmod", "go-w", "--", "{}", "+", ")", ",",
+                    "(", "-type", "d", "-exec", "/usr/bin/setfacl", "-k", "--", "{}", "+", ")"))
+
+
+def _reachable_writable_entries(root: str, *, skip: str) -> tuple[list[str], bool]:
+    """World-writable non-sticky directories and world-writable regular files on ``root``'s filesystem.
+
+    ``skip`` (the worker boundary) is not entered. Neither is a directory that only its owner can
+    search when that owner is an existing account: an account created later can never be that
+    owner, so nothing below is reachable for it. Sticky directories are entered but not reported.
+    Returns the entries and whether the listing was complete.
+    """
+
+    device = str(os.stat(root, follow_symlinks=False).st_dev).encode("ascii")
+    output, complete = _fence_command((
+        "/usr/bin/find", root, "-xdev", "-ignore_readdir_race", "-path", skip, "-prune", "-o",
+        "(", "-type", "d", "!", "-perm", "/0011", "!", "-nouser", "-prune", ")", "-o",
+        "(", "(", "-type", "d", "-perm", "-0002", "!", "-perm", "-1000", "-o", "-type", "f", "-perm", "-0002", ")",
+        "-printf", "%D %p\\0", ")"))
+    records = output.split(b"\0")[:-1]  # A cut-off last record has no terminator and is dropped.
+    entries = []
+    for record in records:
+        number, _, path = record.partition(b" ")
+        if number == device:  # A mount point is listed with the device of what is mounted on it.
+            entries.append(path.decode("utf-8", "backslashreplace"))
+    return entries, complete
+
+
+def fence_worker_host(*, boundary: HostBoundary) -> None:
+    """Root-only, before any worker account exists: close the hosted image to later accounts.
+
+    Removes group/other write permission and default ACLs from the ``HOST_FENCE_TREES`` this host
+    has, then proves that no world-writable non-sticky directory and no world-writable regular
+    file remains reachable on the root filesystem outside the worker boundary. Anything left is
+    a failure, and so is a tree that is not a real directory or a command that fails. Sticky
+    directories outside those trees, such as ``/tmp``, stay as they are.
+    """
+
+    authenticate_privileged_host_boundary(boundary)
+    import pwd
+
+    try:
+        for name in WORKER_ACCOUNTS.values():
+            try:
+                pwd.getpwnam(name)
+            except KeyError:
+                continue
+            raise WorkerError("host fence must run before any worker account exists")
+        trees = []
+        for tree in HOST_FENCE_TREES:
+            try:
+                os.close(_open_directory(tuple(PurePosixPath(tree).parts[1:])))
+            except FileNotFoundError:
+                continue
+            trees.append(tree)
+        if trees:
+            _close_writable_trees(tuple(trees))
+        entries, complete = _reachable_writable_entries("/", skip=str(WORKER_ROOT.parent))
+    except OSError as error:
+        raise WorkerError("cannot fence the worker host") from error
+    if entries or not complete:
+        first = repr(entries[0])[:300] if entries else "an unlisted entry"
+        raise WorkerError(f"host fence left {len(entries)}{'' if complete else ' or more'} world-writable "
+                          f"entries reachable on the root filesystem, first {first}")
+    authenticate_privileged_host_boundary(boundary)
 
 
 def execute_isolated_worker(account: WorkerAccount, *, boundary: HostBoundary,

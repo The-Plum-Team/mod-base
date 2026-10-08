@@ -702,6 +702,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_UNIX_ID`
 * `MAX_CI_COMMAND_ARGUMENTS`, `MAX_CI_COMMAND_BYTES`, `CI_PROCESS_READ_BYTES`
 * `CI_ROOT_OPERATION_TIMEOUT_SECONDS`, `MAX_CI_ROOT_DIAGNOSTIC_BYTES`: The 1800-second bound of one root operation process (the bootstrap arms the same alarm on itself) and the 4 KiB of its stderr the launching runner keeps for its own single error line. No worker or hook timeout changes.
+* `CI_HOST_FENCE_TIMEOUT_SECONDS`, `MAX_CI_HOST_FENCE_REPORT_BYTES`: The 600-second bound of each of the host fence's two walks, inside the root operation's own bound, and the 64 KiB the fence keeps of each output stream of a walk: the listing of the world-writable entries that remain and the diagnostic of a command that failed. A listing that does not fit is never a clean result.
 * `MAX_CI_SOURCE_LIST_BYTES`, `MAX_CI_SOURCE_FILES`, `MAX_CI_SOURCE_ENTRIES`
 * `MAX_CI_SOURCE_FILE_BYTES`, `MAX_CI_SOURCE_TREE_BYTES`, `MAX_CI_SOURCE_LINK_BYTES`
 * `MAX_CI_GIT_METADATA_FILES`, `MAX_CI_GIT_METADATA_ENTRIES`, `MAX_CI_GIT_METADATA_FILE_BYTES`
@@ -2112,31 +2113,36 @@ does not allocate or freeze a worker, stage Git metadata/overlays/caches or assi
 
 ## `mod_base.build_ci.host`
 
-Owner: MB11. Inactive host filesystem fence for the initial protected GitHub-hosted Linux
-profile. It hides the fixed runner home and authenticates workspace/temp containment without
-following directory links. It does not establish all kernel or outside-layout assumptions,
-stage authenticated copies or complete the worker lifecycle; required Linux evidence remains missing.
+Owner: MB11. Inactive host filesystem fences for the initial protected GitHub-hosted Linux
+profile. The runner hides its fixed home and authenticates workspace/temp containment without
+following directory links. Root then closes the image itself before any worker account exists
+(D5 of the Build/E2E architecture): a hosted `ubuntu-24.04` image ships `/opt` with the tool
+cache, `/usr/share`, `/usr/local` and the JDKs writable by everyone. Neither fence establishes
+kernel assumptions, stages authenticated copies or completes the worker lifecycle; required
+Linux evidence remains missing.
 
 * `HOST_RUNNER_HOME = '/home/runner'`
+* `HOST_FENCE_TREES = ('/opt', '/usr/share', '/usr/local', '/usr/lib/jvm', '/var/lib/gems')`
 * `class HostBoundary`: A frozen private runner-home identity, not execution or status authority.
   * fields: `home: str, uid: int, gid: int, device: int, inode: int, original_mode: int`
 * `def protect_worker_host(*, runner_environment: str, runner_home: str, workspace: str, runner_temp: str) -> HostBoundary`: Authenticate the initial runner-owned hosted layout and close home traversal to 0700. Failures after chmod keep it private.
 * `def authenticate_host_boundary(boundary: HostBoundary) -> None`: Recheck the exact private runner-home inode before admitting either disposable UID.
 * `def privileged_runner_identity() -> tuple[int, int]`: Root-only. The `(uid, gid)` of the passwd account that owns the fixed runner home, derived from the filesystem and passwd and never from a request. It names an account; it is not a host fence receipt.
 * `def authenticate_privileged_host_boundary(boundary: HostBoundary) -> None`: Recheck a bounded nonprivileged runner receipt against actual passwd/home identity from protected Linux root setup; never admits a worker or selects arbitrary owner identities.
+* `def fence_worker_host(*, boundary: HostBoundary) -> None`: Root-only, and only while neither fixed worker account exists. Authenticate the fenced home; in one `find -xdev` walk over the `HOST_FENCE_TREES` this host has, remove group/other write permission from every directory and regular file that carries it (`chmod go-w`) and the default ACL of every directory (`setfacl -k`), never following or changing a link; then, in a second walk over the root filesystem, list every world-writable directory without the sticky bit and every world-writable regular file, without entering the worker boundary or a directory that only its owner can search when that owner is an existing account. Reject when anything is listed (with the count and the first path), when the listing does not fit `MAX_CI_HOST_FENCE_REPORT_BYTES`, when a tree is not a real directory, or when a command fails (with the start of what it wrote to stderr) or outlives `CI_HOST_FENCE_TIMEOUT_SECONDS`. Sticky directories outside the trees stay as they are; other filesystems, special files and group-writable entries outside the trees are not examined. A second run changes nothing.
 * `def execute_isolated_worker(account: WorkerAccount, *, boundary: HostBoundary, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Recheck the host fence before dispatching the bounded worker; failed admission terminates/locks the UID without launching.
 
 ## `mod_base.build_ci.toolchain`
 
 Owner: MB11. Inactive bounded permission/identity closure of protected-selected host tools.
-This does not establish installer provenance, byte integrity, complete import-root enrollment
-or compiler semantics. Protected setup and actual hosted Linux evidence remain required.
+A root may live anywhere: what admits it is that every entry, ancestor and link target passes
+the ownership and mode rules after the host fence, not its location. This does not establish
+installer provenance, byte integrity, complete import-root enrollment or compiler semantics.
+Protected setup and actual hosted Linux evidence remain required.
 
-* `TOOL_INSTALL_PREFIXES = ('/opt/hostedtoolcache', '/usr/lib/jvm')`
-* `TOOL_LINK_PREFIXES = ('/opt/hostedtoolcache', '/usr/lib/jvm', '/usr', '/lib', '/lib64', '/etc')`
 * `class ToolTreeProof`: Immutable metadata receipt; not a content digest or build authority.
   * fields: `roots: tuple[str, ...], metadata_sha256: str, files: int, entries: int, total_bytes: int`
-* `def inspect_worker_toolchains(*, boundary: HostBoundary, roots: tuple[str, ...]) -> ToolTreeProof`: Inspect every selected root, link target and ancestor under global limits, rejecting foreign owners, writable directories/files and special entries.
+* `def inspect_worker_toolchains(*, boundary: HostBoundary, roots: tuple[str, ...]) -> ToolTreeProof`: Inspect every selected root, link target and ancestor under global limits, rejecting foreign owners, group/other-writable directories/files, special entries and any directory that carries a default ACL. No installation or link prefix is special.
 * `def authenticate_toolchains(proof: ToolTreeProof, *, boundary: HostBoundary) -> None`: Reinspect the full closure and reject metadata/permission drift.
 * `def execute_tool_fenced_worker(account: WorkerAccount, *, boundary: HostBoundary, tools: ToolTreeProof, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Bind Python/JDK paths and their resolved destinations to explicitly admitted roots, require a nonempty worker-executable regular Python file and worker-traversable JAVA_HOME directory, recheck tool and host fences, and terminate/lock without dispatch on failed admission.
 
@@ -2147,7 +2153,7 @@ operation. Its `operation` is a member of `grammar.CI_ROOT_OPERATIONS` and its `
 closed object per operation; no field holds a program, a hook or a destination path. Validation
 proves shape and internal consistency only.
 
-* `def validate_root_request(document: Any, *, path: str = "$") -> dict[str, Any]`: Require the kind, version, a closed operation, a 64-hex nonce, the runner's host boundary and exactly that operation's arguments. An account named in the arguments must differ from the runner in uid and gid. `freeze-build-validation` carries the validator, controller source metadata, plan, Build envelope, producing run/attempt and the execution nonce (distinct from the request nonce); `freeze-runtime-validation` carries the same with the complete owning Build, the lane's runtime envelope and the lane id. Source, plan and envelope caps of the existing kinds apply unchanged.
+* `def validate_root_request(document: Any, *, path: str = "$") -> dict[str, Any]`: Require the kind, version, a closed operation, a 64-hex nonce, the runner's host boundary and exactly that operation's arguments. An account named in the arguments must differ from the runner in uid and gid. `host-fence` carries no arguments; `freeze-build-validation` carries the validator, controller source metadata, plan, Build envelope, producing run/attempt and the execution nonce (distinct from the request nonce); `freeze-runtime-validation` carries the same with the complete owning Build, the lane's runtime envelope and the lane id. Source, plan and envelope caps of the existing kinds apply unchanged.
 
 ## `mod_base.build_ci.root_request`
 
@@ -2160,6 +2166,7 @@ proves no provenance. Root never calls the GitHub API.
 
 * `ROOT_PROGRAM = 'tools/ci_privileged_bootstrap.py'`
 * `def root_request_path(operation: str) -> PurePosixPath`: The fixed `WORKER_ROOT / 'root-request-<operation>'` directory of one closed operation; any other name is rejected.
+* `def request_host_fence(*, boundary: HostBoundary) -> str`: Runner-only. Publish the `host-fence` request, which carries nothing but the receipt of the fenced home, after the runner closed its home and before any worker account exists. Returns the request nonce.
 * `def request_build_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int, execution_nonce: str) -> str`: Runner-only. Publish the `freeze-build-validation` request for the retained source receipt, plan, frozen Build and the nonce of the published execution record; the controller copy and both read-only inputs are inspected before and inside publication. Returns the request nonce.
 * `def request_runtime_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int, execution_nonce: str) -> str`: Runner-only. Publish the `freeze-runtime-validation` request for one lane, keeping the complete owning Build's own cross-run identity; the caller's three documents are canonicalised once and compared again inside publication together with all three input roots. Returns the request nonce.
 * `def run_root_operation(operation: str, *, python: str, kit_root: Path, kit_digest: str, nonce: str) -> None`: Runner-only. Run `/usr/bin/sudo -n -- <python> -I -B -S <kit_root>/tools/ci_privileged_bootstrap.py --operation <operation> --kit <kit_root> --kit-digest <kit_digest> --nonce <nonce>` with a fixed environment, the worker root as working directory and no inherited descriptors, bounded by `CI_ROOT_OPERATION_TIMEOUT_SECONDS`. `kit_root` and `kit_digest` are the checkout and digest the job prologue verified. A non-zero exit, a timeout or a signal raises with the child's first bounded stderr line.
@@ -2171,7 +2178,7 @@ Owner: MB11. The closed set of root operations behind the request channel; the o
 `tools/ci_privileged_bootstrap.py`. Operations rebuild their inputs from the request's closed data
 and from protected copies on disk.
 
-* `def execute_root_operation(operation: str, *, kit_root: str, kit_digest: str, nonce: str) -> None`: Require real Linux root; require the importing package to be `kit_root`'s, its kit-digest-v1 to equal `kit_digest` and its `template/`, `tools/` and `actions/` to match the staged-file locks; admit the request and the live host fence; run the one fixed operation; re-read the request unchanged. `freeze-build-validation` and `freeze-runtime-validation` require the plan to name this kit's version and digest, rebuild the source receipt from the validator's protected controller copy, authenticate the read-only inputs before and after, seal the verifier receipt bound to the published execution record and always terminate the validator.
+* `def execute_root_operation(operation: str, *, kit_root: str, kit_digest: str, nonce: str) -> None`: Require real Linux root; require the importing package to be `kit_root`'s, its kit-digest-v1 to equal `kit_digest` and its `template/`, `tools/` and `actions/` to match the staged-file locks; admit the request and the live host fence; run the one fixed operation; re-read the request unchanged. `host-fence` runs `host.fence_worker_host` for the request's boundary. `freeze-build-validation` and `freeze-runtime-validation` require the plan to name this kit's version and digest, rebuild the source receipt from the validator's protected controller copy, authenticate the read-only inputs before and after, seal the verifier receipt bound to the published execution record and always terminate the validator.
 
 ## `mod_base.build_ci.selection`
 

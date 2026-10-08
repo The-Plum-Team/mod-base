@@ -141,6 +141,15 @@ def _publish(operation: str, boundary: HostBoundary, arguments: dict[str, Any], 
         raise WorkerError("cannot publish private root request") from error
 
 
+def request_host_fence(*, boundary: HostBoundary) -> str:
+    """Runner-only request to fence the host image; return the request nonce.
+
+    Made after the runner closed its own home and before any worker account exists. The
+    request carries nothing but the home fence receipt.
+    """
+    return _publish("host-fence", boundary, {})
+
+
 def request_build_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount,
                                     sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any],
                                     run_id: int, run_attempt: int, execution_nonce: str) -> str:

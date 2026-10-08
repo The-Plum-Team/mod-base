@@ -19,7 +19,8 @@ from typing import Any
 import mod_base
 from mod_base.build_ci.controller import CONTROLLER_VALIDATION_ROOT, ControllerSources
 from mod_base.build_ci.handoff import _context, freeze_handed_off_build_validation
-from mod_base.build_ci.host import HostBoundary, _canonical_path, authenticate_privileged_host_boundary
+from mod_base.build_ci.host import (HostBoundary, _canonical_path, authenticate_privileged_host_boundary,
+                                    fence_worker_host)
 from mod_base.build_ci.inputs import _accounts, _inspect_inputs
 from mod_base.build_ci.root_request import (_inspect_sources, _restore_sources, _source_root_identity,
                                           read_root_request)
@@ -74,6 +75,10 @@ def _controller_sources(boundary: HostBoundary, validator: WorkerAccount, metada
     check(_inspect_sources(boundary, validator, sources, plan) == initial,
           "$.sources", "controller copy root replaced during reconstruction")
     return sources, initial
+
+
+def _host_fence(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    fence_worker_host(boundary=boundary)
 
 
 def _freeze_build_validation(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
@@ -134,6 +139,7 @@ def _freeze_runtime_validation(boundary: HostBoundary, arguments: dict[str, Any]
 
 
 _OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
+    "host-fence": _host_fence,
     "freeze-build-validation": _freeze_build_validation,
     "freeze-runtime-validation": _freeze_runtime_validation,
 }

@@ -164,6 +164,18 @@ bootstrap's mirror, `root_request_schema` (closed arguments), `root_request` (th
 request function) and `root_request_operations` (the handler), with a hosted test in
 `tests/ci_linux_worker.py` that runs it through the real bootstrap.
 
+`host-fence` is the first root operation of a job: it runs after the runner closed its home and
+before any worker account exists, and refuses afterwards (`build_ci.host.fence_worker_host`). A
+hosted `ubuntu-24.04` image ships `/opt` with the tool cache, `/usr/share`, `/usr/local` and the
+JDKs world-writable, the `/opt` trees with default ACLs. The fence removes group/other write
+permission and default ACLs from `HOST_FENCE_TREES`, then fails unless no world-writable
+non-sticky directory and no world-writable regular file is left reachable on the root
+filesystem outside the worker boundary. When a new image leaves another tree writable the fence
+fails and names the first path: add the tree to `HOST_FENCE_TREES`, never an exception to the
+proof. Do not give a tool location a special case in `build_ci.toolchain` either: after the
+fence a tool root is admitted by ownership, mode and the absence of default ACLs, wherever it
+lives.
+
 ## What a kit change reaches
 
 - The kit runs in consumer mods only at the single commit each mod pins, and only after a

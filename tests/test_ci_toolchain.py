@@ -1,8 +1,14 @@
 """Read-only closure admission; actual Linux permission tests remain mandatory."""
 
+import errno
+import os
 import stat
+import subprocess
+import sys
+import tempfile
 import unittest
 from contextlib import ExitStack
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -78,6 +84,11 @@ class Filesystem:
                 target = self.info(name, dir_fd=dir_fd).target
                 return target if isinstance(target, bytes) else target.encode()
             stack.enter_context(patch.object(toolchain.os, "readlink", side_effect=readlink))
+            def no_acl(descriptor, name):
+                if getattr(self.nodes[self.descriptors[descriptor]], "default_acl", False):
+                    return b"acl"
+                raise OSError(errno.ENODATA, "no ACL")
+            stack.enter_context(patch.object(toolchain.os, "getxattr", side_effect=no_acl, create=True))
             return (operation() if operation is not None else
                     toolchain.inspect_worker_toolchains(boundary=BOUNDARY, roots=roots))
 
@@ -106,9 +117,14 @@ class ToolTreeTests(unittest.TestCase):
                 fs.inspect()
             self.assertEqual(fs.descriptors, {})
 
-    def test_links_cannot_escape_prefixes_or_exceed_hop_budget(self):
-        for target in ("/home/runner/secret", "/tmp/candidate", "python3", b"\xff"):
+    def test_links_cannot_reach_writable_places_or_exceed_hop_budget(self):
+        for target in ("/tmp/candidate", "/srv/foreign/tool", "python3", b"\xff"):
             fs = Filesystem()
+            fs.add("/tmp", stat.S_IFDIR | 0o1777, owner=0)
+            fs.add("/tmp/candidate", stat.S_IFREG | 0o755, size=3)
+            fs.add("/srv", stat.S_IFDIR | 0o755, owner=0)
+            fs.add("/srv/foreign", stat.S_IFDIR | 0o755, owner=2000)
+            fs.add("/srv/foreign/tool", stat.S_IFREG | 0o755, size=3)
             fs.add(ROOT + "/bin/python3", stat.S_IFLNK | 0o777, target=target)
             with self.subTest(target=target), self.assertRaises(MbError):
                 fs.inspect()
@@ -124,10 +140,31 @@ class ToolTreeTests(unittest.TestCase):
             self.assertEqual(fs.descriptors, {})
 
     def test_empty_duplicate_foreign_and_oversized_root_inventories_are_rejected(self):
-        for roots in [(), [], (ROOT, ROOT), ("/tmp/candidate",), ("/opt/hostedtoolcache",),
+        for roots in [(), [], (ROOT, ROOT), ("/",), ("opt/python",), (ROOT + "/../x",), (ROOT + "/bin/python3.11",),
                       tuple(ROOT + str(index) for index in range(limits.MAX_CI_TOOL_ROOTS + 1))]:
             with self.subTest(roots=roots), self.assertRaises(MbError):
                 Filesystem().inspect(roots)
+
+    def test_a_root_is_admitted_wherever_it_lives_when_every_ancestor_passes(self):
+        fs = Filesystem()
+        for name in ("/srv", "/srv/tools", "/srv/tools/jdk", "/srv/tools/jdk/bin"):
+            fs.add(name, stat.S_IFDIR | 0o755, owner=0)
+        fs.add("/srv/tools/jdk/bin/java", stat.S_IFREG | 0o755, owner=0, size=4)
+        proof = fs.inspect(("/srv/tools/jdk", ROOT))
+        self.assertEqual(proof.roots, ("/srv/tools/jdk", ROOT))
+        fs.inspect(operation=lambda: toolchain._execution_tool_paths(
+            proof, BOUNDARY, ROOT + "/bin/python3", "/srv/tools/jdk"))
+        fs.nodes["/srv/tools"].st_mode = stat.S_IFDIR | 0o777
+        with self.assertRaises(MbError):
+            fs.inspect(("/srv/tools/jdk",))
+
+    def test_default_acl_on_a_root_ancestor_or_directory_is_rejected(self):
+        for path in ("/opt", ROOT, ROOT + "/lib"):
+            fs = Filesystem()
+            fs.nodes[path].default_acl = True
+            with self.subTest(path=path), self.assertRaisesRegex(MbError, "default ACL"):
+                fs.inspect()
+            self.assertEqual(fs.descriptors, {})
 
     def test_changed_tool_receipt_is_not_authority(self):
         proof = Filesystem().inspect()
@@ -236,3 +273,97 @@ class ToolTreeTests(unittest.TestCase):
         with patch.object(toolchain._Scan, "resolve", side_effect=OSError("unavailable")), \
                 self.assertRaisesRegex(MbError, "cannot bind"):
             toolchain._execution_tool_paths(proof, BOUNDARY, args["python"], None)
+
+
+@unittest.skipUnless(sys.platform == "linux", "the scanner walks real no-follow descriptors on Linux")
+class RealToolTreeTests(unittest.TestCase):
+    """The scanner over real trees below the home directory (``/tmp`` is world-writable).
+
+    A scan stamps every ancestor up to ``/`` and rejects one that changes meanwhile. All trees
+    therefore live in one class directory: the class fixture keeps these cases in a single worker
+    of the parallel runner, so none of them creates a sibling while another one scans.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        directory = tempfile.TemporaryDirectory(prefix="mod-base-tools-", dir=Path.home())
+        cls.addClassCleanup(directory.cleanup)
+        cls.shared = Path(directory.name)
+        cls.shared.chmod(0o755)
+
+    def setUp(self):
+        self.base = Path(tempfile.mkdtemp(dir=self.shared))
+        self.base.chmod(0o755)
+        self.root = self.base / "python"
+        (self.root / "bin").mkdir(parents=True)
+        (self.root / "lib").mkdir()
+        (self.root / "bin/python3.12").write_bytes(b"elf")
+        (self.root / "bin/python3.12").chmod(0o755)
+        (self.root / "bin/python3").symlink_to("python3.12")
+        (self.root / "lib/os.py").write_bytes(b"inert\n")
+        (self.root / "lib64").symlink_to("lib")
+
+    def scan(self, root=None):
+        scanner = toolchain._Scan(os.getuid())
+        resolved, info = scanner.resolve(str(root or self.root))
+        scanner.walk(resolved, 0)
+        return scanner
+
+    def test_real_tree_with_internal_links_is_walked_once_without_descriptor_leaks(self):
+        before = set(os.listdir("/proc/self/fd"))
+        scanner = self.scan()
+        self.assertEqual(scanner.files, 4)
+        self.assertIn(str(self.root / "lib/os.py"), scanner.records)
+        self.assertIn(str(self.root / "bin/python3"), scanner.records)
+        self.assertIn("/", scanner.records)
+        self.assertEqual(set(os.listdir("/proc/self/fd")), before)
+
+    def test_writable_special_and_escaping_entries_are_rejected_for_real(self):
+        def writable_file():
+            (self.root / "lib/os.py").chmod(0o666)
+
+        def group_writable_directory():
+            (self.root / "lib").chmod(0o775)
+
+        def writable_ancestor():
+            self.base.chmod(0o777)
+
+        def fifo():
+            os.mkfifo(self.root / "lib/pipe")
+
+        def link_into_tmp():
+            (self.root / "lib/escape").symlink_to("/tmp")
+
+        def dangling():
+            (self.root / "lib/missing").symlink_to("nowhere")
+
+        def loop():
+            (self.root / "lib/loop").symlink_to("loop")
+
+        cases = ((writable_file, MbError, "group/other write"), (group_writable_directory, MbError, "group/other write"),
+                 (writable_ancestor, MbError, "group/other write"), (fifo, MbError, "special file"),
+                 (link_into_tmp, MbError, "group/other write"), (dangling, FileNotFoundError, "nowhere"),
+                 (loop, MbError, "hop cap"))
+        for mutate, error, reason in cases:
+            self.setUp()
+            mutate()
+            before = set(os.listdir("/proc/self/fd"))
+            with self.subTest(mutation=mutate.__name__), self.assertRaisesRegex(error, reason):
+                self.scan()
+            self.assertEqual(set(os.listdir("/proc/self/fd")), before)
+
+    @unittest.skipUnless(os.path.exists("/usr/bin/setfacl"), "the case sets a real default ACL")
+    def test_real_default_acl_on_the_root_or_a_directory_below_it_is_rejected(self):
+        for path in (self.root, self.root / "lib"):
+            subprocess.run(("/usr/bin/setfacl", "-d", "-m", "o::r-x", str(path)), check=True)
+            with self.subTest(path=path), self.assertRaisesRegex(MbError, "default ACL"):
+                self.scan()
+            subprocess.run(("/usr/bin/setfacl", "-k", str(path)), check=True)
+        self.assertEqual(self.scan().files, 4)
+
+    def test_root_below_a_world_writable_directory_is_never_admitted(self):
+        with tempfile.TemporaryDirectory(prefix="mod-base-tools-", dir="/tmp") as directory:
+            root = Path(directory) / "python"
+            root.mkdir()
+            with self.assertRaisesRegex(MbError, "group/other write"):
+                self.scan(root)

@@ -1024,7 +1024,9 @@ def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any
                "files": [{"path": file["path"], "mode": "100644", "git_blob": "d" * 40,
                           "sha256": file["sha256"], "size": 1} for file in ci_config()["adapter"]["files"]]}
     validator = {"uid": 2001, "gid": 2001}
-    if operation == "freeze-build-validation":
+    if operation == "host-fence":
+        arguments = {}
+    elif operation == "freeze-build-validation":
         arguments = {"validator": validator, "sources": sources, "plan": plan, "envelope": ci_envelope(),
                      "run_id": 42, "run_attempt": 2, "execution_nonce": h("execution-nonce")}
     elif operation == "freeze-runtime-validation":
@@ -1101,6 +1103,7 @@ def sample_documents() -> dict[str, dict[str, Any]]:
         "ci-execution": ci_execution(),
         "ci-root-request": ci_root_request(),
         "ci-root-request-runtime": ci_root_request("freeze-runtime-validation"),
+        "ci-root-request-fence": ci_root_request("host-fence"),
         "expectation": expectation(),
         "handoff": handoff(),
         "compact": compact(),
@@ -1134,6 +1137,7 @@ VALID_FIXTURE_KINDS = {
     "ci-execution": "mod-base.ci.execution",
     "ci-root-request": "mod-base.ci.root-request",
     "ci-root-request-runtime": "mod-base.ci.root-request",
+    "ci-root-request-fence": "mod-base.ci.root-request",
     "expectation": "mod-base.evidence.expectation",
     "handoff": "mod-base.evidence.handoff",
     "compact": "mod-base.evidence.compact",

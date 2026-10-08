@@ -148,6 +148,14 @@ the release change. Pages formats, `ADAPTER_API` and `pixel_metrics_version` rem
   `docs/PYTHON-INSTALLER.md` and the unreleased `mod-base.ci.kit-installation` and
   `mod-base.ci.runtime-root-request` kinds. Runtime lane verification now uses the same
   tool-fenced second-account route as Build verification.
+- Fence the hosted image before any worker account exists. A hosted `ubuntu-24.04` image ships
+  `/opt` with the tool cache, `/usr/share`, `/usr/local` (the head of sudo's PATH) and the JDKs
+  world-writable, the `/opt` trees with default ACLs. The new root operation `host-fence`
+  removes group/other write permission and default ACLs from those trees and `/var/lib/gems`,
+  then fails unless no world-writable non-sticky directory and no world-writable regular file
+  remains reachable on the root filesystem outside the worker boundary. Tool roots are admitted
+  by ownership and mode wherever they live (`TOOL_INSTALL_PREFIXES` and `TOOL_LINK_PREFIXES` are
+  gone), and a directory that carries a default ACL is never part of an admitted tool tree.
 - Add a local-only execution handoff v1 kind and private runner-to-root Build result data
   channel, with strict binary-log/context/nonce binding and independent receipt freeze.
   Genuine execution/native validity and enrolled root-program/import provenance remain required.

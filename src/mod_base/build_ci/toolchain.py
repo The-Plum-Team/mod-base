@@ -3,11 +3,13 @@
 Metadata admission proves filesystem permissions and identity closure of the selected roots: no
 foreign owner, no group/other write access and no special file anywhere below them or on the way
 to them. It does not prove installer provenance or compiler semantics. Protected setup must
-finish first; mutable tool trees are rejected.
+finish first; mutable tool trees are rejected. A root may live anywhere: what admits it is that
+every entry, ancestor and link target passes these rules after the host fence, not its location.
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import itertools
 import os
@@ -23,10 +25,6 @@ from mod_base.build_ci.worker import WorkerAccount, WorkerError, WorkerResult, t
 from mod_base.errors import MbError
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json
-
-
-TOOL_INSTALL_PREFIXES = ("/opt/hostedtoolcache", "/usr/lib/jvm")
-TOOL_LINK_PREFIXES = (*TOOL_INSTALL_PREFIXES, "/usr", "/lib", "/lib64", "/etc")
 
 
 @dataclass(frozen=True)
@@ -45,6 +43,17 @@ def _below(path: str, prefixes: tuple[str, ...]) -> bool:
 def _stamp(info: os.stat_result) -> tuple[int, ...]:
     return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_nlink,
             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _no_default_acl(descriptor: int) -> None:
+    """A default ACL would hand its grants to whatever is created in the directory later."""
+    try:
+        os.getxattr(descriptor, "system.posix_acl_default")
+    except OSError as error:
+        if error.errno not in {errno.ENODATA, errno.ENOTSUP}:
+            raise
+    else:
+        raise WorkerError("tool tree directory carries a default ACL")
 
 
 class _Scan:
@@ -93,6 +102,7 @@ class _Scan:
         descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             self.record("/", os.fstat(descriptor))
+            _no_default_acl(descriptor)
             while pending:
                 part = pending.pop(0)
                 absolute = "/" + "/".join((*resolved, part))
@@ -125,8 +135,6 @@ class _Scan:
                             parts.append(component)
                     destination = "/" + "/".join(parts)
                     _canonical_path(destination)
-                    if not _below(destination, TOOL_LINK_PREFIXES):
-                        raise WorkerError("tool link leaves the supported tool/system prefixes")
                     pending = parts + pending
                     if len(("/" + "/".join(pending)).encode("utf-8")) > limits.MAX_CI_TOOL_PATH_BYTES:
                         raise WorkerError("resolved tool path exceeds its byte cap")
@@ -143,6 +151,7 @@ class _Scan:
                     try:
                         if _stamp(os.fstat(child)) != _stamp(info):
                             raise WorkerError("tool directory changed while opened")
+                        _no_default_acl(child)
                     except BaseException:
                         os.close(child)
                         raise
@@ -168,6 +177,7 @@ class _Scan:
         try:
             if _stamp(os.fstat(descriptor)) != _stamp(info):
                 raise WorkerError("tool tree root changed while opened")
+            _no_default_acl(descriptor)
             remaining = limits.MAX_CI_SOURCE_ENTRIES - len(self.records)
             with os.scandir(descriptor) as entries:
                 names = [entry.name for entry in itertools.islice(entries, remaining + 1)]
@@ -188,15 +198,13 @@ def inspect_worker_toolchains(*, boundary: HostBoundary, roots: tuple[str, ...])
         raise WorkerError("tool root inventory is empty or exceeds its cap")
     for root in roots:
         _canonical_path(root)
-        if not _below(root, TOOL_INSTALL_PREFIXES) or root in TOOL_INSTALL_PREFIXES:
-            raise WorkerError("tool root is outside the supported installation prefixes")
     if len(set(roots)) != len(roots):
         raise WorkerError("tool roots are duplicated")
     scanner = _Scan(boundary.uid)
     try:
         for root in roots:
             resolved, info = scanner.resolve(root)
-            if not stat.S_ISDIR(info.st_mode) or not _below(resolved, TOOL_INSTALL_PREFIXES):
+            if not stat.S_ISDIR(info.st_mode):
                 raise WorkerError("selected tool root must be a real directory")
             scanner.walk(resolved, 0)
     except OSError as error:
@@ -217,11 +225,12 @@ def authenticate_toolchains(proof: ToolTreeProof, *, boundary: HostBoundary) -> 
 
 def _execution_tool_paths(proof: ToolTreeProof, boundary: HostBoundary,
                           python: str, java_home: str | None) -> None:
-    """Bind executable destinations to fully walked roots, not just permitted link prefixes.
+    """Bind the interpreter and JDK, as named and as resolved, to fully walked roots.
 
-    The scanner may inspect a link target's metadata without walking its surrounding import
-    tree. Such a target cannot become an execution root unless setup explicitly enrolled it.
-    Installer provenance and complete Python/JDK import enrollment remain caller requirements.
+    The scanner inspects a link target's metadata without walking its surrounding tree, so a
+    target outside the roots cannot become an execution root. The path as named must be inside
+    a root too: an interpreter started through a virtual environment takes its import roots
+    from there, so the environment has to be one of the admitted roots.
     """
     paths = (python, *((java_home,) if java_home is not None else ()))
     for path in paths:
