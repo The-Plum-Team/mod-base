@@ -6,22 +6,26 @@ and the live host fence, runs the one fixed operation the request names and re-a
 afterwards. Operations reconstruct their inputs from the request's closed data and from protected
 copies on disk; nothing in a request selects code, and no operation calls the GitHub API.
 ``stage-candidate`` is the one operation that reads directories a request names: the runner's own
-checkout, kit overlay and Gradle seed, each below the fenced runner home.
+checkout, kit overlay and Gradle seed, each below the fenced runner home. The operations around a
+candidate hook (``stage-bundle``, ``verify-candidate-source``, ``freeze-build-export``,
+``freeze-runtime-export``) take the bundle directory and the generated roots from the protected
+Build config in the validator's controller copy, never from the request.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import mod_base
-from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, ControllerSources,
+from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, ControllerSources, _validate_sources,
                                           prepare_controller_validation)
-from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, prepare_build_validation
+from mod_base.build_ci.exports import (BUILD_VALIDATION_ROOT, freeze_build_export, prepare_build_validation,
+                                       stage_build_bundle, verify_candidate_source)
 from mod_base.build_ci.handoff import _context, freeze_handed_off_build_validation
 from mod_base.build_ci.host import (HostBoundary, _canonical_path, authenticate_privileged_host_boundary,
                                     fence_worker_host)
@@ -29,16 +33,18 @@ from mod_base.build_ci.inputs import (_accounts, _inspect_inputs, prepare_plan_i
                                       take_derived_plan)
 from mod_base.build_ci.root_request import (_inspect_sources, _restore_sources, _source_root_identity,
                                           read_root_request)
-from mod_base.build_ci.runtime_handoff import _context as _runtime_context, freeze_handed_off_runtime_validation
+from mod_base.build_ci.runtime_freeze import freeze_runtime_export
+from mod_base.build_ci.runtime_handoff import (_context as _runtime_context, freeze_handed_off_runtime_validation,
+                                               take_derived_runtime)
 from mod_base.build_ci.runtime_inputs import _inspect_inputs as _inspect_runtime_inputs, prepare_runtime_validation
 from mod_base.build_ci.source import GitSourceEntry
 from mod_base.build_ci.worker import WorkerAccount, WorkerError, authenticate_worker_account, terminate_worker
-from mod_base.build_ci.worker_preparation import prepare_privileged_worker_checkout
+from mod_base.build_ci.worker_preparation import _tree_id, prepare_privileged_worker_checkout
 from mod_base.io.tree import authenticate_tree_read_access, read_child_file
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.validators import check
-from mod_base.pin import Pin, kit_tree_digest, verify_staged_files
+from mod_base.pin import OVERLAY_PATH, Pin, kit_tree_digest, verify_staged_files
 
 
 @dataclass(frozen=True)
@@ -214,6 +220,92 @@ def _freeze_runtime_validation(boundary: HostBoundary, arguments: dict[str, Any]
         terminate_worker(validator)
 
 
+def candidate_generated_roots(config: Mapping[str, Any]) -> tuple[str, ...]:
+    """The directories of a candidate checkout that may hold files the tested tree does not track.
+
+    Protected policy, never a candidate claim: the kit overlay protected code stages
+    (``pin.OVERLAY_PATH``) and the directory the protected Build config names for a lane's Build
+    (``bundle.path``). ``config`` is the validated protected config document. Neither directory
+    may hold the other. Every other path a hook leaves in its checkout is undeclared.
+    """
+
+    bundle = config["bundle"]["path"]
+    overlay, staged = (path.casefold() + "/" for path in (OVERLAY_PATH, bundle))
+    check(not overlay.startswith(staged) and not staged.startswith(overlay), "$.bundle.path",
+          "the Build of a lane is staged apart from the kit overlay")
+    return tuple(sorted((OVERLAY_PATH, bundle)))
+
+
+def _protected_config(boundary: HostBoundary, validator: WorkerAccount, arguments: dict[str, Any],
+                      kit: _Kit) -> tuple[dict[str, Any], Callable[[], None]]:
+    """The protected Build config of the job, read from the validator's controller copy, and the
+    check that closes the operation: the copy is still the one that was read."""
+    plan = arguments["plan"]
+    _kit_binding(plan, kit)
+    sources, initial = _controller_sources(boundary, validator, arguments["sources"], plan)
+
+    def closing() -> None:
+        check(_inspect_sources(boundary, validator, sources, plan) == initial,
+              "$.sources", "controller copy changed during the root operation")
+        authenticate_privileged_host_boundary(boundary)
+
+    return _validate_sources(sources, plan["identity"]), closing
+
+
+def _candidate_job(boundary: HostBoundary, arguments: dict[str, Any]) -> tuple[WorkerAccount, WorkerAccount]:
+    """The live candidate and validator, which must be the two accounts the request names."""
+    validator = _job(boundary, arguments)
+    return authenticate_worker_account("candidate"), validator
+
+
+def _stage_bundle(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    candidate, validator = _candidate_job(boundary, arguments)
+    config, closing = _protected_config(boundary, validator, arguments, kit)
+    candidate_generated_roots(config)  # The bundle directory lies apart from the kit overlay.
+    stage_build_bundle(boundary=boundary, candidate=candidate, plan=arguments["plan"],
+                       envelope=arguments["envelope"], path=config["bundle"]["path"])
+    closing()
+
+
+def _take_derived_runtime(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    take_derived_runtime(boundary=boundary, validator=_job(boundary, arguments))
+
+
+def _candidate_source(boundary: HostBoundary, arguments: dict[str, Any],
+                      kit: _Kit) -> tuple[dict[str, Any], Callable[[], None]]:
+    """What every operation after a candidate hook checks first, as keyword arguments: the live
+    candidate, the inventory bound to the tested tree of the plan and the generated roots of the
+    protected config."""
+    candidate, validator = _candidate_job(boundary, arguments)
+    config, closing = _protected_config(boundary, validator, arguments, kit)
+    inventory = tuple(GitSourceEntry(**entry) for entry in arguments["inventory"])
+    check(_tree_id(inventory) == arguments["plan"]["identity"]["tested_tree"], "$.request.inventory",
+          "is not the inventory of the tested tree")
+    return {"boundary": boundary, "candidate": candidate, "inventory": inventory,
+            "generated_roots": candidate_generated_roots(config)}, closing
+
+
+def _verify_candidate_source(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    source, closing = _candidate_source(boundary, arguments, kit)
+    verify_candidate_source(**source)
+    closing()
+
+
+def _freeze_build_export(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    source, closing = _candidate_source(boundary, arguments, kit)
+    freeze_build_export(**source, plan=arguments["plan"], target_id=arguments["target_id"],
+                        producer=arguments["producer"])
+    closing()
+
+
+def _freeze_runtime_export(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    source, closing = _candidate_source(boundary, arguments, kit)
+    freeze_runtime_export(**source, plan=arguments["plan"], build=arguments["build"],
+                          owning_build=arguments["owning_build"], lane_id=arguments["lane_id"],
+                          producer=arguments["producer"])
+    closing()
+
+
 _OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
     "host-fence": _host_fence,
     "stage-candidate": _stage_candidate,
@@ -223,6 +315,11 @@ _OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
     "grant-plan-inputs": _grant_plan_inputs,
     "take-derived-plan": _take_derived_plan,
     "grant-validation-inputs": _grant_validation_inputs,
+    "stage-bundle": _stage_bundle,
+    "take-derived-runtime": _take_derived_runtime,
+    "verify-candidate-source": _verify_candidate_source,
+    "freeze-build-export": _freeze_build_export,
+    "freeze-runtime-export": _freeze_runtime_export,
     "grant-build-validation": _grant_build_validation,
     "grant-runtime-validation": _grant_runtime_validation,
 }

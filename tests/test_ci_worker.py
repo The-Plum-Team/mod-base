@@ -233,6 +233,25 @@ class EnvironmentTests(unittest.TestCase):
             with self.subTest(environment=value), self.assertRaises(MbError):
                 self.environment(identity=value)
 
+    def test_every_jdk_home_of_the_job_is_listed_in_order_behind_java_home(self):
+        homes = ["/opt/jdk", "/opt/hostedtoolcache/Java_Temurin/21.0.4/x64", "/usr/lib/jvm/temurin-25-jdk-amd64"]
+        for count in (1, 2, 3):
+            value = ":".join(homes[:count])
+            result = dict(entry.split("=", 1) for entry in self.environment(values={"MB_JAVA_HOMES": value}))
+            with self.subTest(count=count):
+                self.assertEqual((result["JAVA_HOME"], result["MB_JAVA_HOMES"]), ("/opt/jdk", value))
+                self.assertEqual(result["PATH"].split(":")[:2], ["/opt/python/bin", "/opt/jdk/bin"])
+        self.assertEqual(worker.JAVA_HOMES_ENVIRONMENT, "MB_JAVA_HOMES")
+        self.assertNotIn("MB_JAVA_HOMES", dict(entry.split("=", 1) for entry in self.environment()))
+        rejected = ["", "/opt/other", "/opt/other:/opt/jdk", "/opt/jdk:/opt/jdk", "/opt/jdk:", ":/opt/jdk",
+                    "/opt/jdk:relative/jdk", "/opt/jdk:/opt/../etc", "/opt/jdk:/opt/jdk21\n", "/opt/jdk /opt/jdk21:x",
+                    ":".join(["/opt/jdk", *(f"/opt/jdk-{index}" for index in range(limits.MAX_CI_TOOL_ROOTS))])]
+        for value in rejected:
+            with self.subTest(value=value[:40]), self.assertRaises(MbError):
+                self.environment(values={"MB_JAVA_HOMES": value})
+        with self.assertRaises(MbError):  # A job without a JDK has no list either.
+            self.environment(java_home=None, values={"MB_JAVA_HOMES": "/opt/jdk"})
+
     def test_reviewed_runtime_inputs_are_passed_without_shell_interpolation(self):
         values = {"E2E_ROW_JSON": '{"data":"$(touch /outside)"}', "E2E_SCENARIOS": "example/server",
                   "LIBGL_ALWAYS_SOFTWARE": "1", "MB_LANE_ID": "lane-a", "SOURCE_DATE_EPOCH": "123"}

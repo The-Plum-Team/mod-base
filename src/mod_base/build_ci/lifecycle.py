@@ -1,4 +1,5 @@
-"""The worker lifecycle of one Build or packaged job (MB11): prepare, plan, finish.
+"""The worker lifecycle of one Build or packaged job (MB11): prepare, plan, stage, run, seal, validate,
+finish.
 
 Every step of a job is one ``ci`` command run by the runner. The steps share the job's private
 state directory, which ``ci subject`` creates, and the fixed worker root below ``/tmp``. This
@@ -12,6 +13,12 @@ module is what the ``ci worker-*`` and ``ci plan`` commands compose:
 * :func:`open_worker` gives every later command the prepared worker, checked against the host;
 * :func:`derive_plan` (``ci plan``) stages the candidate files the protected config names, runs
   ``derive_plan`` as the validator and builds the plan;
+* :func:`stage_candidate` (``ci worker-stage``) gives the candidate its own copy of the tested
+  commit, the verified kit and, for a lane, the complete Build;
+* :func:`run_candidate_hook` (``ci worker-run``) runs the one candidate hook of the job behind the
+  tool fence and records how it ended;
+* :func:`seal_worker` (``ci worker-seal``) locks the candidate and has root prove its tracked
+  sources unchanged and freeze its export with the envelope protected code writes;
 * :func:`validate_export` (``ci worker-validate``) hands the job's sealed export to the validator,
   runs its verification hook, has root seal the reports with the record protected code builds
   and writes the directory the job uploads;
@@ -27,6 +34,15 @@ State records are canonical JSON, written once and read strictly:
     the digest of the protected config.
 ``ci-plan.json``
     the plan of this job.
+``worker-stage.json``
+    what the candidate was staged from: the runner's checkout, the tested commit and tree, the
+    kit and whether a Gradle seed and the Build went with it.
+``worker-run.json``
+    how the one candidate hook of the job ended, written also when it failed.
+``worker-seal.json``
+    what was frozen after a successful hook: the export and the hash of its envelope.
+``ci-selection.json``
+    (written by ``ci fetch-build``) the Build a lane job runs against.
 
 Between two hook runs both accounts are terminated and locked. A locked account still runs what
 the runner starts for it, so locking is the resting state and not the end of a job.
@@ -38,51 +54,65 @@ import contextlib
 import hashlib
 import os
 import stat
+import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mod_base.build_ci import adapter, identity, planning
+from mod_base.build_ci.authenticate import run_head
 from mod_base.build_ci.checkout import read_objects
 from mod_base.build_ci.config import BuildConfig, load_build_config
 from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, ControllerSources,
                                           checkout_controller_sources, execute_controller_validator,
                                           materialize_controller_sources)
-from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT
+from mod_base.build_ci.exports import (BUILD_VALIDATION_ROOT, CANDIDATE_SOURCE_ROOT, inspect_complete_build,
+                                       verify_build_export)
+from mod_base.build_ci.graph import run_graph
 from mod_base.build_ci.handoff import _read_private_record, record_build_validation_execution
 from mod_base.build_ci.host import (HOST_RUNNER_HOME, HostBoundary, _canonical_path, authenticate_host_boundary,
                                     inspect_worker_host, protect_worker_host, restore_worker_host)
 from mod_base.build_ci.inputs import (DERIVED_PLAN_ROOT, VALIDATOR_INPUT_ROOT, _layout, build_input_sha256,
                                       execute_frozen_build_validator, materialize_validation_inputs,
                                       read_sealed_build, replace_plan_inputs)
-from mod_base.build_ci.protocol import SHA256, validate_plan
-from mod_base.build_ci.root_request import (request_build_validation_freeze, request_build_validation_grant,
-                                          request_controller_grant, request_derived_plan, request_host_fence,
-                                          request_plan_inputs_grant, request_runtime_validation_freeze,
-                                          request_runtime_validation_grant, request_validation_inputs_grant,
-                                          run_root_operation)
+from mod_base.build_ci.protocol import ID, SHA1, SHA256, repo_path, validate_plan
+from mod_base.build_ci.records import validate_source_selection
+from mod_base.build_ci.root_request import (request_build_export_freeze, request_build_validation_freeze,
+                                            request_build_validation_grant, request_bundle_staging,
+                                            request_candidate_source_check, request_candidate_staging,
+                                            request_controller_grant, request_derived_plan, request_derived_runtime,
+                                            request_host_fence, request_plan_inputs_grant,
+                                            request_runtime_export_freeze, request_runtime_validation_freeze,
+                                            request_runtime_validation_grant, request_validation_inputs_grant,
+                                            run_root_operation)
 from mod_base.build_ci.root_request_schema import _ACCOUNT, _BOUNDARY
-from mod_base.build_ci.runtime_handoff import record_runtime_validation_execution
+from mod_base.build_ci.runtime_exports import verify_runtime_export
+from mod_base.build_ci.runtime_handoff import DERIVED_RUNTIME_ROOT, record_runtime_validation_execution
 from mod_base.build_ci.runtime_inputs import (RUNTIME_VALIDATION_ROOT, execute_frozen_runtime_validator,
                                               read_sealed_runtime)
+from mod_base.build_ci.source import GitSourceEntry, parse_source_inventory, verify_source_copy
 from mod_base.build_ci.toolchain import (ToolTreeProof, _execution_tool_paths, authenticate_toolchains,
-                                        inspect_worker_toolchains)
+                                         execute_tool_fenced_worker, inspect_worker_toolchains)
 from mod_base.build_ci.validation import SEALED_VALIDATION_ROOT, materialize_validated_export
-from mod_base.build_ci.worker import (WORKER_ACCOUNTS, WORKER_ROOT, WorkerAccount, WorkerExecutionError,
-                                      WorkerResult, allocate_worker_account, authenticate_worker_account,
-                                      lock_worker_account, prepare_worker_boundary, render_worker_log,
-                                      terminate_worker, worker_account_exists, worker_processes)
-from mod_base.errors import MbError
+from mod_base.build_ci.worker import (JAVA_HOMES_ENVIRONMENT, WORKER_ACCOUNTS, WORKER_ROOT, WorkerAccount,
+                                      WorkerExecutionError, WorkerResult, allocate_worker_account,
+                                      authenticate_worker_account, lock_worker_account, prepare_worker_boundary,
+                                      render_worker_log, terminate_worker, worker_account_exists, worker_processes)
+from mod_base.build_ci.worker_preparation import _tree_id
+from mod_base.errors import MAX_MESSAGE_CHARS, MbError, single_line
 from mod_base.github.api import GitHubApi
 from mod_base.github.contents import blob, exact_tree
+from mod_base.io.atomic_directory import atomic_directory, write_new
 from mod_base.io.secure_json import loads
-from mod_base.io.tree import authenticate_tree_private_access
+from mod_base.io.tree import authenticate_tree_private_access, copy_regular_data_files, read_child_file
 from mod_base.model import grammar, limits
-from mod_base.model.canonical import canonical_json
-from mod_base.model.validators import Int, List, Nullable, Obj, check
-from mod_base.pin import kit_tree_digest
+from mod_base.model.canonical import canonical_json, canonical_sha256
+from mod_base.model.validators import Bool, Int, List, Nullable, Obj, Str, check
+from mod_base.pin import (ACTIONS_DIR, DIGESTED_DIRS, LOCKED_DIRS, STAMP_NAME, Pin, kit_tree_digest, stamp_document,
+                          verify_staged_files)
 from mod_base.runtime import Invocation
+from mod_base.workflow import ci_producer
 
 HOST_NAME = "worker-host.json"
 WORKER_NAME = "worker.json"
@@ -424,14 +454,9 @@ def api_candidate_files(api: GitHubApi, job: Job) -> dict[str, bytes]:
 _git = read_objects
 
 
-def checkout_candidate_files(checkout: Path, job: Job) -> dict[str, bytes]:
-    """The candidate files a plan is derived from, read as Git objects of the candidate checkout.
-
-    The result has the shape of :func:`api_candidate_files` and the same bytes, without a request.
-    The checkout's ``HEAD`` must be the tested commit and that commit's tree the tested tree.
-    The working files are never read: a path is resolved in the commit's tree, must be a regular
-    file there, and its blob is read by id with the id recomputed from the bytes.
-    """
+def _tested_checkout(checkout: Path, job: Job) -> Path:
+    """The absolute path of a candidate checkout whose own Git directory has ``HEAD`` at the
+    tested commit and that commit with the tested tree."""
 
     checkout = Path(os.path.abspath(checkout))
     try:
@@ -446,6 +471,21 @@ def checkout_candidate_files(checkout: Path, job: Job) -> dict[str, bytes]:
     check(_git(checkout, "rev-parse", "--verify", f"{tested}^{{tree}}", max_bytes=answer)
           == f"{job.subject['tested_tree']}\n".encode("ascii"), "$.candidate",
           "the candidate checkout's commit does not have the tested tree")
+    return checkout
+
+
+def checkout_candidate_files(checkout: Path, job: Job) -> dict[str, bytes]:
+    """The candidate files a plan is derived from, read as Git objects of the candidate checkout.
+
+    The result has the shape of :func:`api_candidate_files` and the same bytes, without a request.
+    The checkout's ``HEAD`` must be the tested commit and that commit's tree the tested tree.
+    The working files are never read: a path is resolved in the commit's tree, must be a regular
+    file there, and its blob is read by id with the id recomputed from the bytes.
+    """
+
+    checkout = _tested_checkout(checkout, job)
+    tested = job.subject["tested_sha"]
+    answer = limits.MAX_CI_GIT_ANSWER_BYTES
 
     def read(path: str) -> bytes:
         listing = _git(checkout, "ls-tree", "-z", "-l", "--full-tree", tested, "--", path, max_bytes=answer)
@@ -527,6 +567,400 @@ def derive_plan(job: Job, worker: Worker, sources: Mapping[str, bytes], *, expec
               request_validation_inputs_grant(boundary=boundary, validator=validator, plan=plan))
     identity.write_state_record(job.state, PLAN_NAME, canonical_json(plan))
     return read_plan(job)
+
+
+# -- ci worker-stage, ci worker-run, ci worker-seal: the candidate path --------------------------------
+
+STAGE_NAME = "worker-stage.json"
+RUN_NAME = "worker-run.json"
+SEAL_NAME = "worker-seal.json"
+#: The selection record ``ci fetch-build`` keeps in the state of a lane job: the Build the lane runs.
+SELECTION_NAME = "ci-selection.json"
+#: The producer whose job runs each candidate hook: lanes run in the packaged workflow only.
+HOOK_PRODUCERS = {"policy": "build", "build_target": "build", "run_lane": "packaged"}
+#: What a job's seal freezes for each candidate hook; ``policy`` exports nothing.
+HOOK_EXPORTS = {"policy": None, "build_target": "build", "run_lane": "runtime"}
+#: The directories of a kit checkout that a staged kit holds, as a mod's bootstrap copies them.
+_KIT_DIRECTORIES = (*DIGESTED_DIRS, *LOCKED_DIRS, ACTIONS_DIR)
+_KIT_BOUNDS = dict(max_files=limits.MAX_CI_KIT_INSTALL_FILES, max_entries=limits.MAX_CI_KIT_INSTALL_ENTRIES,
+                   max_total_bytes=limits.MAX_CI_KIT_INSTALL_BYTES, max_file_bytes=limits.MAX_CI_KIT_INSTALL_BYTES)
+
+_STAGE = Obj({
+    "candidate": _tool_path, "tested_sha": SHA1, "tested_tree": SHA1,
+    "source": Obj({"files": Int(1, limits.MAX_CI_SOURCE_FILES), "bytes": Int(0, limits.MAX_CI_SOURCE_TREE_BYTES)}),
+    "kit": Obj({"sha": SHA1, "version": Str(grammar.VERSION, max_len=20),
+                "tree_digest": Str(grammar.DIGEST, max_len=71)}),
+    "gradle_seed": Bool(),
+    "bundle": Nullable(Obj({"path": repo_path, "envelope_sha256": SHA256,
+                            "files": Int(1, limits.MAX_CI_EXPORT_FILES)})),
+})
+_EXECUTION_FIELDS = {"returncode": Nullable(Int(-255, 255)), "truncated": Bool(),
+                     "log_bytes": Int(0, limits.MAX_CI_LOG_BYTES), "log_sha256": SHA256}
+_RUN = Obj({"hook": Str(choices=adapter.CANDIDATE_HOOKS), "unit_id": Nullable(ID), "succeeded": Bool(),
+            "error": Nullable(Str(max_len=MAX_MESSAGE_CHARS, text="evidence")), **_EXECUTION_FIELDS})
+_SEAL = Obj({"hook": Str(choices=adapter.CANDIDATE_HOOKS), "unit_id": Nullable(ID),
+             "export": Nullable(Str(choices=("build", "runtime"))), "envelope_sha256": Nullable(SHA256),
+             "files": Int(0, limits.MAX_CI_EXPORT_FILES)})
+
+
+def _candidate(worker: Worker) -> WorkerAccount:
+    if "candidate" not in worker.accounts:
+        raise LifecycleError("this job allocated no candidate account: `ci worker-prepare --roles candidate+validator`")
+    return worker.accounts["candidate"]
+
+
+def read_stage(job: Job) -> dict[str, Any]:
+    """What ``ci worker-stage`` recorded: the runner's checkout the candidate was staged from, the
+    tested commit and tree, the staged kit and whether a Gradle seed and the Build went with it."""
+
+    stage = _read_record(job.state, STAGE_NAME, _STAGE, limits.MAX_CI_WORKER_RECORD_BYTES)
+    check((stage["tested_sha"], stage["tested_tree"]) == (job.subject["tested_sha"], job.subject["tested_tree"]),
+          "$.stage", "the candidate was staged for another subject")
+    return stage
+
+
+def read_run(job: Job) -> dict[str, Any]:
+    """What ``ci worker-run`` recorded of its one candidate hook: the hook and unit, whether it
+    succeeded (``error`` says why not) and the exit status and log digest of the execution."""
+
+    run = _read_record(job.state, RUN_NAME, _RUN, limits.MAX_CI_WORKER_RECORD_BYTES)
+    check((run["error"] is None) == run["succeeded"] and (not run["succeeded"] or run["returncode"] == 0),
+          "$.run", "a successful run has a zero exit and no error, a failed one says why")
+    check((run["unit_id"] is None) == (adapter.HOOKS[run["hook"]].unit is None), "$.run.unit_id",
+          "a hook runs for its kind of unit")
+    return run
+
+
+def read_seal(job: Job) -> dict[str, Any]:
+    """What ``ci worker-seal`` recorded once it sealed: the hook and unit, which export it froze
+    (``build`` into ``sealed-build/``, ``runtime`` into ``sealed-runtime/``, ``None`` for the
+    source check of ``policy`` alone), the SHA-256 of the canonical envelope and its file count."""
+
+    seal = _read_record(job.state, SEAL_NAME, _SEAL, limits.MAX_CI_WORKER_RECORD_BYTES)
+    check(seal["export"] == HOOK_EXPORTS[seal["hook"]]
+          and (seal["export"] is None) == (seal["envelope_sha256"] is None) == (seal["files"] == 0)
+          and (seal["unit_id"] is None) == (adapter.HOOKS[seal["hook"]].unit is None), "$.seal",
+          "names the export its hook produces for its kind of unit, with its envelope")
+    return seal
+
+
+def _complete_build(worker: Worker, plan: dict[str, Any]) -> dict[str, Any]:
+    """The envelope of the complete Build ``ci fetch-build`` left in ``sealed-build/``, every byte checked."""
+
+    try:
+        return inspect_complete_build(boundary=worker.boundary, plan=plan)[0]
+    except OSError as error:
+        raise LifecycleError("this job has no Build in sealed-build/: `ci fetch-build` runs first") from error
+
+
+def checkout_inventory(checkout: Path, job: Job) -> tuple[GitSourceEntry, ...]:
+    """The complete inventory of the tested tree, read from the Git objects of the candidate checkout.
+
+    The checkout must be detached at the tested commit, whose tree is the tested tree: ``HEAD``
+    holds the commit id itself, not a branch. The tree is listed recursively by plumbing, within
+    the source listing cap; a submodule, an unusual mode or an unsafe path is a rejection. The
+    listing is bound to the authenticated tree by recomputing the tree's object name from it, so
+    no other inventory passes. The working files are not read here.
+    """
+
+    checkout = _tested_checkout(checkout, job)
+    tested, tree = job.subject["tested_sha"], job.subject["tested_tree"]
+    check(read_child_file(checkout / ".git", "HEAD", max_bytes=limits.MAX_CI_GIT_REF_BYTES)
+          == f"{tested}\n".encode("ascii"), "$.candidate", "the candidate checkout is not detached at the tested commit")
+    inventory = parse_source_inventory(_git(checkout, "ls-tree", "-r", "-l", "-z", "--full-tree", tree,
+                                            max_bytes=limits.MAX_CI_SOURCE_LIST_BYTES))
+    check(_tree_id(inventory) == tree, "$.candidate", "the candidate checkout's objects do not list the tested tree")
+    return inventory
+
+
+def stage_kit_overlay(job: Job, output: Path) -> Pin:
+    """Runner-only: stage the verified kit at the new directory ``output`` as a mod's bootstrap does.
+
+    The copy holds the digested directories, ``template/``, ``tools/`` and ``actions/`` of the kit
+    checkout this command executes (regular files only, none executable) and the stamp
+    ``MOD_BASE_KIT.json`` for the kit commit and version of the subject. It must have the verified
+    kit-digest-v1 and match the staged-file locks. Returns the pin the stamp names; root admits the
+    overlay against it again before it copies it to the candidate's ``out/mod-base-kit``.
+    """
+
+    kit = job.subject["kit"]
+    pin = Pin(kit["sha"], "v" + kit["version"], ())
+
+    def writer(stage: Path, stage_fd: int) -> None:
+        for top in _KIT_DIRECTORIES:
+            os.mkdir(top, 0o700, dir_fd=stage_fd)
+            descriptor = os.open(top, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=stage_fd)
+            try:
+                copy_regular_data_files(job.kit_root / top, descriptor, **_KIT_BOUNDS)
+            finally:
+                os.close(descriptor)
+        write_new(stage_fd, STAMP_NAME, canonical_json(stamp_document(pin, job.kit_digest)))
+        check(kit_tree_digest(stage) == job.kit_digest, "$.kit", "the staged kit differs from the verified checkout")
+        verify_staged_files(stage)
+
+    try:
+        atomic_directory(output, writer)
+    except OSError as error:
+        raise LifecycleError(f"cannot stage the kit for the candidate: {error.strerror or error}") from error
+    return pin
+
+
+def stage_candidate(job: Job, worker: Worker, plan: dict[str, Any], checkout: Path, *, gradle_seed: Path | None,
+                    bundle: bool) -> dict[str, Any]:
+    """``ci worker-stage``: give the candidate its checkout, the kit and, for a lane, the Build.
+
+    The runner's ``checkout`` must be detached at the tested commit and hold exactly the tested
+    tree: every tracked file with its bytes and mode and nothing else, ignored files included
+    (:func:`checkout_inventory`, ``source.verify_source_copy``). The verified kit is staged with
+    its stamp in a temporary directory of the state (:func:`stage_kit_overlay`) and the
+    ``stage-candidate`` root operation copies the tracked files, a curated ``.git``, the kit as
+    ``out/mod-base-kit`` and the optional Gradle seed into the candidate's own ``repository/`` and
+    Gradle home. With ``bundle`` the complete Build of ``sealed-build/`` is then placed at
+    ``repository/<bundle.path>`` by ``stage-bundle``, as a copy the candidate owns. Nothing of the
+    candidate runs. Every account ends terminated and locked; the stage is recorded last, once.
+    """
+
+    candidate = _candidate(worker)
+    if _recorded(job.state, STAGE_NAME):
+        raise LifecycleError("this job already staged its candidate; `ci worker-stage` runs once")
+    checkout = Path(os.path.abspath(checkout))
+    seed = None if gradle_seed is None else Path(os.path.abspath(gradle_seed))
+    inventory = checkout_inventory(checkout, job)
+    verify_source_copy(checkout, inventory=inventory)
+    with resting(worker.accounts):
+        envelope = _complete_build(worker, plan) if bundle else None
+        try:
+            with tempfile.TemporaryDirectory(prefix="mb-ci-stage-", dir=job.state) as temporary:
+                overlay = Path(temporary) / "kit"
+                pin = stage_kit_overlay(job, overlay)
+                _root(job, worker.python, "stage-candidate", request_candidate_staging(
+                    boundary=worker.boundary, candidate=candidate, repository=job.subject["repository"],
+                    tested_sha=job.subject["tested_sha"], tested_tree=job.subject["tested_tree"],
+                    inventory=inventory, source=checkout, overlay=overlay, pin=pin, expected_digest=job.kit_digest,
+                    gradle_seed=seed))
+        except OSError as error:
+            raise identity.StateError(f"cannot hold the staged kit in the state directory: "
+                                      f"{error.strerror or error}") from error
+        if envelope is not None:
+            _root(job, worker.python, "stage-bundle", request_bundle_staging(
+                boundary=worker.boundary, candidate=candidate, validator=worker.validator, sources=job.sources,
+                plan=plan, envelope=envelope))
+    stage = {"candidate": checkout.as_posix(), "tested_sha": job.subject["tested_sha"],
+             "tested_tree": job.subject["tested_tree"],
+             "source": {"files": len(inventory), "bytes": sum(entry.size for entry in inventory)},
+             "kit": {"sha": pin.sha, "version": pin.version[1:], "tree_digest": job.kit_digest},
+             "gradle_seed": seed is not None,
+             "bundle": None if envelope is None else {
+                 "path": job.config.data["bundle"]["path"], "envelope_sha256": canonical_sha256(envelope),
+                 "files": len(envelope["files"])}}
+    identity.write_state_record(job.state, STAGE_NAME, canonical_json(_STAGE(stage, "$")))
+    return read_stage(job)
+
+
+def derive_runtime(job: Job, worker: Worker, plan: dict[str, Any], lane_id: str, *,
+                   log: Callable[[str], object]) -> dict[str, str]:
+    """The values ``run_lane`` receives for ``lane_id``, as the protected ``derive_runtime`` hook
+    returns them: the hook runs as the validator, ``take-derived-runtime`` hands the runner a
+    private copy of its one output and removes the original, and the copy is decoded strictly
+    (``adapter.parse_runtime_values``). A job derives them once."""
+
+    run_protected_hook(job, worker, "derive_runtime", plan=plan, unit_id=lane_id, log=log)
+    _root(job, worker.python, "take-derived-runtime",
+          request_derived_runtime(boundary=worker.boundary, validator=worker.validator))
+    authenticate_host_boundary(worker.boundary)
+    _layout(worker.boundary)
+    try:
+        raw = _read_private_record(Path(str(DERIVED_RUNTIME_ROOT)), name=adapter.RUNTIME_OUTPUT,
+                                   owner_uid=worker.boundary.uid, owner_gid=worker.boundary.gid,
+                                   max_bytes=limits.MAX_CI_REPORT_BYTES, label="derived runtime values")
+    except OSError as error:
+        raise LifecycleError("cannot read the runtime values root handed over") from error
+    return adapter.parse_runtime_values(raw)
+
+
+def _execution(result: WorkerResult | None) -> dict[str, Any]:
+    """What a state record and a root request keep of one execution; the log itself was printed."""
+
+    log = b"" if result is None else result.log
+    return {"returncode": None if result is None else result.returncode,
+            "truncated": False if result is None else result.truncated,
+            "log_bytes": len(log), "log_sha256": hashlib.sha256(log).hexdigest()}
+
+
+def run_candidate_hook(job: Job, worker: Worker, plan: dict[str, Any], hook: str, *, unit_id: str | None,
+                       log: Callable[[str], object]) -> dict[str, Any]:
+    """``ci worker-run``: run the one candidate hook of this job and record how it ended.
+
+    ``hook`` is ``policy``, ``build_target`` (for a target of the plan) or ``run_lane`` (for a
+    lane, in a packaged job whose stage placed the Build). For a lane the protected
+    ``derive_runtime`` hook runs first as the validator and its values are passed on unchanged
+    (:func:`derive_runtime`). The hook is the dispatcher of the candidate's own ``repository/``
+    copy, run as the candidate behind the tool fence with the timeout the protected config sets
+    for it. ``JAVA_HOME`` is the first JDK of the job and ``MB_JAVA_HOMES`` lists every one, each
+    bound to the admitted tool trees first. The neutralised log goes to ``log`` whatever happens,
+    and every account ends terminated and locked.
+
+    ``worker-run.json`` is written once the hook was attempted, also when it failed, hung, left a
+    process behind or could not be started; the failure is then raised again. Returns the record
+    of a hook that succeeded. A job runs its candidate once.
+    """
+
+    check(type(hook) is str and hook in HOOK_PRODUCERS, "$.hook", "is not a candidate hook")
+    candidate = _candidate(worker)
+    stage = read_stage(job)
+    if _recorded(job.state, RUN_NAME):
+        raise LifecycleError("this job already ran its candidate hook; `ci worker-run` runs once")
+    adapter.plan_unit(plan, hook, unit_id)
+    check(job.record["producer"] == HOOK_PRODUCERS[hook], "$.hook",
+          f"{hook} is a step of a {HOOK_PRODUCERS[hook]} job")
+    if hook == "run_lane" and stage["bundle"] is None:
+        raise LifecycleError("run_lane needs the Build in its checkout: `ci worker-stage --bundle`")
+    result: WorkerResult | None = None
+    failure: MbError | None = None
+    try:
+        with resting(worker.accounts):
+            runtime = derive_runtime(job, worker, plan, unit_id, log=log) if hook == "run_lane" else None
+            values = adapter.hook_values(hook, unit_id=unit_id, runtime=runtime)
+            if worker.java_homes:
+                values[JAVA_HOMES_ENVIRONMENT] = ":".join(worker.java_homes)
+            for home in worker.java_homes[1:]:
+                _execution_tool_paths(worker.tools, worker.boundary, worker.python, home)
+            command = adapter.hook_command(hook, python=worker.python, checkout=str(CANDIDATE_SOURCE_ROOT),
+                                           dispatcher=job.config.data["adapter"]["dispatcher"])
+            try:
+                result = execute_tool_fenced_worker(
+                    candidate, boundary=worker.boundary, tools=worker.tools, command=command, python=worker.python,
+                    java_home=worker.java_home, identity=plan["identity"], run_id=job.run_id,
+                    run_attempt=job.run_attempt, values=values,
+                    timeout_seconds=adapter.hook_timeout_seconds(hook, job.config.data))
+            except WorkerExecutionError as error:
+                result = error.result
+                raise
+            finally:
+                if result is not None:
+                    log(render_worker_log(result, role="candidate"))
+    except MbError as error:
+        failure = error
+    run = {"hook": hook, "unit_id": unit_id, "succeeded": failure is None,
+           "error": None if failure is None else single_line(failure), **_execution(result)}
+    identity.write_state_record(job.state, RUN_NAME, canonical_json(_RUN(run, "$")))
+    if failure is not None:
+        raise failure
+    return read_run(job)
+
+
+def _producer(job: Job, plan: dict[str, Any], mode: str) -> dict[str, Any]:
+    """The producer identity every record of the executing run attempt carries, for the graph the
+    run shows in ``mode``: the managed caller and event of the job's identity record, the head
+    GitHub records the run under and the digest of that graph for ``plan``."""
+
+    path, subject = job.record["workflow_path"], plan["identity"]
+    return {"run_id": job.run_id, "run_attempt": job.run_attempt, "workflow_path": path,
+            "workflow_ref": grammar.workflow_ref(subject["repository"], path, subject["base_branch"]),
+            "api_head_sha": run_head(subject)[0], "event": job.record["event"],
+            "graph_sha256": run_graph(ci_producer(path), mode).sha256(plan)}
+
+
+def read_selection(job: Job, plan: dict[str, Any]) -> dict[str, Any]:
+    """The selection record of a lane job (``ci-selection.json``): the complete Build this run
+    attempt of the packaged caller selected for ``plan``, strictly decoded."""
+
+    selection = _read_record(job.state, SELECTION_NAME,
+                             lambda value, path: validate_source_selection(value, plan=plan, path=path),
+                             limits.MAX_CI_RECORD_BYTES)
+    request = selection["request"]
+    check((request["run_id"], request["run_attempt"], request["workflow_path"])
+          == (job.run_id, job.run_attempt, job.record["workflow_path"]), "$.selection.request",
+          "the selection record belongs to another run or attempt")
+    return selection
+
+
+def _lane_mode(job: Job, owning_build: dict[str, Any]) -> str:
+    """The graph mode of the packaged run a lane job belongs to: a pull request's own mode, or for
+    a protected subject whether the run built its Build itself or selected one of a Build run."""
+
+    built = ci_producer(owning_build["producer"]["workflow_path"])
+    if job.subject["pr_number"]:
+        return "pull-request"
+    if built == "build":
+        return "selected"
+    check((owning_build["producer"]["run_id"], owning_build["producer"]["run_attempt"])
+          == (job.run_id, job.run_attempt), "$.selection.build", "a rebuilt Build is the one this run attempt built")
+    return "rebuilt"
+
+
+def seal_worker(invocation: Invocation, state: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """``ci worker-seal``: lock the candidate and freeze what its hook left, or say why nothing is.
+
+    Runs after ``ci worker-run`` whatever that step did (``if: always()``). The candidate is
+    terminated and locked first, before any record is read. Returns the run record and the seal
+    record, which is ``None`` when nothing was sealed:
+
+    * a hook that did not succeed seals nothing, and the step that ran it has already failed. A
+      job without a record of its run is a rejection, since nothing shows that an earlier step
+      failed;
+    * otherwise root proves the tracked sources of ``repository/`` unchanged against the tested
+      tree's inventory, read again from the runner's checkout, with nothing undeclared outside
+      the generated roots of the protected config
+      (``root_request_operations.candidate_generated_roots``);
+    * ``build_target``: ``freeze-build-export`` copies ``export/`` to ``sealed-build/`` with the
+      envelope root builds from the plan, which requires exactly the planned outputs;
+    * ``run_lane``: ``freeze-runtime-export`` copies ``export/`` to ``sealed-runtime/`` with the
+      runtime envelope root builds, bound to the Build of the job's selection record;
+    * ``policy``: ``verify-candidate-source`` alone; it exports nothing.
+
+    The sealed copy is read back as the runner and must carry this run's producer identity. Every
+    account ends terminated and locked; ``worker-seal.json`` is written last.
+    """
+
+    if _sweep("candidate") is None:
+        raise LifecycleError("this job has no candidate account to seal")
+    job = open_job(invocation, state)
+    worker = open_worker(job)
+    candidate = _candidate(worker)
+    if _recorded(job.state, SEAL_NAME):
+        raise LifecycleError("this job already sealed its candidate; `ci worker-seal` runs once")
+    if not _recorded(job.state, RUN_NAME):
+        raise LifecycleError("the candidate hook has no recorded result: nothing is sealed")
+    run = read_run(job)
+    if not run["succeeded"]:
+        return run, None
+    stage, plan = read_stage(job), read_plan(job)
+    hook, unit_id = run["hook"], run["unit_id"]
+    execution = {key: run[key] for key in _EXECUTION_FIELDS}
+    envelope = None
+    with resting(worker.accounts):
+        inventory = checkout_inventory(Path(stage["candidate"]), job)
+        common = dict(boundary=worker.boundary, candidate=candidate, validator=worker.validator, sources=job.sources,
+                      plan=plan, inventory=inventory, execution=execution)
+        if hook == "policy":
+            _root(job, worker.python, "verify-candidate-source", request_candidate_source_check(**common))
+        elif hook == "build_target":
+            producer = _producer(job, plan, "full" if ci_producer(job.record["workflow_path"]) == "build" else "rebuilt")
+            _root(job, worker.python, "freeze-build-export",
+                  request_build_export_freeze(**common, target_id=unit_id, producer=producer))
+            authenticate_host_boundary(worker.boundary)
+            envelope = verify_build_export(BUILD_VALIDATION_ROOT, plan=plan)
+            check((envelope["scope"], envelope["target_id"], envelope["producer"]) == ("target", unit_id, producer),
+                  "$.envelope", "the sealed Build is not this job's target partition")
+        else:
+            owning_build = read_selection(job, plan)["build"]
+            build = _complete_build(worker, plan)
+            check(stage["bundle"] is not None and canonical_sha256(build) == stage["bundle"]["envelope_sha256"],
+                  "$.build", "the sealed Build is not the one that was staged for the candidate")
+            producer = _producer(job, plan, _lane_mode(job, owning_build))
+            _root(job, worker.python, "freeze-runtime-export", request_runtime_export_freeze(
+                **common, lane_id=unit_id, producer=producer, build=build, owning_build=owning_build))
+            authenticate_host_boundary(worker.boundary)
+            envelope = verify_runtime_export(RUNTIME_VALIDATION_ROOT, plan=plan)
+            check((envelope["scope"], envelope["lane_id"], envelope["producer"], envelope["owning_build"])
+                  == ("lane", unit_id, producer, owning_build), "$.envelope",
+                  "the sealed runtime results are not this job's lane")
+    seal = {"hook": hook, "unit_id": unit_id, "export": HOOK_EXPORTS[hook],
+            "envelope_sha256": None if envelope is None else canonical_sha256(envelope),
+            "files": 0 if envelope is None else len(envelope["files"])}
+    identity.write_state_record(job.state, SEAL_NAME, canonical_json(_SEAL(seal, "$")))
+    return run, read_seal(job)
 
 
 # -- ci worker-finish --------------------------------------------------------------------------------

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import os
+import shutil
 import stat
 import tempfile
 import unittest
@@ -15,14 +16,15 @@ from contextlib import ExitStack
 
 from mod_base.build_ci import exports
 from mod_base.build_ci.host import HostBoundary
-from mod_base.build_ci.worker import WorkerAccount, WorkerError, WorkerResult
+from mod_base.build_ci.worker import WorkerAccount, WorkerError
 from mod_base.build_ci.exports import materialize_build_export, validate_target_partitions, verify_build_export
 from mod_base.build_ci.protocol import plan_sha256
+from mod_base.build_ci.records import validate_build_envelope
 from mod_base.errors import MbError
 from mod_base.io.tree import EXPORT_PATHS
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
-from tests.helpers import ci_descriptor, ci_envelope, ci_plan, ci_run_descriptor
+from tests.helpers import ci_descriptor, ci_envelope, ci_plan, ci_run_descriptor, ci_run_producer, ci_staged_plan
 
 
 def partitions_fixture():
@@ -379,118 +381,190 @@ class BuildReadHandoffTests(unittest.TestCase):
             opening.assert_not_called()
 
 
-class CandidateFreezeTests(unittest.TestCase):
-    """Composition checks; required Linux fixtures own actual UID/filesystem evidence."""
+class TargetSealTests(unittest.TestCase):
+    """The envelope protected code writes for one target, from the plan and a real directory.
 
-    boundary = HostBoundary("/home/runner", 1001, 121, 1, 10, 0o755)
-    candidate = WorkerAccount("candidate", 2000, 2000, "candidate-home")
-    validator = WorkerAccount("validator", 2001, 2001, "validator-home")
+    The directory is what a target's hook left: the mod's own files and no kit document. The
+    account, the ownership handover and the source check around it need root and are exercised by
+    ``LinuxCandidateCommandTests`` in ``tests/ci_linux_worker.py``.
+    """
 
-    def freeze(self, *, source_error=None, changed_source=False, kill_error=None,
-               private_error=None, copy_owner=0, transfer_error=None, final_inode=30,
-               changed_export=False):
-        def metadata(inode, owner, group, mode):
-            return SimpleNamespace(st_dev=1, st_ino=inode, st_uid=owner, st_gid=group,
-                                   st_mode=stat.S_IFDIR | mode)
-        info = [metadata(20, 1001, 121, 0o711), metadata(21, 1001, 121, 0o711),
-                metadata(22, 2000, 2000, 0o700), metadata(23, 2000, 2000, 0o700),
-                metadata(30, copy_owner, 0, 0o700), metadata(final_inode, 1001, 121, 0o700)]
-        events = []
-        source_calls = 0
-        expected = ci_envelope()
-        def terminate(account):
-            self.assertEqual(account, self.candidate)
-            events.append("terminate")
-            if kill_error:
-                raise kill_error
-        def source(root, **kwargs):
-            nonlocal source_calls
-            source_calls += 1
-            events.append("source")
-            self.assertEqual(root, exports.CANDIDATE_SOURCE_ROOT)
-            self.assertEqual(kwargs, {"inventory": (), "generated_roots": ("build",)})
-            if source_error:
-                raise source_error
-            return ["changed"] if changed_source and source_calls == 2 else ["original"]
-        def private(root, **kwargs):
-            events.append("private-original" if root == exports.CANDIDATE_OUTPUT_ROOT else "private-copy")
-            self.assertEqual(kwargs["owner_uid"], 2000 if root == exports.CANDIDATE_OUTPUT_ROOT else 1001)
-            if private_error:
-                raise private_error
-        def copying(root, output, **kwargs):
-            events.append("copy")
-            self.assertEqual((root, output), (exports.CANDIDATE_OUTPUT_ROOT, exports.BUILD_VALIDATION_ROOT))
-            self.assertEqual(kwargs["plan"], ci_plan())
-            return expected
-        def transfer(root, **kwargs):
-            events.append("transfer")
-            self.assertEqual(root, exports.BUILD_VALIDATION_ROOT)
-            self.assertEqual((kwargs["source_owner_uid"], kwargs["owner_uid"], kwargs["owner_gid"]), (0, 1001, 121))
-            self.assertIs(kwargs["rule"], EXPORT_PATHS)
-            if transfer_error:
-                raise transfer_error
-        def verify(root, **kwargs):
-            events.append("verify")
-            self.assertEqual(root, exports.BUILD_VALIDATION_ROOT)
-            return {**expected, "profile": "changed"} if changed_export else expected
-        with ExitStack() as stack:
-            stack.enter_context(patch.object(exports, "authenticate_privileged_host_boundary"))
-            stack.enter_context(patch.object(exports, "authenticate_worker_account", side_effect=[self.candidate, self.validator]))
-            stack.enter_context(patch.object(exports, "_open_directory", side_effect=[10, 11, 12, 13, 14]))
-            stack.enter_context(patch.object(exports.os, "fstat", side_effect=info))
-            stack.enter_context(patch.object(exports.os, "close"))
-            modes = stack.enter_context(patch.object(exports.os, "fchmod", create=True))
-            stack.enter_context(patch.object(exports.os, "fsync"))
-            stack.enter_context(patch.object(exports, "terminate_worker", side_effect=terminate))
-            stack.enter_context(patch.object(exports, "verify_source_copy", side_effect=source))
-            stack.enter_context(patch.object(exports, "authenticate_tree_private_access", side_effect=private))
-            stack.enter_context(patch.object(exports, "materialize_build_export", side_effect=copying))
-            stack.enter_context(patch.object(exports, "privatize_tree_copy", side_effect=transfer))
-            stack.enter_context(patch.object(exports, "verify_build_export", side_effect=verify))
-            try:
-                result = exports.freeze_build_export(boundary=self.boundary, candidate=self.candidate,
-                    execution=WorkerResult(0, b"native log", False), inventory=(), generated_roots=("build",), plan=ci_plan())
-                self.assertEqual(result, expected)
-                self.assertEqual(events, ["terminate", "source", "private-original", "copy", "source",
-                                          "transfer", "private-copy", "verify"])
-                modes.assert_not_called()
-            except MbError:
-                if "transfer" in events:
-                    modes.assert_called_once_with(14, 0o700)
-                else:
-                    modes.assert_not_called()
-                if source_error or kill_error or private_error:
-                    self.assertNotIn("copy", events)
-                if changed_source:
-                    self.assertIn("copy", events)
-                    self.assertNotIn("transfer", events)
-                raise
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.root, self.output = self.base / "export", self.base / "sealed"
+        self.plan = ci_staged_plan()
+        self.producer = {key: value for key, value in ci_run_producer(self.plan).items() if key != "upload_window"}
+        self.payloads = self.write("target-a")
 
-    def test_quiescence_source_checks_and_private_independent_copy_are_ordered(self):
-        self.freeze()
+    def write(self, target_id):
+        """Write every planned output of ``target_id`` below the export root, as its hook does."""
+        payloads = {}
+        for output in next(target for target in self.plan["targets"] if target["id"] == target_id)["outputs"]:
+            data = f"{output['role']} bytes of {output['path']}".encode()
+            path = self.root.joinpath(*output["path"].split("/"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            payloads[output["path"]] = data
+        return payloads
 
-    def test_source_survivor_permissions_and_copy_transfer_failures_refuse_receipt(self):
-        for args in ({"source_error": MbError("tracked mutation")}, {"changed_source": True},
-                     {"kill_error": WorkerError("survivor")}, {"private_error": MbError("ACL")},
-                     {"copy_owner": 2000}, {"transfer_error": OSError("ownership")},
-                     {"final_inode": 31}, {"changed_export": True}):
-            with self.subTest(args=list(args)), self.assertRaises(MbError):
-                self.freeze(**args)
+    def seal(self, target_id="target-a", **changes):
+        return exports.seal_target_export(self.root, self.output, plan=self.plan, target_id=target_id,
+                                          **{"producer": self.producer, **changes})
 
-    def test_unsuccessful_execution_and_unprotected_root_types_reject_before_account_mutation(self):
-        for execution, roots in [(WorkerResult(1, b"failed", False), ()),
-                                 (WorkerResult(False, b"bool", False), ()),
-                                 (WorkerResult(None, b"cancelled", False), ()),
-                                 (WorkerResult(0, "wrong", False), ()),
-                                 (WorkerResult(0, b"", False), ["build"]),
-                                 (WorkerResult(0, b"", False), (".git",)),
-                                 (WorkerResult(0, b"", False), ("../build",))]:
-            with self.subTest(execution=execution, roots=roots), \
-                    patch.object(exports, "authenticate_privileged_host_boundary"), \
-                    patch.object(exports, "authenticate_worker_account") as account, \
-                    patch.object(exports, "terminate_worker") as terminate, self.assertRaises(MbError):
-                exports.freeze_build_export(boundary=self.boundary, candidate=self.candidate, execution=execution,
-                                            inventory=(), generated_roots=roots, plan=ci_plan())
+    def published(self):
+        return sorted(path.name for path in self.base.iterdir())
+
+    def test_the_envelope_is_the_plan_of_the_target_with_the_sizes_and_hashes_of_the_bytes_found(self):
+        envelope = self.seal()
+        self.assertEqual(validate_build_envelope(copy.deepcopy(envelope), plan=self.plan), envelope)
+        target = self.plan["targets"][0]
+        self.assertEqual({key: envelope[key] for key in ("kind", "schema_version", "identity", "plan_sha256", "profile",
+                                                         "producer", "scope", "target_id")},
+                         {"kind": "mod-base.build.envelope", "schema_version": 1, "identity": self.plan["identity"],
+                          "plan_sha256": self.plan["plan_sha256"], "profile": self.plan["profile"],
+                          "producer": self.producer, "scope": "target", "target_id": "target-a"})
+        self.assertEqual(envelope["files"], [
+            {**output, "size": len(self.payloads[output["path"]]),
+             "sha256": hashlib.sha256(self.payloads[output["path"]]).hexdigest()}
+            for output in sorted(target["outputs"], key=lambda output: output["path"])])
+        self.assertEqual(envelope["native_reports"], ["targets/target-a/artifacts.json"])
+        # The mod's own names survive: spaces, and one file that belongs to the target as a whole.
+        self.assertIn("files/Example Mod - lane-a.jar", self.payloads)
+        self.assertEqual([file["lane_id"] for file in envelope["files"] if file["role"] == "sbom"], [None])
+        # The sealed directory is an independent copy with the one document the kit wrote.
+        self.assertEqual(sorted(path.relative_to(self.output).as_posix() for path in self.output.rglob("*")
+                                if path.is_file()), sorted([*self.payloads, grammar.CI_ENVELOPE_NAME]))
+        self.assertEqual((self.output / grammar.CI_ENVELOPE_NAME).read_bytes(), canonical_json(envelope))
+        self.assertEqual(verify_build_export(self.output, plan=self.plan), envelope)
+        for name, data in self.payloads.items():
+            self.assertEqual((self.output / name).read_bytes(), data)
+            self.assertNotEqual(os.stat(self.output / name).st_ino, os.stat(self.root / name).st_ino)
+            self.assertEqual((self.root / name).read_bytes(), data)
+        self.assertFalse((self.root / grammar.CI_ENVELOPE_NAME).exists())
+        self.assertEqual(self.published(), ["export", "sealed"])
+
+    def test_the_other_target_of_the_plan_seals_its_own_outputs(self):
+        shutil.rmtree(self.root)
+        payloads = self.write("target-c")
+        envelope = self.seal("target-c")
+        self.assertEqual((envelope["target_id"], [file["path"] for file in envelope["files"]]),
+                         ("target-c", sorted(payloads)))
+        self.assertEqual(verify_build_export(self.output, plan=self.plan), envelope)
+
+    def test_every_difference_between_the_planned_outputs_and_the_files_is_refused_and_nothing_is_published(self):
+        jar, manifest = "files/Example Mod - lane-a.jar", "targets/target-a/artifacts.json"
+
+        def fifo():
+            (self.root / jar).unlink()
+            os.mkfifo(self.root / jar)
+
+        def directory():
+            (self.root / manifest).unlink()
+            (self.root / manifest).mkdir()
+            (self.root / manifest / "artifacts.json").write_bytes(b"{}")
+
+        def linked():
+            (self.root / jar).unlink()
+            (self.root / jar).symlink_to(self.root / "harness/Example Mod E2E - lane-a.jar")
+
+        mutations = {
+            "a planned output is missing": (lambda: (self.root / jar).unlink(), "1 planned and missing"),
+            "two planned outputs are missing": (
+                lambda: [(self.root / name).unlink() for name in (jar, manifest)], "2 planned and missing"),
+            "an extra file": (lambda: (self.root / "files/extra.jar").write_bytes(b"extra"),
+                              r"1 not planned \(first 'files/extra.jar'\)"),
+            "an extra file in a new directory": (lambda: [(self.root / "notes").mkdir(),
+                                                          (self.root / "notes/readme.txt").write_bytes(b"x")],
+                                                 "1 not planned"),
+            "an output of another target": (lambda: self.write("target-c"), "3 not planned"),
+            "a renamed output": (lambda: (self.root / jar).rename(self.root / "files/Example Mod - lane-a.zip"),
+                                 "1 planned and missing .*1 not planned"),
+            "an output under another case": (lambda: (self.root / manifest).rename(
+                self.root / "targets/target-a/Artifacts.json"), "1 planned and missing .*1 not planned"),
+            "a kit envelope written by the hook": (
+                lambda: (self.root / grammar.CI_ENVELOPE_NAME).write_bytes(canonical_json(ci_envelope())),
+                r"1 not planned \(first 'ci-envelope.json'\)"),
+            "a runtime envelope written by the hook": (
+                lambda: (self.root / grammar.CI_RUNTIME_ENVELOPE_NAME).write_bytes(b"{}"), "1 not planned"),
+            "an empty planned output": (lambda: (self.root / manifest).write_bytes(b""), "size is outside"),
+            "a planned output that is a symlink": (linked, "symlink"),
+            "a planned output with a second name": (lambda: os.link(self.root / jar, self.base / "alias"),
+                                                    "hard-linked"),
+            "a planned output that is a pipe": (fifo, "special file"),
+            "a planned output that is a directory": (directory, "planned and missing"),
+            "a hidden file": (lambda: (self.root / "files/.hidden").write_bytes(b"x"), "not a canonical export path"),
+            "a name outside the export grammar": (lambda: (self.root / "files/caf\xe9.jar").write_bytes(b"x"),
+                                                  "not a canonical export path"),
+            "a case alias of a planned directory": (lambda: (self.root / "Files").mkdir(), "case alias"),
+        }
+        for name, (mutate, message) in mutations.items():
+            with self.subTest(name=name):
+                self.setUp()
+                mutate()
+                with self.assertRaisesRegex(MbError, message):
+                    self.seal()
+                self.assertFalse(self.output.exists())
+                self.assertEqual(sorted(set(self.published()) - {"alias"}), ["export"])  # No stage is left behind.
+
+    def test_a_target_outside_the_plan_a_foreign_producer_and_an_existing_output_are_refused(self):
+        for changes in ({"target_id": "target-b"}, {"target_id": "lane-a"},
+                        {"producer": {**self.producer, "api_head_sha": "e" * 40}},
+                        {"producer": {**self.producer, "event": "push"}},
+                        {"producer": {**self.producer, "workflow_path": ".github/workflows/other.yml"}},
+                        {"producer": {**self.producer, "upload_window": {}}},
+                        {"producer": {key: value for key, value in self.producer.items() if key != "graph_sha256"}}):
+            with self.subTest(changes=list(changes)), self.assertRaises(MbError):
+                self.seal(**changes)
+            self.assertFalse(self.output.exists())
+        self.output.mkdir()
+        with self.assertRaisesRegex(MbError, "refusing to replace existing output"):
+            self.seal()
+        self.assertEqual(os.listdir(self.output), [])
+
+    def test_every_role_keeps_its_own_size_bound_and_the_whole_export_its_caps(self):
+        for bound, value in (("MAX_CI_SBOM_BYTES", 8), ("MAX_CI_JAR_BYTES", 8), ("MAX_CI_EXPORT_FILE_BYTES", 8),
+                             ("MAX_CI_EXPORT_FILES", 5), ("MAX_CI_EXPORT_TREE_BYTES", 64), ("MAX_CI_EXPORT_ENTRIES", 4),
+                             ("MAX_CI_ENVELOPE_BYTES", 64)):
+            with self.subTest(bound=bound), patch.object(limits, bound, value), self.assertRaises(MbError):
+                self.seal()
+            self.assertFalse(self.output.exists())
+        with patch.dict(limits.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE, {self.plan["profile"]: 8}), \
+                self.assertRaisesRegex(MbError, "role budget"):
+            self.seal()
+        self.assertEqual(self.seal()["target_id"], "target-a")
+
+    def test_the_envelope_is_a_function_of_the_inventory_alone(self):
+        records = [{"path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+                   for path, data in sorted(self.payloads.items())]
+        envelope = exports.target_envelope(records, plan=self.plan, target_id="target-a", producer=self.producer)
+        self.assertEqual(envelope, self.seal())
+        self.assertEqual(exports.target_envelope(records[::-1], plan=self.plan, target_id="target-a",
+                                                 producer=self.producer), envelope)
+        self.assertIsNot(envelope["identity"], self.plan["identity"])
+        with self.assertRaisesRegex(MbError, "3 planned and missing .*6 not planned"):
+            exports.target_envelope(records, plan=self.plan, target_id="target-c", producer=self.producer)
+        with self.assertRaisesRegex(MbError, "6 planned and missing"):
+            exports.target_envelope([], plan=self.plan, target_id="target-a", producer=self.producer)
+
+    def test_root_only_steps_refuse_an_unprivileged_caller_before_they_look_at_anything(self):
+        if os.geteuid() == 0:
+            self.skipTest("this case needs an unprivileged user")
+        boundary = HostBoundary("/home/runner", os.getuid(), os.getgid(), 1, 10, 0o755)
+        candidate = WorkerAccount("candidate", 2000, 2000, "/tmp/mod-base-sandbox-boundary/mod-base-worker/candidate-home")
+        calls = (lambda: exports.freeze_build_export(boundary=boundary, candidate=candidate, inventory=(),
+                                                     generated_roots=(), plan=self.plan, target_id="target-a",
+                                                     producer=self.producer),
+                 lambda: exports.verify_candidate_source(boundary=boundary, candidate=candidate, inventory=(),
+                                                         generated_roots=()),
+                 lambda: exports.stage_build_bundle(boundary=boundary, candidate=candidate, plan=self.plan,
+                                                    envelope=ci_envelope(self.plan), path="build/release"))
+        for call in calls:
+            with patch.object(exports, "authenticate_worker_account") as account, \
+                    patch.object(exports, "terminate_worker") as terminate, \
+                    self.assertRaisesRegex(MbError, "requires protected root setup"):
+                call()
             account.assert_not_called()
             terminate.assert_not_called()
 

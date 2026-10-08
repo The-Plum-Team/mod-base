@@ -340,6 +340,105 @@ def request_candidate_staging(*, boundary: HostBoundary, candidate: WorkerAccoun
         raise WorkerError("cannot publish private root request") from error
 
 
+def request_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) -> str:
+    """Runner-only request for what ``derive_runtime`` left in the validator's home; return the nonce.
+
+    Made after the hook returned and the validator was terminated. The request names only the
+    accounts: the output's place, name and bound are fixed in root.
+    """
+    try:
+        authenticate_host_boundary(boundary)
+        return _publish("take-derived-runtime", boundary, _job_arguments(boundary, validator))
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
+
+
+def _request_candidate(operation: str, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount,
+                       sources: ControllerSources, plan: dict[str, Any], arguments: dict[str, Any]) -> str:
+    """Publish one request about the candidate of this job: its live accounts, the protected
+    sources root re-reads its policy from, the plan and ``arguments``."""
+    try:
+        authenticate_host_boundary(boundary)
+        accounts = _job_arguments(boundary, validator)
+        check(accounts["candidate"] == {"uid": candidate.uid, "gid": candidate.gid}, "$.candidate",
+              "must be the live candidate account of this job")
+        initial = _inspect_sources(boundary, validator, sources, plan)
+
+        def closing() -> None:
+            check(_inspect_sources(boundary, validator, sources, plan) == initial
+                  and _job_arguments(boundary, validator) == accounts,
+                  "$.request", "controller copy or accounts changed during publication")
+
+        return _publish(operation, boundary, {**accounts, "sources": _source_metadata(sources),
+                                              "plan": copy.deepcopy(plan), **copy.deepcopy(arguments)},
+                        before_publish=closing)
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
+
+
+def request_bundle_staging(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount,
+                           sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any]) -> str:
+    """Runner-only request to place the complete Build in the candidate's checkout; return the nonce.
+
+    Made after ``stage-candidate`` and before the candidate ever runs. ``envelope`` is the complete
+    Build the runner read in ``sealed-build/``; root copies exactly that Build. The destination is
+    not in the request: root reads ``bundle.path`` from the protected controller copy.
+    """
+    return _request_candidate("stage-bundle", boundary, candidate, validator, sources, plan, {"envelope": envelope})
+
+
+def _candidate_source(inventory: tuple[GitSourceEntry, ...], execution: Mapping[str, Any]) -> dict[str, Any]:
+    validate_source_inventory(inventory)
+    return {"inventory": [{"path": entry.path, "mode": entry.mode, "size": entry.size, "git_blob": entry.git_blob}
+                          for entry in inventory], "execution": dict(execution)}
+
+
+def request_candidate_source_check(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount,
+                                   sources: ControllerSources, plan: dict[str, Any],
+                                   inventory: tuple[GitSourceEntry, ...], execution: Mapping[str, Any]) -> str:
+    """Runner-only request to prove the candidate's tracked sources unchanged; return the nonce.
+
+    Made after a candidate hook that exports nothing (``policy``) succeeded. ``inventory`` is the
+    complete inventory of the tested tree and ``execution`` what the runner retained of the hook
+    run (``returncode`` 0, ``truncated``, ``log_bytes``, ``log_sha256``). The generated roots are
+    not in the request: root derives them from the protected controller copy.
+    """
+    return _request_candidate("verify-candidate-source", boundary, candidate, validator, sources, plan,
+                              _candidate_source(inventory, execution))
+
+
+def request_build_export_freeze(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount,
+                                sources: ControllerSources, plan: dict[str, Any],
+                                inventory: tuple[GitSourceEntry, ...], execution: Mapping[str, Any],
+                                target_id: str, producer: dict[str, Any]) -> str:
+    """Runner-only request to freeze one target's export into ``sealed-build/``; return the nonce.
+
+    Made after ``build_target`` succeeded for ``target_id``. ``producer`` is the identity of the
+    executing run attempt, which root writes into the envelope it builds; ``inventory`` and
+    ``execution`` are as in :func:`request_candidate_source_check`.
+    """
+    return _request_candidate("freeze-build-export", boundary, candidate, validator, sources, plan,
+                              {**_candidate_source(inventory, execution), "target_id": target_id,
+                               "producer": producer})
+
+
+def request_runtime_export_freeze(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount,
+                                  sources: ControllerSources, plan: dict[str, Any],
+                                  inventory: tuple[GitSourceEntry, ...], execution: Mapping[str, Any],
+                                  lane_id: str, producer: dict[str, Any], build: dict[str, Any],
+                                  owning_build: dict[str, Any]) -> str:
+    """Runner-only request to freeze one lane's results into ``sealed-runtime/``; return the nonce.
+
+    Made after ``run_lane`` succeeded for ``lane_id``. ``build`` is the complete Build the runner
+    read in ``sealed-build/`` and ``owning_build`` the descriptor its selection record names; root
+    requires the sealed Build to be exactly that one and writes the descriptor into the runtime
+    envelope it builds. The other arguments are as in :func:`request_build_export_freeze`.
+    """
+    return _request_candidate("freeze-runtime-export", boundary, candidate, validator, sources, plan,
+                              {**_candidate_source(inventory, execution), "lane_id": lane_id, "producer": producer,
+                               "build": build, "owning_build": owning_build})
+
+
 def request_build_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount,
                                     sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any],
                                     run_id: int, run_attempt: int, execution_nonce: str) -> str:

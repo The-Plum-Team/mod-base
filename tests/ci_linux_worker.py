@@ -2,7 +2,8 @@
 
 Not named test_*: ordinary local discovery must not allocate accounts on arbitrary hosts.
 Explicit execution rejects missing Linux/hosted-runner/sudo prerequisites instead of skipping.
-This exercises current primitives, not the unfinished copy/execute/freeze/validator lifecycle.
+It exercises the account and file-system primitives and, through the real ``ci`` commands, the
+worker lifecycle of a job. Classes built on ``SharedJobCase`` run their cases in one job each.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from mod_base.build_ci import identity, lifecycle, worker
 from mod_base.build_ci.worker import (WORKER_ACCOUNTS, WORKER_ROOT, WorkerExecutionError,
                                       allocate_worker_account, authenticate_worker_account,
                                       prepare_worker_boundary, terminate_worker)
+from tests import ci_candidate_fixture as candidate_fixture
 from tests import ci_lifecycle_fixture as job_fixture
 from tests import ci_mod_harness as h
 from tests.helpers import ci_plan, ci_plan_inputs
@@ -889,7 +891,7 @@ class LinuxWorkerTests(HostedWorkerCase):
         for flag in ("-u", "-U"):
             self.assertEqual(command("/usr/bin/pgrep", flag, str(account.uid), accepted=(0, 1)).stdout, b"")
 
-    def candidate_freeze_program(self, body, execution):
+    def candidate_freeze_program(self, body):
         """Protected synthetic tracked inventory; no live Git/API or compiler assertion."""
         from mod_base.build_ci.source import GitSourceEntry
         data = body.encode("utf-8")
@@ -899,11 +901,12 @@ class LinuxWorkerTests(HostedWorkerCase):
         candidate = authenticate_worker_account("candidate")
         return (f"import sys;sys.path.insert(0,{str(source)!r})\n"
                 "from mod_base.build_ci.host import HostBoundary\n"
-                "from mod_base.build_ci.worker import WorkerAccount,WorkerResult\n"
+                "from mod_base.build_ci.worker import WorkerAccount\n"
                 "from mod_base.build_ci.source import GitSourceEntry,SourceError\n"
                 "from mod_base.build_ci.exports import freeze_build_export\n"
                 f"def freeze():\n    return freeze_build_export(boundary={self.host_boundary!r},candidate={candidate!r},"
-                f"execution={execution!r},inventory={inventory!r},generated_roots=(),plan={ci_plan()!r})\n")
+                f"inventory={inventory!r},generated_roots=(),plan={ci_plan()!r},target_id='target-a',"
+                f"producer={ci_envelope()['producer']!r})\n")
 
     def test_runtime_candidate_copy_preserves_empty_data_and_grants_only_validator_reads(self):
         self.runtime_candidate_copy()
@@ -922,9 +925,10 @@ class LinuxWorkerTests(HostedWorkerCase):
         runtime = ci_runtime_envelope()
         runtime.update(scope='lane', lane_id='lane-a')
         payloads = {'lanes/lane-a/result.json': b'{"fixture":"runtime"}\n',
-                    'lanes/lane-a/runtime.log': b'', 'lanes/lane-a/crash.txt': b''}
-        runtime['files'] = [{'path': name, 'lane_id': 'lane-a',
-            'role': 'native-report' if name.endswith('.json') else ('runtime-log' if name.endswith('.log') else 'crash-report'),
+                    'lanes/lane-a/runtime.log': b'', 'lanes/lane-a/crash-reports/crash.txt': b''}
+        # What root derives from each name: the candidate writes no envelope and claims no role.
+        roles = {'result.json': 'native-report', 'runtime.log': 'runtime-log', 'crash.txt': 'crash-report'}
+        runtime['files'] = [{'path': name, 'lane_id': 'lane-a', 'role': roles[name.rsplit('/', 1)[-1]],
             'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()} for name, data in sorted(payloads.items())]
         materialize_validation_inputs(Path(str(VALIDATOR_INPUT_ROOT)), sources=SOURCES, plan=plan)
         build_root = Path(str(BUILD_VALIDATION_ROOT))
@@ -948,10 +952,10 @@ class LinuxWorkerTests(HostedWorkerCase):
                   "from pathlib import Path\n"
                   "from mod_base.build_ci.host import HostBoundary\n"
                   "from mod_base.build_ci.worker import WorkerAccount,WorkerResult\n")
+        # The lane runs and is frozen while the Build is still the runner's private copy; the
+        # validator gets its read grant of the Build afterwards, with the frozen lane.
         preparation = (prefix +
-            "from mod_base.build_ci.exports import prepare_build_validation\n"
             "from mod_base.build_ci.inputs import prepare_validation_plan\n"
-            f"prepare_build_validation(boundary={self.host_boundary!r},validator={validator!r},plan={plan!r})\n"
             f"prepare_validation_plan(boundary={self.host_boundary!r},validator={validator!r},plan={plan!r})\n")
         command('/usr/bin/sudo', '-n', '--', sys.executable, '-I', '-B', '-S', '-c', preparation, cwd=self.root)
         body = ("import os\nfrom pathlib import Path\n"
@@ -964,8 +968,6 @@ class LinuxWorkerTests(HostedWorkerCase):
                 "    path=root/name\n    parent=root\n"
                 "    for part in Path(name).parts[:-1]:\n        parent=parent/part\n        parent.mkdir(mode=0o700,exist_ok=True)\n"
                 "    path.write_bytes(data)\n    path.chmod(0o600)\n"
-                f"path=root/{grammar.CI_RUNTIME_ENVELOPE_NAME!r}\n"
-                f"path.write_bytes({canonical_json(runtime)!r})\npath.chmod(0o600)\n"
                 "print('synthetic runtime export complete',flush=True)\n")
         execution = self.run_dispatcher(body, run_id=43)
         self.assertEqual(execution.returncode, 0)
@@ -982,8 +984,8 @@ class LinuxWorkerTests(HostedWorkerCase):
                   "from mod_base.build_ci.runtime_freeze import freeze_runtime_export\n"
                   "from mod_base.errors import MbError\n"
                   f"def freeze():\n    return freeze_runtime_export(boundary={self.host_boundary!r},candidate={candidate!r},"
-                  f"execution={execution!r},inventory={inventory!r},generated_roots=(),plan={plan!r},build={build!r},"
-                  f"owning_build={runtime['owning_build']!r},lane_id='lane-a',run_id=43,run_attempt=2)\n")
+                  f"inventory={inventory!r},generated_roots=(),plan={plan!r},build={build!r},"
+                  f"owning_build={runtime['owning_build']!r},lane_id='lane-a',producer={runtime['producer']!r})\n")
         if hardlink:
             freeze += ("try:\n    freeze()\nexcept MbError as error:\n"
                        "    assert 'read-only tree permissions or identity changed' in str(error)\n"
@@ -1007,7 +1009,9 @@ class LinuxWorkerTests(HostedWorkerCase):
             before = command('/usr/bin/sudo', '-n', '--', '/usr/bin/stat', '-c', '%u:%g:%i', str(original / name)).stdout.split(b':')
             self.assertEqual(tuple(map(int, before[:2])), (candidate.uid, candidate.gid))
             self.assertNotEqual(int(before[2]), private.stat().st_ino)
-        grant = (prefix + "from mod_base.build_ci.runtime_inputs import prepare_runtime_validation\n"
+        grant = (prefix + "from mod_base.build_ci.exports import prepare_build_validation\n"
+            "from mod_base.build_ci.runtime_inputs import prepare_runtime_validation\n"
+            f"prepare_build_validation(boundary={self.host_boundary!r},validator={validator!r},plan={plan!r})\n"
             f"assert prepare_runtime_validation(boundary={self.host_boundary!r},validator={validator!r},"
             f"plan={plan!r},build={build!r},runtime={runtime!r},lane_id='lane-a',run_id=43,run_attempt=2)=={runtime!r}\n")
         command('/usr/bin/sudo', '-n', '--', sys.executable, '-I', '-B', '-S', '-c', grant, cwd=self.root)
@@ -1036,7 +1040,7 @@ class LinuxWorkerTests(HostedWorkerCase):
         self.assert_quiescent('validator')
 
     def test_candidate_build_freeze_preserves_originals_and_excludes_both_worker_uids(self):
-        envelope = ci_envelope()
+        envelope = ci_envelope(target_id="target-a")
         payloads = {}
         for file in envelope["files"]:
             payload = (file["role"] + " fixture bytes").encode()
@@ -1049,14 +1053,12 @@ class LinuxWorkerTests(HostedWorkerCase):
                 "    path=root/name\n    parent=root\n"
                 "    for part in Path(name).parts[:-1]:\n        parent=parent/part\n        parent.mkdir(mode=0o700,exist_ok=True)\n"
                 "    path.write_bytes(payload)\n    path.chmod(0o600)\n"
-                f"path=root/{grammar.CI_ENVELOPE_NAME!r}\n"
-                f"path.write_bytes({canonical_json(envelope)!r})\npath.chmod(0o600)\n"
                 "print('candidate export complete',flush=True)\n")
         result = self.run_dispatcher(body)
         self.assertEqual(result.returncode, 0)
         self.assert_quiescent()
         command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-c",
-                self.candidate_freeze_program(body, result) + "freeze()\n", cwd=self.root)
+                self.candidate_freeze_program(body) + f"assert freeze()=={envelope!r}\n", cwd=self.root)
         frozen = Path(str(BUILD_VALIDATION_ROOT))
         self.assertEqual(verify_build_export(frozen, plan=ci_plan()), envelope)
         for leaf in (frozen, *frozen.rglob("*")):
@@ -1139,7 +1141,7 @@ class LinuxWorkerTests(HostedWorkerCase):
         body = "from pathlib import Path\nPath(__file__).write_text('mutated tracked source',encoding='utf-8')\n"
         result = self.run_dispatcher(body)
         self.assertEqual(result.returncode, 0)
-        program = (self.candidate_freeze_program(body, result)
+        program = (self.candidate_freeze_program(body)
                    + "try:\n    freeze()\nexcept SourceError:\n    print('tracked mutation refused',flush=True)\n"
                      "else:\n    raise AssertionError('tracked mutation admitted')\n")
         observed = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-c", program, cwd=self.root)
@@ -2454,6 +2456,14 @@ class LinuxLifecycleCommandTests(unittest.TestCase):
     PLAN_HOOK = "[validator] synthetic derive_plan: ok, 1 files\n"
 
     def setUp(self):
+        LinuxLifecycleCommandTests.start(self, self.addCleanup)
+
+    def start(self, add_cleanup):
+        """A hosted runner without a boundary and accounts, and what one job on it needs.
+
+        ``add_cleanup`` registers what removes the accounts, the boundary and the temporary
+        directory of that job again: after the test, or after the class whose cases share the job.
+        """
         if sys.platform != "linux" or os.environ.get("GITHUB_ACTIONS") != "true" \
                 or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
             raise AssertionError("UID integration tests require a fresh GitHub-hosted Linux runner")
@@ -2471,9 +2481,9 @@ class LinuxLifecycleCommandTests(unittest.TestCase):
             raise AssertionError("Linux fixture account already exists; refusing to repurpose it")
         self.home_mode = stat.S_IMODE(self.HOME.stat().st_mode)
         self.assertNotEqual(self.home_mode, 0o700, "the fixture needs a home whose closing can be observed")
-        self.addCleanup(self.cleanup)
+        add_cleanup(self.cleanup)
         directory = tempfile.TemporaryDirectory(prefix="mod-base-lifecycle-", dir=os.environ["RUNNER_TEMP"])
-        self.addCleanup(directory.cleanup)
+        add_cleanup(directory.cleanup)
         self.temporary = Path(directory.name)
         self.state = self.temporary / "state"
         self.output = self.temporary / "github-output"
@@ -2841,6 +2851,28 @@ class LinuxLifecycleCommandTests(unittest.TestCase):
 
     # -- prepare and finish in every state --------------------------------------------------------------
 
+    def test_second_job_in_process_refuses_a_host_that_is_no_longer_fenced(self):
+        self.job()
+        code, stdout, stderr = self.prepare("validator")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assert_finished("validator")
+        self.cleanup()
+
+        # A new job in this Python process must run the real fence again. A root-owned
+        # world-writable file outside the repaired trees cannot be accepted from a cached proof.
+        stray = Path("/var/lib") / f"mod-base-second-job-stray-{os.getpid()}"
+        command("/usr/bin/sudo", "-n", "/usr/bin/touch", str(stray))
+        self.addCleanup(command, "/usr/bin/sudo", "-n", "/usr/bin/rm", "-f", "--", str(stray))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0666", str(stray))
+        self.start(self.addCleanup)
+        self.job()
+        code, stdout, stderr = self.prepare("validator")
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn(str(stray), stderr)
+        self.assertFalse((self.state / "worker.json").exists())
+        self.assert_resting()
+        self.assert_finished()
+
     def test_second_worker_prepare_of_a_job_refuses_and_changes_nothing(self):
         self.job()
         self.assertEqual(self.prepare("candidate+validator")[0], 0)
@@ -2916,6 +2948,783 @@ class LinuxLifecycleCommandTests(unittest.TestCase):
         self.assert_resting("candidate", "validator")  # Both are locked all the same.
 
 
+def worker_listing():
+    """Every entry below the worker root as root sees it: ``{path: (type, uid, gid, mode)}``, and
+    for a regular file also its size and the time it was last written."""
+    listing = command("/usr/bin/sudo", "-n", "/usr/bin/find", str(WORKER_ROOT), "-mindepth", "1", "-printf",
+                      "%P\\t%y\\t%U\\t%G\\t%m\\t%s\\t%T@\\n").stdout.decode()
+    found = {}
+    for line in listing.splitlines():
+        name, kind, uid, gid, mode, size, written = line.split("\t")
+        found[name] = (kind, int(uid), int(gid), int(mode, 8), *((int(size), written) if kind == "f" else ()))
+    return found
+
+
+class SharedJobCase(unittest.TestCase):
+    """Command tests that start from one job of their class instead of preparing one each.
+
+    The first test of a class builds the job on a host without a boundary and accounts
+    (:meth:`build_job`: the steps every case would otherwise repeat), and the state it reached
+    is recorded: every entry below the worker root, the records of the state directory and the
+    names in the fixture's temporary directory. Every later test first takes the job back to
+    that state. What the test before it left is removed, and the recorded entries must be
+    there unchanged, so no test finds another one's files, root requests or records. The
+    accounts, the closed runner home and the records of the shared steps are the same for all.
+
+    A test leaves the job to the next one, so it cannot end with ``ci worker-finish``:
+    :meth:`assert_finished` requires here that every account is locked and idle. The sweep runs
+    once, with the assertions the other classes make after every case, when the class is done.
+    """
+
+    HOME = LinuxLifecycleCommandTests.HOME
+    #: The accounts of the shared job.
+    ROLES = ("candidate", "validator")
+    cleanup = LinuxLifecycleCommandTests.cleanup
+    prepare = LinuxLifecycleCommandTests.prepare
+    plan = LinuxLifecycleCommandTests.plan
+    finish = LinuxLifecycleCommandTests.finish
+    account = LinuxLifecycleCommandTests.account
+    as_account = LinuxLifecycleCommandTests.as_account
+    assert_resting = LinuxLifecycleCommandTests.assert_resting
+    home = LinuxLifecycleCommandTests.home
+    owner = LinuxLifecycleCommandTests.owner
+
+    @classmethod
+    def setUpClass(cls):
+        cls.shared = None
+
+    def setUp(self):
+        cls = type(self)
+        if cls.shared is None:
+            fixture = set(vars(self))
+            try:
+                LinuxLifecycleCommandTests.start(self, cls.addClassCleanup)
+                self.build_job()
+                cls.addClassCleanup(LinuxLifecycleCommandTests.assert_finished, self, *self.ROLES)
+                cls.shared = {
+                    "attributes": {name: value for name, value in vars(self).items() if name not in fixture},
+                    "worker": worker_listing(), "temporary": {entry.name for entry in self.temporary.iterdir()},
+                    "records": {entry.name: entry.read_bytes() for entry in self.state.iterdir()}}
+            except BaseException as error:
+                cls.shared = error
+                raise
+        elif isinstance(cls.shared, BaseException):
+            raise AssertionError("the job this class shares could not be built") from cls.shared
+        else:
+            vars(self).update(cls.shared["attributes"])
+            self.rewind()
+        self.requests = self.api.request_count
+
+    def build_job(self):
+        """The steps of the job that every case of the class starts from."""
+        raise NotImplementedError
+
+    def rewind(self):
+        """Take the shared job back to the state its first test recorded."""
+        import pwd
+
+        shared = type(self).shared
+        for name in WORKER_ACCOUNTS.values():  # Nothing an earlier case started may still run.
+            try:
+                uid = pwd.getpwnam(name).pw_uid
+            except KeyError:
+                continue
+            for flag in ("-u", "-U"):
+                command("/usr/bin/sudo", "-n", "/usr/bin/pkill", "-KILL", flag, str(uid), accepted=(0, 1))
+        left = {name for name in worker_listing() if name not in shared["worker"]}
+        tops = sorted(name for name in left if name.rpartition("/")[0] not in left)
+        if tops:
+            command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--one-file-system", "--",
+                    *(str(WORKER_ROOT / name) for name in tops))
+        for directory, kept in ((self.state, shared["records"]), (self.temporary, shared["temporary"])):
+            for entry in directory.iterdir():
+                if entry.name not in kept:
+                    if entry.is_dir() and not entry.is_symlink():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink()
+        self.assertEqual(worker_listing(), shared["worker"], "the shared job is not back at its recorded state")
+        self.assertEqual({entry.name: entry.read_bytes() for entry in self.state.iterdir()}, shared["records"])
+
+    def assert_finished(self, *roles):
+        """What a case of a shared job can require at its end: every account locked and idle."""
+        self.assertEqual(roles, self.ROLES)
+        self.assert_resting(*roles)
+
+
+class LinuxCandidateCommandTests(unittest.TestCase):
+    """The candidate path of a job as a workflow runs it, with real accounts, sudo and root operations.
+
+    ``ci subject`` -> ``ci worker-prepare`` -> ``ci plan --candidate`` -> ``ci worker-stage`` ->
+    ``ci worker-run`` -> ``ci worker-seal`` on the synthetic mod. The candidate checkout is fetched
+    and detached the way ``actions/checkout`` leaves one. A misbehaving candidate is a tested tree
+    whose own dispatcher was changed: the protected adapter of the job is another, unchanged copy.
+    Only the GitHub API is a fake. Every case starts and ends without a boundary and accounts.
+    """
+
+    HOME = LinuxLifecycleCommandTests.HOME
+    setUp = LinuxLifecycleCommandTests.setUp
+    cleanup = LinuxLifecycleCommandTests.cleanup
+    prepare = LinuxLifecycleCommandTests.prepare
+    plan = LinuxLifecycleCommandTests.plan
+    finish = LinuxLifecycleCommandTests.finish
+    account = LinuxLifecycleCommandTests.account
+    as_account = LinuxLifecycleCommandTests.as_account
+    assert_resting = LinuxLifecycleCommandTests.assert_resting
+    assert_finished = LinuxLifecycleCommandTests.assert_finished
+    home = LinuxLifecycleCommandTests.home
+    jdk = LinuxLifecycleCommandTests.jdk
+    owner = LinuxLifecycleCommandTests.owner
+
+    # -- helpers -------------------------------------------------------------------------------------
+
+    def candidate_job(self, *, faults=None, code=None, files=None, profile=None, producer="build", jdks=(),
+                      **timeouts):
+        """A prepared and planned job of ``producer``: both accounts, the plan of the tested tree.
+
+        ``faults`` go into the tested inventory; ``code`` is run by the tested tree's own
+        dispatcher in every candidate hook and ``files`` are more tracked files of that tree;
+        ``profile`` and ``timeouts`` change the protected Build config. Returns the plan, which is
+        the one the pure planning functions give for the same subject and candidate files."""
+        import json
+        from mod_base import runtime
+
+        def materialized(name):
+            mod = h.materialize(self.temporary / name, faults=faults)
+            if profile is not None:
+                config = mod / "scripts/ci/mod-base-build.json"
+                config.write_bytes(h.pretty({**json.loads(config.read_bytes()), "profile": profile}))
+            if timeouts:
+                job_fixture.rewrite_config(mod, **timeouts)
+            return mod
+
+        self.mod = materialized("mod")
+        self.tested = self.mod
+        if code is not None or files:
+            self.tested = materialized("tested")
+            for name, data in (files or {}).items():
+                (self.tested / name).parent.mkdir(parents=True, exist_ok=True)
+                (self.tested / name).write_bytes(data)
+            if code is not None:
+                candidate_fixture.patch_dispatcher(self.tested, code)
+        self.checkout, commit, tree = candidate_fixture.fetch_checkout(self.tested, self.temporary)
+        job_fixture.retarget(self.api, self.pull, commit, tree)
+        self.environment = {**self.environment, **h.environment(caller=producer)}
+        self.commands = job_fixture.Commands(self.mod, self.state, self.api, self.environment)
+        self.assertEqual(self.commands.run("subject", "--producer", producer, "--pr", "7", "--github-output",
+                                           str(self.output)), (0, "", ""))
+        self.subject = identity.read_subject(self.state)["subject"]
+        self.assertEqual(self.subject["tested_sha"], commit)
+        extra = [flag for home in jdks for flag in ("--java-home", home)]
+        self.assertEqual(self.prepare("candidate+validator", *extra)[0], 0)
+        self.sandbox = h.Sandbox(self.temporary / "pure", protected=self.mod, candidate=self.tested)
+        self.sandbox.subject = self.subject
+        expected = self.sandbox.derive_plan()
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.job = lifecycle.open_job(runtime.build_invocation(self.mod, None, self.environment), self.state)
+        self.assertEqual(lifecycle.read_plan(self.job), expected)
+        self.repository = self.root / "repository"
+        self.export = self.root / "candidate-home" / "export"
+        return expected
+
+    def stage(self, *extra):
+        return self.commands.run("worker-stage", "--candidate", str(self.checkout), *extra)
+
+    def run_hook(self, hook, unit=None):
+        return self.commands.run("worker-run", "--hook", hook, *(() if unit is None else ("--unit", unit)))
+
+    def seal(self):
+        return self.commands.run("worker-seal")
+
+    def record(self, name):
+        import json
+
+        self.assertEqual(self.owner(self.state / name)[2], 0o600)
+        return json.loads((self.state / name).read_bytes())
+
+    def as_root(self, *args, accepted=(0,)):
+        return command("/usr/bin/sudo", "-n", "--", *args, accepted=accepted)
+
+    def exists(self, path):
+        """Whether ``path`` exists, asked as root: the runner cannot look into an account's home."""
+        return self.as_root("/usr/bin/test", "-e", str(path), accepted=(0, 1)).returncode == 0
+
+    def tree(self, root):
+        """``{relative path: (uid, gid, mode, links)}`` of every entry below ``root``, as root sees it."""
+        listing = self.as_root("/usr/bin/find", str(root), "-mindepth", "1", "-printf", "%P\\t%U\\t%G\\t%m\\t%n\\t%y\\n")
+        found = {}
+        for line in listing.stdout.decode().splitlines():
+            path, uid, gid, mode, links, kind = line.split("\t")
+            found[path] = (int(uid), int(gid), int(mode, 8), int(links) if kind == "f" else None, kind)
+        return found
+
+    def assert_nothing_sealed(self):
+        for name in ("sealed-build", "sealed-runtime", "sealed-validation"):
+            self.assertFalse((self.root / name).exists(), name)
+        self.assertFalse((self.state / "worker-seal.json").exists())
+
+    def assert_private_to_the_runner(self, sealed):
+        """A sealed tree is the runner's alone: 0700 directories, 0600 files, one link each, and
+        neither account reads or writes it."""
+        self.assertEqual(self.owner(sealed), (os.getuid(), os.getgid(), 0o700))
+        for leaf in sealed.rglob("*"):
+            self.assertEqual(self.owner(leaf), (os.getuid(), os.getgid(), 0o700 if leaf.is_dir() else 0o600), leaf)
+            self.assertFalse(leaf.is_symlink(), leaf)
+            if leaf.is_file():
+                self.assertEqual(leaf.stat().st_nlink, 1, leaf)
+        for role in WORKER_ACCOUNTS:
+            for flag in ("-r", "-w", "-x"):
+                self.assertEqual(self.as_account(role, "/usr/bin/test", flag, str(sealed)), 1, (role, flag))
+
+    # -- the sequence ---------------------------------------------------------------------------------
+
+    def test_a_target_is_staged_built_by_the_candidate_and_sealed_with_the_envelope_root_writes(self):
+        from mod_base.build_ci.records import validate_build_envelope
+        from mod_base.pin import stamp_document, Pin
+
+        plan = self.candidate_job()
+        candidate, validator = self.account("candidate"), self.account("validator")
+        tracked = sorted(h.files(self.tested))
+        code, stdout, stderr = self.stage()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual(stdout, f"worker-stage: {len(tracked)} tracked files of {self.subject['tested_sha']} and kit "
+                                 f"{self.subject['kit']['version']} staged for the candidate\n")
+        self.assert_resting("candidate", "validator")
+        self.assertEqual(self.record("worker-stage.json"), {
+            "candidate": str(self.checkout), "tested_sha": self.subject["tested_sha"],
+            "tested_tree": self.subject["tested_tree"],
+            "source": {"files": len(tracked), "bytes": sum((self.tested / name).stat().st_size for name in tracked)},
+            "kit": {key: self.subject["kit"][key] for key in ("sha", "version", "tree_digest")},
+            "gradle_seed": False, "bundle": None})
+        # The staging directory of the kit is gone; only records remain in the state.
+        self.assertEqual({path.name for path in self.state.iterdir()},
+                         {"identity.json", "worker-host.json", "worker.json", "ci-plan.json", "worker-stage.json"})
+        # The candidate owns its copy: the tracked files, a curated .git and the stamped kit.
+        staged = self.tree(self.repository)
+        self.assertEqual(self.owner(self.repository), (candidate.pw_uid, candidate.pw_gid, 0o700))
+        self.assertTrue(all(row[:2] == (candidate.pw_uid, candidate.pw_gid) for row in staged.values()))
+        self.assertEqual(sorted(path for path, row in staged.items() if row[4] == "f"
+                                and not path.startswith((".git/", "out/mod-base-kit/"))), tracked)
+        stamp = self.as_root("/usr/bin/cat", str(self.repository / "out/mod-base-kit/MOD_BASE_KIT.json")).stdout
+        self.assertEqual(stamp, canonical_json(stamp_document(
+            Pin(self.subject["kit"]["sha"], "v" + self.subject["kit"]["version"], ()),
+            self.subject["kit"]["tree_digest"])))
+        self.assertEqual(staged["out/mod-base-kit/src/mod_base/__init__.py"][:3],
+                         (candidate.pw_uid, candidate.pw_gid, 0o644))
+        # It reaches nothing of the runner: not the checkout it was staged from, the state or the mod.
+        for private in (self.checkout, self.checkout / "src/payload.txt", self.state, self.state / "ci-plan.json",
+                        self.mod, self.temporary, self.HOME):
+            for role in WORKER_ACCOUNTS:
+                self.assertEqual(self.as_account(role, "/usr/bin/test", "-r", str(private)), 1, (role, private))
+        self.assertEqual(self.as_account("validator", "/usr/bin/test", "-x", str(self.repository)), 1)
+        with self.assertRaises(PermissionError):
+            os.listdir(self.repository)
+        self.assertEqual(job_fixture.git(self.checkout, "status", "--porcelain=v1", "--untracked-files=all"), "")
+
+        code, stdout, stderr = self.run_hook("build_target", "1.20.1")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual(stdout, "[candidate] synthetic build_target 1.20.1: ok, 8 files\n"
+                                 "worker-run: build_target 1.20.1 succeeded; candidate terminated and locked\n")
+        self.assert_resting("candidate", "validator")
+        log = b"synthetic build_target 1.20.1: ok, 8 files\n"
+        self.assertEqual(self.record("worker-run.json"), {
+            "hook": "build_target", "unit_id": "1.20.1", "succeeded": True, "error": None, "returncode": 0,
+            "truncated": False, "log_bytes": len(log), "log_sha256": hashlib.sha256(log).hexdigest()})
+        planned = sorted(output["path"] for output in plan["targets"][0]["outputs"])
+        exported = self.tree(self.export)
+        self.assertEqual(sorted(path for path, row in exported.items() if row[4] == "f"), planned)
+        self.assertFalse(self.root.joinpath("sealed-build").exists())
+
+        code, stdout, stderr = self.seal()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        sealed = self.root / "sealed-build"
+        envelope = verify_build_export(sealed, plan=plan)
+        validate_build_envelope(envelope, plan=plan)
+        self.assertEqual(stdout, "worker-seal: candidate terminated and locked; tracked sources unchanged; 8 files of "
+                                 "build_target 1.20.1 sealed in sealed-build/ with envelope "
+                                 f"{hashlib.sha256(canonical_json(envelope)).hexdigest()}\n")
+        self.assertEqual(sorted(h.files(sealed)), sorted([*planned, "ci-envelope.json"]))
+        self.assertEqual((envelope["scope"], envelope["target_id"]), ("target", "1.20.1"))
+        self.assertEqual([{key: file[key] for key in ("path", "lane_id", "role")} for file in envelope["files"]],
+                         sorted(plan["targets"][0]["outputs"], key=lambda output: output["path"]))
+        self.assertEqual(envelope["producer"], candidate_fixture.producer(plan, "build", "full", run_id=42))
+        self.assertEqual((envelope["identity"], envelope["plan_sha256"]), (plan["identity"], plan["plan_sha256"]))
+        # The bytes are what the same hook builds as a plain process for the same tested commit.
+        self.sandbox.build("1.20.1")
+        for file in envelope["files"]:
+            data = (sealed / file["path"]).read_bytes()
+            self.assertEqual(data, (self.sandbox.sealed_build / file["path"]).read_bytes(), file["path"])
+            self.assertEqual((file["size"], file["sha256"]), (len(data), hashlib.sha256(data).hexdigest()))
+        self.assert_private_to_the_runner(sealed)
+        # The originals stay the candidate's, as separate files.
+        for path in planned:
+            self.assertEqual(self.tree(self.export)[path][:4], (candidate.pw_uid, candidate.pw_gid, 0o600, 1))
+        self.assertEqual(self.record("worker-seal.json"), {
+            "hook": "build_target", "unit_id": "1.20.1", "export": "build", "files": 8,
+            "envelope_sha256": hashlib.sha256(canonical_json(envelope)).hexdigest()})
+        self.assert_resting("candidate", "validator")
+        self.assertIsNotNone(validator)
+
+        # Each step runs once per job, and none of them changes what was sealed.
+        before = {path: path.read_bytes() for path in sealed.rglob("*") if path.is_file()}
+        for arguments, message in ((("worker-stage", "--candidate", str(self.checkout)), "already staged"),
+                                   (("worker-run", "--hook", "build_target", "--unit", "1.20.1"), "already ran"),
+                                   (("worker-seal",), "already sealed")):
+            code, stdout, stderr = self.commands.run(*arguments)
+            self.assertEqual((code, stdout), (2, ""), arguments)
+            self.assertIn(f"ci-lifecycle: this job {message}", stderr)
+        self.assertEqual({path: path.read_bytes() for path in sealed.rglob("*") if path.is_file()}, before)
+        self.assertEqual(self.api.request_count, 4)  # No step of the candidate path reads the API.
+        self.assert_finished("candidate", "validator")
+
+    def test_policy_runs_as_the_candidate_and_its_seal_is_the_source_check_alone(self):
+        self.candidate_job()
+        self.assertEqual(self.stage()[0], 0)
+        code, stdout, stderr = self.run_hook("policy")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual(stdout, "[candidate] synthetic policy: 4 checks, 0 failures\n"
+                                 "[candidate] synthetic policy: ok, 0 files\n"
+                                 "worker-run: policy succeeded; candidate terminated and locked\n")
+        self.assertEqual(self.record("worker-run.json")["unit_id"], None)
+        code, stdout, stderr = self.seal()
+        self.assertEqual((code, stdout, stderr), (0, "worker-seal: candidate terminated and locked; tracked sources "
+                                                     "unchanged after policy; nothing to export\n", ""))
+        self.assertEqual(self.record("worker-seal.json"), {"hook": "policy", "unit_id": None, "export": None,
+                                                          "envelope_sha256": None, "files": 0})
+        for name in ("sealed-build", "sealed-runtime"):
+            self.assertFalse((self.root / name).exists(), name)
+        self.assertTrue((self.root / "root-request-verify-candidate-source").is_dir())
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+
+    def lane_job(self, lane, **job):
+        """A packaged job whose ``sealed-build/`` holds the complete Build of a Build run and whose
+        state names it, as ``ci fetch-build`` leaves both; the candidate is staged with it."""
+        plan = self.candidate_job(producer="packaged", **job)
+        descriptor = candidate_fixture.build_descriptor(plan)
+        self.build = candidate_fixture.build_complete(self.sandbox, self.root / "sealed-build", descriptor)
+        identity.write_state_record(self.state, "ci-selection.json", canonical_json(
+            candidate_fixture.selection(plan, descriptor, self.build, run_id=42)))
+        self.descriptor = descriptor
+        code, stdout, stderr = self.stage("--bundle")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertTrue(stdout.endswith(f", with the Build of {len(self.build['files'])} files at build/release\n"),
+                        stdout)
+        return plan
+
+    def test_a_lane_gets_the_build_and_its_runtime_values_and_is_sealed_with_the_runtime_envelope(self):
+        from mod_base.build_ci.runtime_exports import verify_runtime_export
+        from mod_base.build_ci.runtime_schema import validate_runtime_envelope
+
+        lane = "forge-1.20.1"
+        plan = self.lane_job(lane)
+        candidate = self.account("candidate")
+        self.assertEqual(self.record("worker-stage.json")["bundle"], {
+            "path": "build/release", "files": len(self.build["files"]),
+            "envelope_sha256": hashlib.sha256(canonical_json(self.build)).hexdigest()})
+        # The Build in the checkout is the candidate's own copy of the mod's files, without kit documents.
+        staged = self.tree(self.repository / "build")
+        self.assertEqual(sorted(path for path, row in staged.items() if row[4] == "f"),
+                         sorted("release/" + file["path"] for file in self.build["files"]))
+        for path, row in staged.items():
+            self.assertEqual(row[:3], (candidate.pw_uid, candidate.pw_gid, 0o700 if row[4] == "d" else 0o600), path)
+        production = next(file for file in self.build["files"] if file["lane_id"] == lane and file["role"] == "production")
+        copied = self.as_root("/usr/bin/cat", str(self.repository / "build/release" / production["path"])).stdout
+        original = self.root / "sealed-build" / production["path"]
+        self.assertEqual(copied, original.read_bytes())
+        self.assertNotEqual(self.as_root("/usr/bin/stat", "-c", "%i", str(self.repository / "build/release"
+                                                                       / production["path"])).stdout.strip(),
+                            str(original.stat().st_ino).encode())
+        self.assertEqual(self.owner(self.root / "sealed-build"), (os.getuid(), os.getgid(), 0o700))
+
+        code, stdout, stderr = self.run_hook("run_lane", lane)
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual(stdout, f"[validator] synthetic derive_runtime {lane}: ok, 1 files\n"
+                                 f"[candidate] synthetic run_lane {lane}: ok, 4 files\n"
+                                 f"worker-run: run_lane {lane} succeeded; candidate terminated and locked\n")
+        self.assert_resting("candidate", "validator")
+        # The derivation was handed to the runner and removed from the validator's home.
+        derived = self.root / "derived-runtime"
+        self.assertEqual(self.owner(derived), (os.getuid(), os.getgid(), 0o700))
+        self.assertEqual(self.owner(derived / "runtime.json"), (os.getuid(), os.getgid(), 0o600))
+        self.assertEqual(self.tree(self.root / "validator-home").keys() & {"validation", "validation/runtime.json"},
+                         set())
+
+        code, stdout, stderr = self.seal()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        sealed = self.root / "sealed-runtime"
+        envelope = verify_runtime_export(sealed, plan=plan)
+        validate_runtime_envelope(envelope, plan=plan)
+        self.assertIn(f"4 files of run_lane {lane} sealed in sealed-runtime/ with envelope "
+                      f"{hashlib.sha256(canonical_json(envelope)).hexdigest()}\n", stdout)
+        self.assertEqual((envelope["scope"], envelope["lane_id"], envelope["owning_build"]),
+                         ("lane", lane, self.descriptor))
+        self.assertEqual(envelope["producer"], candidate_fixture.producer(plan, "packaged", "pull-request", run_id=42))
+        self.assertEqual(envelope["lanes"], [{"id": lane, "native_contract_sha256": next(
+            item["native_contract_sha256"] for item in plan["lanes"] if item["id"] == lane)}])
+        self.assertEqual({file["path"]: (file["lane_id"], file["role"]) for file in envelope["files"]}, {
+            f"lanes/{lane}/logs/client.log": (lane, "runtime-log"),
+            f"lanes/{lane}/result.json": (lane, "native-report"),
+            f"lanes/{lane}/screenshots/smoke-title.png": (lane, "screenshot"),
+            f"lanes/{lane}/screenshots/smoke-world.png": (lane, "screenshot")})
+        self.assertEqual(sorted(h.files(sealed)),
+                         sorted([*(file["path"] for file in envelope["files"]), "ci-runtime-envelope.json"]))
+        for file in envelope["files"]:
+            data = (sealed / file["path"]).read_bytes()
+            self.assertEqual((file["size"], file["sha256"]), (len(data), hashlib.sha256(data).hexdigest()))
+        self.assert_private_to_the_runner(sealed)
+        self.assertEqual(self.record("worker-seal.json"), {
+            "hook": "run_lane", "unit_id": lane, "export": "runtime", "files": 4,
+            "envelope_sha256": hashlib.sha256(canonical_json(envelope)).hexdigest()})
+        # The Build the lane ran against is untouched and still the runner's private copy.
+        self.assertEqual(verify_build_export(self.root / "sealed-build", plan=plan), self.build)
+        self.assertEqual(self.owner(self.root / "sealed-build"), (os.getuid(), os.getgid(), 0o700))
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+
+    # -- faults of the synthetic mod --------------------------------------------------------------------
+
+    def run_fault(self, mode, *, error, log=None, **timeouts):
+        """A hook that fails, hangs or leaves a process behind fails ``ci worker-run`` with one error
+        line; the seal then locks the candidate, seals nothing and does not fail a second time."""
+        self.candidate_job(faults=[{"hook": "build_target", "unit": "1.20.1", "mode": mode}], **timeouts)
+        self.assertEqual(self.stage()[0], 0)
+        started = time.monotonic()
+        code, stdout, stderr = self.run_hook("build_target", "1.20.1")
+        self.assertEqual(code, 2, stdout + stderr)
+        self.assertEqual(stderr, f"mod_base: ci-worker: {error}\n")
+        if log is not None:
+            self.assertEqual(stdout, log)
+        self.assertLess(time.monotonic() - started, 60)
+        self.assert_resting("candidate", "validator")
+        run = self.record("worker-run.json")
+        self.assertEqual((run["hook"], run["unit_id"], run["succeeded"], run["error"]),
+                         ("build_target", "1.20.1", False, error))
+        self.assertEqual(run["log_sha256"], hashlib.sha256(
+            "".join(line.removeprefix("[candidate] ") for line in stdout.splitlines(True)).encode()).hexdigest())
+        code, stdout, stderr = self.seal()
+        self.assertEqual((code, stdout, stderr), (0, "worker-seal: candidate terminated and locked; nothing sealed, "
+                                                     f"because build_target 1.20.1 did not succeed ({error})\n", ""))
+        self.assert_nothing_sealed()
+        self.assertFalse((self.root / "root-request-freeze-build-export").exists())
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+        return run
+
+    def test_hanging_hook_is_killed_at_the_timeout_of_the_protected_config(self):
+        run = self.run_fault("hang", error="worker execution timed out", log="", target_seconds=3)
+        self.assertEqual((run["returncode"], run["log_bytes"]), (None, 0))
+
+    def test_a_protected_hook_that_fails_before_the_lane_stops_the_run_and_the_candidate_never_runs(self):
+        lane = "fabric-1.21.1"
+        self.lane_job(lane, faults=[{"hook": "derive_runtime", "unit": lane, "mode": "fail"}])
+        code, stdout, stderr = self.run_hook("run_lane", lane)
+        self.assertEqual((code, stderr), (2, "mod_base: ci-worker: worker dispatcher returned failure\n"), stdout)
+        self.assertEqual(stdout, f"[validator] synthetic derive_runtime {lane} rejected: the release inventory "
+                                 "requests this failure\n")
+        self.assertFalse(self.exists(self.export) or (self.root / "derived-runtime").exists())
+        run = self.record("worker-run.json")
+        self.assertEqual((run["succeeded"], run["returncode"], run["log_bytes"]), (False, None, 0))
+        code, stdout, stderr = self.seal()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertIn(f"nothing sealed, because run_lane {lane} did not succeed", stdout)
+        self.assertFalse((self.root / "sealed-runtime").exists())
+        self.assert_finished("candidate", "validator")
+
+    # -- what a hook sees, and a policy suite through the staged kit -------------------------------------
+
+    def test_the_hook_sees_every_jdk_its_seeded_cache_and_no_path_or_variable_of_the_runner(self):
+        first, second = self.jdk("17"), self.jdk("21")
+        seed = self.temporary / "gradle-seed"
+        cached = "caches/modules-2/files-2.1/net.fabricmc/yarn/1.20.1+build.10/2d1f/yarn-1.20.1+build.10-v2.jar"
+        (seed / cached).parent.mkdir(parents=True)
+        (seed / cached).write_bytes(b"yarn")
+        (seed / "wrapper/dists/gradle-8.8-bin").mkdir(parents=True)
+        (seed / "wrapper/dists/gradle-8.8-bin/gradle-8.8-bin.zip.ok").write_bytes(b"")
+        probes = (str(self.temporary / "candidate"), str(self.state), str(self.temporary), str(self.HOME), str(seed),
+                  str(self.root / "validator-home"), str(self.root / "controller"))
+        self.candidate_job(jdks=(first, second), code=(
+            f"    for probe in {probes!r}:\n"
+            "        try:\n"
+            "            os.listdir(probe)\n"
+            "            print('synthetic probe reached', probe, flush=True)\n"
+            "        except OSError as error:\n"
+            "            print('synthetic probe refused', type(error).__name__, flush=True)\n"
+            "    os.makedirs('build/release/cache', exist_ok=True)\n"
+            "    open('build/release/cache/state', 'w').close()\n"
+            "    open('out/mod-base-kit/scratch', 'w').close()\n"
+            "    print('synthetic java', os.environ.get('JAVA_HOME'), os.environ.get('MB_JAVA_HOMES'), flush=True)\n"
+            f"    print('synthetic cache', open(os.path.join(os.environ['GRADLE_USER_HOME'], {cached!r}), 'rb').read(),"
+            " sorted(os.listdir(os.environ['GRADLE_USER_HOME'])), flush=True)\n"
+            "    print('synthetic runner variables', sorted(name for name in os.environ if name.startswith("
+            "('GITHUB_', 'ACTIONS_', 'RUNNER_')) or 'TOKEN' in name), os.getcwd(), flush=True)\n"))
+        code, stdout, stderr = self.stage("--gradle-seed", str(seed))
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertTrue(stdout.endswith(" staged for the candidate, with a Gradle seed\n"), stdout)
+        self.assertTrue(self.record("worker-stage.json")["gradle_seed"])
+        code, stdout, stderr = self.run_hook("policy")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual(stdout.splitlines()[:10], [
+            *["[candidate] synthetic probe refused PermissionError"] * 7,
+            f"[candidate] synthetic java {first} {first}:{second}",
+            "[candidate] synthetic cache b'yarn' ['caches', 'wrapper']",
+            f"[candidate] synthetic runner variables [] {self.repository}"])
+        self.assertEqual((seed / cached).read_bytes(), b"yarn")  # The seed itself stays the runner's.
+        # What it wrote below the two generated roots (the kit overlay and the bundle directory) is its
+        # own business: the tracked sources are unchanged.
+        self.assertEqual(self.seal(), (0, "worker-seal: candidate terminated and locked; tracked sources unchanged "
+                                          "after policy; nothing to export\n", ""))
+        self.assert_finished("candidate", "validator")
+
+    #: A policy hook that runs its suite through the runner of the staged kit, with the profile of its
+    #: Build config, as a mod's real policy hook does.
+    POLICY_SUITE = (
+        '    if hook == "policy":\n'
+        '        profile = adapter.decode(Path("scripts/ci/mod-base-build.json").read_bytes(), "config")["profile"]\n'
+        '        suite = subprocess.run(\n'
+        '            [sys.executable, "-B", "out/mod-base-kit/tools/parallel_unittest.py", "-t", "scripts/ci/policy_tests",\n'
+        '             "--policy-profile", profile, "-j", "2", "--slowest", "0", "scripts/ci/policy_tests"],\n'
+        '            env={**os.environ, "PYTHONPATH": "out/mod-base-kit/src"}, stdin=subprocess.DEVNULL)\n'
+        '        print("synthetic suite exit", suite.returncode, flush=True)\n'
+        '        if suite.returncode:\n'
+        '            return 1\n')
+    #: One test that runs and one class whose fixture skips it whole: two tests that never run.
+    POLICY_TESTS = {"scripts/ci/policy_tests/test_fixture.py": (
+        b"import os\nimport unittest\n\n\n"
+        b"class Missing(unittest.TestCase):\n"
+        b"    @classmethod\n"
+        b"    def setUpClass(cls):\n"
+        b"        raise unittest.SkipTest('the fixture needs a tool this runner lacks')\n\n"
+        b"    def test_a(self):\n        raise AssertionError('must not run')\n\n"
+        b"    def test_b(self):\n        raise AssertionError('must not run')\n\n\n"
+        b"class Available(unittest.TestCase):\n"
+        b"    def test_account(self):\n"
+        b"        self.assertNotEqual(os.getuid(), 0)\n"
+        b"        self.assertEqual([name for name in os.environ if name.startswith(('GITHUB_', 'ACTIONS_'))], [])\n")}
+
+    def test_a_policy_suite_runs_through_the_staged_kit_whose_count_rule_admits_a_class_skip_for_quick_skin(self):
+        self.candidate_job(code=self.POLICY_SUITE, files=self.POLICY_TESTS)
+        self.assertEqual(self.job.config.data["profile"], "quick-skin")
+        self.assertEqual(self.stage()[0], 0)
+        code, stdout, stderr = self.run_hook("policy")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        lines = stdout.splitlines()
+        self.assertIn("[candidate] scripts/ci/policy_tests: 1 of 3 discovered tests ran", lines)
+        self.assertIn("[candidate] OK (skipped=1)", lines)
+        self.assertEqual(lines[-4:], ["[candidate] synthetic suite exit 0",
+                                      "[candidate] synthetic policy: 4 checks, 0 failures",
+                                      "[candidate] synthetic policy: ok, 0 files",
+                                      "worker-run: policy succeeded; candidate terminated and locked"])
+        # The kit's runner left nothing in the checkout: no bytecode, no scratch directory.
+        self.assertEqual(self.seal(), (0, "worker-seal: candidate terminated and locked; tracked sources unchanged "
+                                          "after policy; nothing to export\n", ""))
+        self.assert_finished("candidate", "validator")
+
+    def test_the_same_suite_fails_the_policy_step_under_the_profile_that_counts_every_discovered_test(self):
+        self.candidate_job(code=self.POLICY_SUITE, files=self.POLICY_TESTS, profile="block-pops")
+        self.assertEqual(self.job.config.data["profile"], "block-pops")
+        self.assertEqual(self.stage()[0], 0)
+        code, stdout, stderr = self.run_hook("policy")
+        self.assertEqual((code, stderr), (2, "mod_base: ci-worker: worker dispatcher returned failure\n"), stdout)
+        lines = stdout.splitlines()
+        self.assertIn("[candidate] FAILED: test_fixture.Missing: ran 0 tests, discovered 2", lines)
+        self.assertEqual(lines[-1], "[candidate] synthetic suite exit 1")
+        self.assertFalse(self.record("worker-run.json")["succeeded"])
+        code, stdout, stderr = self.seal()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertIn("nothing sealed, because policy did not succeed", stdout)
+        self.assert_finished("candidate", "validator")
+
+    # -- what is refused before the candidate exists ------------------------------------------------------
+
+    def test_a_checkout_that_is_not_exactly_the_tested_commit_is_never_staged(self):
+        self.candidate_job()
+        stray, tracked = self.checkout / "notes.txt", self.checkout / "src/payload.txt"
+        original = tracked.read_bytes()
+
+        def refused(message):
+            code, stdout, stderr = self.stage()
+            self.assertEqual((code, stdout), (2, ""), stderr)
+            self.assertIn(message, stderr)
+            self.assertFalse(self.repository.exists())
+            self.assertFalse((self.state / "worker-stage.json").exists())
+            self.assertFalse((self.root / "root-request-stage-candidate").exists())
+            self.assert_resting("candidate", "validator")
+
+        stray.write_bytes(b"untracked\n")
+        refused("unsafe-tree: source contains an undeclared path")
+        stray.unlink()
+        tracked.write_bytes(original + b"edited\n")
+        refused("ci-source: tracked source differs from the protected tested tree")
+        tracked.write_bytes(original)
+        job_fixture.git(self.checkout, "checkout", "-q", "-b", "work")
+        refused("the candidate checkout is not detached at the tested commit")
+        job_fixture.git(self.checkout, "checkout", "-q", "--detach", self.subject["tested_sha"])
+        # A lane's stage needs the Build that `ci fetch-build` left; a Build job has none.
+        code, stdout, stderr = self.stage("--bundle")
+        self.assertEqual((code, stdout), (2, ""), stderr)
+        self.assertFalse(self.repository.exists())
+        # Nothing ran, so nothing can be run or sealed either.
+        code, stdout, stderr = self.run_hook("policy")
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("ci-state: cannot read the state record worker-stage.json", stderr)
+        # A step that was cancelled left no record and perhaps a process: the seal stops the process
+        # first and then refuses, because nothing in the state shows that an earlier step failed.
+        candidate = self.account("candidate")
+        stray = subprocess.Popen(("/usr/bin/sudo", "-n", "--user", f"#{candidate.pw_uid}", "--", "/usr/bin/setsid",
+                                  "--fork", "/usr/bin/sleep", "600"), stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=HOST_ENV, cwd="/")
+        self.assertEqual(stray.wait(timeout=20), 0)
+        self.assertNotEqual(command("/usr/bin/sudo", "-n", "/usr/bin/pgrep", "-u", str(candidate.pw_uid)).stdout, b"")
+        code, stdout, stderr = self.seal()
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertEqual(stderr, "mod_base: ci-lifecycle: the candidate hook has no recorded result: nothing is sealed\n")
+        self.assert_resting("candidate", "validator")
+        self.assert_nothing_sealed()
+        self.assertEqual(self.stage()[0], 0)  # The checkout as fetched is accepted.
+        self.assert_finished("candidate", "validator")
+
+
+class LinuxCandidateFaultTests(SharedJobCase):
+    """A candidate hook that fails or misbehaves, in one build job that every case starts from.
+
+    ``ci worker-stage`` -> ``ci worker-run`` -> ``ci worker-seal`` on the synthetic mod, in a job
+    whose first three steps ran once (:class:`SharedJobCase`). Every case tests the same tree. Its
+    own dispatcher runs the code it finds in a file of the candidate's temporary directory, and a
+    case writes that file after the stage: each run of the real hook then does something else,
+    as the candidate account and behind the tool fence. A fault of the synthetic mod is requested
+    the same way instead of through the release inventory, which the plan of the job binds. The
+    protected adapter of the job is another, unchanged copy. Only the GitHub API is a fake.
+    """
+
+    #: What the tested dispatcher runs in every hook, right after it set its umask.
+    SWITCH = ('    case = os.path.join(os.environ["HOME"], "tmp", "candidate-case.py")\n'
+              '    if os.path.isfile(case):\n'
+              '        with open(case, encoding="utf-8") as stream:\n'
+              '            exec(compile(stream.read(), case, "exec"), globals())\n')
+    case = ""
+    run_hook = LinuxCandidateCommandTests.run_hook
+    seal = LinuxCandidateCommandTests.seal
+    record = LinuxCandidateCommandTests.record
+    as_root = LinuxCandidateCommandTests.as_root
+    exists = LinuxCandidateCommandTests.exists
+    tree = LinuxCandidateCommandTests.tree
+    assert_nothing_sealed = LinuxCandidateCommandTests.assert_nothing_sealed
+    run_fault = LinuxCandidateCommandTests.run_fault
+
+    # -- helpers -------------------------------------------------------------------------------------
+
+    def build_job(self):
+        self.document = LinuxCandidateCommandTests.candidate_job(self, code=self.SWITCH)
+
+    def candidate_job(self, *, faults=None, code=None):
+        """The shared job and its plan. ``faults`` (entries as the release inventory holds them)
+        and ``code`` (statements indented by four spaces) are what its candidate does in this
+        case: :meth:`stage` hands them to the staged candidate."""
+        import textwrap
+
+        parts = []
+        if faults is not None:
+            table = {(fault["hook"], fault["unit"]): fault["mode"] for fault in faults}
+            parts.append(f"adapter.fault = lambda inventory, hook, unit: {table!r}.get((hook, unit))\n")
+        if code is not None:
+            parts.append(textwrap.dedent(code))
+        self.case = "".join(parts)
+        return self.document
+
+    def stage(self, *extra):
+        """``ci worker-stage``, and then the file that tells the staged candidate what to do."""
+        result = LinuxCandidateCommandTests.stage(self, *extra)
+        if result[0] == 0 and self.case:
+            source = self.temporary / "candidate-case.py"
+            source.write_text(self.case, encoding="utf-8", newline="\n")
+            candidate = self.account("candidate")
+            self.as_root("/usr/bin/install", "-o", str(candidate.pw_uid), "-g", str(candidate.pw_gid), "-m", "0600",
+                         "--", str(source), str(self.root / "candidate-home" / "tmp" / "candidate-case.py"))
+        return result
+
+    def staged_target(self, target, **job):
+        """A job whose candidate is staged and has built ``target`` successfully."""
+        plan = self.candidate_job(**job)
+        self.assertEqual(self.stage()[0], 0)
+        code, stdout, stderr = self.run_hook("build_target", target)
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        return plan
+
+    def rejected_seal(self, error):
+        """``ci worker-seal`` refuses with one error line, seals nothing and leaves both accounts locked."""
+        code, stdout, stderr = self.seal()
+        self.assertEqual((code, stdout), (2, ""), stderr)
+        self.assertRegex(stderr, error)
+        self.assertEqual(stderr.count("\n"), 1)
+        self.assert_nothing_sealed()
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+
+    # -- faults of the synthetic mod --------------------------------------------------------------------
+
+    def test_failing_hook_fails_the_run_step_with_its_log_and_nothing_is_sealed(self):
+        run = self.run_fault("fail", error="worker dispatcher returned failure",
+                             log="[candidate] synthetic build_target 1.20.1 rejected: the release inventory "
+                                 "requests this failure\n")
+        self.assertEqual(run["returncode"], 1)
+
+    def test_hook_that_forks_a_process_that_outlives_it_fails_the_run_step(self):
+        run = self.run_fault("orphan", error="worker dispatcher left a process behind")
+        self.assertEqual(run["returncode"], 0)  # The hook itself reported success.
+
+    def seal_fault(self, mode, *, error):
+        """A hook that reports success over the wrong files is refused by root when it seals."""
+        self.staged_target("1.20.1", faults=[{"hook": "build_target", "unit": "1.20.1", "mode": mode}])
+        self.assertTrue(self.record("worker-run.json")["succeeded"])
+        self.rejected_seal(r"^mod_base: ci-worker: root operation freeze-build-export failed with exit 2: .*" + error)
+
+    def test_hook_that_writes_an_extra_file_is_refused_by_the_seal(self):
+        self.seal_fault("extra", error=r"is not the planned output set of target 1\.20\.1: 1 not planned "
+                                       r"\(first 'unplanned\.txt'\)")
+
+    def test_hook_that_omits_an_output_is_refused_by_the_seal(self):
+        self.seal_fault("missing", error=r"is not the planned output set of target 1\.20\.1: 1 planned and missing ")
+
+    # -- a candidate that misbehaves --------------------------------------------------------------------
+
+    def test_candidate_that_modifies_a_tracked_file_is_refused_by_the_seal(self):
+        self.staged_target("1.21.1", code='    open("src/payload.txt", "ab").write(b"changed by the candidate\\n")\n')
+        self.rejected_seal(r"^mod_base: ci-worker: root operation freeze-build-export failed with exit 2: "
+                           r".*tracked source differs from the protected tested tree")
+
+    def test_candidate_that_adds_a_file_outside_the_generated_roots_is_refused_by_the_seal(self):
+        # `out/` holds the kit overlay, which is a generated root; `out/` itself is not one.
+        self.staged_target("1.21.1", code='    open("out/beside.txt", "w").close()\n')
+        self.rejected_seal(r"^mod_base: ci-worker: root operation freeze-build-export failed with exit 2: "
+                           r".*source contains an undeclared path")
+
+    def planted(self, link):
+        """Candidate code that creates its export directory and plants one entry in it before the hook."""
+        return ('    planted = os.path.join(os.environ["HOME"], "export")\n'
+                '    os.makedirs(planted, exist_ok=True)\n'
+                f'    {link}\n')
+
+    def test_candidate_that_plants_a_symlink_in_its_export_is_refused_by_the_seal(self):
+        self.staged_target("1.21.1", code=self.planted(
+            f'os.symlink({str(self.state / "ci-plan.json")!r}, os.path.join(planted, "plan.json"))'))
+        self.rejected_seal(r"^mod_base: ci-worker: root operation freeze-build-export failed with exit 2: "
+                           r".*tree contains a symlink")
+
+    def test_candidate_that_plants_a_hard_link_in_its_export_is_refused_by_the_seal(self):
+        self.staged_target("1.21.1", code=(
+            '    with open(os.path.join(os.environ["HOME"], "tmp", "kept"), "wb") as stream:\n'
+            '        stream.write(b"the same bytes under two names")\n'
+            + self.planted('os.link(os.path.join(os.environ["HOME"], "tmp", "kept"), '
+                           'os.path.join(planted, "copy.bin"))')))
+        # A private regular file of the candidate in every respect but its second name.
+        candidate = self.account("candidate")
+        self.assertEqual(self.tree(self.export)["copy.bin"][:4], (candidate.pw_uid, candidate.pw_gid, 0o600, 2))
+        self.rejected_seal(r"^mod_base: ci-worker: root operation freeze-build-export failed with exit 2: "
+                           r".*read-only tree permissions or identity changed")
+
+
 class LinuxWorkerValidateTests(unittest.TestCase):
     """``ci worker-validate`` as the seal step of a job: real commands, accounts, sudo and root.
 
@@ -2925,7 +3734,10 @@ class LinuxWorkerValidateTests(unittest.TestCase):
     (``ci assemble``), a target's partition and a lane's results as the runner-private copy with
     its envelope that ``ci worker-seal`` freezes. Their bytes come from the synthetic mod's
     candidate hooks, run as plain processes for the job's own plan. Only the GitHub API is a
-    fake. Every case starts without a boundary and without accounts and removes both afterwards.
+    fake. Every case here starts without a boundary and without accounts and removes both
+    afterwards: a verifier that misbehaves, and a target's partition. The cases of the complete
+    Build and of a lane are ``LinuxBuildValidateTests`` and ``LinuxLaneValidateTests``, which use
+    the helpers of this class in one job each.
     """
 
     HOME = LinuxLifecycleCommandTests.HOME
@@ -3172,7 +3984,116 @@ class LinuxWorkerValidateTests(unittest.TestCase):
         self.assert_resting(*roles)
         self.assertEqual(self.api.request_count, self.requests)  # The command asks the API nothing.
 
-    # -- the complete Build in a job with the validator alone ----------------------------------------------
+    # -- hook faults ------------------------------------------------------------------------------------
+
+    def fault(self, mode, *, error, log=None, timeout=None, frozen=False):
+        """A ``verify_build`` that misbehaves is a clean rejection: one error line, no upload, the
+        validator locked with nothing of its own running, and the sweep still restores the home."""
+        self.begin("validator", faults=[{"hook": "verify_build", "unit": None, "mode": mode}], timeout=timeout)
+        self.seal_complete_build(self.built())
+        started = time.monotonic()
+        code, stdout, stderr = self.validate("verify_build")
+        self.assertEqual(code, 2, stdout + stderr)
+        self.assertRegex(stderr, error)
+        self.assertEqual(stderr.count("\n"), 1)
+        if log is not None:
+            self.assertEqual(stdout, log)
+        self.assertLess(time.monotonic() - started, 60)
+        self.assert_nothing_validated("validator", granted=True)
+        # Root is asked to freeze only what a hook that ran to its end left behind.
+        self.assertEqual((self.root / "root-request-freeze-build-validation").exists(), frozen)
+        self.assert_read_only_for_the_validator(self.build)
+        self.assert_finished("validator")
+
+    def test_failing_verifier_is_rejected_with_its_log(self):
+        self.fault("fail", error=r"^mod_base: ci-worker: worker dispatcher returned failure\n$",
+                   log="[validator] synthetic verify_build rejected: the release inventory requests this failure\n")
+
+    def test_hanging_verifier_is_killed_at_the_protected_timeout(self):
+        self.fault("hang", timeout=3, error=r"^mod_base: ci-worker: worker execution timed out\n$", log="")
+
+    def test_verifier_that_leaves_an_orphan_process_is_rejected_and_the_orphan_is_killed(self):
+        self.fault("orphan", error=r"^mod_base: ci-worker: worker dispatcher left a process behind\n$")
+
+    def test_verifier_that_writes_an_extra_file_is_rejected_by_root(self):
+        self.fault("extra", frozen=True, log="[validator] synthetic verify_build: ok, 3 files\n",
+                   error=r"^mod_base: ci-worker: root operation freeze-build-validation failed with exit 2: .*"
+                         r"exactly one `<unit id>\.json` report per unit and nothing else")
+
+    def test_verifier_that_omits_a_report_is_rejected_by_root(self):
+        self.fault("missing", frozen=True, log="[validator] synthetic verify_build: ok, 2 files\n",
+                   error=r"^mod_base: ci-worker: root operation freeze-build-validation failed with exit 2: .*"
+                         r"exactly one `<unit id>\.json` report per unit and nothing else")
+
+    # -- a target's partition, in a job with both accounts -------------------------------------------------
+
+    def test_target_job_verifies_its_frozen_partition_with_both_accounts_locked(self):
+        plan = self.begin("candidate+validator")
+        box = self.built()
+        envelope = self.seal_partition(box, "1.20.1")
+        target = plan["targets"][0]
+        self.assertEqual((target["id"], envelope["scope"], envelope["target_id"]), ("1.20.1", "target", "1.20.1"))
+        # The partition of one target never answers for another, and never for the complete Build.
+        for arguments, message in ((("verify_target", "--unit", "1.21.1"), "exactly its own frozen partition"),
+                                   (("verify_build",), "this job allocated candidate and validator")):
+            code, stdout, stderr = self.validate(*arguments)
+            self.assertEqual((code, stdout), (2, ""), arguments)
+            self.assertIn(message, stderr)
+            self.assert_nothing_validated("candidate", "validator")
+
+        code, stdout, stderr = self.validate("verify_target", "--unit", "1.20.1")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertEqual(stdout, "[validator] synthetic verify_target 1.20.1: ok, 1 files\n"
+                                 f"worker-validate: verify_target 1.20.1 verified {len(target['outputs'])} sealed "
+                                 "files; 1 report sealed; upload directory written\n")
+        uploaded = self.tree(self.upload)
+        self.assertEqual(sorted(uploaded), sorted([grammar.CI_ENVELOPE_NAME, grammar.CI_VALIDATION_NAME, "1.20.1.json",
+                                                   *(output["path"] for output in target["outputs"])]))
+        self.assertEqual(uploaded[grammar.CI_ENVELOPE_NAME], canonical_json(envelope))
+        _, export = self.assert_sealed_verification(
+            "verify_target", "1.20.1", grammar.CI_ENVELOPE_NAME,
+            hashlib.sha256(canonical_json(envelope)).hexdigest(), [target])
+        self.assertEqual(verify_build_export(export, plan=plan), envelope)
+        self.assert_resting("candidate", "validator")
+        self.assert_read_only_for_the_validator(self.build)
+        self.assert_private_to_the_runner("candidate", "validator")
+        for path in (self.build, self.root / "validation-input", self.root / "controller"):
+            self.assertEqual(self.as_account("candidate", "/usr/bin/test", "-r", str(path)), 1, path)
+        self.assert_finished("candidate", "validator")
+
+class LinuxBuildValidateTests(SharedJobCase):
+    """``ci worker-validate`` over the complete Build, in one assembling job every case starts from.
+
+    The job allocated the validator alone and planned from the API; its first three steps ran
+    once (:class:`SharedJobCase`). A case lays the complete Build into ``sealed-build/`` as
+    ``ci assemble`` leaves it and runs the command. Only the GitHub API is a fake.
+    """
+
+    ROLES = ("validator",)
+    RUN = LinuxWorkerValidateTests.RUN
+    built = LinuxWorkerValidateTests.built
+    producer = LinuxWorkerValidateTests.producer
+    build_envelope = LinuxWorkerValidateTests.build_envelope
+    partition = LinuxWorkerValidateTests.partition
+    seal_complete_build = LinuxWorkerValidateTests.seal_complete_build
+    validate = LinuxWorkerValidateTests.validate
+    tree = LinuxWorkerValidateTests.tree
+    read_artifact = LinuxWorkerValidateTests.read_artifact
+    assert_sealed_verification = LinuxWorkerValidateTests.assert_sealed_verification
+    assert_private_to_the_runner = LinuxWorkerValidateTests.assert_private_to_the_runner
+    assert_read_only_for_the_validator = LinuxWorkerValidateTests.assert_read_only_for_the_validator
+    assert_nothing_validated = LinuxWorkerValidateTests.assert_nothing_validated
+
+    def build_job(self):
+        self.upload = self.temporary / "mb-upload"
+        self.build = Path(str(BUILD_VALIDATION_ROOT))
+        self.sealed = self.root / "sealed-validation"
+        LinuxWorkerValidateTests.begin(self, "validator")
+
+    def begin(self, roles):
+        """The shared job: the plan it recorded."""
+        self.assertEqual(roles, "validator")
+        return self.document
 
     def test_validator_job_verifies_the_assembled_build_and_writes_the_upload_directory(self):
         from mod_base.build_ci.records import bind_build_envelope
@@ -3329,82 +4250,41 @@ class LinuxWorkerValidateTests(unittest.TestCase):
         self.assert_resting("validator")
         self.assert_finished("validator")
 
-    # -- hook faults ------------------------------------------------------------------------------------
 
-    def fault(self, mode, *, error, log=None, timeout=None, frozen=False):
-        """A ``verify_build`` that misbehaves is a clean rejection: one error line, no upload, the
-        validator locked with nothing of its own running, and the sweep still restores the home."""
-        self.begin("validator", faults=[{"hook": "verify_build", "unit": None, "mode": mode}], timeout=timeout)
-        self.seal_complete_build(self.built())
-        started = time.monotonic()
-        code, stdout, stderr = self.validate("verify_build")
-        self.assertEqual(code, 2, stdout + stderr)
-        self.assertRegex(stderr, error)
-        self.assertEqual(stderr.count("\n"), 1)
-        if log is not None:
-            self.assertEqual(stdout, log)
-        self.assertLess(time.monotonic() - started, 60)
-        self.assert_nothing_validated("validator", granted=True)
-        # Root is asked to freeze only what a hook that ran to its end left behind.
-        self.assertEqual((self.root / "root-request-freeze-build-validation").exists(), frozen)
-        self.assert_read_only_for_the_validator(self.build)
-        self.assert_finished("validator")
+class LinuxLaneValidateTests(SharedJobCase):
+    """``ci worker-validate`` over a lane's results, in one packaged job every case starts from.
 
-    def test_failing_verifier_is_rejected_with_its_log(self):
-        self.fault("fail", error=r"^mod_base: ci-worker: worker dispatcher returned failure\n$",
-                   log="[validator] synthetic verify_build rejected: the release inventory requests this failure\n")
+    The job allocated both accounts; its first three steps ran once (:class:`SharedJobCase`). A
+    case lays down the complete Build of the Build run and the lane's sealed results as the
+    steps before leave them and runs the command. Only the GitHub API is a fake.
+    """
 
-    def test_hanging_verifier_is_killed_at_the_protected_timeout(self):
-        self.fault("hang", timeout=3, error=r"^mod_base: ci-worker: worker execution timed out\n$", log="")
+    RUN = LinuxWorkerValidateTests.RUN
+    built = LinuxWorkerValidateTests.built
+    producer = LinuxWorkerValidateTests.producer
+    build_envelope = LinuxWorkerValidateTests.build_envelope
+    partition = LinuxWorkerValidateTests.partition
+    seal_complete_build = LinuxWorkerValidateTests.seal_complete_build
+    frozen = LinuxWorkerValidateTests.frozen
+    seal_lane = LinuxWorkerValidateTests.seal_lane
+    validate = LinuxWorkerValidateTests.validate
+    tree = LinuxWorkerValidateTests.tree
+    read_artifact = LinuxWorkerValidateTests.read_artifact
+    assert_sealed_verification = LinuxWorkerValidateTests.assert_sealed_verification
+    assert_private_to_the_runner = LinuxWorkerValidateTests.assert_private_to_the_runner
+    assert_read_only_for_the_validator = LinuxWorkerValidateTests.assert_read_only_for_the_validator
+    assert_nothing_validated = LinuxWorkerValidateTests.assert_nothing_validated
 
-    def test_verifier_that_leaves_an_orphan_process_is_rejected_and_the_orphan_is_killed(self):
-        self.fault("orphan", error=r"^mod_base: ci-worker: worker dispatcher left a process behind\n$")
+    def build_job(self):
+        self.upload = self.temporary / "mb-upload"
+        self.build = Path(str(BUILD_VALIDATION_ROOT))
+        self.sealed = self.root / "sealed-validation"
+        LinuxWorkerValidateTests.begin(self, "candidate+validator", producer="packaged")
 
-    def test_verifier_that_writes_an_extra_file_is_rejected_by_root(self):
-        self.fault("extra", frozen=True, log="[validator] synthetic verify_build: ok, 3 files\n",
-                   error=r"^mod_base: ci-worker: root operation freeze-build-validation failed with exit 2: .*"
-                         r"exactly one `<unit id>\.json` report per unit and nothing else")
-
-    def test_verifier_that_omits_a_report_is_rejected_by_root(self):
-        self.fault("missing", frozen=True, log="[validator] synthetic verify_build: ok, 2 files\n",
-                   error=r"^mod_base: ci-worker: root operation freeze-build-validation failed with exit 2: .*"
-                         r"exactly one `<unit id>\.json` report per unit and nothing else")
-
-    # -- a target's partition and a lane, in jobs with both accounts -------------------------------------
-
-    def test_target_job_verifies_its_frozen_partition_with_both_accounts_locked(self):
-        plan = self.begin("candidate+validator")
-        box = self.built()
-        envelope = self.seal_partition(box, "1.20.1")
-        target = plan["targets"][0]
-        self.assertEqual((target["id"], envelope["scope"], envelope["target_id"]), ("1.20.1", "target", "1.20.1"))
-        # The partition of one target never answers for another, and never for the complete Build.
-        for arguments, message in ((("verify_target", "--unit", "1.21.1"), "exactly its own frozen partition"),
-                                   (("verify_build",), "this job allocated candidate and validator")):
-            code, stdout, stderr = self.validate(*arguments)
-            self.assertEqual((code, stdout), (2, ""), arguments)
-            self.assertIn(message, stderr)
-            self.assert_nothing_validated("candidate", "validator")
-
-        code, stdout, stderr = self.validate("verify_target", "--unit", "1.20.1")
-        self.assertEqual((code, stderr), (0, ""), stdout)
-        self.assertEqual(stdout, "[validator] synthetic verify_target 1.20.1: ok, 1 files\n"
-                                 f"worker-validate: verify_target 1.20.1 verified {len(target['outputs'])} sealed "
-                                 "files; 1 report sealed; upload directory written\n")
-        uploaded = self.tree(self.upload)
-        self.assertEqual(sorted(uploaded), sorted([grammar.CI_ENVELOPE_NAME, grammar.CI_VALIDATION_NAME, "1.20.1.json",
-                                                   *(output["path"] for output in target["outputs"])]))
-        self.assertEqual(uploaded[grammar.CI_ENVELOPE_NAME], canonical_json(envelope))
-        _, export = self.assert_sealed_verification(
-            "verify_target", "1.20.1", grammar.CI_ENVELOPE_NAME,
-            hashlib.sha256(canonical_json(envelope)).hexdigest(), [target])
-        self.assertEqual(verify_build_export(export, plan=plan), envelope)
-        self.assert_resting("candidate", "validator")
-        self.assert_read_only_for_the_validator(self.build)
-        self.assert_private_to_the_runner("candidate", "validator")
-        for path in (self.build, self.root / "validation-input", self.root / "controller"):
-            self.assertEqual(self.as_account("candidate", "/usr/bin/test", "-r", str(path)), 1, path)
-        self.assert_finished("candidate", "validator")
+    def begin(self, roles, *, producer):
+        """The shared job: the plan it recorded."""
+        self.assertEqual((roles, producer), ("candidate+validator", "packaged"))
+        return self.document
 
     def test_lane_job_verifies_its_results_against_the_owning_build(self):
         self.lane_job(handed_over=False)
@@ -3470,6 +4350,320 @@ class LinuxWorkerValidateTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in self.root.glob("root-request-*validation")),
                          ["root-request-freeze-runtime-validation", "root-request-grant-build-validation",
                           "root-request-grant-runtime-validation"])
+        self.assert_finished("candidate", "validator")
+
+
+class LinuxJobChainTests(unittest.TestCase):
+    """A whole target job and a whole lane job on the synthetic mod, every step a real command.
+
+    ``ci subject`` -> ``ci worker-prepare --roles candidate+validator`` -> ``ci plan --candidate`` ->
+    ``ci worker-stage`` -> ``ci worker-run`` -> ``ci worker-seal`` -> ``ci worker-validate`` ->
+    ``ci worker-finish``, with real accounts, sudo and root operations. Between two commands of a
+    job the test lays nothing down. What a lane job receives from other jobs of its run is put in
+    place as they leave it: the complete Build in ``sealed-build/`` the way
+    ``exports.assemble_build_export`` publishes it, and the selection record ``ci fetch-build``
+    keeps in the state. The upload directory is read the way the next job reads the artifact. Only
+    the GitHub API is a fake. Every case starts and ends without a boundary and accounts.
+    """
+
+    HOME = LinuxLifecycleCommandTests.HOME
+    RUN = LinuxWorkerValidateTests.RUN
+    setUp = LinuxWorkerValidateTests.setUp
+    cleanup = LinuxLifecycleCommandTests.cleanup
+    finish = LinuxLifecycleCommandTests.finish
+    account = LinuxLifecycleCommandTests.account
+    as_account = LinuxLifecycleCommandTests.as_account
+    assert_resting = LinuxLifecycleCommandTests.assert_resting
+    assert_finished = LinuxLifecycleCommandTests.assert_finished
+    home = LinuxLifecycleCommandTests.home
+    owner = LinuxLifecycleCommandTests.owner
+    as_root = LinuxCandidateCommandTests.as_root
+    exists = LinuxCandidateCommandTests.exists
+    built = LinuxWorkerValidateTests.built
+    producer = LinuxWorkerValidateTests.producer
+    build_envelope = LinuxWorkerValidateTests.build_envelope
+    partition = LinuxWorkerValidateTests.partition
+    seal_complete_build = LinuxWorkerValidateTests.seal_complete_build
+    validate = LinuxWorkerValidateTests.validate
+
+    # -- helpers -------------------------------------------------------------------------------------
+
+    def step(self, verb, *arguments):
+        """One job step that must succeed; returns what it printed."""
+        code, stdout, stderr = self.commands.run(verb, *arguments)
+        self.assertEqual((code, stderr), (0, ""), (verb, stdout))
+        return stdout
+
+    def begin(self, producer, *, code=None):
+        """The first three steps of a job of ``producer`` with both accounts: ``ci subject``,
+        ``ci worker-prepare`` and ``ci plan --candidate``.
+
+        The candidate checkout is fetched and detached the way ``actions/checkout`` leaves one.
+        With ``code`` the tested tree's own dispatcher runs it in every candidate hook; the
+        protected adapter of the job stays the unchanged copy. Returns the plan the job recorded.
+        """
+        from mod_base import runtime
+
+        self.mod = h.materialize(self.temporary / "mod")
+        tested = self.mod
+        if code is not None:
+            tested = h.materialize(self.temporary / "tested")
+            candidate_fixture.patch_dispatcher(tested, code)
+        self.checkout, commit, tree = candidate_fixture.fetch_checkout(tested, self.temporary)
+        job_fixture.retarget(self.api, self.pull, commit, tree)
+        self.environment = {**self.environment, **h.environment(caller=producer),
+                            "GITHUB_RUN_ID": self.RUN[producer], "GITHUB_RUN_ATTEMPT": "2"}
+        self.commands = job_fixture.Commands(self.mod, self.state, self.api, self.environment)
+        self.step("subject", "--producer", producer, "--pr", "7", "--github-output", str(self.output))
+        self.subject = identity.read_subject(self.state)["subject"]
+        self.assertEqual(self.subject["tested_sha"], commit)
+        self.step("worker-prepare", "--roles", "candidate+validator", "--python", sys.executable)
+        self.step("plan", "--candidate", str(self.checkout), "--github-output", str(self.output))
+        self.document = lifecycle.read_plan(
+            lifecycle.open_job(runtime.build_invocation(self.mod, None, self.environment), self.state))
+        self.config = hashlib.sha256((self.mod / "scripts/ci/mod-base-build.json").read_bytes()).hexdigest()
+        self.requests = self.api.request_count
+        return self.document
+
+    def uploaded(self):
+        return {name: (self.upload / name).read_bytes() for name in h.files(self.upload)}
+
+    def downloaded(self):
+        """The upload directory as a reading job extracts the artifact: the export root, and the
+        new directory that job detaches the verification into."""
+        root = self.temporary / "download"
+        shutil.copytree(self.upload, root / "export")
+        return root / "export", root / "validation"
+
+    def candidate_export(self):
+        """``{path: sha256}`` of every file the candidate's hook left in its own export, read as root."""
+        root = str(self.root / "candidate-home" / "export")
+        listing = self.as_root("/usr/bin/find", root, "-type", "f", "-exec", "/usr/bin/sha256sum", "--", "{}", "+")
+        return {name[len(root) + 1:]: digest for digest, name in
+                (line.split("  ", 1) for line in listing.stdout.decode().splitlines())}
+
+    def assert_verification(self, record, *, hook, unit, run_id, input_sha256, uploaded):
+        """The uploaded validation record is the kit's and binds the plan, this run attempt, the
+        protected Build config of the job and exactly the input the hook was given."""
+        plan = self.document
+        self.assertEqual(uploaded[grammar.CI_VALIDATION_NAME], canonical_json(record))
+        report = uploaded[unit["id"] + ".json"]
+        self.assertEqual(record, {
+            "kind": "mod-base.ci.validation", "schema_version": 1, "identity": plan["identity"],
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"], "hook": hook, "unit_id": unit["id"],
+            "run_id": run_id, "run_attempt": 2, "source_config_sha256": self.config, "input_sha256": input_sha256,
+            "reports": [{"unit_id": unit["id"], "native_contract_sha256": unit["native_contract_sha256"],
+                         "path": unit["id"] + ".json", "size": len(report),
+                         "sha256": hashlib.sha256(report).hexdigest()}]})
+        self.assertIn(f'"hook":"{hook}"'.encode(), report)  # The synthetic verifier's own report.
+
+    def assert_nothing_uploaded(self):
+        """A job that stopped: no upload directory, no sealed verification, nothing left half-written."""
+        self.assertFalse(self.upload.exists())
+        self.assertFalse(self.sealed.exists())
+        self.assertEqual([path.name for path in self.temporary.iterdir() if path.name.startswith(".")], [])
+        self.assertFalse((self.root / "execution-handoff").exists())
+        self.assert_resting("candidate", "validator")
+        self.assertEqual(self.api.request_count, self.requests)
+
+    # -- a Build target job ----------------------------------------------------------------------------
+
+    def test_a_target_job_uploads_exactly_its_planned_files_with_an_envelope_and_a_verification_of_the_plan(self):
+        import json
+        from mod_base.build_ci import adapter, transport
+        from tests.helpers import ci_run_descriptor
+
+        plan = self.begin("build")
+        target = plan["targets"][1]
+        name, planned = target["id"], sorted(adapter.target_outputs(plan, target["id"]))
+        self.assertEqual(name, "1.21.1")
+        self.assertIn(" staged for the candidate\n", self.step("worker-stage", "--candidate", str(self.checkout)))
+        self.assertEqual(self.step("worker-run", "--hook", "build_target", "--unit", name),
+                         f"[candidate] synthetic build_target {name}: ok, {len(planned)} files\n"
+                         f"worker-run: build_target {name} succeeded; candidate terminated and locked\n")
+        sealed = self.step("worker-seal")
+        self.assertFalse(self.upload.exists())
+        self.assertEqual(self.step("worker-validate", "--hook", "verify_target", "--unit", name, "--output",
+                                   str(self.upload)),
+                         f"[validator] synthetic verify_target {name}: ok, 1 files\n"
+                         f"worker-validate: verify_target {name} verified {len(planned)} sealed files; 1 report "
+                         "sealed; upload directory written\n")
+        self.assertEqual(self.api.request_count, self.requests)  # Only `ci subject` asked the API anything.
+
+        # Exactly the planned files of the target, their envelope, the validation record and its report.
+        uploaded = self.uploaded()
+        self.assertEqual(sorted(uploaded), sorted([*planned, grammar.CI_ENVELOPE_NAME, grammar.CI_VALIDATION_NAME,
+                                                   f"{name}.json"]))
+        # The assembling job reads a partition with this function: it accepts the directory as it is.
+        export, receipt = self.downloaded()
+        envelope, record = transport._verify_sealed_build(
+            export, receipt, ci_run_descriptor(plan, "build", "full", "target", unit_id=name), plan, self.config)
+        self.assertEqual(uploaded[grammar.CI_ENVELOPE_NAME], canonical_json(envelope))
+        self.assertEqual({key: envelope[key] for key in ("identity", "plan_sha256", "profile", "scope", "target_id",
+                                                         "producer")},
+                         {"identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+                          "scope": "target", "target_id": name, "producer": self.producer("build")})
+        self.assertEqual([{key: file[key] for key in ("path", "lane_id", "role")} for file in envelope["files"]],
+                         sorted(target["outputs"], key=lambda output: output["path"]))
+        for file in envelope["files"]:
+            data = uploaded[file["path"]]
+            self.assertEqual((file["size"], file["sha256"]), (len(data), hashlib.sha256(data).hexdigest()), file["path"])
+        # They are byte for byte what the candidate's own hook left in its export, and nothing else was there.
+        self.assertEqual(self.candidate_export(), {file["path"]: file["sha256"] for file in envelope["files"]})
+        input_sha256 = hashlib.sha256(canonical_json(envelope)).hexdigest()
+        self.assert_verification(record, hook="verify_target", unit=target, run_id=42, input_sha256=input_sha256,
+                                 uploaded=uploaded)
+        # What the validator verified is what the seal froze, and the job leaves it read-only for it.
+        seal = json.loads((self.state / "worker-seal.json").read_bytes())
+        self.assertEqual((seal["export"], seal["files"], seal["envelope_sha256"]), ("build", len(planned), input_sha256))
+        self.assertTrue(sealed.endswith(f" sealed in sealed-build/ with envelope {input_sha256}\n"), sealed)
+        self.assertEqual(self.owner(self.build), (os.getuid(), self.account("validator").pw_gid, 0o750))
+        self.assertEqual(self.as_account("candidate", "/usr/bin/test", "-r", str(self.build)), 1)
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+
+    def test_a_candidate_that_changes_a_tracked_file_is_stopped_at_the_seal_and_nothing_is_uploaded(self):
+        name = "1.20.1"
+        self.begin("build", code='    open("src/payload.txt", "ab").write(b"changed by the candidate\\n")\n')
+        self.step("worker-stage", "--candidate", str(self.checkout))
+        # The hook itself reports success and exports every planned file.
+        self.assertIn(f"worker-run: build_target {name} succeeded; candidate terminated and locked\n",
+                      self.step("worker-run", "--hook", "build_target", "--unit", name))
+        self.assertEqual(sorted(self.candidate_export()),
+                         sorted(output["path"] for output in self.document["targets"][0]["outputs"]))
+        code, stdout, stderr = self.commands.run("worker-seal")
+        self.assertEqual((code, stdout), (2, ""), stderr)
+        self.assertRegex(stderr, r"^mod_base: ci-worker: root operation freeze-build-export failed with exit 2: "
+                                 r".*tracked source differs from the protected tested tree")
+        self.assertEqual(stderr.count("\n"), 1)
+        for missing in (self.build, self.state / "worker-seal.json"):
+            self.assertFalse(missing.exists(), missing)
+        self.assert_nothing_uploaded()
+        # A job ends here. Were its next step to run all the same, it would find nothing to verify.
+        code, stdout, stderr = self.validate("verify_target", "--unit", name)
+        self.assertEqual((code, stdout, stderr), (2, "", "mod_base: ci-worker: cannot read the sealed Build export\n"))
+        self.assertFalse((self.root / "root-request-grant-build-validation").exists())
+        self.assert_nothing_uploaded()
+        self.assert_finished("candidate", "validator")
+
+    # -- a packaged lane job ---------------------------------------------------------------------------
+
+    def lane_job(self, lane):
+        """A lane job up to its seal: ``(plan, complete Build envelope, descriptor of that Build)``."""
+        from tests.helpers import ci_run_descriptor
+
+        plan = self.begin("packaged")
+        # What `ci fetch-build` leaves a lane job: the complete Build of the Build run, private to
+        # the runner, and the selection record that names it.
+        build = self.seal_complete_build(self.built())
+        owning = ci_run_descriptor(plan, "build", "full", "build")
+        identity.write_state_record(self.state, "ci-selection.json", canonical_json(
+            candidate_fixture.selection(plan, owning, build, run_id=43, run_attempt=2)))
+        staged = self.step("worker-stage", "--candidate", str(self.checkout), "--bundle")
+        self.assertTrue(staged.endswith(f", with the Build of {len(build['files'])} files at build/release\n"), staged)
+        self.assertEqual(self.step("worker-run", "--hook", "run_lane", "--unit", lane),
+                         f"[validator] synthetic derive_runtime {lane}: ok, 1 files\n"
+                         f"[candidate] synthetic run_lane {lane}: ok, 4 files\n"
+                         f"worker-run: run_lane {lane} succeeded; candidate terminated and locked\n")
+        # The derivation left nothing in the validator's output directory: its verification starts clean.
+        self.assertFalse(self.exists(self.root / "validator-home" / "validation"))
+        sealed = self.step("worker-seal")
+        self.assertIn(f"4 files of run_lane {lane} sealed in sealed-runtime/ with envelope ", sealed)
+        # The seal leaves the Build as it found it: still the runner's private copy.
+        self.assertEqual(self.owner(self.build), (os.getuid(), os.getgid(), 0o700))
+        self.runtime = self.root / "sealed-runtime"
+        self.results = sorted(f"lanes/{lane}/{leaf}" for leaf in (
+            "logs/client.log", "result.json", "screenshots/smoke-title.png", "screenshots/smoke-world.png"))
+        return plan, build, owning
+
+    def test_a_lane_job_runs_the_assembled_build_and_uploads_exactly_its_verified_results(self):
+        from mod_base.build_ci import transport
+        from mod_base.build_ci.runtime_exports import verify_runtime_export
+        from mod_base.build_ci.runtime_schema import bind_runtime_envelope
+        from mod_base.build_ci.validation import verify_validation_export
+        from mod_base.model.canonical import canonical_sha256
+        from tests.helpers import ci_run_descriptor
+
+        name = "forge-1.20.1"
+        plan, build, owning = self.lane_job(name)
+        lane = next(lane for lane in plan["lanes"] if lane["id"] == name)
+        self.assertEqual(self.step("worker-validate", "--hook", "verify_runtime", "--unit", name, "--output",
+                                   str(self.upload)),
+                         f"[validator] synthetic verify_runtime {name}: ok, 1 files\n"
+                         f"worker-validate: verify_runtime {name} verified 4 sealed files; 1 report sealed; upload "
+                         "directory written\n")
+        self.assertEqual(self.api.request_count, self.requests)
+
+        # Exactly the lane's native results, their envelope, the validation record and its report;
+        # the Build the lane ran against is read, verified against and left out.
+        uploaded = self.uploaded()
+        self.assertEqual(sorted(uploaded), sorted([*self.results, grammar.CI_RUNTIME_ENVELOPE_NAME,
+                                                   grammar.CI_VALIDATION_NAME, f"{name}.json"]))
+        # As the aggregating job reads a lane's artifact (`transport._read_sealed_lane`).
+        export, receipt = self.downloaded()
+        transport._detach_validation(export, receipt, plan)
+        envelope = verify_runtime_export(export, plan=plan)
+        bind_runtime_envelope(envelope, owning_build=owning, plan=plan, descriptor=ci_run_descriptor(
+            plan, "packaged", "pull-request", "runtime", unit_id=name))
+        input_sha256 = canonical_sha256({
+            "format": grammar.CI_RUNTIME_INPUT_FORMAT, "plan_sha256": plan["plan_sha256"],
+            "build_envelope_sha256": canonical_sha256(build), "runtime_envelope_sha256": canonical_sha256(envelope)})
+        record = verify_validation_export(receipt, plan=plan, hook="verify_runtime", unit_id=name, run_id=43,
+                                          run_attempt=2, source_config_sha256=self.config, input_sha256=input_sha256)
+        self.assertEqual(uploaded[grammar.CI_RUNTIME_ENVELOPE_NAME], canonical_json(envelope))
+        self.assertEqual({key: envelope[key] for key in ("identity", "plan_sha256", "profile", "scope", "lane_id",
+                                                         "producer", "owning_build")},
+                         {"identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+                          "scope": "lane", "lane_id": name, "producer": self.producer("packaged"),
+                          "owning_build": owning})
+        self.assertEqual([file["path"] for file in envelope["files"]], self.results)
+        for file in envelope["files"]:
+            data = uploaded[file["path"]]
+            self.assertEqual((file["size"], file["sha256"]), (len(data), hashlib.sha256(data).hexdigest()), file["path"])
+        self.assertEqual(self.candidate_export(), {file["path"]: file["sha256"] for file in envelope["files"]})
+        self.assert_verification(record, hook="verify_runtime", unit=lane, run_id=43, input_sha256=input_sha256,
+                                 uploaded=uploaded)
+        # The lane ran the production JAR of the Build it was staged, which the report it uploads names.
+        production = next(file for file in build["files"] if file["lane_id"] == name and file["role"] == "production")
+        self.assertIn(f'"production_sha256":"{production["sha256"]}"'.encode(), uploaded[f"lanes/{name}/result.json"])
+        # Both sealed inputs end read-only for the validator; the candidate reads neither.
+        validator = self.account("validator")
+        for root in (self.build, self.runtime):
+            self.assertEqual(self.owner(root), (os.getuid(), validator.pw_gid, 0o750), root)
+            self.assertEqual(self.as_account("candidate", "/usr/bin/test", "-r", str(root)), 1, root)
+        self.assert_resting("candidate", "validator")
+        self.assert_finished("candidate", "validator")
+
+    def test_a_sealed_byte_changed_after_the_seal_is_rejected_and_nothing_is_uploaded(self):
+        import json
+
+        name = "forge-1.20.1"
+        self.lane_job(name)
+        log = self.runtime / f"lanes/{name}/logs/client.log"
+        original = log.read_bytes()
+        changed = bytes([original[0] ^ 0x01]) + original[1:]
+        # The byte alone: the sealed copy is no longer what its envelope says, and the command
+        # stops before anything is handed to the validator.
+        log.write_bytes(changed)
+        code, stdout, stderr = self.validate("verify_runtime", "--unit", name)
+        self.assertEqual((code, stdout), (2, ""), stderr)
+        self.assertIn("frozen runtime differs from its complete file inventory", stderr)
+        self.assertEqual(sorted(path.name for path in self.root.glob("root-request-*validation")), [])
+        self.assertEqual(self.owner(self.runtime), (os.getuid(), os.getgid(), 0o700))
+        self.assert_nothing_uploaded()
+        # With the envelope rewritten to name the changed byte, the copy is again exactly what its
+        # envelope says. The kit cannot tell; the mod's own verifier can, and nothing is uploaded.
+        path = self.runtime / grammar.CI_RUNTIME_ENVELOPE_NAME
+        envelope = json.loads(path.read_bytes())
+        entry = next(file for file in envelope["files"] if file["path"] == f"lanes/{name}/logs/client.log")
+        entry["sha256"] = hashlib.sha256(changed).hexdigest()
+        path.write_bytes(canonical_json(envelope))
+        code, stdout, stderr = self.validate("verify_runtime", "--unit", name)
+        self.assertEqual((code, stderr), (2, "mod_base: ci-worker: worker dispatcher returned failure\n"), stdout)
+        self.assertEqual(stdout, f"[validator] synthetic verify_runtime {name} rejected: the client log of {name} "
+                                 "differs from its result report\n")
+        self.assertFalse((self.root / "root-request-freeze-runtime-validation").exists())
+        self.assert_nothing_uploaded()
         self.assert_finished("candidate", "validator")
 
 

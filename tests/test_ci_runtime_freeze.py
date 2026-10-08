@@ -1,196 +1,190 @@
-"""Original candidate runtime freeze binding with explicit source/copy/UID seams."""
+"""The runtime envelope protected code writes for one lane, from the plan and a real directory.
+
+The directory is what a lane's hook left: its native results and no kit document. The account,
+the ownership handover and the source and Build checks around the copy need root and are exercised
+by ``LinuxCandidateCommandTests`` in ``tests/ci_linux_worker.py``.
+"""
 
 import copy
-import stat
+import hashlib
+import os
+import tempfile
 import unittest
-from contextlib import ExitStack
-from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import patch
 
 from mod_base.build_ci import runtime_freeze
-from mod_base.build_ci.source import GitSourceEntry
-from mod_base.build_ci.worker import WorkerResult
+from mod_base.build_ci.host import HostBoundary
+from mod_base.build_ci.runtime_exports import verify_runtime_export
+from mod_base.build_ci.runtime_schema import validate_runtime_envelope
+from mod_base.build_ci.worker import WorkerAccount
 from mod_base.errors import MbError
-from mod_base.io.tree import EXPORT_PATHS
-from mod_base.model import limits
+from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
-from tests import test_ci_runtime_inputs as runtime_fixture
+from tests.helpers import ci_descriptor, ci_envelope, ci_plan, ci_run_producer, ci_staged_plan
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"pixels"
+RESULTS = {
+    "lanes/lane-a/result.json": (b'{"status":"pass"}\n', "native-report"),
+    "lanes/lane-a/logs/client.log": (b"client started\n", "runtime-log"),
+    "lanes/lane-a/logs/empty.log": (b"", "runtime-log"),
+    "lanes/lane-a/screenshots/Title Screen.png": (PNG, "screenshot"),
+    "lanes/lane-a/run/crash-reports/crash-2026-10-08_10.00.00-client.txt": (b"", "crash-report"),
+    "lanes/lane-a/run/options.txt": (b"fov:70\n", "runtime-log"),
+}
 
 
-class RuntimeFreezeTests(unittest.TestCase):
-    boundary = runtime_fixture.RuntimeInputTests.boundary
-    candidate = runtime_fixture.RuntimeInputTests.candidate
-    validator = runtime_fixture.RuntimeInputTests.validator
-    inventory = (GitSourceEntry('src/Main.java', '100644', 3, 'a' * 40),)
-
-    def exercise(self, *, fault=None, mutate=None, runtime_mutate=None, execution=None,
-                 lane_id='lane-a', generated_roots=('build',), preflight=False):
-        plan, build, runtime = runtime_fixture.fixture()
-        owner = copy.deepcopy(runtime['owning_build'])
-        original = copy.deepcopy((plan, build, owner))
-        if runtime_mutate is not None:
-            runtime_mutate(runtime)
-        expected = copy.deepcopy(runtime)
-        events = []
-        reads = {'source': 0, 'build': 0, 'runtime': 0}
-        def info(inode, owner, group, mode):
-            return SimpleNamespace(st_dev=1, st_ino=inode, st_uid=owner, st_gid=group, st_mode=stat.S_IFDIR | mode)
-        metadata = [info(20, 1001, 121, 0o711), info(21, 1001, 121, 0o711),
-                    info(22, 2000, 2000, 0o700), info(23, 2000, 2000, 0o700),
-                    info(40, 2000 if fault == 'foreign' else 0, 0, 0o700),
-                    info(99 if fault == 'inode' else 40, 1001, 121, 0o700),
-                    info(99 if fault == 'named-root' else 40, 1001, 121, 0o700)]
-        def terminate(account):
-            self.assertEqual(account, self.candidate)
-            events.append('terminate')
-            if fault == 'survivor':
-                raise MbError('candidate survived')
-        def source(root, **kwargs):
-            reads['source'] += 1
-            events.append('source')
-            self.assertEqual(root, runtime_freeze.CANDIDATE_SOURCE_ROOT)
-            self.assertEqual(kwargs, dict(inventory=self.inventory, generated_roots=generated_roots))
-            if fault == 'source-pre':
-                raise MbError('source mutated')
-            return ['changed'] if (fault == 'source-copy' and reads['source'] == 2
-                or fault == 'source-transfer' and reads['source'] == 4) else ['original witness']
-        def build_inputs(boundary, validator, p, b):
-            reads['build'] += 1
-            events.append('build')
-            self.assertEqual((p, b), original[:2])
-            self.assertIsNot(p, plan)
-            if fault == 'build-bytes':
-                raise MbError('Build bytes changed')
-            return ((1, 99 if fault == 'build-root' and reads['build'] > 1 else 20), (1, 30))
-        def verifying(root, **kwargs):
-            reads['runtime'] += 1
-            events.append('runtime-original' if root == runtime_freeze.CANDIDATE_OUTPUT_ROOT else 'runtime-copy')
-            self.assertEqual(kwargs['plan'], original[0])
-            if fault == 'runtime-original' and reads['runtime'] == 2:
-                return {**expected, 'files': []}
-            if fault == 'runtime-copy' and root == runtime_freeze.RUNTIME_VALIDATION_ROOT:
-                return {**expected, 'files': []}
-            return copy.deepcopy(expected)
-        def copying(root, output, **kwargs):
-            events.append('copy')
-            self.assertEqual((root, output), (runtime_freeze.CANDIDATE_OUTPUT_ROOT, runtime_freeze.RUNTIME_VALIDATION_ROOT))
-            if mutate is not None:
-                mutate(plan, build, owner)
-            kwargs['before_publish']()
-            if fault == 'copy-result':
-                return {**expected, 'files': []}
-            return copy.deepcopy(expected)
-        def transferring(root, **kwargs):
-            events.append('transfer')
-            self.assertEqual(root, runtime_freeze.RUNTIME_VALIDATION_ROOT)
-            self.assertEqual((kwargs['source_owner_uid'], kwargs['owner_uid'], kwargs['owner_gid']), (0, 1001, 121))
-            self.assertEqual(kwargs['max_files'], limits.MAX_CI_RUNTIME_FILES + 1)
-            self.assertEqual(kwargs['max_total_bytes'], limits.MAX_CI_RUNTIME_BYTES + len(canonical_json(expected)))
-            # The copy keeps the mod's own file names: the transfer walks it with the export rule.
-            self.assertIs(kwargs['rule'], EXPORT_PATHS)
-            if fault in ('transfer', 'cleanup'):
-                raise OSError('ownership failed')
-        def close(fd):
-            if fault == 'close' and fd == 14:
-                raise OSError('close failed')
-        with ExitStack() as stack:
-            stack.enter_context(patch.object(runtime_freeze, 'authenticate_privileged_host_boundary'))
-            accounts = stack.enter_context(patch.object(runtime_freeze, 'authenticate_worker_account',
-                side_effect=[self.candidate, self.validator]))
-            stack.enter_context(patch.object(runtime_freeze, '_open_directory', side_effect=[10, 11, 12, 13, 14, 15]))
-            stack.enter_context(patch.object(runtime_freeze.os, 'fstat', side_effect=metadata))
-            stack.enter_context(patch.object(runtime_freeze.os, 'close', side_effect=close))
-            modes = stack.enter_context(patch.object(runtime_freeze.os, 'fchmod', create=True,
-                side_effect=OSError('cleanup failed') if fault == 'cleanup' else None))
-            stack.enter_context(patch.object(runtime_freeze.os, 'fsync'))
-            killing = stack.enter_context(patch.object(runtime_freeze, 'terminate_worker', side_effect=terminate))
-            stack.enter_context(patch.object(runtime_freeze, 'verify_source_copy', side_effect=source))
-            stack.enter_context(patch.object(runtime_freeze, '_inspect_build_inputs', side_effect=build_inputs))
-            stack.enter_context(patch.object(runtime_freeze, 'authenticate_tree_private_access',
-                side_effect=MbError('unsafe private tree') if fault == 'private' else None))
-            checking = stack.enter_context(patch.object(runtime_freeze, 'verify_runtime_export', side_effect=verifying))
-            copying_mock = stack.enter_context(patch.object(runtime_freeze, '_materialize_runtime_export', side_effect=copying))
-            transferring_mock = stack.enter_context(patch.object(runtime_freeze, 'privatize_regular_data_copy', side_effect=transferring))
-            try:
-                observed = runtime_freeze.freeze_runtime_export(boundary=self.boundary, candidate=self.candidate,
-                    execution=WorkerResult(0, b'candidate log', False) if execution is None else execution,
-                    inventory=self.inventory, generated_roots=generated_roots, plan=plan, build=build,
-                    owning_build=owner, lane_id=lane_id, run_id=43, run_attempt=2)
-                self.assertEqual(observed, expected)
-                self.assertIsNot(observed, runtime)
-                self.assertEqual(reads, {'source': 4, 'build': 4, 'runtime': 3})
-                self.assertEqual(events[0], 'terminate')
-                self.assertEqual(events[-1], 'terminate')
-                modes.assert_not_called()
-            except MbError:
-                if 'transfer' in events and fault != 'close':
-                    modes.assert_called_once_with(14, 0o700)
-                else:
-                    modes.assert_not_called()
-                raise
-            finally:
-                if preflight:
-                    accounts.assert_not_called()
-                    killing.assert_not_called()
-                    checking.assert_not_called()
-                else:
-                    self.assertEqual(killing.call_args.args, (self.candidate,))
-                if fault in ('survivor', 'source-pre', 'private', 'build-bytes') or runtime_mutate is not None:
-                    copying_mock.assert_not_called()
-                if fault in ('source-copy', 'build-root', 'runtime-original', 'copy-result', 'foreign'):
-                    transferring_mock.assert_not_called()
-
-    def test_success_binds_original_source_build_whole_selection_and_private_copy(self):
-        self.exercise()
-
-    def test_survivor_original_source_build_and_private_metadata_failures_stop_copy(self):
-        for fault in ('survivor', 'source-pre', 'build-bytes', 'private'):
-            with self.subTest(fault=fault), self.assertRaises(MbError):
-                self.exercise(fault=fault)
-
-    def test_source_build_and_original_runtime_drift_inside_publication_stop_transfer(self):
-        for fault in ('source-copy', 'build-root', 'runtime-original', 'copy-result'):
-            with self.subTest(fault=fault), self.assertRaises(MbError):
-                self.exercise(fault=fault)
-
-    def test_private_owner_inode_named_root_bytes_and_final_source_failures_never_return(self):
-        for fault in ('foreign', 'transfer', 'inode', 'named-root', 'runtime-copy', 'source-transfer'):
-            with self.subTest(fault=fault), self.assertRaises(MbError):
-                self.exercise(fault=fault)
-
-    def test_candidate_cannot_replace_whole_original_owning_build_or_lane_or_attempt(self):
-        for mutate in (lambda r: r['owning_build']['artifact'].update(id=999),
-                       lambda r: r.update(scope='complete', lane_id=None),
-                       lambda r: r['producer'].update(run_id=44)):
-            with self.subTest(mutate=mutate), self.assertRaises(MbError):
-                self.exercise(runtime_mutate=mutate)
-
-    def test_original_caller_drift_is_rejected_inside_private_publication(self):
-        for mutate in (lambda p, b, o: p.clear(), lambda p, b, o: b.clear(),
-                       lambda p, b, o: o['artifact'].update(id=999)):
-            with self.subTest(mutate=mutate), self.assertRaises(MbError):
-                self.exercise(mutate=mutate)
-
-    def test_bad_execution_lane_and_generated_policy_reject_before_account_mutation(self):
-        for args in ({'execution': WorkerResult(1, b'failed', False)},
-                     {'execution': WorkerResult(False, b'fake', False)},
-                     {'execution': WorkerResult(0, bytearray(b'log'), False)},
-                     {'lane_id': 'lane-b'}, {'generated_roots': ['build']}):
-            with self.subTest(args=args), self.assertRaises(MbError):
-                self.exercise(**args, preflight=True)
-
-    def test_cleanup_and_close_errors_are_visible_and_still_quiesce_candidate(self):
-        for fault in ('cleanup', 'close'):
-            with self.subTest(fault=fault), self.assertRaises(MbError):
-                self.exercise(fault=fault)
-
-    def test_unprivileged_denial_precedes_account_lookup(self):
-        with patch.object(runtime_freeze, 'authenticate_privileged_host_boundary', side_effect=MbError('not Root')), \
-                patch.object(runtime_freeze, 'authenticate_worker_account') as account, self.assertRaises(MbError):
-            runtime_freeze.freeze_runtime_export(boundary=self.boundary, candidate=self.candidate, execution=None,
-                inventory=(), generated_roots=(), plan={}, build={}, owning_build={}, lane_id='lane-a', run_id=43, run_attempt=2)
-        account.assert_not_called()
+class RuntimeRoleTests(unittest.TestCase):
+    def test_the_role_follows_from_the_name_alone(self):
+        roles = {"result.json": "native-report", "lanes/a/REPORT.JSON": "native-report",
+                 "shot.png": "screenshot", "lanes/a/screenshots/Title.PNG": "screenshot",
+                 "latest.log": "runtime-log", "logs/debug.log.gz": "runtime-log", "options.txt": "runtime-log",
+                 "notes": "runtime-log", "report.json.bak": "runtime-log", "png": "runtime-log",
+                 "crash-reports/crash.txt": "crash-report", "run/crash-reports/crash.json": "crash-report",
+                 "run/crash-reports/dump/frame.png": "crash-report",
+                 # A file that is merely named like the directory is no crash report.
+                 "run/crash-reports": "runtime-log", "run/crash-reports.json": "native-report"}
+        for path, role in roles.items():
+            with self.subTest(path=path):
+                self.assertEqual(runtime_freeze.runtime_role(path), role)
 
 
-if __name__ == '__main__':
+class LaneSealTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.root, self.output = self.base / "export", self.base / "sealed"
+        self.plan = ci_plan()
+        self.producer = {key: value for key, value in ci_run_producer(self.plan, "packaged").items()
+                         if key != "upload_window"}
+        self.owning_build = ci_descriptor()
+        for name, (data, _) in RESULTS.items():
+            self.put(name, data)
+
+    def put(self, name, data):
+        path = self.root.joinpath(*name.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def seal(self, lane_id="lane-a", **changes):
+        arguments = {"producer": self.producer, "owning_build": self.owning_build, **changes}
+        return runtime_freeze.seal_lane_export(self.root, self.output, plan=self.plan, lane_id=lane_id, **arguments)
+
+    def published(self):
+        return sorted(path.name for path in self.base.iterdir())
+
+    def test_the_envelope_names_the_lane_of_the_plan_and_every_file_found_with_its_derived_role(self):
+        envelope = self.seal()
+        self.assertEqual(validate_runtime_envelope(copy.deepcopy(envelope), plan=self.plan), envelope)
+        lane = self.plan["lanes"][0]
+        self.assertEqual({key: value for key, value in envelope.items() if key != "files"}, {
+            "kind": "mod-base.ci.runtime-envelope", "schema_version": 1, "identity": self.plan["identity"],
+            "plan_sha256": self.plan["plan_sha256"], "profile": self.plan["profile"], "producer": self.producer,
+            "scope": "lane", "lane_id": "lane-a", "owning_build": self.owning_build,
+            "lanes": [{"id": "lane-a", "native_contract_sha256": lane["native_contract_sha256"]}]})
+        self.assertEqual(envelope["files"], [
+            {"path": name, "lane_id": "lane-a", "role": role, "size": len(data),
+             "sha256": hashlib.sha256(data).hexdigest()} for name, (data, role) in sorted(RESULTS.items())])
+        # An independent copy, empty logs included, with the one document the kit wrote.
+        self.assertEqual(sorted(path.relative_to(self.output).as_posix() for path in self.output.rglob("*")
+                                if path.is_file()), sorted([*RESULTS, grammar.CI_RUNTIME_ENVELOPE_NAME]))
+        self.assertEqual((self.output / grammar.CI_RUNTIME_ENVELOPE_NAME).read_bytes(), canonical_json(envelope))
+        self.assertEqual(verify_runtime_export(self.output, plan=self.plan), envelope)
+        for name, (data, _) in RESULTS.items():
+            self.assertEqual((self.output / name).read_bytes(), data)
+            self.assertNotEqual(os.stat(self.output / name).st_ino, os.stat(self.root / name).st_ino)
+        self.assertFalse((self.root / grammar.CI_RUNTIME_ENVELOPE_NAME).exists())
+        self.assertEqual(self.published(), ["export", "sealed"])
+
+    def test_the_envelope_is_a_function_of_the_inventory_the_plan_and_the_selected_build(self):
+        records = [{"path": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+                   for name, (data, _) in RESULTS.items()]
+        arguments = dict(plan=self.plan, lane_id="lane-a", producer=self.producer, owning_build=self.owning_build)
+        envelope = runtime_freeze.lane_envelope(records, **arguments)
+        self.assertEqual(envelope, self.seal())
+        self.assertEqual(runtime_freeze.lane_envelope(records[::-1], **arguments), envelope)
+        self.assertIsNot(envelope["owning_build"], self.owning_build)
+        staged = ci_staged_plan()  # Three lanes: the envelope of one names that lane alone.
+        owner = ci_descriptor()
+        owner["plan_sha256"] = staged["plan_sha256"]
+        producer = {key: value for key, value in ci_run_producer(staged, "packaged").items() if key != "upload_window"}
+        moved = [{**record, "path": record["path"].replace("lane-a", "lane-b")} for record in records]
+        other = runtime_freeze.lane_envelope(moved, plan=staged, lane_id="lane-b", producer=producer, owning_build=owner)
+        self.assertEqual((other["lane_id"], [lane["id"] for lane in other["lanes"]],
+                          {file["lane_id"] for file in other["files"]}), ("lane-b", ["lane-b"], {"lane-b"}))
+
+    def test_results_no_lane_may_leave_are_refused_and_nothing_is_published(self):
+        report = "lanes/lane-a/result.json"
+
+        def linked():
+            (self.root / report).unlink()
+            (self.root / report).symlink_to(self.root / "lanes/lane-a/logs/client.log")
+
+        def emptied():
+            for path in sorted(self.root.rglob("*"), reverse=True):
+                path.rmdir() if path.is_dir() else path.unlink()
+
+        mutations = {
+            "nothing at all": (emptied, "files"),
+            "an empty report": (lambda: self.put(report, b""), "empty report/image data"),
+            "an empty screenshot": (lambda: self.put("lanes/lane-a/screenshots/blank.png", b""),
+                                    "empty report/image data"),
+            "a runtime envelope written by the hook": (
+                lambda: self.put(grammar.CI_RUNTIME_ENVELOPE_NAME, b"{}"), "its own envelope"),
+            "a result that is a symlink": (linked, "symlink"),
+            "a result with a second name": (lambda: os.link(self.root / report, self.base / "alias"), "links"),
+            "a pipe": (lambda: os.mkfifo(self.root / "lanes/lane-a/logs/pipe"), "special file"),
+            "a hidden file": (lambda: self.put("lanes/lane-a/.hidden", b"x"), "unsafe or aliased path"),
+            "Git internals": (lambda: self.put("lanes/lane-a/.git/config", b"x"), "unsafe or aliased path"),
+            "a case alias": (lambda: self.put("lanes/lane-a/Result.json", b"{}"), "unsafe or aliased path"),
+        }
+        for name, (mutate, message) in mutations.items():
+            with self.subTest(name=name):
+                self.setUp()
+                mutate()
+                with self.assertRaisesRegex(MbError, message):
+                    self.seal()
+                self.assertFalse(self.output.exists())
+                self.assertEqual(sorted(set(self.published()) - {"alias"}), ["export"])  # No stage is left behind.
+
+    def test_a_lane_outside_the_plan_an_unbound_build_and_a_foreign_producer_are_refused(self):
+        other_plan = ci_staged_plan()
+        target = ci_descriptor("target", unit_id="target-a")
+        for changes in ({"lane_id": "lane-b"}, {"lane_id": "target-a"},
+                        {"owning_build": {**self.owning_build, "plan_sha256": other_plan["plan_sha256"]}},
+                        {"owning_build": target}, {"owning_build": ci_envelope()},
+                        {"producer": {**self.producer, "api_head_sha": "e" * 40}},
+                        {"producer": {**self.producer, "event": "push"}},
+                        {"producer": {**self.producer, "upload_window": {}}}):
+            with self.subTest(changes=list(changes)), self.assertRaises(MbError):
+                self.seal(**changes)
+            self.assertFalse(self.output.exists())
+        self.output.mkdir()
+        with self.assertRaisesRegex(MbError, "refusing to replace existing output"):
+            self.seal()
+
+    def test_every_role_keeps_its_own_size_bound_and_one_lane_its_caps(self):
+        for bound, value in (("MAX_CI_REPORT_BYTES", 8), ("MAX_CI_PNG_BYTES", 8), ("MAX_CI_LOG_BYTES", 8),
+                             ("MAX_CI_RUNTIME_FILES", 5), ("MAX_CI_RUNTIME_BYTES", 32), ("MAX_CI_RUNTIME_ENTRIES", 6),
+                             ("MAX_CI_RUNTIME_ENVELOPE_BYTES", 64)):
+            with self.subTest(bound=bound), patch.object(limits, bound, value), self.assertRaises(MbError):
+                self.seal()
+            self.assertFalse(self.output.exists())
+        self.assertEqual(self.seal()["lane_id"], "lane-a")
+
+    def test_the_root_only_freeze_refuses_an_unprivileged_caller_before_it_looks_at_anything(self):
+        if os.geteuid() == 0:
+            self.skipTest("this case needs an unprivileged user")
+        boundary = HostBoundary("/home/runner", os.getuid(), os.getgid(), 1, 10, 0o755)
+        candidate = WorkerAccount("candidate", 2000, 2000, "/tmp/mod-base-sandbox-boundary/mod-base-worker/candidate-home")
+        with patch.object(runtime_freeze, "terminate_worker") as terminate, \
+                self.assertRaisesRegex(MbError, "requires protected root setup"):
+            runtime_freeze.freeze_runtime_export(
+                boundary=boundary, candidate=candidate, inventory=(), generated_roots=(), plan=self.plan,
+                build=ci_envelope(), owning_build=self.owning_build, lane_id="lane-a", producer=self.producer)
+        terminate.assert_not_called()
+
+
+if __name__ == "__main__":
     unittest.main()

@@ -103,6 +103,19 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
     "ci plan candidate": (["ci", "plan", *REPO, "--state", "state", "--candidate", "candidate",
                            "--expect-sha256", "ab" * 32, "--github-output", "out"],
                           {"candidate": Path("candidate"), "expect_sha256": "ab" * 32, "github_output": Path("out")}),
+    "ci worker-stage": (["ci", "worker-stage", *REPO, "--state", "state", "--candidate", "candidate"],
+                        {"ci_command": "worker-stage", "state": Path("state"), "candidate": Path("candidate"),
+                         "gradle_seed": None, "bundle": False}),
+    "ci worker-stage lane": (["ci", "worker-stage", *REPO, "--state", "state", "--candidate", "candidate",
+                              "--gradle-seed", "seed", "--bundle"], {"gradle_seed": Path("seed"), "bundle": True}),
+    "ci worker-run": (["ci", "worker-run", *REPO, "--state", "state", "--hook", "policy"],
+                      {"ci_command": "worker-run", "state": Path("state"), "hook": "policy", "unit": None}),
+    "ci worker-run target": (["ci", "worker-run", *REPO, "--state", "state", "--hook", "build_target",
+                              "--unit", "1.20.1"], {"hook": "build_target", "unit": "1.20.1"}),
+    "ci worker-run lane": (["ci", "worker-run", *REPO, "--state", "state", "--hook", "run_lane",
+                            "--unit", "fabric-1.20.1"], {"hook": "run_lane", "unit": "fabric-1.20.1"}),
+    "ci worker-seal": (["ci", "worker-seal", *REPO, "--state", "state"],
+                       {"ci_command": "worker-seal", "state": Path("state")}),
     "ci worker-finish": (["ci", "worker-finish", *REPO, "--state", "state"],
                          {"ci_command": "worker-finish", "state": Path("state")}),
     "ci assemble": (["ci", "assemble", *REPO, "--state", "state"], {"ci_command": "assemble", "state": Path("state")}),
@@ -243,6 +256,23 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "plan", *REPO, "--state", "s", "--expect-sha256", "ab" * 31],
             ["ci", "plan", *REPO, "--state", "s", "--candidate", ""],
             ["ci", "plan", *REPO, "--state", "s", "--roles", "validator"],
+            ["ci", "worker-stage", *REPO, "--state", "s"],
+            ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", ""],
+            ["ci", "worker-stage", *REPO, "--candidate", "candidate"],
+            ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--bundle", "build/release"],
+            ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--gradle-seed"],
+            ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--overlay", "kit"],
+            ["ci", "worker-run", *REPO, "--state", "s"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "1.20.1"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "derive_runtime", "--unit", "fabric-1.20.1"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "build_target", "--unit", "Fabric 1.20.1"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "build_target", "--unit", "a--b"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "run_lane", "--unit", ""],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "policy", "--command", "sh"],
+            ["ci", "worker-run", *REPO, "--hook", "policy"],
+            ["ci", "worker-seal", *REPO],
+            ["ci", "worker-seal", *REPO, "--state", "s", "--export", "build/release"],
+            ["ci", "worker-seal", *REPO, "--state", "s", "--hook", "build_target"],
             ["ci", "worker-finish", *REPO],
             ["ci", "worker-finish", "--state", "s"],
             ["ci", "worker-finish", *REPO, "--state", "s", "--python", "/opt/python/bin/python3"],
@@ -349,9 +379,9 @@ class CiVerbsTest(unittest.TestCase):
             with self.subTest(module=name):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
-        self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-finish", "batch-prepare", "batch-settle",
-                              "select-build", "fetch-build", "gate-status", "worker-validate", "reuse-admit"},
-                             set(verbs))
+        self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+                              "worker-validate", "worker-finish", "batch-prepare", "batch-settle", "select-build",
+                              "fetch-build", "gate-status", "reuse-admit"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

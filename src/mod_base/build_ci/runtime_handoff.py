@@ -1,23 +1,91 @@
-"""Original runner-to-Root runtime execution context, using the existing private channel (MB11)."""
+"""Runtime handoffs between the validator, the runner and root (MB11).
+
+``derive_runtime`` answers in the validator's own home; root hands the runner a private copy of
+the one file it must write (:func:`take_derived_runtime`), exactly as it does for ``derive_plan``.
+The rest is the runner-to-root execution context of a lane's verifier, on the existing private
+channel.
+"""
 
 from __future__ import annotations
 
 import base64
 import os
+import stat
+from pathlib import Path
 from typing import Any
 
 from mod_base import readable_schema_versions
+from mod_base.build_ci import adapter
 from mod_base.build_ci.controller import ControllerSources, _validate_sources
 from mod_base.build_ci.handoff import (_log, _publish_execution, _read_private_handoff,
                                       validate_execution_handoff)
-from mod_base.build_ci.host import HostBoundary, authenticate_host_boundary, authenticate_privileged_host_boundary
-from mod_base.build_ci.inputs import _accounts, _layout
+from mod_base.build_ci.host import (HostBoundary, _open_directory, authenticate_host_boundary,
+                                    authenticate_privileged_host_boundary)
+from mod_base.build_ci.inputs import _accounts, _discard, _layout
 from mod_base.build_ci.runtime_inputs import (RuntimeValidationExecution, _context as _input_context,
     _inspect_inputs, _read_inputs, _retained, freeze_frozen_runtime_validation)
-from mod_base.build_ci.worker import WorkerAccount, WorkerError, WorkerResult, terminate_worker
+from mod_base.build_ci.validation import VALIDATOR_OUTPUT_ROOT
+from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult, terminate_worker
+from mod_base.io.atomic_directory import atomic_directory
+from mod_base.io.tree import authenticate_tree_private_access, copy_regular_files, file_records, privatize_tree_copy
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, strict_loads
 from mod_base.model.validators import check
+
+
+#: The runner's private copy of what ``derive_runtime`` wrote, as root handed it over.
+DERIVED_RUNTIME_ROOT = WORKER_ROOT / "derived-runtime"
+
+
+def take_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) -> None:
+    """Root-only: give the runner a private copy of what ``derive_runtime`` wrote and remove the original.
+
+    The validator is terminated first. Its output directory must be exactly the one file the
+    contract names: private, regular, single-linked, within the report cap. Anything else (a
+    missing or an extra file, a link, another mode) fails and hands nothing over. The copy has its
+    own inodes, in the fixed runner-private :data:`DERIVED_RUNTIME_ROOT`, which must not exist yet:
+    a job derives the runtime values of one lane, once. The original is never chowned; it is
+    removed, so that the lane's verifier finds no output of this hook.
+    """
+
+    authenticate_privileged_host_boundary(boundary)
+    _accounts(boundary, validator)
+    names = (adapter.RUNTIME_OUTPUT,)
+    bounds = dict(max_files=len(names), max_entries=len(names) + 1,
+                  max_total_bytes=limits.MAX_CI_REPORT_BYTES, max_file_bytes=limits.MAX_CI_REPORT_BYTES)
+    output = Path(str(DERIVED_RUNTIME_ROOT))
+    try:
+        terminate_worker(validator)
+        _layout(boundary)
+        home = _open_directory(tuple(VALIDATOR_OUTPUT_ROOT.parent.parts[1:]))
+        try:
+            info = os.fstat(home)
+            if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (validator.uid, validator.gid, 0o700):
+                raise WorkerError("validator home identity changed before the runtime values were taken")
+        finally:
+            os.close(home)
+        authenticate_tree_private_access(VALIDATOR_OUTPUT_ROOT, owner_uid=validator.uid,
+                                         owner_gid=validator.gid, max_entries=bounds["max_entries"])
+
+        def writer(stage: Path, stage_fd: int) -> list[dict[str, Any]]:
+            copied = copy_regular_files(VALIDATOR_OUTPUT_ROOT, stage_fd, **bounds)
+            check([record["path"] for record in copied] == list(names), "$.derivation",
+                  "derive_runtime must leave exactly its one output file")
+            return copied
+
+        copied = atomic_directory(output, writer)
+        privatize_tree_copy(output, source_owner_uid=0, owner_uid=boundary.uid, owner_gid=boundary.gid, **bounds)
+        authenticate_tree_private_access(output, owner_uid=boundary.uid, owner_gid=boundary.gid,
+                                         max_entries=bounds["max_entries"])
+        check(file_records(output, max_files=bounds["max_files"], max_total_bytes=bounds["max_total_bytes"],
+                           max_file_bytes=bounds["max_file_bytes"]) == copied,
+              "$.derivation", "derived runtime values changed during the ownership transfer")
+        _discard(VALIDATOR_OUTPUT_ROOT, names)
+        authenticate_privileged_host_boundary(boundary)
+    except OSError as error:
+        raise WorkerError("cannot take the derived runtime values from the validator") from error
+    finally:
+        terminate_worker(validator)
 
 
 def _context(sources: ControllerSources, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], *,

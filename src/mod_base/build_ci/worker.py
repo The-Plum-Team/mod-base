@@ -44,6 +44,9 @@ _DISPLAY_ENV = {
 _PRIVATE_UMASK = ("-I", "-S", "-B", "-c", "import os,sys;os.umask(0o077);os.execv(sys.argv[1],sys.argv[1:])")
 #: Every state of a process that can still run. A zombie (``Z``) only waits to be collected.
 _LIVE_STATES = "DIKPRSTWt"
+#: The environment name that gives a candidate hook every JDK home its job installed, in the
+#: job's order and joined with ``:`` (a tool path holds none). The first one is ``JAVA_HOME``.
+JAVA_HOMES_ENVIRONMENT = "MB_JAVA_HOMES"
 
 
 class WorkerError(MbError):
@@ -153,7 +156,8 @@ def worker_environment(*, role: str, python: str, java_home: str | None,
         environment.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory",
                             "GIT_CONFIG_VALUE_0": str(WORKER_ROOT / "repository")})
     check(isinstance(values, Mapping), "$.values", "must be an explicit environment mapping")
-    allowed = {*_DISPLAY_ENV, "SOURCE_DATE_EPOCH", "MB_TARGET_ID", "MB_LANE_ID", "E2E_ROW_JSON", "E2E_SCENARIOS"}
+    allowed = {*_DISPLAY_ENV, "SOURCE_DATE_EPOCH", "MB_TARGET_ID", "MB_LANE_ID", "E2E_ROW_JSON", "E2E_SCENARIOS",
+               JAVA_HOMES_ENVIRONMENT}
     for key, value in values.items():
         check(isinstance(key, str) and key in allowed, "$.values", "unsupported worker environment name")
         check(isinstance(value, str) and "\0" not in value, f"$.values.{key}", "must be a NUL-free string")
@@ -169,6 +173,12 @@ def worker_environment(*, role: str, python: str, java_home: str | None,
         elif key == "SOURCE_DATE_EPOCH":
             check(value.isascii() and value.isdigit() and len(value) <= 20, f"$.values.{key}",
                   "must be a bounded decimal epoch")
+        elif key == JAVA_HOMES_ENVIRONMENT:
+            homes = value.split(":")
+            check(homes[0] == java_home and len(homes) <= lim.MAX_CI_TOOL_ROOTS and len(set(homes)) == len(homes),
+                  f"$.values.{key}", "must list distinct JDK homes, starting with JAVA_HOME")
+            for home in homes:
+                _path(home, f"$.values.{key}")
         environment[key] = value
     encoded = [f"{key}={value}" for key, value in sorted(environment.items())]
     check(sum(len(value.encode("utf-8")) for value in encoded) <= lim.MAX_CI_ENV_BYTES,

@@ -1127,6 +1127,25 @@ def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any
             "grant-build-validation": {"plan": plan, "envelope": ci_envelope()},
             "grant-runtime-validation": {"plan": plan, "build": ci_envelope(), "runtime": lane,
                                          "lane_id": "lane-a", "run_id": 43, "run_attempt": 2}}[operation]}
+    elif operation == "take-derived-runtime":
+        arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}}
+    elif operation in ("stage-bundle", "verify-candidate-source", "freeze-build-export", "freeze-runtime-export"):
+        data = b"known tracked bytes\n"
+        # What every operation after a candidate hook names; the inventory is one tracked file.
+        source = {"inventory": [{"path": "file", "mode": "100644", "size": len(data),
+                                 "git_blob": hashlib.sha1(b"blob %d\x00" % len(data) + data).hexdigest()}],
+                  "execution": {"returncode": 0, "truncated": False, "log_bytes": 11, "log_sha256": h("hook log")}}
+
+        def producer(caller: str) -> dict[str, Any]:
+            return {key: value for key, value in ci_run_producer(plan, caller).items() if key != "upload_window"}
+
+        arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}, "sources": sources,
+                     "plan": plan, **{
+            "stage-bundle": {"envelope": ci_envelope()},
+            "verify-candidate-source": source,
+            "freeze-build-export": {**source, "target_id": "target-a", "producer": producer("build")},
+            "freeze-runtime-export": {**source, "lane_id": "lane-a", "producer": producer("packaged"),
+                                      "build": ci_envelope(), "owning_build": ci_descriptor()}}[operation]}
     else:
         raise ValueError(f"no sample root request for {operation!r}")
     return {"kind": "mod-base.ci.root-request", "schema_version": 1, "operation": operation,

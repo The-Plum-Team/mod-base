@@ -24,7 +24,7 @@ protected default branch, never from a pull request.
 | `adapter.files` | every file the dispatcher imports, with its SHA-256. Protected hooks run from a copy that holds this config and exactly these files, so an import that is not listed fails |
 | `inventory.path`, `scenario_contract.path` | the two candidate files every plan is derived from |
 | `plan_inputs` | up to eight more candidate files the plan needs, each `{"name", "path"}`, sorted by name: `path` is the file in the tested tree, `name` the file name the protected hooks find it under. Quick Skin lists `{"name": "gradle-properties", "path": "gradle.properties"}`, because that file holds the version in its JAR names; a mod that needs nothing more writes `[]` |
-| `bundle.path` | the directory, relative to a lane's checkout, where the verified Build is staged before `run_lane` |
+| `bundle.path` | the directory, relative to a lane's checkout, where the verified Build is staged before `run_lane`. It must not lie inside `out/mod-base-kit` (or contain it), and the tested tree must not track it |
 | `contexts.build`, `contexts.packaged` | the two required status contexts |
 | `timeouts` | `validator_seconds` for every protected hook, `policy_seconds`, `target_seconds` and `runtime_seconds` for the three candidate hooks |
 
@@ -47,6 +47,11 @@ evidence.
   `TMPDIR`, `PATH`, `JAVA_HOME` (when the job installs a JDK), `GRADLE_USER_HOME`, `MB_TESTED_SHA`,
   `MB_TESTED_TREE`, `MB_REPOSITORY`, `MB_SOURCE_BRANCH`, `MB_RUN_ID`, `MB_RUN_ATTEMPT`, plus the
   names in the table below. No variable of the runner reaches a hook: no `GITHUB_*`, no token.
+* A candidate hook (`policy`, `build_target`, `run_lane`) also gets `MB_JAVA_HOMES`: every JDK
+  home the job installed, in the job's order, joined with `:`. The first one is `JAVA_HOME`, and
+  only its `bin` is on `PATH`; a build that needs several toolchains hands the list to its build
+  tool (for Gradle, `org.gradle.java.installations.paths` takes it with `,` for `:`). The
+  variable is absent when the job installs no JDK. Protected hooks get `JAVA_HOME` alone.
 * The worker root is the parent directory of `HOME`. Every path below is relative to it.
 * A hook that exits non-zero, runs past its timeout or leaves a process behind fails the step.
 * A hook starts with `umask 077` and creates its output directory when it is missing. Output must
@@ -57,17 +62,38 @@ evidence.
 | Hook | Account, checkout | Extra environment | Reads | Must write |
 |---|---|---|---|---|
 | `derive_plan` | validator, `controller/` | none | `validation-input/inventory`, `validation-input/scenario-contract` and one `validation-input/<name>` for every `plan_inputs` entry | `validator-home/validation/plan.json` |
-| `policy` | candidate, `repository/` | none | its checkout | nothing (exit status and log) |
-| `build_target` | candidate, `repository/` | `MB_TARGET_ID` | its checkout | every planned output of that target at `candidate-home/export/<path>`, and nothing else |
+| `policy` | candidate, `repository/` | `MB_JAVA_HOMES` | its checkout | nothing (exit status and log) |
+| `build_target` | candidate, `repository/` | `MB_TARGET_ID`, `MB_JAVA_HOMES` | its checkout | every planned output of that target at `candidate-home/export/<path>`, and nothing else |
 | `verify_target` | validator, `controller/` | `MB_TARGET_ID` | `validation-input/`, `sealed-build/` (that target) | `validator-home/validation/<target id>.json` |
 | `verify_build` | validator, `controller/` | none | `validation-input/`, `sealed-build/` (every target) | one `<target id>.json` for every target |
 | `derive_runtime` | validator, `controller/` | `MB_LANE_ID` | `validation-input/` | `validator-home/validation/runtime.json` |
-| `run_lane` | candidate, `repository/` | `MB_LANE_ID`, `E2E_ROW_JSON`, `E2E_SCENARIOS` | its checkout, the Build at `repository/<bundle.path>` | its native results below `candidate-home/export/` |
+| `run_lane` | candidate, `repository/` | `MB_LANE_ID`, `E2E_ROW_JSON`, `E2E_SCENARIOS`, `MB_JAVA_HOMES` | its checkout, the Build at `repository/<bundle.path>` | its native results below `candidate-home/export/` |
 | `verify_runtime` | validator, `controller/` | `MB_LANE_ID` | `validation-input/`, `sealed-build/`, `sealed-runtime/` | `validator-home/validation/<lane id>.json` |
 
 `controller/` is the protected copy (the config and `adapter.files`). `repository/` is the tested
 commit, so a candidate hook runs the pull request's own copy of the dispatcher; whatever it
 produces is checked by the protected hooks.
+
+A job runs one candidate hook, once. Its checkout `repository/` is the candidate account's own
+private copy of the tested commit: every tracked file with its Git mode, a `.git` that holds the
+tested commit detached (no credential, no hook, an `origin` without a token), and the kit the
+protected branch pins at `out/mod-base-kit` with its stamp, where the managed bootstrap looks for
+a staged kit. Nothing else is there, and the hook reaches nothing of the runner: not the original
+checkout, not the workspace, not a token. When the job restored a Gradle cache,
+`GRADLE_USER_HOME` starts as a private copy of its `caches/` and `wrapper/` directories.
+
+For `run_lane` the checkout also holds the Build at `<bundle.path>`: the candidate's own copy of
+every file of the complete, verified Build under the names the plan gives them
+(`build/release/files/…`, `build/release/targets/<target id>/artifacts.json`, …) and no kit
+document.
+
+**What a candidate hook may leave in its checkout.** After the hook, protected code compares the
+checkout with the tested commit: every tracked file must still have its bytes and its mode, and
+nothing untracked may exist outside two directories, `out/mod-base-kit` and `<bundle.path>`. A
+build writes everything else it produces below its home (`HOME`, `TMPDIR`, `GRADLE_USER_HOME`) or
+below one of those two directories; an untracked `build/` or `.gradle/` beside them fails the
+step, also when the hook exited zero. A directory that only leads to `<bundle.path>` (`build/` for
+`build/release`) may exist.
 
 `validation-input/` holds the bytes of every candidate file at the tested commit: `inventory`,
 `scenario-contract` and one file per `plan_inputs` entry under its `name` (which is never
@@ -125,20 +151,82 @@ non-blank text without control characters, at most 128 KiB each. `run_lane` rece
 unchanged as environment variables.
 
 **Build outputs**: the files the plan lists for the target, byte for byte what later steps verify
-and ship. A missing or an extra file fails the job.
+and ship. A missing or an extra file fails the job, and so does an empty one, a link, a file with
+a second name or a `ci-envelope.json`: the kit writes that document itself, from the plan and
+the bytes it finds.
+
+**Runtime results**: `run_lane` writes at least one file below `export/` and at most 512 files and
+256 MiB in all, under export paths (the same rule as plan paths). The plan does not list them, so
+the kit records what it finds and gives every file a role by its name alone: a file below a
+directory called `crash-reports` is a crash report (at most 16 MiB, may be empty), a `.png` a
+screenshot (32 MiB, not empty), a `.json` a native report (4 MiB, not empty) and every other
+file a runtime log (16 MiB, may be empty). A role only bounds the file; what a result means is
+for `verify_runtime` to decide. The synthetic mod writes everything below `lanes/<lane id>/`,
+which keeps the results of two lanes apart for whoever reads them side by side.
+
+**Policy**: `policy` writes nothing and is judged by its exit status alone. Protected code cannot
+count the tests of a suite it does not run, so a mod that wants every discovered test accounted
+for runs its suites through the pinned kit's own runner, which fails closed on a discovery error,
+a failure, an unexpected success, a dead worker, zero tests or a unit that ran another number of
+tests than it discovered:
+`PYTHONPATH=out/mod-base-kit/src <python> out/mod-base-kit/tools/parallel_unittest.py --policy-profile <profile> …`.
 
 **Reports** (`<unit id>.json`, at most 4 MiB): a canonical JSON object (sorted keys, `,` and `:`
 without spaces, UTF-8, one final newline). Its content is the mod's own. A verification hook must
 decode native reports strictly (no duplicate key, closed schema), re-hash what it was given and
 exit non-zero on any difference; it writes its report only when everything holds.
 
-## What protected code does afterwards
+## What protected code does around a hook
 
-1. `derive_plan`: parses `plan.json`, adds the authenticated identity, binds the policy digest, the
-   inventory's Git blob id and SHA-256, the scenario contract's SHA-256, the SHA-256 of every
-   extra plan input and the runtime selection digest, and computes `plan_sha256`.
-2. `build_target` and `run_lane`: terminates and locks the account, proves the tracked sources are
-   unchanged, freezes the export and writes its envelope. The Build file set must equal the plan.
-3. `verify_*`: requires exactly the expected reports, freezes them and records them in the
-   validation record that is uploaded with the sealed export.
-4. Gates and status publication use only these sealed records, never a hook's exit text.
+Every step below is one `ci` command of a job; [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md) describes
+the root operations and the state records behind them. Both accounts are terminated and locked
+between two steps, so nothing a hook starts outlives its step.
+
+1. **Plan** (`ci plan`, every job). Protected code stages the candidate files in
+   `validation-input/`, runs `derive_plan`, parses `plan.json`, adds the authenticated identity,
+   binds the policy digest, the inventory's Git blob id and SHA-256, the scenario contract's
+   SHA-256, the SHA-256 of every extra plan input and the runtime selection digest, and computes
+   `plan_sha256`. The result is `validation-input/ci-plan.json` for every later protected hook.
+2. **Stage** (`ci worker-stage`, a job with a candidate hook). The runner's checkout must be
+   detached at the tested commit and hold exactly the tested tree: an untracked or ignored file
+   stops the job before anything is copied. Root then gives the candidate account the
+   `repository/` described above (the tracked files, the curated `.git`, the kit at
+   `out/mod-base-kit`), seeds `GRADLE_USER_HOME` when the job restored a cache and, in a lane
+   job, copies the complete Build of `sealed-build/` to `repository/<bundle.path>`. Nothing of the
+   candidate has run at this point.
+3. **Run** (`ci worker-run`). A job runs one candidate hook:
+   * `policy` receives its checkout and no extra variable.
+   * `build_target` receives its checkout and `MB_TARGET_ID`.
+   * `run_lane` receives its checkout with the Build, `MB_LANE_ID`, `E2E_ROW_JSON` and
+     `E2E_SCENARIOS`. The two values come from `derive_runtime`, which runs first, in the same
+     step, as the validator: it receives `MB_LANE_ID`, reads `validation-input/` (the plan and
+     the candidate files) and writes `runtime.json`. Root hands that file to the runner and
+     removes it from the validator's output directory, so the lane's `verify_runtime` starts with
+     an empty one; protected code decodes it strictly and passes both values on unchanged. A
+     `derive_runtime` that fails ends the step before the candidate runs.
+
+   All three also receive `MB_JAVA_HOMES` when the job installed a JDK, and every home in it is
+   checked against the tool trees the job admitted before the hook starts. The hook runs with the
+   timeout the protected config sets for it (`policy_seconds`, `target_seconds` or
+   `runtime_seconds`) and its log is printed with every line prefixed and neutralised. The step
+   fails when the hook exits non-zero, runs past its timeout or leaves a process behind, and it
+   records how the hook ended either way.
+4. **Seal** (`ci worker-seal`, also after a run that failed). The candidate is terminated and
+   locked before anything is read. A hook that failed seals nothing. After a hook that succeeded,
+   root compares the checkout with the tested commit ("What a candidate hook may leave in its
+   checkout" above) and then
+   * for `policy` does nothing more: the unchanged sources and the exit status are its result;
+   * for `build_target` requires `candidate-home/export/` to hold exactly the planned outputs of
+     the target, copies them into `sealed-build/` and writes `ci-envelope.json` there from the
+     plan and the bytes it copied;
+   * for `run_lane` copies the results in `candidate-home/export/` into `sealed-runtime/` and
+     writes `ci-runtime-envelope.json` there, bound to the Build the lane was staged.
+
+   The sealed copy belongs to the runner alone. The files the hook wrote stay the candidate's and
+   no later step reads them.
+5. **Verify** (`ci worker-validate`). Root hands the sealed export to the validator read-only and
+   the `verify_*` hook of the job runs. Root then requires `validator-home/validation/` to hold
+   exactly the expected reports, freezes them and writes the validation record. The step writes
+   the directory the job uploads: the sealed export with its envelope, the validation record and
+   the reports.
+6. Gates and status publication use only these sealed records, never a hook's exit text.

@@ -43,6 +43,24 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   even when it exited zero; and every candidate file the protected config names is staged for
   the protected hooks under its name in `validation-input/`, next to `ci-plan.json` once the plan
   exists.
+- Add the candidate steps of the disposable-worker lifecycle: `ci worker-stage` (the candidate's
+  own copy of the tested commit, the kit the protected branch pins at `out/mod-base-kit`, an
+  optional Gradle seed
+  and, for a lane, the verified Build at `bundle.path`), `ci worker-run` (one candidate hook:
+  `policy`, `build_target` or `run_lane`) and `ci worker-seal` (locks the candidate, proves its
+  tracked sources unchanged and freezes its export). For a mod's hooks: a candidate hook gets
+  `MB_JAVA_HOMES`, every JDK home of the job joined with `:` (the first is `JAVA_HOME`); a hook
+  writes no kit document, because the kit builds `ci-envelope.json` and the runtime envelope itself
+  from the plan and the bytes it finds, so a `build_target` export must hold exactly the planned
+  files; runtime results get their role from their name (`crash-reports/`, `.png`, `.json`,
+  anything else is a log); and after a candidate hook nothing untracked may exist in its checkout
+  outside `out/mod-base-kit` and `bundle.path`.
+- Add the verification step of the disposable-worker lifecycle: `ci worker-validate` (hands the
+  job's sealed export to the validator read-only, runs `verify_target`, `verify_build` or
+  `verify_runtime`, has root seal the reports with the validation record the kit builds and
+  writes the directory the job uploads). For a mod's hooks: a verification hook leaves exactly
+  one `<unit id>.json` report for every unit it verified and nothing else, and it finds its
+  output directory empty, also in a lane job whose `derive_runtime` ran before it.
 - The unreleased Build kinds describe what Block Pops and Quick Skin really stage.
   `mod-base.build.plan`: an output's `lane_id` may be `null` for a file of the target as a whole
   (its staged manifest, a report, a log, one SBOM for all its lanes). Every lane has exactly one

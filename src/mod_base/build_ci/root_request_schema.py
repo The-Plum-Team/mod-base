@@ -3,7 +3,10 @@
 One document kind carries every operation of ``grammar.CI_ROOT_OPERATIONS``. Its ``operation``
 names fixed protected code and its ``arguments`` are a closed object per operation: no field holds
 a program, a hook or a destination path. ``stage-candidate`` alone names directories, and only ones
-root reads: the runner's own checkout, kit overlay and Gradle seed below its fenced home.
+root reads: the runner's own checkout, kit overlay and Gradle seed below its fenced home. The
+operations that place or freeze candidate data take their paths from the protected controller copy
+root re-reads, and state the successful execution they follow: a request after a failed hook cannot
+be written.
 Validation proves shape and internal consistency only; physical admission of the host, the
 accounts, the sources and the frozen inputs happens in root.
 """
@@ -16,13 +19,14 @@ from mod_base import readable_schema_versions
 from mod_base.build_ci import adapter
 from mod_base.build_ci.host import HOST_RUNNER_HOME, _canonical_path
 from mod_base.build_ci.protocol import REPO, check_output_paths, repo_path, validate_plan, validate_subject
-from mod_base.build_ci.records import bind_build_envelope, validate_build_envelope
+from mod_base.build_ci.records import (_PRODUCER_IDENTITY, _producer_binding, bind_build_envelope,
+                                       validate_build_envelope, validate_descriptor)
 from mod_base.build_ci.runtime_schema import validate_runtime_envelope
 from mod_base.build_ci.source import GitSourceEntry, validate_source_inventory
 from mod_base.build_ci.worker import WorkerError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
-from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check, fail
+from mod_base.model.validators import Bool, Const, Int, List, Nullable, Obj, Str, check, fail
 
 
 _SHA = Str(grammar.SHA256, max_len=64)
@@ -156,6 +160,54 @@ def _plan_inputs(document: dict[str, Any], path: str) -> None:
           "must be the inventory, the scenario contract and the extra plan inputs sorted by name")
 
 
+#: The candidate operations of a job that allocated both accounts: neither may be absent.
+_CANDIDATE_JOB = {"validator": _ACCOUNT, "candidate": _ACCOUNT}
+#: What the runner retained of the candidate hook a freeze follows: only a zero exit is expressible.
+_EXECUTION = Obj({"returncode": Const(0), "truncated": Bool(), "log_bytes": Int(0, limits.MAX_CI_LOG_BYTES),
+                  "log_sha256": _SHA})
+#: What every operation after a candidate hook names: the accounts, the protected sources root
+#: re-reads its policy from, the plan, the tested tree's inventory and the execution it follows.
+_CANDIDATE_SOURCE = {**_CANDIDATE_JOB, "sources": _SOURCES, "plan": _plan,
+                     "inventory": List(_TRACKED, min_items=1, max_items=limits.MAX_CI_SOURCE_FILES),
+                     "execution": _EXECUTION}
+
+
+def _bundle_staging(document: dict[str, Any], path: str) -> None:
+    arguments = document["arguments"]
+    _job(document, path)
+    _sources(arguments, path)
+    validate_build_envelope(arguments["envelope"], plan=arguments["plan"], path=f"{path}.envelope")
+    check(arguments["envelope"]["scope"] == "complete", f"{path}.envelope", "a lane is staged the complete Build")
+
+
+def _candidate_source(document: dict[str, Any], path: str) -> None:
+    arguments = document["arguments"]
+    _job(document, path)
+    _sources(arguments, path)
+    _candidate_staging(document, path)
+
+
+def _unit(arguments: dict[str, Any], kind: str, path: str) -> None:
+    """The target or lane a freeze names is one of the plan, and its producer runs for the plan's subject."""
+    key = f"{kind}_id"
+    check(arguments[key] in [unit["id"] for unit in arguments["plan"][f"{kind}s"]], f"{path}.{key}",
+          f"is not a {kind} of the protected plan")
+    _producer_binding(arguments["producer"], arguments["plan"]["identity"], f"{path}.producer")
+
+
+def _build_export(document: dict[str, Any], path: str) -> None:
+    _candidate_source(document, path)
+    _unit(document["arguments"], "target", path)
+
+
+def _runtime_export(document: dict[str, Any], path: str) -> None:
+    arguments = document["arguments"]
+    _candidate_source(document, path)
+    _unit(arguments, "lane", path)
+    check(arguments["build"]["scope"] == "complete", f"{path}.build", "a lane ran against the complete Build")
+    bind_build_envelope(arguments["build"], descriptor=arguments["owning_build"], plan=arguments["plan"])
+
+
 def _build_grant(document: dict[str, Any], path: str) -> None:
     """The sealed Build a verification reads: a partition or the complete Build of the plan. A
     lane's owning Build may come from another run, so no producing attempt is named."""
@@ -192,6 +244,15 @@ _OPERATIONS = {
         Obj({**_JOB, "inputs": List(_INPUT, min_items=2, max_items=2 + limits.MAX_CI_PLAN_INPUTS)}), _plan_inputs),
     "take-derived-plan": (Obj(_JOB), _job),
     "grant-validation-inputs": (Obj({**_JOB, "plan": _plan}), _job),
+    "stage-bundle": (
+        Obj({**_CANDIDATE_JOB, "sources": _SOURCES, "plan": _plan, "envelope": _envelope}), _bundle_staging),
+    "take-derived-runtime": (Obj(_JOB), _job),
+    "verify-candidate-source": (Obj(_CANDIDATE_SOURCE), _candidate_source),
+    "freeze-build-export": (
+        Obj({**_CANDIDATE_SOURCE, "target_id": _UNIT, "producer": _PRODUCER_IDENTITY}), _build_export),
+    "freeze-runtime-export": (
+        Obj({**_CANDIDATE_SOURCE, "lane_id": _UNIT, "producer": _PRODUCER_IDENTITY, "build": _envelope,
+             "owning_build": validate_descriptor}), _runtime_export),
     "grant-build-validation": (Obj({**_JOB, "plan": _plan, "envelope": _envelope}), _build_grant),
     "grant-runtime-validation": (
         Obj({**_JOB, "plan": _plan, "build": _envelope, "runtime": _runtime, "lane_id": _UNIT,

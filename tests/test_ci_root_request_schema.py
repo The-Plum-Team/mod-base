@@ -19,6 +19,10 @@ BUILD, RUNTIME = "freeze-build-validation", "freeze-runtime-validation"
 #: each names the accounts of the job.
 LIFECYCLE = ("grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs",
              "grant-build-validation", "grant-runtime-validation")
+#: The operations around a candidate hook: ``ci worker-stage --bundle`` and ``ci worker-seal``.
+CANDIDATE = ("stage-bundle", "verify-candidate-source", "freeze-build-export", "freeze-runtime-export")
+#: Both hand the runner the one output of a derivation and name the accounts of the job, nothing else.
+SAME_ARGUMENTS = {"take-derived-plan", "take-derived-runtime"}
 
 
 class RootRequestSchemaTests(unittest.TestCase):
@@ -33,7 +37,7 @@ class RootRequestSchemaTests(unittest.TestCase):
     def test_one_operation_never_accepts_the_arguments_of_another(self):
         for operation in grammar.CI_ROOT_OPERATIONS:
             for other in grammar.CI_ROOT_OPERATIONS:
-                if other == operation:
+                if other == operation or {operation, other} == SAME_ARGUMENTS:
                     continue
                 document = ci_root_request(operation)
                 document["operation"] = other
@@ -189,6 +193,87 @@ class RootRequestSchemaTests(unittest.TestCase):
                     validate_root_request(changed)
         with patch.object(limits, "MAX_CI_PLAN_BYTES", 1), self.assertRaises(MbError):
             validate_root_request(ci_root_request("grant-validation-inputs"))
+
+    def test_the_runtime_derivation_names_the_accounts_like_the_plan_derivation(self):
+        document = ci_root_request("take-derived-runtime")
+        validate_root_request(document)
+        self.assertEqual(document["arguments"], ci_root_request("take-derived-plan")["arguments"])
+        for mutate in (lambda d: d["arguments"].update(output="runtime.json"),
+                       lambda d: d["arguments"].update(lane_id="lane-a"),
+                       lambda d: d["arguments"].pop("validator"),
+                       lambda d: d["arguments"]["candidate"].update(uid=d["arguments"]["validator"]["uid"])):
+            changed = copy.deepcopy(document)
+            mutate(changed)
+            with self.subTest(changed=str(changed["arguments"])[:80]), self.assertRaises(MbError):
+                validate_root_request(changed)
+
+    def test_candidate_operations_need_both_accounts_the_protected_sources_and_the_plan(self):
+        for operation in CANDIDATE:
+            document = ci_root_request(operation)
+            validate_root_request(document)
+            for mutate in (lambda d: d["arguments"].update(candidate=None),  # No job without a candidate.
+                           lambda d: d["arguments"].pop("validator"),
+                           lambda d: d["arguments"]["candidate"].update(uid=d["arguments"]["validator"]["uid"]),
+                           lambda d: d["arguments"]["candidate"].update(gid=d["boundary"]["gid"]),
+                           lambda d: d["arguments"]["sources"].update(controller_sha="e" * 40),
+                           lambda d: d["arguments"]["sources"]["config"].update(path="scripts/ci/other.json"),
+                           lambda d: d["arguments"]["plan"].update(plan_sha256="f" * 64),
+                           lambda d: d["arguments"].pop("plan"),
+                           # Neither the bundle directory nor a generated root nor a hook is request data.
+                           lambda d: d["arguments"].update(path="build/release"),
+                           lambda d: d["arguments"].update(generated_roots=["build"]),
+                           lambda d: d["arguments"].update(hook="build_target"),
+                           lambda d: d["arguments"].update(export="/tmp/export")):
+                changed = copy.deepcopy(document)
+                mutate(changed)
+                with self.subTest(operation=operation, changed=str(changed["arguments"])[:80]), \
+                        self.assertRaises(MbError):
+                    validate_root_request(changed)
+
+    def test_a_freeze_follows_a_successful_execution_over_the_inventory_of_one_planned_unit(self):
+        after_hook = (lambda d: d["arguments"]["execution"].update(returncode=1),
+                      lambda d: d["arguments"]["execution"].update(returncode=None),
+                      lambda d: d["arguments"]["execution"].update(returncode=False),
+                      lambda d: d["arguments"]["execution"].update(truncated=0),
+                      lambda d: d["arguments"]["execution"].update(log_bytes=limits.MAX_CI_LOG_BYTES + 1),
+                      lambda d: d["arguments"]["execution"].update(log_sha256="0" * 63),
+                      lambda d: d["arguments"]["execution"].update(log_base64=""),
+                      lambda d: d["arguments"].pop("execution"),
+                      lambda d: d["arguments"].update(inventory=[]),
+                      lambda d: d["arguments"]["inventory"][0].update(path="../file"),
+                      lambda d: d["arguments"]["inventory"][0].update(path=".git/config"),
+                      lambda d: d["arguments"]["inventory"][0].update(mode="160000"),
+                      lambda d: d["arguments"]["inventory"].append(dict(d["arguments"]["inventory"][0])))
+        producer = (lambda d: d["arguments"]["producer"].update(api_head_sha="e" * 40),
+                    lambda d: d["arguments"]["producer"].update(event="push"),
+                    lambda d: d["arguments"]["producer"].update(workflow_path=".github/workflows/other.yml"),
+                    lambda d: d["arguments"]["producer"].update(upload_window={}),
+                    lambda d: d["arguments"].pop("producer"))
+        cases = {
+            "stage-bundle": (lambda d: d["arguments"]["envelope"].update(scope="target", target_id="target-a"),
+                             lambda d: d["arguments"]["envelope"].update(plan_sha256="f" * 64),
+                             lambda d: d["arguments"]["envelope"]["files"].pop(),
+                             lambda d: d["arguments"].update(envelope=None)),
+            "verify-candidate-source": after_hook,
+            "freeze-build-export": (*after_hook, *producer, lambda d: d["arguments"].update(target_id="target-b"),
+                                    lambda d: d["arguments"].update(target_id=None),
+                                    lambda d: d["arguments"].update(envelope=ci_root_request("stage-bundle")
+                                                                    ["arguments"]["envelope"])),
+            "freeze-runtime-export": (*after_hook, *producer, lambda d: d["arguments"].update(lane_id="lane-b"),
+                                      lambda d: d["arguments"]["build"].update(scope="target", target_id="target-a"),
+                                      lambda d: d["arguments"]["build"].update(plan_sha256="f" * 64),
+                                      lambda d: d["arguments"]["owning_build"]["producer"].update(run_id=44),
+                                      lambda d: d["arguments"]["owning_build"]["artifact"].update(
+                                          name=grammar.ci_artifact_name("target", 42, 2, "target-a")),
+                                      lambda d: d["arguments"].pop("owning_build")),
+        }
+        self.assertEqual(tuple(cases), CANDIDATE)
+        for operation, mutations in cases.items():
+            for index, mutate in enumerate(mutations):
+                changed = ci_root_request(operation)
+                mutate(changed)
+                with self.subTest(operation=operation, index=index), self.assertRaises(MbError):
+                    validate_root_request(changed)
 
     def test_runtime_request_keeps_its_cross_run_owning_build(self):
         for operation in (RUNTIME, "grant-runtime-validation"):

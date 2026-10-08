@@ -10,9 +10,9 @@ remains. The reasons are in [ADR 0007](adr/0007-protected-build-and-packaged-run
 [BUILD-ADAPTER.md](BUILD-ADAPTER.md), and the way a mod turns the pipeline on and off in
 [OPERATIONS.md](OPERATIONS.md#builde2e-activation-and-rollback).
 
-Three parts were still being changed when this page was written, and the page says so where each
-appears: the three verbs around candidate code (`worker-stage`, `worker-run`, `worker-seal`), the
-way the later jobs of a packaged run receive the selected Build, and the request budget.
+The selected Build hand-over between packaged jobs and the request budget are still being
+changed, and the page marks them below. The candidate staging, execution and sealing commands
+are registered and compose the real account and root operations.
 
 ## Trust model
 

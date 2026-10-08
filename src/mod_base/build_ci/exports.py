@@ -6,12 +6,13 @@ These checks establish bytes/coverage, not native compiler validity or API prove
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import itertools
 import os
 import stat
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mod_base import SCHEMA_VERSIONS
@@ -28,7 +29,7 @@ from mod_base.io.tree import (EXPORT_PATHS, authenticate_tree_private_access, co
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json
-from mod_base.model.validators import Int, List, Obj, check
+from mod_base.model.validators import Int, List, Obj, check, fail
 
 
 BUILD_VALIDATION_ROOT = WORKER_ROOT / "sealed-build"
@@ -282,87 +283,305 @@ def prepare_build_validation(*, boundary: HostBoundary, validator: WorkerAccount
             os.close(descriptor)
 
 
-def freeze_build_export(*, boundary: HostBoundary, candidate: WorkerAccount, execution: WorkerResult,
-                         inventory: tuple[GitSourceEntry, ...], generated_roots: tuple[str, ...],
-                         plan: dict[str, Any]) -> dict[str, Any]:
-    """Protected-root freeze after candidate quiescence and complete tracked-source rechecking.
+def target_envelope(records: list[dict[str, Any]], *, plan: dict[str, Any], target_id: str,
+                    producer: dict[str, Any]) -> dict[str, Any]:
+    """The envelope protected code writes for one target partition, from the plan and the bytes found.
 
-    Retain genuine tested-tree inventory and execution evidence; constructed objects do not
-    establish provenance. Generated roots are protected native policy, never candidate claims.
-    Copy independently and transfer only the new protected copy; originals keep candidate ownership.
-    Native compiler/report witnesses, overlays/cache/Git provenance and second-UID validation
-    remain required before upload/gate admission.
+    ``records`` is the exact inventory ``[{path, sha256, size}]`` of what the target's hook left.
+    It must hold exactly the outputs the plan lists for the target: a missing and an extra file
+    are rejections. Every file takes its lane and role from the plan and its size and hash from
+    the bytes; ``producer`` is the identity of the run attempt that is executing. No byte of a
+    mod decides a field. The result is a valid ``mod-base.build.envelope`` of scope ``target``.
+    """
+
+    validate_plan(plan)
+    targets = [target for target in plan["targets"] if target["id"] == target_id]
+    check(len(targets) == 1, "$.target_id", "is not a target of the protected plan")
+    planned = {output["path"]: output for output in targets[0]["outputs"]}
+    found = {record["path"]: record for record in records}
+    missing, extra = sorted(set(planned) - set(found)), sorted(set(found) - set(planned))
+    if missing or extra:
+        detail = [f"{len(paths)} {label} (first {paths[0]!r})"
+                  for paths, label in ((missing, "planned and missing"), (extra, "not planned")) if paths]
+        raise fail("$.export", f"is not the planned output set of target {target_id}: {', '.join(detail)}"[:600])
+    files = [{**planned[path], "size": found[path]["size"], "sha256": found[path]["sha256"]} for path in sorted(planned)]
+    envelope = {"kind": "mod-base.build.envelope", "schema_version": SCHEMA_VERSIONS["mod-base.build.envelope"],
+                "identity": copy.deepcopy(plan["identity"]), "plan_sha256": plan["plan_sha256"],
+                "profile": plan["profile"], "producer": copy.deepcopy(producer), "scope": "target",
+                "target_id": target_id, "files": files,
+                "native_reports": [file["path"] for file in files if file["role"] == "native-report"]}
+    validate_build_envelope(envelope, plan=plan)
+    check(len(canonical_json(envelope)) <= lim.MAX_CI_ENVELOPE_BYTES, "$.envelope", "target envelope exceeds its byte cap")
+    return envelope
+
+
+def seal_target_export(root: Path, output: Path, *, plan: dict[str, Any], target_id: str,
+                       producer: dict[str, Any]) -> dict[str, Any]:
+    """Atomically publish an independent copy of one target's export with its protected envelope.
+
+    ``root`` holds what the target's hook left and no kit document: every entry must be a
+    directory or a non-empty single-link regular file under an export path, and the files must be
+    exactly the planned outputs (:func:`target_envelope`). ``output`` is created with copies of
+    them and the ``ci-envelope.json`` this function writes; :func:`verify_build_export` accepts it.
+    Caller terminates the account that wrote ``root`` and owns a private output parent.
+    """
+
+    bounds = dict(max_files=lim.MAX_CI_EXPORT_FILES, max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES,
+                  max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS)
+    validate_tree_entries(root, max_entries=lim.MAX_CI_EXPORT_ENTRIES)
+    records = file_records(root, **bounds)
+    envelope = target_envelope(records, plan=plan, target_id=target_id, producer=producer)
+    raw = canonical_json(envelope)
+
+    def writer(stage: Path, stage_fd: int) -> dict[str, Any]:
+        copied = copy_regular_files(root, stage_fd, max_entries=lim.MAX_CI_EXPORT_ENTRIES, **bounds)
+        check(copied == records, "$.files", "export changed while it was copied")
+        write_new(stage_fd, g.CI_ENVELOPE_NAME, raw)
+        check(verify_build_export(stage, plan=plan) == envelope, "$.envelope",
+              "sealed export differs from its protected envelope")
+        return envelope
+
+    return atomic_directory(output, writer)
+
+
+def _isolated_candidate(boundary: HostBoundary, candidate: WorkerAccount) -> WorkerAccount:
+    """Bind the fixed candidate to the live account, apart from the validator and the runner;
+    return the validator."""
+
+    if type(candidate) is not WorkerAccount or candidate.role != "candidate":
+        raise WorkerError("candidate freeze requires the fixed candidate identity")
+    if authenticate_worker_account("candidate") != candidate:
+        raise WorkerError("candidate freeze identity changed")
+    validator = authenticate_worker_account("validator")
+    if (candidate.uid == validator.uid or candidate.gid == validator.gid
+            or any(account.uid == boundary.uid or account.gid == boundary.gid for account in (candidate, validator))):
+        raise WorkerError("candidate freeze identities are not isolated")
+    return validator
+
+
+def _candidate_layout(boundary: HostBoundary, candidate: WorkerAccount) -> None:
+    """The traversal roots are the runner's, the home and the checkout the candidate's own."""
+
+    for path, owner, group, mode in ((WORKER_ROOT.parent, boundary.uid, boundary.gid, 0o711),
+                                    (WORKER_ROOT, boundary.uid, boundary.gid, 0o711),
+                                    (CANDIDATE_OUTPUT_ROOT.parent, candidate.uid, candidate.gid, 0o700),
+                                    (CANDIDATE_SOURCE_ROOT, candidate.uid, candidate.gid, 0o700)):
+        descriptor = _open_directory(tuple(path.parts[1:]))
+        try:
+            info = os.fstat(descriptor)
+            if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (owner, group, mode):
+                raise WorkerError("candidate traversal, home or checkout identity changed")
+        finally:
+            os.close(descriptor)
+
+
+def _generated_roots(generated_roots: Any) -> None:
+    if type(generated_roots) is not tuple or any(not g.is_repo_path(path) for path in generated_roots):
+        raise WorkerError("candidate source check requires exact protected generated-root paths")
+
+
+def verify_candidate_source(*, boundary: HostBoundary, candidate: WorkerAccount,
+                            inventory: tuple[GitSourceEntry, ...],
+                            generated_roots: tuple[str, ...]) -> list[dict[str, str | int]]:
+    """Root-only: prove that the quiescent candidate's checkout still holds exactly the tested tree.
+
+    The candidate is terminated first. Every tracked path must have the bytes and the mode of
+    ``inventory`` and nothing undeclared may exist outside ``generated_roots``, which are protected
+    policy (``root_request_operations.candidate_generated_roots``). Nothing is copied or changed.
+    Returns the records.
+    """
+
+    authenticate_privileged_host_boundary(boundary)
+    _generated_roots(generated_roots)
+    _isolated_candidate(boundary, candidate)
+    try:
+        terminate_worker(candidate)
+        _candidate_layout(boundary, candidate)
+        records = verify_source_copy(CANDIDATE_SOURCE_ROOT, inventory=inventory, generated_roots=generated_roots)
+        authenticate_privileged_host_boundary(boundary)
+        return records
+    except OSError as error:
+        raise WorkerError("cannot verify the candidate's tracked sources") from error
+
+
+def inspect_complete_build(*, boundary: HostBoundary, plan: dict[str, Any]) -> tuple[dict[str, Any], tuple[int, int]]:
+    """The complete Build a lane job holds in ``sealed-build/``: its envelope and its root's identity.
+
+    The root must be the runner's own private directory, which is how ``ci fetch-build`` publishes
+    it: no worker account can enter it yet. Every byte is checked against the envelope. For the
+    runner and for root alike; each authenticates its own role first.
+    """
+
+    descriptor = _open_directory(tuple(BUILD_VALIDATION_ROOT.parts[1:]))
+    try:
+        info = os.fstat(descriptor)
+        if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (boundary.uid, boundary.gid, 0o700):
+            raise WorkerError("the Build of this lane is not the runner's private copy")
+    finally:
+        os.close(descriptor)
+    envelope = verify_build_export(BUILD_VALIDATION_ROOT, plan=plan)
+    check(envelope["scope"] == "complete", "$.build", "a lane runs against the complete Build")
+    return envelope, (info.st_dev, info.st_ino)
+
+
+def _candidate_directory(parent: int, name: str, candidate: WorkerAccount) -> int:
+    """Open ``name`` below a directory of the quiescent candidate's checkout, creating it for the
+    candidate when the tested tree has none."""
+
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent)
+        created = True
+    except FileExistsError:
+        created = False  # The tested tree tracks files in it: the source phase published it.
+    child = _open_directory((name,), root=parent)
+    try:
+        if created:
+            os.fchown(child, candidate.uid, candidate.gid)
+            os.fchmod(child, 0o700)
+            os.fsync(child)
+        info = os.fstat(child)
+        if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (candidate.uid, candidate.gid, 0o700):
+            raise WorkerError("a parent of the bundle directory is not the candidate's private directory")
+        return child
+    except BaseException:
+        os.close(child)
+        raise
+
+
+def stage_build_bundle(*, boundary: HostBoundary, candidate: WorkerAccount, plan: dict[str, Any],
+                       envelope: dict[str, Any], path: str) -> None:
+    """Root-only: give the candidate its own copy of the complete Build at ``repository/<path>``.
+
+    ``path`` is the protected config's ``bundle.path``; ``envelope`` is what the runner read in
+    ``sealed-build/``, which must still hold exactly that complete Build. The candidate is
+    terminated first and has never run. The new directory holds the files the envelope lists,
+    byte for byte under the mod's own names, and no kit document; it and every parent created for
+    it belong to the candidate (0700 directories, 0600 files, their own inodes). An existing
+    ``repository/<path>`` is never replaced: a tested tree that tracks the directory is refused.
+    """
+
+    authenticate_privileged_host_boundary(boundary)
+    validate_build_envelope(envelope, plan=plan)
+    if not g.is_repo_path(path):
+        raise WorkerError("bundle staging requires the protected bundle directory")
+    _isolated_candidate(boundary, candidate)
+    bounds = dict(max_files=lim.MAX_CI_EXPORT_FILES + 1, max_entries=lim.MAX_CI_EXPORT_ENTRIES,
+                  max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES + lim.MAX_CI_ENVELOPE_BYTES,
+                  max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS)
+    expected = [{key: file[key] for key in ("path", "sha256", "size")} for file in envelope["files"]]
+    parts = path.split("/")
+    try:
+        terminate_worker(candidate)
+        _candidate_layout(boundary, candidate)
+        build = inspect_complete_build(boundary=boundary, plan=plan)
+        check(build[0] == envelope, "$.envelope", "the sealed Build is not the one the runner read")
+        parent = _open_directory(tuple(CANDIDATE_SOURCE_ROOT.parts[1:]))
+        try:
+            for part in parts[:-1]:
+                child = _candidate_directory(parent, part, candidate)
+                os.close(parent)
+                parent = child
+        finally:
+            os.close(parent)
+        destination = Path(str(CANDIDATE_SOURCE_ROOT)).joinpath(*parts)
+
+        def writer(stage: Path, stage_fd: int) -> None:
+            copied = copy_selected_regular_files(BUILD_VALIDATION_ROOT, stage_fd,
+                                                 paths=tuple(file["path"] for file in expected), **bounds)
+            check(copied == expected, "$.files", "the Build changed while it was copied")
+            check(privatize_tree_copy(stage, source_owner_uid=0, owner_uid=candidate.uid, owner_gid=candidate.gid,
+                                      **bounds) == expected, "$.files", "the staged Build changed during its handover")
+
+        atomic_directory(destination, writer)
+        authenticate_tree_private_access(destination, owner_uid=candidate.uid, owner_gid=candidate.gid,
+                                         max_entries=lim.MAX_CI_EXPORT_ENTRIES)
+        check(inspect_complete_build(boundary=boundary, plan=plan) == build, "$.build",
+              "the sealed Build changed while it was staged")
+        authenticate_privileged_host_boundary(boundary)
+    except OSError as error:
+        raise WorkerError("cannot stage the Build for the candidate") from error
+    finally:
+        terminate_worker(candidate)
+
+
+def _hand_to_runner(root: PurePosixPath, boundary: HostBoundary, transfer: Callable[[], object]) -> None:
+    """Give root's fresh private copy at ``root`` to the runner (``transfer``), bound to one inode.
+
+    A failure after the copy was admitted leaves its root closed to everyone but its owner.
+    """
+
+    descriptor = _open_directory(tuple(root.parts[1:]))
+    admitted = False
+    try:
+        initial = os.fstat(descriptor)
+        if (initial.st_uid, initial.st_gid, stat.S_IMODE(initial.st_mode)) != (0, 0, 0o700):
+            raise WorkerError("frozen copy is not fresh private protected-root-owned")
+        admitted = True
+        transfer()
+        final = os.fstat(descriptor)
+        if ((final.st_dev, final.st_ino) != (initial.st_dev, initial.st_ino)
+                or (final.st_uid, final.st_gid, stat.S_IMODE(final.st_mode)) != (boundary.uid, boundary.gid, 0o700)):
+            raise WorkerError("frozen copy identity or private ownership changed")
+        named = _open_directory(tuple(root.parts[1:]))
+        try:
+            info = os.fstat(named)
+            if (info.st_dev, info.st_ino) != (initial.st_dev, initial.st_ino):
+                raise WorkerError("frozen copy was replaced during its ownership transfer")
+        finally:
+            os.close(named)
+    except BaseException:
+        try:
+            if admitted:
+                os.fchmod(descriptor, 0o700)
+                os.fsync(descriptor)
+        except OSError as cleanup:
+            raise WorkerError("frozen copy could not keep its private traversal") from cleanup
+        raise
+    finally:
+        os.close(descriptor)
+
+
+def freeze_build_export(*, boundary: HostBoundary, candidate: WorkerAccount,
+                         inventory: tuple[GitSourceEntry, ...], generated_roots: tuple[str, ...],
+                         plan: dict[str, Any], target_id: str, producer: dict[str, Any]) -> dict[str, Any]:
+    """Protected-root freeze of one target after candidate quiescence and tracked-source rechecking.
+
+    The candidate is terminated; its checkout must still hold exactly the tested tree
+    (:func:`verify_candidate_source`) before and after the copy; its ``export/`` must be private
+    regular files (0700 directories, 0600 single-link files, no ACL) and exactly the planned
+    outputs of ``target_id``. Root copies them to the fixed ``sealed-build/`` with the envelope it
+    builds itself (:func:`seal_target_export`) and hands only that copy to the runner; the
+    originals keep the candidate's ownership. The inventory and ``producer`` come from the runner,
+    which authenticated the tested tree and knows the executing run; generated roots are protected
+    policy. Native validity and second-UID validation remain required before upload.
     """
 
     authenticate_privileged_host_boundary(boundary)
     validate_plan(plan)
-    if type(generated_roots) is not tuple or any(not g.is_repo_path(path) for path in generated_roots):
-        raise WorkerError("Build freeze generated roots require exact protected policy paths")
-    if (type(execution) is not WorkerResult or type(execution.returncode) is not int or execution.returncode != 0
-            or type(execution.log) is not bytes or len(execution.log) > lim.MAX_CI_LOG_BYTES
-            or type(execution.truncated) is not bool):
-        raise WorkerError("Build freeze requires retained successful candidate execution")
-    if type(candidate) is not WorkerAccount or candidate.role != "candidate":
-        raise WorkerError("Build freeze requires the fixed candidate identity")
-    if authenticate_worker_account("candidate") != candidate:
-        raise WorkerError("Build freeze candidate identity changed")
-    validator = authenticate_worker_account("validator")
-    if (candidate.uid == validator.uid or candidate.gid == validator.gid
-            or any(account.uid == boundary.uid or account.gid == boundary.gid for account in (candidate, validator))):
-        raise WorkerError("Build freeze identities are not isolated")
-    descriptor = None
-    admitted = False
+    _generated_roots(generated_roots)
+    _isolated_candidate(boundary, candidate)
     try:
-        terminate_worker(candidate)
-        for path, owner, group, mode in ((WORKER_ROOT.parent, boundary.uid, boundary.gid, 0o711),
-                                        (WORKER_ROOT, boundary.uid, boundary.gid, 0o711),
-                                        (CANDIDATE_OUTPUT_ROOT.parent, candidate.uid, candidate.gid, 0o700),
-                                        (CANDIDATE_SOURCE_ROOT, candidate.uid, candidate.gid, 0o700)):
-            parent = _open_directory(tuple(path.parts[1:]))
-            try:
-                info = os.fstat(parent)
-                if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (owner, group, mode):
-                    raise WorkerError("Build freeze traversal/home/source identity changed")
-            finally:
-                os.close(parent)
-        original = verify_source_copy(CANDIDATE_SOURCE_ROOT, inventory=inventory, generated_roots=generated_roots)
+        original = verify_candidate_source(boundary=boundary, candidate=candidate, inventory=inventory,
+                                           generated_roots=generated_roots)
         authenticate_tree_private_access(CANDIDATE_OUTPUT_ROOT, owner_uid=candidate.uid,
                                          owner_gid=candidate.gid, max_entries=lim.MAX_CI_EXPORT_ENTRIES)
-        expected = materialize_build_export(CANDIDATE_OUTPUT_ROOT, BUILD_VALIDATION_ROOT, plan=plan)
+        expected = seal_target_export(CANDIDATE_OUTPUT_ROOT, BUILD_VALIDATION_ROOT, plan=plan,
+                                      target_id=target_id, producer=producer)
         if verify_source_copy(CANDIDATE_SOURCE_ROOT, inventory=inventory, generated_roots=generated_roots) != original:
             raise WorkerError("tracked source changed during Build freeze")
-        descriptor = _open_directory(tuple(BUILD_VALIDATION_ROOT.parts[1:]))
-        initial = os.fstat(descriptor)
-        if (initial.st_uid, initial.st_gid, stat.S_IMODE(initial.st_mode)) != (0, 0, 0o700):
-            raise WorkerError("Build freeze copy is not fresh private protected-root-owned")
-        admitted = True
         raw = canonical_json(expected)
-        privatize_tree_copy(BUILD_VALIDATION_ROOT, source_owner_uid=0, owner_uid=boundary.uid,
-                             owner_gid=boundary.gid, max_files=lim.MAX_CI_EXPORT_FILES + 1,
-                             max_entries=lim.MAX_CI_EXPORT_ENTRIES,
-                             max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES + len(raw),
-                             max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS)
-        final = os.fstat(descriptor)
-        if ((final.st_dev, final.st_ino) != (initial.st_dev, initial.st_ino)
-                or (final.st_uid, final.st_gid, stat.S_IMODE(final.st_mode)) != (boundary.uid, boundary.gid, 0o700)):
-            raise WorkerError("Build freeze copy identity or private ownership changed")
+        _hand_to_runner(BUILD_VALIDATION_ROOT, boundary, lambda: privatize_tree_copy(
+            BUILD_VALIDATION_ROOT, source_owner_uid=0, owner_uid=boundary.uid, owner_gid=boundary.gid,
+            max_files=lim.MAX_CI_EXPORT_FILES + 1, max_entries=lim.MAX_CI_EXPORT_ENTRIES,
+            max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES + len(raw),
+            max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS))
         authenticate_tree_private_access(BUILD_VALIDATION_ROOT, owner_uid=boundary.uid,
                                          owner_gid=boundary.gid, max_entries=lim.MAX_CI_EXPORT_ENTRIES)
-        observed = verify_build_export(BUILD_VALIDATION_ROOT, plan=plan)
-        if observed != expected:
+        if verify_build_export(BUILD_VALIDATION_ROOT, plan=plan) != expected:
             raise WorkerError("Build freeze envelope changed during ownership transfer")
         authenticate_privileged_host_boundary(boundary)
-        return observed
-    except BaseException as error:
-        try:
-            if descriptor is not None and admitted:
-                os.fchmod(descriptor, 0o700)
-                os.fsync(descriptor)
-        except OSError as cleanup:
-            raise WorkerError("Build freeze could not restore private traversal") from cleanup
-        if isinstance(error, OSError):
-            raise WorkerError("cannot freeze protected Build export") from error
-        raise
+        return expected
+    except OSError as error:
+        raise WorkerError("cannot freeze protected Build export") from error
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
+        terminate_worker(candidate)
