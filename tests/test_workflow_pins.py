@@ -11,7 +11,9 @@ fill the placeholders in. Composites never ``uses:`` a sibling and never read
 
 The Build/E2E caller templates are a closed list (:data:`ACTIVATION_CALLERS`): each may reference
 only the kit entry points listed for it, and only the Build and the packaged E2E caller may call
-the mod's own managed guard workflow, the one local ``uses:`` in the kit.
+the mod's own managed guard workflow, the one local ``uses:`` in the kit. Those two also hold the
+one other placeholder, ``{{BRANCH}}``, on the branch filter of their ``push`` trigger and nowhere
+else (:data:`BRANCH_LINE`); the guard itself is shell alone and has no ``uses:`` at all.
 """
 
 from __future__ import annotations
@@ -55,6 +57,13 @@ GUARDED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE)
 #: the guard, which carries the pin as the literal it verifies.
 ACTIVATION_PLACEHOLDERS = {GUARD_TEMPLATE: 1, BUILD_TEMPLATE: 1, PACKAGED_TEMPLATE: 3, STATUS_TEMPLATE: 1}
 GUARD_LITERALS = ('  MB_KIT_SHA: "{{PIN}}"', '  MB_KIT_VERSION: "{{VERSION}}"')
+#: The mod's canonical branch: GitHub reads the branch filter of a ``push`` trigger as a literal,
+#: so the two producers carry it as a placeholder on exactly this line, once.
+BRANCH_PLACEHOLDER = "{{BRANCH}}"
+BRANCH_LINE = '    branches: ["{{BRANCH}}"]'
+BRANCHED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE)
+#: Any ``{{...}}`` token that is no GitHub expression.
+TEMPLATE_TOKEN = re.compile(r"(?<!\$)\{\{[^{}]*\}\}")
 CANARY = ROOT / "canary"
 CANARY_CALLER = CANARY / ".github/workflows/pages.yml"
 PLACEHOLDERS = ("{{PIN}}", "{{VERSION}}")
@@ -301,6 +310,19 @@ class PinTests(unittest.TestCase):
                                         line)
                 self.assertEqual(len(kit_uses), ACTIVATION_PLACEHOLDERS[path] - (path == GUARD_TEMPLATE))
                 self.assertEqual(LOCAL_GUARD in uses_values(path), path in GUARDED_CALLERS)
+                self.assertEqual([line for line in lines if BRANCH_PLACEHOLDER in line],
+                                 [BRANCH_LINE] if path in BRANCHED_CALLERS else [])
+                self.assertLessEqual(set(TEMPLATE_TOKEN.findall("\n".join(lines))), {*PLACEHOLDERS, BRANCH_PLACEHOLDER},
+                                     "the three placeholders are a closed set")
+        self.assertEqual(uses_values(GUARD_TEMPLATE), [], "the guard is shell alone")
+
+    def test_the_branch_placeholder_stays_on_the_push_filter_of_the_two_producers(self) -> None:
+        self.assertEqual(set(BRANCHED_CALLERS), set(GUARDED_CALLERS), "the callers that run on a push")
+        files = {*kit_yaml_files(), *(item for item in (ROOT / "template").rglob("*") if item.is_file())}
+        self.assertTrue(set(BRANCHED_CALLERS) <= files)
+        for path in sorted(files - set(BRANCHED_CALLERS)):
+            with self.subTest(file=path.relative_to(ROOT).as_posix()):
+                self.assertNotIn(BRANCH_PLACEHOLDER, path.read_bytes().decode("utf-8", errors="replace"))
 
     def test_composites_resolve_the_kit_only_through_their_action_path(self) -> None:
         for path in COMPOSITE_PATHS.values():

@@ -1711,10 +1711,17 @@ manifest, a caller its mode manages is checked and written like a managed file a
 not exist (`forbidden`); `sync` never deletes one. To add or replace a caller template, put it at
 `template/managed/<path>` and enrol its path in `build_ci.activation.CALLERS` and
 `MANAGED_CALLERS`; a new way of rendering is a new `RENDERERS` entry with its three functions.
+A `pinned` caller template may also hold `{{BRANCH}}`, filled in with `canonical_branch` of the
+mod's `site/mod-base.json` and validated with `grammar.BRANCH`: GitHub reads the branch filter of a
+`push` trigger as a literal. The placeholders are a closed set per renderer; a caller template
+holding any other `{{NAME}}` token is refused by every verb, and a caller whose branch differs
+from the configuration is drift like any other byte.
 
 Constants:
 
 * `MANIFEST_PATH = 'template/manifest.json'`
+* `PAGES_PLACEHOLDERS = ('{{PIN}}', '{{VERSION}}')`: every placeholder the `pages-extension` renderer fills in.
+* `PINNED_PLACEHOLDERS = ('{{PIN}}', '{{VERSION}}', '{{BRANCH}}')`: every placeholder the `pinned` renderer fills in; `{{BRANCH}}` is optional in a template.
 * `RENDERERS = ('pages-extension', 'pinned')`: every renderer a `RenderedCaller` may name; one of another name is an error in every verb, never a byte-identical managed file.
 * `RENDERED_CALLERS`: the closed registry, a tuple of `RenderedCaller`: the Pages caller, then one record per `build_ci.activation.CALLERS` path with `modes = build_ci.activation.managing_modes(path)`.
 
@@ -1722,7 +1729,8 @@ Constants:
   * fields: `path: str, source: str, renderer: str, modes: frozenset[str] | None`
 * `def load_template_activation(repo: Path) -> dict[str, Any] | None`: The mod's validated activation manifest, or ``None`` for a mod with neither the manifest nor a Build configuration. Read bounded without following symlinks and bound to the repository and profile of ``scripts/ci/mod-base-build.json``; a Build configuration without a manifest is an error, so a deleted manifest is never taken for ``disabled``.
 * `def activation_bytes(repo: Path) -> bytes | None`: The bytes of the manifest ``load_template_activation`` accepts (``None`` where it returns ``None``).
-* `def expected_callers(kit_root: Path, pin: Pin, activation: dict[str, Any] | None) -> dict[str, bytes | None]`: What every Build/E2E caller path must hold for a validated manifest and a pin: the template of ``kit_root`` rendered with the pin where the mode manages the caller, ``None`` where the file must not exist. ``kit_root`` must be the kit the pin names.
+* `def expected_callers(kit_root: Path, pin: Pin, activation: dict[str, Any] | None, branch: str | None = None) -> dict[str, bytes | None]`: What every Build/E2E caller path must hold for a validated manifest, a pin and the mod's canonical branch (``canonical_branch``): the template of ``kit_root`` rendered with the pin and the branch where the mode manages the caller, ``None`` where the file must not exist. ``kit_root`` must be the kit the pin names. A managed caller whose template names the branch cannot be rendered without one, and a ``branch`` that is no branch name is refused.
+* `def canonical_branch(repo: Path) -> str | None`: The branch the callers of the mod at ``repo`` are rendered for: ``canonical_branch`` of its validated ``site/mod-base.json``, or ``None`` for a repository without that file.
 * `def caller_files(repo: Path) -> dict[str, bytes]`: The bytes of every Build/E2E caller path that exists in ``repo``, each a bounded regular file reached without symlinks.
 
 * `class Drift`: One difference: ``kind`` is ``missing``, ``changed``, ``fragment``, ``agents``, ``links``, ``forbidden`` or ``extension``; ``detail`` is a bounded unified diff or message.
@@ -2500,7 +2508,7 @@ is owner approval.
 * `class Transition`: An admitted change: the previous and current `activation_state`, whether the manifest changed at all, and the callers the candidate's state manages.
   * fields: `previous: str, current: str, changed: bool, managed: tuple[str, ...]`
 * `def admit_transition(protected: bytes | None, candidate: bytes | None, *, protected_pin: Pin, candidate_pin: Pin) -> Transition`: Admit the change from the protected manifest bytes to the candidate's (a side without a manifest is `None`) or raise `MbError`. Both are decoded strictly. Equal documents are admitted whatever the pins (no transition); any difference must be an allowed transition (`activation.transition_refusal`) and both pins must carry the same SHA and version.
-* `def verify_candidate_callers(files: Mapping[str, bytes], *, candidate: bytes | None, pin: Pin, kit_root: Path) -> tuple[str, ...]`: Require the candidate's caller files (`{path: bytes}` of those that exist) to be exactly `template.tool.expected_callers` for its manifest and pin: a managed caller equals its rendered template, every other caller path is absent, and no other path is given. `kit_root` must be the verified kit `pin` names. Returns the managed paths; one `MbError` names every problem.
+* `def verify_candidate_callers(files: Mapping[str, bytes], *, candidate: bytes | None, pin: Pin, kit_root: Path, branch: str | None = None) -> tuple[str, ...]`: Require the candidate's caller files (`{path: bytes}` of those that exist) to be exactly `template.tool.expected_callers` for its manifest, pin and canonical branch: a managed caller equals its rendered template, every other caller path is absent, and no other path is given. `kit_root` must be the verified kit `pin` names; `branch` is `canonical_branch` of the candidate's `site/mod-base.json` as the protected side read it (`template.tool.canonical_branch` for a checkout), and without one a managed caller whose template names the branch is an error. Returns the managed paths; one `MbError` names every problem.
 
 ## `mod_base.build_ci.batch`
 

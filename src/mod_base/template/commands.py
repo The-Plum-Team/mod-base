@@ -112,7 +112,7 @@ def run_transition(args: argparse.Namespace) -> int:
     admitted = admit_transition(tool.activation_bytes(args.base), candidate, protected_pin=parse_pin(args.base),
                                 candidate_pin=candidate_pin)
     managed = verify_candidate_callers(tool.caller_files(args.repo), candidate=candidate, pin=candidate_pin,
-                                       kit_root=runtime.kit_root())
+                                       kit_root=runtime.kit_root(), branch=tool.canonical_branch(args.repo))
     change = f"{admitted.previous} -> {admitted.current}" if admitted.changed else f"{admitted.current} (unchanged)"
     sys.stdout.write(f"transition: {change}\npin: {candidate_pin.sha} {candidate_pin.version}\n"
                      + "".join(f"managed: {path}\n" for path in managed))

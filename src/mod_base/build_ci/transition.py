@@ -10,8 +10,9 @@ answered from bytes the protected side read itself, never from what a candidate 
   controller already runs. An unchanged manifest is no transition, so an ordinary pin bump stays
   possible in every mode.
 * :func:`verify_candidate_callers` compares the candidate's caller files with the kit templates
-  rendered for its pin. A caller its mode manages equals the rendered template byte for byte and
-  every other one is absent, so no mode leaves a kit caller outside the check.
+  rendered for its pin and its canonical branch. A caller its mode manages equals the rendered
+  template byte for byte and every other one is absent, so no mode leaves a kit caller outside
+  the check.
 
 ``template transition`` runs both over two checkouts; a protected job runs them over the blobs it
 authenticated. Neither is owner approval: they state what the bytes are, and the protected
@@ -76,19 +77,21 @@ def admit_transition(protected: bytes | None, candidate: bytes | None, *, protec
 
 
 def verify_candidate_callers(files: Mapping[str, bytes], *, candidate: bytes | None, pin: Pin,
-                             kit_root: Path) -> tuple[str, ...]:
+                             kit_root: Path, branch: str | None = None) -> tuple[str, ...]:
     """Require the candidate's Build/E2E caller ``files`` (``{path: bytes}`` of those that exist)
-    to be exactly what its activation manifest ``candidate`` and ``pin`` call for; return the
-    managed paths.
+    to be exactly what its activation manifest ``candidate``, ``pin`` and canonical ``branch`` call
+    for; return the managed paths.
 
     ``kit_root`` is the verified kit that ``pin`` names: its templates are the reviewed bytes.
+    ``branch`` is ``canonical_branch`` of the candidate's ``site/mod-base.json`` as the protected
+    side read it; without one, a managed caller whose template names the branch is an error.
     Every problem is reported in one :class:`MbError`: a managed caller that is missing or differs
     from its rendered template, a caller present outside its mode, or a path that is no caller.
     """
 
     _pin(pin, "candidate")
     document = None if candidate is None else parse_activation(candidate, label="the candidate activation manifest")
-    expected = expected_callers(kit_root, pin, document)
+    expected = expected_callers(kit_root, pin, document, branch)
     problems = [f"{single_line(path, limit=120)} is not a mod-base Build/E2E caller" for path in sorted(files)
                 if path not in expected]
     for path, wanted in expected.items():
@@ -101,7 +104,8 @@ def verify_candidate_callers(files: Mapping[str, bytes], *, candidate: bytes | N
         elif actual is None:
             problems.append(f"{path} is missing")
         elif actual != wanted:
-            problems.append(f"{path} differs from the kit template rendered for {pin.sha} {pin.version}")
+            problems.append(f"{path} differs from the kit template rendered for {pin.sha} {pin.version}"
+                            + ("" if branch is None else f" and the canonical branch {branch}"))
     if problems:
         shown = "; ".join(problems[:MAX_REPORTED_PROBLEMS])
         more = len(problems) - MAX_REPORTED_PROBLEMS

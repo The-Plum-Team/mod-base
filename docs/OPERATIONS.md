@@ -270,8 +270,10 @@ callers (`mod-base-guard.yml`, `mod-base-build.yml`, `mod-base-packaged-e2e.yml`
 `mod-base-gate-status.yml` in `.github/workflows/`) are managed files: none in `disabled`, all in
 `shadow` and `shared-build-and-e2e`, all but the packaged E2E caller in `shared-build`, and in
 `reviewed-rollback` those of the mode it leaves. A managed caller is the kit template rendered with
-the mod's pin, byte for byte; it has no extension region and cannot be named in
-`template.deferred`. A caller outside its mode must not exist.
+the mod's pin and, in the branch filter of the Build and packaged E2E callers' `push` trigger, the
+`canonical_branch` of `site/mod-base.json`, byte for byte; it has no extension region and cannot
+be named in `template.deferred`. A change of `canonical_branch` is therefore followed by
+`template sync --write`. A caller outside its mode must not exist.
 
 Every change of mode is its own pull request, never combined with a kit bump:
 

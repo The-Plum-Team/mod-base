@@ -324,7 +324,8 @@ class BumpTest(KitsCase):
                 self.assertEqual((result.sha, result.version, pin.sha, pin.version),
                                  (self.sha("v1.1.1"), "v1.1.1", self.sha("v1.1.1"), "v1.1.1"))
                 kit = self.checkout("v1.1.1")
-                expected = tool.expected_callers(kit, Pin(pin.sha, pin.version, ()), manifest(state))
+                expected = tool.expected_callers(kit, Pin(pin.sha, pin.version, ()), manifest(state),
+                                                 tool.canonical_branch(repo))
                 for path in CALLERS:
                     if path in MANAGED[row(state)]:
                         self.assertEqual((repo / path).read_bytes(), expected[path])

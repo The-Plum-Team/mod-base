@@ -1,8 +1,8 @@
 a2762dc1f34d57b2f7be02c0cc46c26518ce7a6850fe409c047769496a0ec9a3  ./template/managed/.gitattributes
-79e6ff9bac4a635ec76607ec68862313bfe8dd9163cc875351f53bcd60b5bec4  ./template/managed/.github/workflows/mod-base-build.yml
+f6f237842205a47dd542ae657d4fa84b3c6b15e619a011e1b26c0542d2eeed2d  ./template/managed/.github/workflows/mod-base-build.yml
 86d25a697864ec5ec9c49f362ab01fe99d163f5c9785d260b413dee684b7bb08  ./template/managed/.github/workflows/mod-base-gate-status.yml
-92227ee0d3e765fecc6ce25aa7e56d580d7948e312e782953a51cc96f85b0e87  ./template/managed/.github/workflows/mod-base-guard.yml
-3105d4808b4395024abd82e7b395faf46c74079dc1923107a9bdabe6bffbd988  ./template/managed/.github/workflows/mod-base-packaged-e2e.yml
+d56662a0ab491a346e536a5dc201805588d82635b41ce4c39d1310097adc0b75  ./template/managed/.github/workflows/mod-base-guard.yml
+e1eff004630dfa4dc9d6b6b1f0993c316a2cf501fc9b00da8c11cdfb598b60f0  ./template/managed/.github/workflows/mod-base-packaged-e2e.yml
 bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/managed/.github/workflows/pages.yml
 9b3aef4f40e08a64d004e67809b55641cf323b23ccbe32623e4940903d4c60a7  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
 0b9fcb0dd4368b16aaaa5611a92e9909aa9e803ebe8440e33590cc9376a911a9  ./template/managed/docs/ai/shared/REPOSITORY.md

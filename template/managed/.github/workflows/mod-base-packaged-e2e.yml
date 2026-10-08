@@ -1,8 +1,31 @@
 # mod-base managed: packaged E2E caller, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-packaged-e2e.yml
-# PROVISIONAL: a synthetic stand-in that makes activation gating, rendering, drift detection and the staged-file lock testable. It runs on manual dispatch only; the reviewed caller replaces it before any release.
 name: mod-base packaged E2E
-on: workflow_dispatch
+
+# The protected packaged E2E of a pull request (the workflow of the default branch runs it, never
+# the pull request's own copy), of a push to the default branch and of a manual request there. The
+# guard binds the run to the pin before any kit workflow is called. For a pull request the kit's
+# packaged E2E waits for the exact Build of the separate Build run and never compiles. For a push
+# or a manual request this run first selects an existing authenticated Build and calls the same
+# Build workflow only when none exists. A draft pull request gets the deferral job alone. This
+# file holds no secret and passes none on.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: ["{{BRANCH}}"]
+  workflow_dispatch: {}
+
 permissions: {}
+
+# A new generation of a pull request (a push, a draft conversion, a readiness event) cancels the
+# one before it. A push to the default branch waits for the generation before it and replaces an
+# older one that is still waiting; a manual request has a group of its own.
+concurrency:
+  group: >-
+    packaged-e2e-${{ github.event.pull_request.number ||
+    (github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.ref, github.run_id)) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
 jobs:
   guard:
     name: Verify pinned mod-base
@@ -10,34 +33,77 @@ jobs:
       actions: read
       contents: read
     uses: ./.github/workflows/mod-base-guard.yml
+    with:
+      callees: select-build build packaged-e2e
+
+  deferred:
+    name: Packaged E2E deferred for draft
+    needs: guard
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Report the draft deferral
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          fail() { printf 'Packaged E2E deferral: %s\n' "$1" >&2; exit 1; }
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed pull request number"
+          printf 'Packaged E2E deferred: pull request #%s is a draft, so no lane ran and this head has no %s\n' \
+            "$PR_NUMBER" "packaged E2E result. Mark the pull request ready for review to start one." |
+            tee -a "$GITHUB_STEP_SUMMARY"
+
   select:
     name: Select exact Build
     needs: guard
+    if: github.event_name != 'pull_request_target'
     permissions:
       actions: read
       contents: read
+      pull-requests: read
     uses: The-Plum-Team/mod-base/.github/workflows/select-build.yml@{{PIN}} # {{VERSION}}
     with:
       kit-sha: ${{ needs.guard.outputs.kit-sha }}
+
   rebuild:
     name: Shared Build
     needs: [guard, select]
-    if: needs.select.outputs.found == 'false'
+    if: >-
+      github.event_name != 'pull_request_target' && needs.select.outputs.mode == 'full' &&
+      needs.select.outputs.found == 'false'
     permissions:
       actions: read
       contents: read
+      pull-requests: read
     uses: The-Plum-Team/mod-base/.github/workflows/build.yml@{{PIN}} # {{VERSION}}
     with:
       kit-sha: ${{ needs.guard.outputs.kit-sha }}
+
+  # select and rebuild are skipped for a pull request, and rebuild whenever a Build was selected or
+  # reused, so this job states every admitted combination itself. It never starts in a cancelled run.
   shared:
     name: Shared Packaged E2E
     needs: [guard, select, rebuild]
-    if: always() && needs.select.result == 'success' && needs.rebuild.result != 'failure' && needs.rebuild.result != 'cancelled'
+    if: >-
+      ${{ !cancelled() && needs.guard.result == 'success' && (
+      (github.event_name == 'pull_request_target' && github.event.pull_request.draft == false &&
+      needs.select.result == 'skipped' && needs.rebuild.result == 'skipped') ||
+      (github.event_name != 'pull_request_target' && needs.select.result == 'success' && (
+      (needs.select.outputs.mode == 'reuse' && needs.rebuild.result == 'skipped') ||
+      (needs.select.outputs.mode == 'full' && needs.select.outputs.found == 'true' &&
+      needs.rebuild.result == 'skipped') ||
+      (needs.select.outputs.mode == 'full' && needs.select.outputs.found == 'false' &&
+      needs.rebuild.result == 'success')))) }}
     permissions:
       actions: read
       contents: read
+      pull-requests: read
     uses: The-Plum-Team/mod-base/.github/workflows/packaged-e2e.yml@{{PIN}} # {{VERSION}}
     with:
       kit-sha: ${{ needs.guard.outputs.kit-sha }}
+      pr-number: ${{ format('{0}', github.event.pull_request.number) }}
       mode: ${{ needs.select.outputs.mode }}
-      build-run-id: ${{ needs.select.outputs.found == 'true' && needs.select.outputs.build-run-id || 'same-run' }}
+      build-run-id: ${{ needs.rebuild.result == 'success' && 'same-run' || needs.select.outputs.build-run-id }}

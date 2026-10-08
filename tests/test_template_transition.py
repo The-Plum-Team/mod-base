@@ -28,7 +28,7 @@ from mod_base.template import tool
 from tests.helpers import ci_activation
 from tests.test_ci_activation import ALLOWED, BUILD, GUARD, MANAGED, PACKAGED, STATES, STATUS, manifest
 from tests.test_pin import BOOT
-from tests.test_template_callers import SYNTHETIC_CALLERS, CallerCase, enter, real_callers, render, row
+from tests.test_template_callers import BRANCH, SYNTHETIC_CALLERS, CallerCase, enter, real_callers, render, row
 from tests.test_template_tool import KIT_ROOT, OTHER_SHA, SHA, write
 
 VERSION = "v1.2.3"
@@ -137,8 +137,8 @@ class VerifyCandidateCallersTest(unittest.TestCase):
         for state in STATES:
             managed = {path: rendered[path] for path in CALLERS if path in MANAGED[row(state)]}
             with self.subTest(state=state):
-                self.assertEqual(verify_candidate_callers(managed, candidate=data(state), pin=PIN, kit_root=KIT_ROOT),
-                                 tuple(managed))
+                admitted = verify_candidate_callers(managed, candidate=data(state), pin=PIN, kit_root=KIT_ROOT, branch=BRANCH)
+                self.assertEqual(admitted, tuple(managed))
                 for path in CALLERS:
                     files = dict(managed)
                     if path in managed:
@@ -148,7 +148,7 @@ class VerifyCandidateCallersTest(unittest.TestCase):
                         files[path] = rendered[path]
                         expected = f"{path} must not exist in the {state.partition(':')[0]} state"
                     with self.assertRaises(MbError) as caught:
-                        verify_candidate_callers(files, candidate=data(state), pin=PIN, kit_root=KIT_ROOT)
+                        verify_candidate_callers(files, candidate=data(state), pin=PIN, kit_root=KIT_ROOT, branch=BRANCH)
                     self.assertIn(expected, str(caught.exception))
                     self.assertEqual(caught.exception.reason, "activation")
 
@@ -163,7 +163,11 @@ class VerifyCandidateCallersTest(unittest.TestCase):
             "another commit": real_callers(OTHER_SHA)[BUILD],
             "another version": real_callers(SHA, "v1.2.4")[BUILD],
             "the unrendered template": (KIT_ROOT / "template/managed" / BUILD).read_bytes(),
-            "a wider trigger": build.replace(b"on: workflow_dispatch", b"on: pull_request_target"),
+            "a wider trigger": build.replace(b"converted_to_draft]", b"converted_to_draft, labeled]"),
+            "another trigger": build.replace(b"  workflow_dispatch: {}\n", b"  workflow_dispatch: {}\n  pull_request: {}\n"),
+            "another branch": real_callers(branch="main")[BUILD],
+            "every branch": build.replace(b'branches: ["master"]', b'branches: ["**"]'),
+            "no draft deferral": build.replace(b" || github.event.pull_request.draft == false", b" || true"),
             "a wider permission": build.replace(b"contents: read", b"contents: write", 1),
             "another caller's bytes": rendered[PACKAGED],
             "empty": b"",
@@ -172,14 +176,14 @@ class VerifyCandidateCallersTest(unittest.TestCase):
             with self.subTest(label), self.assertRaisesRegex(MbError, f"{BUILD} differs from the kit template"):
                 self.assertNotEqual(changed, build)
                 verify_candidate_callers({**rendered, BUILD: changed}, candidate=data("shadow"), pin=PIN,
-                                         kit_root=KIT_ROOT)
+                                         kit_root=KIT_ROOT, branch=BRANCH)
 
     def test_every_problem_is_reported_at_once_and_other_paths_are_refused(self) -> None:
         rendered = real_callers()
         files = {GUARD: rendered[GUARD] + b"#\n", PACKAGED: rendered[PACKAGED], ".github/workflows/pages.yml": b"x\n",
                  "scripts/ci/x.py": b"x\n"}
         with self.assertRaises(MbError) as caught:
-            verify_candidate_callers(files, candidate=data("shared-build"), pin=PIN, kit_root=KIT_ROOT)
+            verify_candidate_callers(files, candidate=data("shared-build"), pin=PIN, kit_root=KIT_ROOT, branch=BRANCH)
         message = str(caught.exception)
         for expected in (".github/workflows/pages.yml is not a mod-base Build/E2E caller",
                          "scripts/ci/x.py is not a mod-base Build/E2E caller", f"{GUARD} differs from the kit template",
@@ -188,27 +192,44 @@ class VerifyCandidateCallersTest(unittest.TestCase):
             self.assertIn(expected, message)
         with self.assertRaises(MbError) as caught:
             verify_candidate_callers({f"docs/{index}.md": b"" for index in range(40)}, candidate=None, pin=PIN,
-                                     kit_root=KIT_ROOT)
+                                     kit_root=KIT_ROOT, branch=BRANCH)
         self.assertIn("and 32 more", str(caught.exception))
         self.assertLess(len(str(caught.exception)), 1000)
 
     def test_a_candidate_without_a_manifest_holds_no_caller(self) -> None:
-        self.assertEqual(verify_candidate_callers({}, candidate=None, pin=PIN, kit_root=KIT_ROOT), ())
+        self.assertEqual(verify_candidate_callers({}, candidate=None, pin=PIN, kit_root=KIT_ROOT, branch=BRANCH), ())
         with self.assertRaisesRegex(MbError, f"{BUILD} must not exist in the absent state"):
-            verify_candidate_callers({BUILD: real_callers()[BUILD]}, candidate=None, pin=PIN, kit_root=KIT_ROOT)
+            verify_candidate_callers({BUILD: real_callers()[BUILD]}, candidate=None, pin=PIN, kit_root=KIT_ROOT, branch=BRANCH)
 
     def test_malformed_arguments_are_refused(self) -> None:
         rendered = real_callers()
         with self.assertRaisesRegex(MbError, "must be read as bytes"):
             verify_candidate_callers({**rendered, BUILD: rendered[BUILD].decode()},  # type: ignore[dict-item]
-                                     candidate=data("shadow"), pin=PIN, kit_root=KIT_ROOT)
+                                     candidate=data("shadow"), pin=PIN, kit_root=KIT_ROOT, branch=BRANCH)
         with self.assertRaisesRegex(MbError, "parsed pin"):
             verify_candidate_callers(rendered, candidate=data("shadow"), pin=(SHA, VERSION),  # type: ignore[arg-type]
-                                     kit_root=KIT_ROOT)
+                                     kit_root=KIT_ROOT, branch=BRANCH)
         with self.assertRaisesRegex(MbError, "the candidate activation manifest is not valid JSON"):
-            verify_candidate_callers(rendered, candidate=b"{", pin=PIN, kit_root=KIT_ROOT)
+            verify_candidate_callers(rendered, candidate=b"{", pin=PIN, kit_root=KIT_ROOT, branch=BRANCH)
         with self.assertRaises(MbError):
-            verify_candidate_callers(rendered, candidate=data("shadow"), pin=PIN, kit_root=KIT_ROOT / "docs")
+            verify_candidate_callers(rendered, candidate=data("shadow"), pin=PIN, kit_root=KIT_ROOT / "docs",
+                                     branch=BRANCH)
+
+    def test_the_callers_are_rendered_for_the_candidate_s_canonical_branch(self) -> None:
+        rendered = real_callers()
+        self.assertNotEqual(rendered[BUILD], real_callers(branch="main")[BUILD])
+        arguments = {"candidate": data("shadow"), "pin": PIN, "kit_root": KIT_ROOT}
+        self.assertEqual(verify_candidate_callers(real_callers(branch="main"), branch="main", **arguments),
+                         tuple(CALLERS))
+        with self.assertRaisesRegex(MbError, f"{BUILD} differs from the kit template rendered for {SHA} {VERSION} "
+                                             "and the canonical branch main"):
+            verify_candidate_callers(rendered, branch="main", **arguments)
+        with self.assertRaisesRegex(MbError, "its template names the mod's canonical branch"):
+            verify_candidate_callers(rendered, **arguments)
+        with self.assertRaisesRegex(MbError, "is not a valid branch name"):
+            verify_candidate_callers(rendered, branch='master"]\n  pull_request: {}', **arguments)
+        self.assertEqual(verify_candidate_callers({}, candidate=data("disabled"), pin=PIN, kit_root=KIT_ROOT), (),
+                         "a candidate that manages no caller needs no branch")
 
 
 class TransitionCommandTest(CallerCase):

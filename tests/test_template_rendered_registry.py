@@ -24,7 +24,7 @@ from tests.test_ci_activation import BUILD, GUARD, PACKAGED, STATUS
 from tests.test_template_callers import PAGES, SYNTHETIC_CALLERS, CallerCase, tree
 from tests.test_template_tool import KIT_ROOT, SHA, SYNTHETIC_CALLER, config_document, write
 
-TOKENS = ("{{PIN}}", "{{VERSION}}")
+TOKENS = ("{{PIN}}", "{{VERSION}}", "{{BRANCH}}")
 
 
 class RegistryCase(CallerCase):

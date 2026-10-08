@@ -61,8 +61,32 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 - Managed files, by activation only: four caller workflows (`.github/workflows/mod-base-guard.yml`,
   `mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`) become managed
   files of a mod whose activation mode lists them. They are not template-manifest entries and no
-  mod without an activation manifest receives or is asked for one. Their templates in this change
-  are provisional stand-ins; the managed `.gitattributes` has no `eol=lf` rule for them yet.
+  mod without an activation manifest receives or is asked for one. The guard, the Build caller and
+  the packaged E2E caller are the reviewed workflows; the status caller is still a provisional
+  stand-in, and the managed `.gitattributes` has no `eol=lf` rule for the four yet.
+  - `mod-base-guard.yml` is a local reusable workflow (input `callees`, output `kit-sha`) that the
+    two producers call first, so the run lists it in `referenced_workflows` at the commit the
+    caller ran from. Its one job, shell alone with a read-only token, admits the event
+    (`pull_request_target`, `push`, `workflow_dispatch`, always for the default branch), checks
+    out the protected mod at `github.sha` without persisting a credential, requires the single pin
+    the bootstrap reads there to be the pin the guard was rendered for and a released commit of
+    the kit's main branch (`mod_base_kit.py verify --network`), and requires the run to reference
+    nothing but this guard at `github.sha` and the caller's own kit workflows at the pin.
+  - `mod-base-build.yml` (workflow `mod-base Build`) and `mod-base-packaged-e2e.yml` (workflow
+    `mod-base packaged E2E`) run on `pull_request_target` (`opened`, `synchronize`, `reopened`,
+    `ready_for_review`, `converted_to_draft`), on a push to the canonical branch and on
+    `workflow_dispatch`, with `permissions: {}`, read-only job grants and no secret. A draft pull
+    request gets the deferral job alone. The packaged caller selects an existing Build for a push
+    or a manual request (`select-build.yml`) and calls `build.yml` itself only when none exists; a
+    pull request waits for its separate Build run. A new generation of a pull request cancels the
+    one before it; nothing else is cancelled while it runs.
+  - A caller that is rendered whole may hold a third placeholder, `{{BRANCH}}`, which
+    `template sync|init` fill in with `canonical_branch` of `site/mod-base.json`: GitHub reads the
+    branch filter of a `push` trigger as a literal. A caller whose branch differs from the
+    configuration is drift, `template transition` renders the candidate's callers for the
+    candidate's canonical branch, and a caller template holding any other `{{NAME}}` token is
+    refused. `template.tool.expected_callers` and `build_ci.transition.verify_candidate_callers`
+    take the branch as an optional last argument; `template.tool.canonical_branch` reads it.
 - Add the first Build/E2E callee workflow, `.github/workflows/build.yml`: jobs `plan`, `policy`,
   `target` (one per planned target), `assemble` and `gate`, inputs `kit-sha` and `pr-number`. It
   has its own registry (`workflow.CI_CALLEE_WORKFLOWS` with the job tables `CI_JOB_VERBS`,

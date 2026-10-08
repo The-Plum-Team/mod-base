@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from mod_base import cli, workflow
@@ -29,11 +30,13 @@ from mod_base.pin import Pin, parse_pin, parse_pin_files
 from mod_base.template import tool
 from tests.helpers import ci_activation, ci_config
 from tests.test_ci_activation import BUILD, GUARD, MANAGED, PACKAGED, STATES, STATUS
-from tests.test_template_tool import (KIT_ROOT, OTHER_SHA, QS_EXTENSION, SHA, TEMPLATE_ROOT, TemplateCase,
-                                      config_document, git, write)
+from tests.test_template_tool import (KIT_ROOT, OTHER_SHA, QS_EXTENSION, SHA, SYNTHETIC_CALLER, TEMPLATE_ROOT,
+                                      TemplateCase, config_document, git, write)
 from tests.test_workflow_policy import parse_yaml, require_tools
 
 VERSION = "v1.2.3"
+#: ``canonical_branch`` of the mods these cases build (``config_document``).
+BRANCH = "master"
 PAGES = ".github/workflows/pages.yml"
 
 #: Small caller templates with the pin where the real ones carry it: on every kit reference, and
@@ -59,8 +62,9 @@ def row(state: str) -> str:
     return state.rpartition(":")[2]
 
 
-def render(text: str, sha: str = SHA, version: str = VERSION) -> bytes:
-    return text.replace("{{PIN}}", sha).replace("{{VERSION}}", version).encode("utf-8")
+def render(text: str, sha: str = SHA, version: str = VERSION, branch: str = BRANCH) -> bytes:
+    return (text.replace("{{PIN}}", sha).replace("{{VERSION}}", version).replace("{{BRANCH}}", branch)
+            .encode("utf-8"))
 
 
 def tree(root: Path) -> dict[str, bytes]:
@@ -519,6 +523,111 @@ class SinglePinGuardTest(CallerCase):
         self.assertEqual(tree(self.repo), before)
 
 
+# -- The canonical branch a caller is rendered for ---------------------------------------------------
+
+#: The synthetic Build caller with the branch filter the real one carries: a ``push`` trigger takes
+#: its branch as a literal, so the template names the mod's canonical branch with a placeholder.
+BRANCHED = SYNTHETIC_CALLERS[BUILD].replace("jobs:\n", 'on:\n  push:\n    branches: ["{{BRANCH}}"]\njobs:\n')
+
+
+class CanonicalBranchTest(CallerCase):
+    """``{{BRANCH}}``: the third and last placeholder of a caller that is rendered whole."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        write(self.kit, f"template/managed/{BUILD}", BRANCHED)
+
+    def verbs(self) -> list[Any]:
+        return [lambda: tool.load_manifest(self.kit), lambda: tool.check(self.repo, kit_root=self.kit),
+                lambda: tool.sync(self.repo, kit_root=self.kit, write=True)]
+
+    def test_sync_renders_the_canonical_branch_and_any_other_filter_is_drift(self) -> None:
+        self.assertIsNone(tool.canonical_branch(self.repo), "a repository without a configuration names none")
+        self.synced("shared-build")
+        self.assertEqual(tool.canonical_branch(self.repo), BRANCH)
+        build = self.repo / BUILD
+        clean = build.read_bytes()
+        self.assertEqual(clean, render(BRANCHED))
+        self.assertIn(b'    branches: ["master"]\n', clean)
+        others = {"another branch": b'["main"]', "a wider filter": b'["master", "release/**"]',
+                  "every branch": b'["**"]', "the placeholder": b'["{{BRANCH}}"]'}
+        for label, other in others.items():
+            with self.subTest(label):
+                build.write_bytes(clean.replace(b'["master"]', other))
+                self.assertEqual(self.kinds(), [(BUILD, "changed")])
+                tool.sync(self.repo, kit_root=self.kit, write=True)
+                self.assertEqual(build.read_bytes(), clean)
+
+    def test_a_change_of_the_canonical_branch_is_drift_until_the_callers_are_synced(self) -> None:
+        self.synced("shared-build")
+        config = config_document()
+        config["canonical_branch"] = "release/1.21"
+        write(self.repo, "site/mod-base.json", json.dumps(config, indent=2) + "\n")
+        drifts = self.check()
+        self.assertEqual([(drift.path, drift.kind) for drift in drifts], [(BUILD, "changed")])
+        self.assertIn('-    branches: ["release/1.21"]', drifts[0].detail)
+        self.assertIn('+    branches: ["master"]', drifts[0].detail)
+        tool.sync(self.repo, kit_root=self.kit, write=True)
+        self.assertEqual((self.repo / BUILD).read_bytes(), render(BRANCHED, branch="release/1.21"))
+        self.assertEqual(self.check(), [])
+
+    def test_a_caller_is_rendered_only_for_a_valid_branch_and_needs_one_where_its_template_names_it(self) -> None:
+        pin = Pin(SHA, VERSION, ())
+        shared = ci_activation("shared-build")
+        self.assertEqual(tool.expected_callers(self.kit, pin, shared, "main")[BUILD], render(BRANCHED, branch="main"))
+        with self.assertRaisesRegex(MbError, "its template names the mod's canonical branch"):
+            tool.expected_callers(self.kit, pin, shared)
+        self.assertEqual(tool.expected_callers(self.kit, pin, ci_activation("disabled")), dict.fromkeys(CALLERS),
+                         "a caller no mode manages is not rendered, so it needs no branch")
+        hostile = ("", "a b", "x\ny", "/x", "a..b", "a//b", '"]\n  pull_request: {}', "{{BRANCH}}", "{{PIN}}", "*",
+                   "!master", "b" * 201)
+        for branch in hostile:
+            with self.subTest(branch=branch), self.assertRaisesRegex(MbError, "is not a valid branch name"):
+                tool.expected_callers(self.kit, pin, shared, branch)
+        write(self.kit, f"template/managed/{BUILD}", SYNTHETIC_CALLERS[BUILD])
+        self.assertEqual(tool.expected_callers(self.kit, pin, shared)[BUILD], render(SYNTHETIC_CALLERS[BUILD]))
+        with self.assertRaisesRegex(MbError, "is not a valid branch name"):
+            tool.expected_callers(self.kit, pin, shared, "a b")
+
+    def test_the_placeholders_are_a_closed_set(self) -> None:
+        self.assertEqual(tool.PINNED_PLACEHOLDERS, ("{{PIN}}", "{{VERSION}}", "{{BRANCH}}"))
+        self.assertEqual(tool.PAGES_PLACEHOLDERS, ("{{PIN}}", "{{VERSION}}"))
+        self.synced("shared-build")
+        before = tree(self.repo)
+        unknown = {"another placeholder": BRANCHED + "# {{OWNER}}\n",
+                   "a seed placeholder in capitals": BRANCHED.replace("{{BRANCH}}", "{{CANONICAL_BRANCH}}"),
+                   "a numbered placeholder": BRANCHED + "# {{PIN2}}\n"}
+        for label, text in unknown.items():
+            write(self.kit, f"template/managed/{BUILD}", text)
+            for verb in self.verbs():
+                with self.subTest(label), self.assertRaisesRegex(MbError, "which its renderer does not fill in"):
+                    verb()
+        write(self.kit, f"template/managed/{BUILD}", BRANCHED)
+        write(self.kit, f"template/managed/{PAGES}", SYNTHETIC_CALLER.replace("# <<< mod-base managed\n",
+                                                                             "# {{BRANCH}}\n# <<< mod-base managed\n"))
+        for verb in self.verbs():
+            with self.assertRaisesRegex(MbError, r"pages\.yml holds \{\{BRANCH\}\}, which its renderer does not fill in"):
+                verb()
+        self.assertEqual(tree(self.repo), before, "no verb wrote a byte")
+        write(self.kit, f"template/managed/{PAGES}", SYNTHETIC_CALLER)
+        expression = BRANCHED + "# ${{ github.sha }} ${{INPUT}} {{ lower }} { {X} }\n"
+        write(self.kit, f"template/managed/{BUILD}", expression)
+        tool.sync(self.repo, kit_root=self.kit, write=True)
+        self.assertEqual((self.repo / BUILD).read_bytes(), render(expression), "an expression is no placeholder")
+
+    def test_init_renders_the_branch_of_the_configuration_it_is_given(self) -> None:
+        config = write(self.root, "config.json", json.dumps(config_document()) + "\n")
+        write(self.repo, ".github/workflows/e2e.yml", f"      - uses: The-Plum-Team/mod-base/actions/setup@{SHA} # {VERSION}\n")
+        enter(self.repo, "shared-build")
+        before = tree(self.repo)
+        with self.assertRaisesRegex(MbError, "its template names the mod's canonical branch"):
+            tool.init(self.repo, kit_root=self.kit, seed=True, from_config=None)
+        self.assertEqual(tree(self.repo), before, "nothing is seeded when a caller cannot be rendered")
+        created = tool.init(self.repo, kit_root=self.kit, seed=True, from_config=config)
+        self.assertIn(BUILD, created)
+        self.assertEqual((self.repo / BUILD).read_bytes(), render(BRANCHED))
+
+
 # -- The command line --------------------------------------------------------------------------------
 
 
@@ -561,10 +670,10 @@ class CallerCommandsTest(CallerCase):
 # -- The kit's own caller templates ------------------------------------------------------------------
 
 
-def real_callers(sha: str = SHA, version: str = VERSION) -> dict[str, bytes]:
-    """The kit's four caller templates rendered for a pin."""
+def real_callers(sha: str = SHA, version: str = VERSION, branch: str = BRANCH) -> dict[str, bytes]:
+    """The kit's four caller templates rendered for a pin and a canonical branch."""
 
-    return {path: render((TEMPLATE_ROOT / "managed" / path).read_text(encoding="utf-8"), sha, version)
+    return {path: render((TEMPLATE_ROOT / "managed" / path).read_text(encoding="utf-8"), sha, version, branch)
             for path in CALLERS}
 
 
@@ -603,21 +712,22 @@ class KitCallerTemplatesTest(unittest.TestCase):
         self.assertFalse({entry["source"] for entry in manifest["files"]} & {f"managed/{path}" for path in CALLERS})
 
     def test_every_template_renders_to_the_single_pin_with_no_placeholder_left(self) -> None:
-        expected = tool.expected_callers(KIT_ROOT, Pin(SHA, VERSION, ()), ci_activation("shadow"))
+        expected = tool.expected_callers(KIT_ROOT, Pin(SHA, VERSION, ()), ci_activation("shadow"), BRANCH)
         self.assertEqual(expected, real_callers())
         for path, data in expected.items():
             with self.subTest(path=path):
                 text = data.decode("utf-8")
-                self.assertNotIn("{{PIN}}", text)
-                self.assertNotIn("{{VERSION}}", text)
+                self.assertNotIn("{{", text.replace("${{", ""), "no placeholder is left")
                 self.assertNotIn("\r", text)
                 self.assertTrue(text.endswith("\n"))
                 self.assertIn(SHA, text)
                 self.assertRegex(text.splitlines()[0],
                                  r"^# mod-base managed: .+, edit only in The-Plum-Team/mod-base template/managed/"
                                  + path.replace(".", r"\.") + "$")
-                self.assertTrue(text.splitlines()[1].startswith("# PROVISIONAL: "),
-                                "a synthetic template says so until the reviewed one replaces it")
+                self.assertEqual(text.splitlines()[1].startswith("# PROVISIONAL: "), path == STATUS,
+                                 "only the status caller is still a synthetic stand-in, and it says so")
+                self.assertEqual(f'    branches: ["{BRANCH}"]' in text.splitlines(), path in (BUILD, PACKAGED),
+                                 "the Build and the packaged E2E caller run on a push to the canonical branch")
         found = parse_pin_files(expected)
         self.assertEqual((found.sha, found.version), (SHA, VERSION))
         self.assertEqual({reference.split("@")[0] for reference in found.references}, {BUILD, PACKAGED, STATUS})
@@ -628,40 +738,49 @@ class KitCallerTemplatesTest(unittest.TestCase):
         for state in STATES:
             mode, _, left = state.partition(":")
             document = None if state == "absent" else ci_activation(mode, left or None)
-            expected = tool.expected_callers(KIT_ROOT, pin, document)
+            expected = tool.expected_callers(KIT_ROOT, pin, document, BRANCH)
             with self.subTest(state=state):
                 self.assertEqual(list(expected), list(CALLERS))
                 self.assertEqual({path for path, data in expected.items() if data is not None}, MANAGED[row(state)])
                 for path, data in expected.items():
                     self.assertIn(data, (None, real_callers()[path]))
 
-    def test_the_provisional_callers_have_the_jobs_and_references_of_the_architecture(self) -> None:
+    def test_the_callers_have_the_jobs_and_references_of_the_architecture(self) -> None:
+        """The shape the other cases of this module rely on. ``test_managed_ci_callers`` holds the
+        policy of the guard, the Build caller and the packaged E2E caller."""
+
         documents = {path: parse_yaml(data.decode("utf-8"), path) for path, data in real_callers().items()}
         for path, document in documents.items():
             with self.subTest(path=path):
                 self.assertEqual(document["permissions"], {})
                 self.assertNotIn("secrets", json.dumps(document))
-                self.assertNotIn("pull_request", json.dumps(document["on"]), "a provisional caller runs on no event")
+        events = ["pull_request_target", "push", "workflow_dispatch"]
+        self.assertEqual({path: document["on"] if isinstance(document["on"], str) else list(document["on"])
+                          for path, document in documents.items()},
+                         {GUARD: ["workflow_call"], BUILD: events, PACKAGED: events, STATUS: "workflow_dispatch"},
+                         "the status caller, still provisional, runs on no event")
         guard = documents[GUARD]
-        self.assertEqual(list(guard["on"]), ["workflow_call"])
         self.assertEqual(list(guard["on"]["workflow_call"]["outputs"]), ["kit-sha"])
         self.assertEqual(guard["env"], {"MB_KIT_SHA": SHA, "MB_KIT_VERSION": VERSION})
+        self.assertEqual({name: job["name"] for name, job in guard["jobs"].items()}, workflow.CI_GUARD_JOBS)
         kit = "The-Plum-Team/mod-base/.github/workflows/"
         local = "./.github/workflows/mod-base-guard.yml"
         build = documents[BUILD]["jobs"]
         self.assertEqual(workflow.CALLER["verify_kit"], "Verify pinned mod-base")
-        self.assertEqual({name: (job["name"], job["uses"]) for name, job in build.items()},
+        self.assertEqual({name: (job["name"], job.get("uses")) for name, job in build.items()},
                          {"guard": ("Verify pinned mod-base", local),
+                          "deferred": ("Build deferred for draft", None),
                           "shared": ("Shared Build", f"{kit}build.yml@{SHA}")})
         packaged = documents[PACKAGED]["jobs"]
-        self.assertEqual({name: (job["name"], job["uses"]) for name, job in packaged.items()},
+        self.assertEqual({name: (job["name"], job.get("uses")) for name, job in packaged.items()},
                          {"guard": ("Verify pinned mod-base", local),
+                          "deferred": ("Packaged E2E deferred for draft", None),
                           "select": ("Select exact Build", f"{kit}select-build.yml@{SHA}"),
                           "rebuild": ("Shared Build", f"{kit}build.yml@{SHA}"),
                           "shared": ("Shared Packaged E2E", f"{kit}packaged-e2e.yml@{SHA}")})
         for jobs in (build, packaged):
             for name, job in jobs.items():
-                if name != "guard":
+                if "uses" in job and name != "guard":
                     self.assertEqual(job["with"]["kit-sha"], "${{ needs.guard.outputs.kit-sha }}", name)
         status = documents[STATUS]["jobs"]
         self.assertEqual({name: job["name"] for name, job in status.items()},
