@@ -737,6 +737,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_BATCH_REPORTED_PATHS`: 20 paths named by one batch refusal (a conflict, a rename that was followed).
 * `CI_BATCH_GIT_TIMEOUT_SECONDS`, `CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS`: 120 seconds for one Git plumbing call of the batch store, 600 for one fetch or push.
 * `MAX_CI_BATCH_GIT_OUTPUT_BYTES`: The output of one Git call of the batch store; the source-listing bound.
+* `MAX_CI_ASSEMBLE_REQUESTS`: 816, the request budget of `ci assemble`: it sends 15 requests and 2 per target, the two of a download (49 for 17 targets); the rest is for retries and further listing pages.
 * `MAX_CI_BATCH_PREPARE_REQUESTS`: 216, the request budget of `ci batch-prepare`: it sends 10 requests and 3 per member (160 for 50 members); the rest is for retries.
 * `MAX_CI_BATCH_SETTLE_REQUESTS`: 348, the request budget of `ci batch-settle`: it sends 3 requests, the 28 of `transport.download_merged_gate_pair` for both original gates and at most 5 per member (281 for 50 members); the rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
 * `MAX_CI_BUNDLE_COMPRESSED_BYTES`: 512 MiB archive cap of one `mb-ci-*` artifact of any kind and profile (`tests/test_ci_limits.py` pins every Build/E2E bound with the native bound it preserves).
@@ -2354,6 +2355,35 @@ immediately before it publishes or returns. Plans and descriptors are copied on 
 * `def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: Privately materialize the exact original complete Build bundle of a coherent historical seal pair, observing the pair's mutable state again inside the atomic publication.
 * `def download_merged_runtime(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: The same for the pair's complete results aggregate, bound to the original owning Build. The extracted source is verified against the bound envelope once more inside the atomic copy, so a source replaced after binding is never published.
 * `def download_merged_inputs(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Publish both under fixed private build/runtime children after one final admission. Each child must carry the very envelope that was bound when its archive was extracted; either failure publishes neither.
+
+## `mod_base.build_ci.describe`
+
+Owner: MB11. Descriptors of the artifacts a running attempt has uploaded so far, for a fan-in or
+gate job of that same attempt. The attempt's job listing and the run's artifact listing are each
+read once: every job that must have finished shows the conclusion its graph expects
+(`graph.require_partial_graph`), every expected artifact is listed exactly once, unexpired,
+within the size cap of its kind and under this run and the subject's head, and its window is the
+upload step of the job that sealed it. A job or an artifact of an earlier attempt is refused as a
+failed-jobs-only rerun. The run, the source and the bytes are authenticated by the caller.
+
+* `def attempt_producer(record: dict[str, Any], plan: dict[str, Any], *, mode: str, run_id: int, run_attempt: int) -> dict[str, Any]`: The producer identity (no upload window) that every record and descriptor of this attempt carries: the caller and the event of the job's identity record (`identity.read_subject`), the head GitHub records the run under and the graph digest of `mode` for `plan`. The plan must be of the record's subject.
+* `def settled_jobs(producer: str, mode: str, plan: dict[str, Any], kind: str, unit_id: str | None = None) -> list[str]`: The jobs of a run of `producer` in `mode` that have finished when the job that uploads the `kind` artifact seals (`build`: the assembling job; `results`: the aggregating job; `tested` with its gate as `unit_id`): every job that succeeds in its own call or an earlier one, except itself and the gate that follows it, and every job the mode skips.
+* `def settled_artifacts(producer: str, mode: str, plan: dict[str, Any], kind: str, unit_id: str | None = None) -> list[tuple[str, str | None]]`: `(kind, unit_id)` of the artifact every sealing job among `settled_jobs` has uploaded, in the order the run produces them.
+* `def attempt_jobs(api: GitHubApi | CommandReads, run_id: int, run_attempt: int) -> list[dict[str, Any]]`: Every job of one running attempt, read once (`github.jobs.attempt_jobs`); a job of an earlier attempt in the listing is refused as what a failed-jobs-only rerun leaves behind.
+* `def describe_attempt(api: GitHubApi | CommandReads, *, producer: dict[str, Any], plan: dict[str, Any], mode: str, expected: Sequence[tuple[str, str | None]], finished: Sequence[str] = ()) -> list[dict[str, Any]]`: Canonical descriptors (`records.validate_descriptor`) of the distinct `expected` `(kind, unit_id)` artifacts of this attempt, in the order given, from two requests. `producer` is `attempt_producer` for `mode`; `finished` names further jobs that must have finished beside the uploading ones. A missing, expired, repeated, oversized or foreign artifact, an artifact of an expected kind the plan does not expect, a job that has not finished as the graph expects or did not seal before its upload, and a job or artifact of an earlier attempt are distinct rejections. One observation: a caller that produces an effect describes again before it.
+
+## `mod_base.build_ci.commands_build`
+
+Owner: MB11. `ci assemble`, listed in `commands.VERB_MODULES`: the fan-in step of the job that
+seals the complete Build. It takes the job arguments only (`commands.add_job_arguments`: `--repo`,
+`--config`, `--state DIR`), reads `identity.json` and `ci-plan.json` of the state and the run and
+attempt from `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`, and builds its API client through
+`commands.api_client` with `MAX_CI_ASSEMBLE_REQUESTS`. The state must belong to the executing
+repository and controller commit and the plan to the subject of the state.
+
+* `PARTITIONS_NAME = 'ci-partitions.json'`: the state record `ci assemble` writes last: `{"descriptors", "envelope_sha256"}`, the partition descriptors in plan order and the SHA-256 of the assembled envelope.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `assemble` on the `ci` verb group.
+* `def run_assemble(args: argparse.Namespace) -> int`: The `assemble` handler, a step of a Build job in a full run of the Build caller or in a packaged run that rebuilds: describes the partition of every planned target of this attempt, downloads them (`transport.download_target_set`) into a temporary directory inside the state and assembles their exact union into `exports.BUILD_VALIDATION_ROOT`, which must not exist.
 
 ## `mod_base.build_ci.handoff`
 

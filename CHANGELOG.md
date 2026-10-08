@@ -7,6 +7,11 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 
 ## Unreleased (planned v1.1.0)
 
+- Add `ci assemble`, the fan-in step of the Build's assembling job: it describes the target
+  partitions of its own running attempt from the API (`build_ci.describe`: exactly one unexpired
+  artifact per planned target, bound to the upload step of the job that sealed it; a job or an
+  artifact of an earlier attempt is refused as a failed-jobs-only rerun), downloads them by numeric
+  id and assembles their exact union into the sealed Build root.
 - Define the Build adapter contract in code (`build_ci.adapter`: eight hooks, argv, environment,
   file names, strict parsers of `plan.json` and `runtime.json`) and for mod authors
   (`docs/BUILD-ADAPTER.md`). The unreleased `mod-base.build.config` gains the required fields

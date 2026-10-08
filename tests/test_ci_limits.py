@@ -203,6 +203,10 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
         lambda: (4 + 15 + 45) + limits.MAX_CI_BUILD_POLLS),
     "MAX_CI_BATCH_GIT_OUTPUT_BYTES": (64 * MIB, "the output of one Git call of the batch store: one Git tree listing",
                                       lambda: limits.MAX_CI_SOURCE_LIST_BYTES),
+    "MAX_CI_ASSEMBLE_REQUESTS": (
+        816, "the 15 requests and 2 per target of `ci assemble`, with 33 and 1 per target more for retries and "
+             "further listing pages",
+        lambda: (15 + 33) + (2 + 1) * limits.MAX_CI_TARGETS),
     "MAX_CI_BATCH_PREPARE_REQUESTS": (
         216, "the 10 requests and 3 per member of `ci batch-prepare`, with 6 and 1 per member more for retries",
         lambda: (10 + 6) + (3 + 1) * limits.MAX_CI_BATCH_MEMBERS),
