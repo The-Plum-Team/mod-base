@@ -6,7 +6,7 @@ import copy
 import unittest
 
 from mod_base.build_ci.authenticate import authenticate_merged_pr_identity
-from mod_base.build_ci.records import (bind_build_envelope, bind_gate_receipt, bind_reuse_reference,
+from mod_base.build_ci.records import (GATE_MODES, bind_build_envelope, bind_gate_receipt, bind_reuse_reference,
                                        validate_build_envelope, validate_descriptor,
                                        validate_gate_receipt, validate_reuse_reference, validate_source_selection)
 from mod_base.build_ci.protocol import plan_sha256, validate_plan
@@ -15,7 +15,8 @@ from mod_base.errors import MbError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.documents import load_document, validate_document
-from tests.helpers import ci_config, ci_descriptor, ci_envelope, ci_gate, ci_plan, ci_reuse, ci_selection
+from tests.helpers import (ci_config, ci_descriptor, ci_envelope, ci_gate, ci_plan, ci_push_plan, ci_reuse,
+                           ci_run_descriptor, ci_run_gate, ci_selection)
 from tests import test_ci_protocol as protocol_fixtures
 
 
@@ -127,14 +128,25 @@ class RecordUploadBindingTests(unittest.TestCase):
                 self.bind(document, descriptor)
 
     def test_tested_seal_unit_cannot_switch_build_and_packaged_authority(self):
-        for gate in ("build", "packaged"):
+        # The two gates of a pull request are sealed by different callers: the descriptor already refuses.
+        for gate, message in (("build", "only the packaged caller"), ("packaged", "come from its Build caller")):
             document = ci_gate(gate)
             descriptor = selected_record(document)
             descriptor["artifact"]["name"] = grammar.ci_artifact_name("tested",
                 descriptor["producer"]["run_id"], descriptor["producer"]["run_attempt"],
                 "packaged" if gate == "build" else "build")
-            with self.subTest(gate=gate), self.assertRaisesRegex(MbError, "wrong selected record kind"):
+            with self.subTest(gate=gate), self.assertRaisesRegex(MbError, message):
                 self.bind(document, descriptor)
+        # A rebuilding packaged run seals both gates itself: only the record binding tells them apart.
+        plan = ci_push_plan()
+        for gate in ("build", "packaged"):
+            document = ci_run_gate(plan, gate, "rebuilt")
+            descriptor = selected_record(document)
+            self.assertIs(bind_gate_receipt(document, descriptor=descriptor, plan=plan), document)
+            descriptor["artifact"]["name"] = grammar.ci_artifact_name("tested", 43, 2,
+                                                                      "packaged" if gate == "build" else "build")
+            with self.subTest(gate=gate, mode="rebuilt"), self.assertRaisesRegex(MbError, "wrong selected record kind"):
+                bind_gate_receipt(document, descriptor=descriptor, plan=plan)
 
 
 class DescriptorTests(unittest.TestCase):
@@ -172,6 +184,81 @@ class DescriptorTests(unittest.TestCase):
             mutate(descriptor)
             with self.subTest(index=index), self.assertRaises(MbError):
                 validate_descriptor(descriptor)
+
+
+class ProducerIdentityTests(unittest.TestCase):
+    """A record names its producer run the way GitHub records that run."""
+
+    def test_pull_request_producers_are_recorded_under_the_pull_request_head(self):
+        descriptor = ci_descriptor()
+        identity = descriptor["identity"]
+        self.assertEqual(descriptor["producer"]["api_head_sha"], identity["head_sha"])
+        self.assertNotIn(descriptor["producer"]["api_head_sha"], (identity["controller_sha"], identity["tested_sha"]))
+        self.assertEqual(descriptor["producer"]["workflow_ref"],
+                         "example/mod/.github/workflows/mod-base-build.yml@refs/heads/master")
+        validate_descriptor(descriptor)
+        for sha in (identity["controller_sha"], identity["tested_sha"], "f" * 40):
+            descriptor = ci_descriptor()
+            descriptor["producer"]["api_head_sha"] = sha
+            with self.subTest(sha=sha), self.assertRaisesRegex(MbError, "recorded under the pull request head"):
+                validate_descriptor(descriptor)
+
+    def test_protected_push_producers_run_from_the_commit_they_test(self):
+        plan = ci_push_plan()
+        descriptor = ci_run_descriptor(plan, "build", "full", "build")
+        self.assertEqual((descriptor["producer"]["event"], descriptor["producer"]["api_head_sha"]),
+                         ("push", plan["identity"]["tested_sha"]))
+        validate_descriptor(descriptor)
+        for event in ("workflow_dispatch", "schedule"):
+            descriptor["producer"]["event"] = event
+            validate_descriptor(descriptor)
+        descriptor["producer"]["event"] = "pull_request_target"
+        with self.assertRaises(MbError):
+            validate_descriptor(descriptor)
+        for change in ({"tested_sha": "9" * 40, "head_sha": "9" * 40},
+                       {"controller_sha": "9" * 40, "base_sha": "9" * 40}):
+            descriptor = ci_run_descriptor(plan, "build", "full", "build")
+            descriptor["identity"].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(MbError, "runs from the commit it tests"):
+                validate_descriptor(descriptor)
+
+    def test_only_the_two_managed_callers_produce_records(self):
+        for path in (".github/workflows/build-gate.yml", ".github/workflows/on-demand-e2e.yml",
+                     ".github/workflows/mod-base-gate-status.yml", ".github/workflows/mod-base-guard.yml",
+                     ".github/workflows/build.yml"):
+            descriptor = ci_descriptor()
+            descriptor["producer"].update(workflow_path=path, workflow_ref=f"example/mod/{path}@refs/heads/master")
+            with self.subTest(path=path), self.assertRaisesRegex(MbError, "managed Build/E2E producer caller"):
+                validate_descriptor(descriptor)
+
+    def test_each_artifact_kind_comes_from_the_caller_that_can_produce_it(self):
+        pull_request, push = ci_plan(), ci_push_plan()
+        cases = [(pull_request, "build", "full", "target", "target-a", True),
+                 (pull_request, "build", "full", "build", None, True),
+                 (pull_request, "build", "full", "tested", "build", True),
+                 (pull_request, "packaged", "pull-request", "runtime", "lane-a", True),
+                 (pull_request, "packaged", "pull-request", "results", None, True),
+                 (pull_request, "packaged", "pull-request", "tested", "packaged", True),
+                 (pull_request, "build", "full", "runtime", "lane-a", False),
+                 (pull_request, "build", "full", "results", None, False),
+                 (pull_request, "build", "full", "tested", "packaged", False),
+                 (pull_request, "packaged", "pull-request", "target", "target-a", False),
+                 (pull_request, "packaged", "pull-request", "build", None, False),
+                 (pull_request, "packaged", "pull-request", "tested", "build", False),
+                 (push, "packaged", "rebuilt", "target", "target-a", True),
+                 (push, "packaged", "rebuilt", "build", None, True),
+                 (push, "packaged", "rebuilt", "tested", "build", True),
+                 (push, "packaged", "reuse", "reuse", None, True),
+                 (push, "build", "reuse", "reuse", None, True),
+                 (push, "build", "full", "results", None, False)]
+        for plan, producer, mode, kind, unit, valid in cases:
+            descriptor = ci_run_descriptor(plan, producer, mode, kind, unit_id=unit)
+            with self.subTest(pr=plan["identity"]["pr_number"], producer=producer, kind=kind, unit=unit):
+                if valid:
+                    self.assertIs(validate_descriptor(descriptor), descriptor)
+                else:
+                    with self.assertRaises(MbError):
+                        validate_descriptor(descriptor)
 
 
 class ConfigTests(unittest.TestCase):
@@ -319,6 +406,53 @@ class GateTests(unittest.TestCase):
         lane["producer"]["upload_window"] = {"started_at": "2026-10-07T09:00:00Z", "completed_at": "2026-10-07T09:01:00Z"}
         lane["artifact"]["created_at"] = "2026-10-07T09:00:30Z"
         validate_gate_receipt(gate, plan=ci_plan())
+
+    def test_every_gate_mode_names_the_run_that_can_seal_it(self):
+        self.assertEqual(GATE_MODES, {"build": {"build": ("full",), "packaged": ("rebuilt",)},
+                                      "packaged": {"packaged": ("pull-request", "selected", "rebuilt")}})
+        pull_request, push = ci_plan(), ci_push_plan()
+        valid = [(pull_request, "build", "full"), (pull_request, "packaged", "pull-request"),
+                 (push, "build", "full"), (push, "build", "rebuilt"), (push, "packaged", "selected"),
+                 (push, "packaged", "rebuilt")]
+        for plan, gate, mode in valid:
+            document = ci_run_gate(plan, gate, mode)
+            with self.subTest(pr=plan["identity"]["pr_number"], gate=gate, mode=mode):
+                self.assertIs(validate_gate_receipt(document, plan=plan), document)
+                self.assertEqual(load_document(canonical_json(document), kind="mod-base.ci.gate"), document)
+                self.assertIs(bind_gate_receipt(document, descriptor=selected_record(document), plan=plan), document)
+                # Graph modes that seal no receipt, and every other gate mode, are refused.
+                for other in ("deferred", "reuse", "full", "pull-request", "selected", "rebuilt"):
+                    if other != mode:
+                        changed = copy.deepcopy(document)
+                        changed["mode"] = other
+                        with self.assertRaises(MbError):
+                            validate_gate_receipt(changed, plan=plan)
+        self.assertEqual(ci_run_gate(push, "packaged", "rebuilt")["owning_build"]["producer"]["run_id"], 43)
+        self.assertEqual(ci_run_gate(push, "packaged", "selected")["owning_build"]["producer"]["run_id"], 42)
+
+    def test_a_pull_request_never_selects_or_rebuilds_and_a_push_is_never_a_pull_request_run(self):
+        for plan, gate, mode in ((ci_plan(), "packaged", "selected"), (ci_plan(), "packaged", "rebuilt"),
+                                 (ci_plan(), "build", "rebuilt"), (ci_push_plan(), "packaged", "pull-request")):
+            document = ci_run_gate(plan, gate, mode)
+            with self.subTest(pr=plan["identity"]["pr_number"], gate=gate, mode=mode), self.assertRaises(MbError):
+                validate_gate_receipt(document, plan=plan)
+
+    def test_owning_build_is_this_run_only_when_it_was_rebuilt(self):
+        plan = ci_push_plan()
+        selected, rebuilt = ci_run_gate(plan, "packaged", "selected"), ci_run_gate(plan, "packaged", "rebuilt")
+        document = copy.deepcopy(selected)
+        document["owning_build"] = copy.deepcopy(rebuilt["owning_build"])
+        with self.assertRaisesRegex(MbError, "separate Build run"):
+            validate_gate_receipt(document, plan=plan)
+        document = copy.deepcopy(rebuilt)
+        document["owning_build"] = copy.deepcopy(selected["owning_build"])
+        with self.assertRaisesRegex(MbError, "sealed by the packaged run itself"):
+            validate_gate_receipt(document, plan=plan)
+        document = copy.deepcopy(rebuilt)
+        document["owning_build"]["producer"]["run_attempt"] = 1
+        document["owning_build"]["artifact"]["name"] = grammar.ci_artifact_name("build", 43, 1)
+        with self.assertRaisesRegex(MbError, "sealed by the packaged run itself"):
+            validate_gate_receipt(document, plan=plan)
 
     def test_partial_mixed_attempt_duplicate_and_wrong_owning_build_reject(self):
         mutations = [lambda d: d["artifacts"].pop(0), lambda d: d["artifacts"].append(copy.deepcopy(d["artifacts"][0])),

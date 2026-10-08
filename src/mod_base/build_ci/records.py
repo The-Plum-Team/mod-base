@@ -14,6 +14,7 @@ from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check, fail
 from mod_base.errors import MbError
+from mod_base.workflow import ci_producer
 
 SHA1 = Str(g.SHA1, max_len=40)
 SHA256 = Str(g.SHA256, max_len=64)
@@ -21,6 +22,10 @@ UNIT = Str(g.CI_UNIT_ID, max_len=80)
 RUN = Int(1, lim.MAX_RUN_ID)
 ATTEMPT = Int(1, lim.MAX_RUN_ATTEMPT)
 PROFILE = Str(choices=("quick-skin", "block-pops"))
+#: Gate -> producer (the managed caller whose run sealed it) -> the modes of that run which end in
+#: this gate's receipt. A deferred run seals nothing and a reuse run seals a reuse reference instead.
+GATE_MODES = {"build": {"build": ("full",), "packaged": ("rebuilt",)},
+              "packaged": {"packaged": ("pull-request", "selected", "rebuilt")}}
 
 
 def _timestamp(value: Any, path: str) -> str:
@@ -64,18 +69,32 @@ def _binding() -> dict[str, Any]:
     return {"identity": validate_identity, "plan_sha256": SHA256, "profile": PROFILE}
 
 
-def _producer_binding(producer: dict[str, Any], identity: dict[str, Any], path: str) -> None:
+def _producer_binding(producer: dict[str, Any], identity: dict[str, Any], path: str) -> str:
+    """Bind a producer run to its subject; return the managed caller (``build``/``packaged``) it ran.
+
+    GitHub records a ``pull_request_target`` run under the pull request's head commit, and a
+    protected push or dispatch under the commit it runs from, which is also the commit it tests."""
+
+    try:
+        caller = ci_producer(producer["workflow_path"])
+    except MbError as error:
+        raise fail(f"{path}.workflow_path", "must be a managed Build/E2E producer caller") from error
     ref = g.WORKFLOW_REF.fullmatch(producer["workflow_ref"])
     check(ref is not None and ref["repository"] == identity["repository"]
           and ref["path"] == producer["workflow_path"] and ref["branch"] == identity["base_branch"],
           f"{path}.workflow_ref", "must name the protected repository, producer workflow and default branch")
     if identity["pr_number"]:
         check(producer["event"] == "pull_request_target", f"{path}.event", "PR producers require protected orchestration")
+        check(producer["api_head_sha"] == identity["head_sha"], f"{path}.api_head_sha",
+              "a pull-request producer run is recorded under the pull request head")
     else:
         check(producer["event"] != "pull_request_target", f"{path}.event", "PR event has no PR subject")
+        check(producer["api_head_sha"] == identity["tested_sha"] == identity["controller_sha"],
+              f"{path}.api_head_sha", "a protected non-PR producer runs from the commit it tests")
     if "upload_window" in producer:
         window = producer["upload_window"]
         check(window["started_at"] <= window["completed_at"], f"{path}.upload_window", "upload window is reversed")
+    return caller
 
 
 _DESCRIPTOR = Obj({**_binding(), "producer": _PRODUCER, "artifact": _ARTIFACT})
@@ -86,9 +105,15 @@ def validate_descriptor(value: Any, path: str = "$") -> dict[str, Any]:
 
     _DESCRIPTOR(value, path)
     producer, artifact = value["producer"], value["artifact"]
-    _producer_binding(producer, value["identity"], f"{path}.producer")
+    caller = _producer_binding(producer, value["identity"], f"{path}.producer")
     name = g.parse_ci_artifact_name(artifact["name"])
     check(name is not None, f"{path}.artifact.name", "must be a CI artifact name")
+    if name.kind in {"runtime", "results"} or (name.kind, name.unit_id) == ("tested", "packaged"):
+        check(caller == "packaged", f"{path}.artifact.name", "only the packaged caller produces this artifact")
+    else:
+        # A pull request never rebuilds inside its packaged run; only a standalone run can.
+        check(caller == "build" or not value["identity"]["pr_number"], f"{path}.artifact.name",
+              "a pull request's Build artifacts come from its Build caller")
     check((name.run_id, name.run_attempt) == (producer["run_id"], producer["run_attempt"]),
           f"{path}.artifact.name", "does not bind the producer run and attempt")
     window = producer["upload_window"]
@@ -198,7 +223,8 @@ def validate_source_selection(document: Any, *, plan: dict[str, Any] | None = No
 _NATIVE_RECEIPT = Obj({"unit_id": UNIT, "native_contract_sha256": SHA256, "report_sha256": SHA256})
 _GATE = Obj({
     **_header("mod-base.ci.gate"), **_binding(), "producer": _PRODUCER_IDENTITY,
-    "gate": Str(choices=("build", "packaged")), "mode": Const("full"),
+    "gate": Str(choices=("build", "packaged")),
+    "mode": Str(choices=("full", "pull-request", "selected", "rebuilt")),
     "artifacts": List(validate_descriptor, min_items=1, max_items=lim.MAX_CI_ARTIFACTS_PER_GATE,
                       unique_by=lambda item: item["artifact"]["id"]),
     "owning_build": Nullable(validate_descriptor),
@@ -211,7 +237,13 @@ def validate_gate_receipt(document: Any, *, plan: dict[str, Any] | None = None,
                           path: str = "$") -> dict[str, Any]:
     _GATE(document, path)
     _plan_binding(document, plan, path)
-    _producer_binding(document["producer"], document["identity"], f"{path}.producer")
+    caller = _producer_binding(document["producer"], document["identity"], f"{path}.producer")
+    mode, pull_request = document["mode"], bool(document["identity"]["pr_number"])
+    check(mode in GATE_MODES[document["gate"]].get(caller, ()), f"{path}.mode",
+          "no run of this caller ends in this gate in that mode")
+    check(mode not in ("selected", "rebuilt") or not pull_request, f"{path}.mode",
+          "a pull request never selects or rebuilds its Build inside the packaged run")
+    check(mode != "pull-request" or pull_request, f"{path}.mode", "the pull-request mode needs a pull request")
     check((document["owning_build"] is not None) == (document["gate"] == "packaged"), f"{path}.owning_build",
           "packaged gate requires an exact owning Build; Build gate has none")
     if document["owning_build"] is not None:
@@ -220,6 +252,13 @@ def validate_gate_receipt(document: Any, *, plan: dict[str, Any] | None = None,
         check(owner.kind == "build", f"{path}.owning_build", "must name a complete Build bundle")
         check(document["owning_build"]["artifact"]["id"] not in {item["artifact"]["id"] for item in document["artifacts"]},
               f"{path}.owning_build", "owning Build id collides with runtime evidence")
+        producer, owning = document["producer"], document["owning_build"]["producer"]
+        if mode == "rebuilt":
+            check(all(owning[key] == producer[key] for key in producer), f"{path}.owning_build.producer",
+                  "a rebuilt Build is sealed by the packaged run itself")
+        else:
+            check(owning["run_id"] != producer["run_id"] and ci_producer(owning["workflow_path"]) == "build",
+                  f"{path}.owning_build.producer", "this mode consumes the Build of a separate Build run")
     names = []
     for index, descriptor in enumerate(document["artifacts"]):
         here = f"{path}.artifacts[{index}]"

@@ -47,10 +47,6 @@ CI_BOOTSTRAP_PROGRAM_NAME = "ci_privileged_bootstrap.py"
 CI_ROOT_REQUEST_NAME = "ci-root-request.json"
 CI_RUNTIME_ROOT_REQUEST_NAME = "ci-runtime-root-request.json"
 CI_RUNTIME_FREEZE_OPERATION = "runtime-validation-v1"
-CI_PR_BUILD_TITLE = re.compile(
-    r"^mb-ci-build-v1 profile=(?P<profile>quick-skin|block-pops) pr=(?P<pr>[1-9][0-9]{0,18}) "
-    r"head=(?P<head>[0-9a-f]{40}) base=(?P<base>[0-9a-f]{40}) tested=(?P<tested>[0-9a-f]{40})$"
-)
 MINECRAFT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$")
 LOADER = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SCENARIO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
@@ -66,6 +62,11 @@ MAX_EXTENSION_NAME_LENGTH = 80
 EVENT = re.compile(r"^[a-z_]{1,40}$")
 WORKFLOW_PATH = re.compile(r"^\.github/workflows/[A-Za-z0-9._-]{1,100}\.ya?ml$")
 RFC3339Z = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+#: The shapes the Actions API writes a time in: ``Z`` or a numeric offset, with or without a fraction.
+ACTIONS_TIMESTAMP = re.compile(
+    r"^(?P<second>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.[0-9]{1,9})?"
+    r"(?P<zone>Z|[+-][0-9]{2}:[0-9]{2})$"
+)
 POSITIVE_DECIMAL = re.compile(r"^[1-9][0-9]{0,18}$")
 RUN_URL = re.compile(f"^https://github\\.com/{_REPOSITORY}/actions/runs/[1-9][0-9]{{0,18}}$")
 WORKFLOW_REF = re.compile(
@@ -215,6 +216,25 @@ def parse_timestamp(value: object, label: str = "timestamp") -> datetime:
         return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)  # type: ignore[arg-type]
     except ValueError as exc:
         raise _fail(f"{label} is not a real calendar time") from exc
+
+
+def normalize_timestamp(value: object, label: str = "timestamp") -> str:
+    """Return an Actions API time as whole-second UTC ``YYYY-MM-DDTHH:MM:SSZ``.
+
+    Job, step and artifact times arrive as ``…Z``, with fractional seconds or with a numeric offset.
+    The fraction is dropped and the offset applied, so the result is the one form the kit stores,
+    and two results compare as text in time order. Anything else raises MbError."""
+
+    match = ACTIONS_TIMESTAMP.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise _fail(f"{label} must be an RFC 3339 timestamp")
+    zone = "+00:00" if match["zone"] == "Z" else match["zone"]
+    try:
+        moment = datetime.fromisoformat(match["second"] + zone).astimezone(timezone.utc)
+    except (ValueError, OverflowError) as exc:
+        raise _fail(f"{label} is not a real calendar time") from exc
+    return (f"{moment.year:04d}-{moment.month:02d}-{moment.day:02d}"
+            f"T{moment.hour:02d}:{moment.minute:02d}:{moment.second:02d}Z")
 
 
 @dataclass(frozen=True)
@@ -429,35 +449,6 @@ class CIArtifactName:
     run_id: int
     run_attempt: int
     unit_id: str | None = None
-
-
-@dataclass(frozen=True)
-class CIPrBuildTitle:
-    profile: str
-    pr_number: int
-    head_sha: str
-    base_sha: str
-    tested_sha: str
-
-
-def ci_pr_build_title(*, profile: str, pr_number: int, head_sha: str, base_sha: str, tested_sha: str) -> str:
-    """Protected PR-generation selection marker; never evidence or an App context."""
-
-    if type(profile) is not str or profile not in ("quick-skin", "block-pops"):
-        raise MbError("invalid protected Build profile")
-    require_positive_int(pr_number, "PR number")
-    for sha in (head_sha, base_sha, tested_sha):
-        require_sha1(sha)
-    return f"mb-ci-build-v1 profile={profile} pr={pr_number} head={head_sha} base={base_sha} tested={tested_sha}"
-
-
-def parse_ci_pr_build_title(value: object) -> CIPrBuildTitle | None:
-    if not isinstance(value, str):
-        return None
-    match = CI_PR_BUILD_TITLE.fullmatch(value)
-    if match is None or int(match["pr"]) > limits.MAX_RUN_ID:
-        return None
-    return CIPrBuildTitle(match["profile"], int(match["pr"]), match["head"], match["base"], match["tested"])
 
 
 def ci_artifact_name(kind: str, run_id: int, run_attempt: int, unit_id: str | None = None) -> str:

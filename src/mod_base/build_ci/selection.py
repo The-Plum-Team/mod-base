@@ -1,196 +1,171 @@
-"""Newest protected PR Build selection before success, never a latest-success query (MB11)."""
+"""Newest pull-request Build selection before success, never a latest-success query (MB11).
+
+A producer run of a pull-request generation is found by the keys GitHub records it under: the
+managed Build caller's workflow file, the ``pull_request_target`` event and the pull request's
+head commit, head branch and source repository. The listing carries no status filter. The newest
+run by ``(created_at, id)`` and its latest attempt are chosen before any result is read:
+
+* no run, or a run that has not completed: nothing yet, the wait continues;
+* a completed run whose exact graph is the draft deferral: not a producer, the wait continues;
+* a completed successful run with the exact full graph: its complete bundle is described;
+* anything else (a failed or cancelled run, another graph, another controller or kit pin, a
+  missing or expired bundle): a rejection. An older run is never considered.
+
+There is no run-title contract. The tested merge is bound by the records inside the artifacts,
+which the consumer compares with its own admitted plan.
+"""
 
 from __future__ import annotations
 
 import copy
+import functools
 import math
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from mod_base.build_ci.authenticate import authenticate_merged_pr_identity, authenticate_source_identity
-from mod_base.build_ci.graph import BuildGraphV1
-from mod_base.build_ci.protocol import validate_plan
+from mod_base.build_ci.authenticate import run_head
+from mod_base.build_ci.graph import require_graph, run_graph, sealed_upload, upload_job_name
+from mod_base.build_ci.reads import CommandReads, Watch
 from mod_base.build_ci.records import validate_descriptor
-from mod_base.build_ci.transport import _authenticate, _authenticate_producer, _download_export
+from mod_base.build_ci.transport import (_admit_source, _artifact_state, _authenticate_artifacts, _authenticate_run,
+                                         _descriptor, _download_build, _merged, _plan, _run)
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
-from mod_base.github.artifacts import Artifact
-from mod_base.github.jobs import job_graph_sha256, require_successful_step
-from mod_base.github.runs import get_run, run_order, validate_run, workflow_runs
+from mod_base.github.jobs import job_graph
+from mod_base.github.runs import run_order, workflow_runs
 from mod_base.model import grammar, limits
-from mod_base.model.canonical import canonical_json, strict_loads
-from mod_base.model.validators import Int, check
-from mod_base.workflow import CI_BUILD_CALL, CI_BUILD_JOBS, CI_UPLOAD_STEP, find_job
+from mod_base.model.validators import check
+from mod_base.workflow import CI_CALLER_WORKFLOWS, find_job
+
+_PENDING = ("queued", "in_progress", "waiting", "requested", "pending")
 
 
-def select_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str) -> dict[str, Any] | None:
-    """Select the newest exact PR generation, then authenticate its complete Build descriptor.
-
-    None means absent/pending, never permission to compile or succeed. A failed/cancelled newest
-    run, unsupported title, missing bundle or API/corruption failure is fatal, with no old fallback.
-    Caller enrolls the protected title-producing workflow independently; title is a selection hint.
-    Downloaded full tuple/native byte validity, consumption-time newest recheck,
-    caller/status authority and non-PR request/nonce routes remain additional required phases.
-    """
-
-    raw, retained = _selection_inputs(plan, workflow_path)
-    def admit() -> None:
-        authenticate_source_identity(api, retained["identity"])
-    result = _select_latest_pr_build(api, plan=retained, workflow_path=workflow_path, source_admission=admit)
-    _close_selection(plan, retained, raw)
-    return result
-
-
-def _selection_inputs(plan: dict[str, Any], workflow_path: str) -> tuple[bytes, dict[str, Any]]:
-    validate_plan(plan)
+def _pr_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    plan = _plan(plan)
     check(plan["identity"]["pr_number"] > 0, "$.identity.pr_number", "selection requires an original PR plan")
-    grammar.require(grammar.WORKFLOW_PATH, workflow_path, "protected Build workflow")
-    raw = canonical_json(plan)
-    return raw, strict_loads(raw, label="original Build selection plan", max_bytes=limits.MAX_CI_PLAN_BYTES)
+    return plan
 
 
-def _close_selection(plan: dict[str, Any], retained: dict[str, Any], raw: bytes) -> None:
-    for value in (plan, retained):
-        validate_plan(value)
-        check(canonical_json(value) == raw, "$.plan", "original Build selection plan changed during admission")
+def _newest(reads: CommandReads, plan: dict[str, Any]) -> dict[str, Any] | None:
+    """The newest Build run GitHub lists for this pull-request head, whatever its result."""
+
+    head_sha, head_branch, head_repository = run_head(plan["identity"])
+    runs = [run for run in workflow_runs(reads, CI_CALLER_WORKFLOWS["build"], branch=head_branch, head_sha=head_sha,
+                                         event="pull_request_target", max_items=limits.MAX_CI_BUILD_RUNS)
+            if isinstance(run.get("head_repository"), dict)
+            and run["head_repository"].get("full_name") == head_repository]
+    if not runs:
+        return None
+    run = max(runs, key=lambda candidate: run_order(candidate)[:2])
+    _, run_id, attempt = run_order(run)
+    return {"id": run_id, "run_attempt": attempt, "created_at": run["created_at"],
+            "status": run.get("status"), "conclusion": run.get("conclusion")}
 
 
-def select_latest_merged_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str,
-                                  controller_sha: str, merged_sha: str) -> dict[str, Any] | None:
-    """Select the newest original PR Build after actual historical source admission.
-
-    Original plan/workflow and current controller/final merge require independent admission.
-    None is absence/pending, not reuse approval. Both coherent historical gates, native bytes,
-    original/current policy/pin, later consumer chronology and authority remain mandatory.
-    No new compiler, fallback, upload, status or candidate execution is admitted.
-    """
-    raw, retained = _selection_inputs(plan, workflow_path)
-    grammar.require_sha1(controller_sha, "current merged Build controller SHA")
-    grammar.require_sha1(merged_sha, "final merged Build SHA")
-    original = authenticate_merged_pr_identity(api, retained["identity"],
-                                               controller_sha=controller_sha, merged_sha=merged_sha)
-    def admit() -> None:
-        check(authenticate_merged_pr_identity(api, retained["identity"],
-                                              controller_sha=controller_sha, merged_sha=merged_sha) == original,
-              "$.source", "original merged Build source changed during selection")
-    result = _select_latest_pr_build(api, plan=retained, workflow_path=workflow_path, source_admission=admit)
-    _close_selection(plan, retained, raw)
-    return result
+def _pending(run: dict[str, Any]) -> None:
+    check(run["status"] in _PENDING and run["conclusion"] is None, "$.run.status", "malformed pending Build state")
 
 
-def revalidate_latest_merged_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any],
-                                      workflow_path: str, controller_sha: str, merged_sha: str) -> None:
-    """Repeat original historical newest/metadata admission around independent consumption.
+def _select(reads: CommandReads, watch: Watch, plan: dict[str, Any]) -> dict[str, Any] | None:
+    """One observation of the newest Build run: its complete bundle's descriptor, or ``None`` while
+    there is nothing to consume yet. Everything mutable it reads is left in ``watch``."""
 
-    Caller snapshots, source and selected descriptor must remain original. This proves neither
-    native payloads nor the packaged partner, consumer chronology or final reuse authority.
-    """
-    validate_descriptor(descriptor)
-    raw = canonical_json(descriptor)
-    retained = strict_loads(raw, label="original historical Build descriptor", max_bytes=limits.MAX_CI_RECORD_BYTES)
-    latest = select_latest_merged_pr_build(api, plan=plan, workflow_path=workflow_path,
-                                           controller_sha=controller_sha, merged_sha=merged_sha)
-    validate_descriptor(descriptor)
-    check(canonical_json(descriptor) == raw, "$.descriptor", "original historical Build descriptor changed")
-    check(latest is not None and latest == retained, "$.descriptor",
-          "historical Build is no longer the newest exact available producer")
-
-
-def _select_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str,
-                             source_admission: Callable[[], None]) -> dict[str, Any] | None:
-    """Shared exact producer selection; only protected public routes supply source admission."""
-    validate_plan(plan)
     identity = plan["identity"]
-    check(identity["pr_number"] > 0, "$.identity.pr_number", "this selection route requires an original PR plan")
-    grammar.require(grammar.WORKFLOW_PATH, workflow_path, "protected Build workflow")
-    title = grammar.ci_pr_build_title(profile=plan["profile"], pr_number=identity["pr_number"],
-                                    head_sha=identity["head_sha"], base_sha=identity["base_sha"],
-                                    tested_sha=identity["tested_sha"])
-
-    def newest() -> dict[str, Any] | None:
-        runs = workflow_runs(api, workflow_path, branch=identity["base_branch"],
-                             head_sha=identity["controller_sha"], event="pull_request_target",
-                             max_items=limits.MAX_CI_BUILD_RUNS)
-        matches = []
-        for run in runs:
-            marker = grammar.parse_ci_pr_build_title(run.get("display_title"))
-            check(marker is not None and marker.profile == plan["profile"],
-                  "$.run.display_title", "run is outside the protected PR Build title contract")
-            if run["display_title"] == title:
-                matches.append(run)
-        return max(matches, key=run_order) if matches else None
-
-    source_admission()
-    selected = newest()
-    if selected is None:
-        source_admission()
+    newest = watch.read(("newest Build run",), functools.partial(_newest, reads, plan))
+    if newest is None:
         return None
-    current = get_run(api, selected["id"])
-    Int(1, limits.MAX_RUN_ID)(selected.get("workflow_id"), "$.run.workflow_id")
-    validate_run(current, repository=api.repository, workflow_path=workflow_path,
-                 events=("pull_request_target",), head_branch=identity["base_branch"],
-                 head_sha=identity["controller_sha"], workflow_id=selected["workflow_id"],
-                 require_success=False, display_title=title)
-    check(run_order(current) == run_order(selected), "$.run", "selected run/attempt changed after listing")
-    if current.get("status") != "completed":
-        check(current.get("status") in ("queued", "in_progress", "waiting", "requested", "pending")
-              and current.get("conclusion") is None, "$.run.status", "malformed pending Build state")
-        source_admission()
+    if newest["status"] != "completed":
+        _pending(newest)
         return None
-    check(current.get("conclusion") == "success", "$.run.conclusion", "newest exact Build failed or was cancelled")
-    producer = {"run_id": current["id"], "run_attempt": current["run_attempt"],
-                "workflow_path": workflow_path,
-                "workflow_ref": f"{identity['repository']}/{workflow_path}@refs/heads/{identity['base_branch']}",
-                "api_head_sha": identity["controller_sha"], "event": "pull_request_target",
-                "graph_sha256": job_graph_sha256(BuildGraphV1().jobs(plan))}
-    jobs = _authenticate_producer(api, producer, plan, complete=True, source_admission=source_admission)
-    aggregate = find_job(jobs, f"{CI_BUILD_CALL} / {CI_BUILD_JOBS['assemble']}",
-                         run_attempt=producer["run_attempt"])
-    upload = require_successful_step(aggregate, CI_UPLOAD_STEP)
-    producer["upload_window"] = {key: upload[key] for key in ("started_at", "completed_at")}
-    name = grammar.ci_artifact_name("build", producer["run_id"], producer["run_attempt"])
-    rows = api.paginate(f"/repos/{api.repository}/actions/runs/{producer['run_id']}/artifacts",
-                        field="artifacts", params={"name": name}, max_items=limits.MAX_ARTIFACTS_PER_NAME)
+    run = _run(reads, watch, newest["id"])
+    check(run["created_at"] == newest["created_at"] and type(run["run_attempt"]) is int
+          and run["run_attempt"] >= newest["run_attempt"], "$.run", "run listing and run disagree")
+    if run["status"] != "completed":
+        _pending(run)
+        return None
+    check(run["conclusion"] == "success", "$.run.conclusion", "newest exact Build failed or was cancelled")
+    attempt = run["run_attempt"]
+    jobs = reads.attempt_jobs(newest["id"], attempt)
+    if job_graph(jobs) == run_graph("build", "deferred").jobs(plan):
+        return None
+    path = CI_CALLER_WORKFLOWS["build"]
+    producer = {"run_id": newest["id"], "run_attempt": attempt, "workflow_path": path,
+                "workflow_ref": grammar.workflow_ref(identity["repository"], path, identity["base_branch"]),
+                "api_head_sha": run_head(identity)[0], "event": "pull_request_target",
+                "graph_sha256": require_graph(jobs, plan=plan, producer="build", mode="full", run_attempt=attempt)}
+    _authenticate_run(reads, watch, producer, plan, mode="full", complete=True)
+    started, completed = sealed_upload(find_job(jobs, upload_job_name("build", "build", None), run_attempt=attempt))
+    producer["upload_window"] = {"started_at": started, "completed_at": completed}
+    name = grammar.ci_artifact_name("build", producer["run_id"], attempt)
+    rows = reads.paginate(f"/repos/{reads.repository}/actions/runs/{producer['run_id']}/artifacts",
+                          field="artifacts", params={"name": name}, max_items=limits.MAX_ARTIFACTS_PER_NAME)
     check(len(rows) == 1, "$.artifact", "newest exact Build lacks one unique complete bundle; rerun Build")
-    artifact = Artifact.parse(rows[0])
-    check(artifact.name == name, "$.artifact.name", "artifact listing ignored the exact name filter")
+    state = _artifact_state(rows[0])
+    check(state["name"] == name, "$.artifact.name", "artifact listing ignored the exact name filter")
     descriptor = {"identity": copy.deepcopy(identity), "plan_sha256": plan["plan_sha256"],
                   "profile": plan["profile"], "producer": producer,
-                  "artifact": {"id": artifact.id, "name": artifact.name, "digest": artifact.digest,
-                               "size": artifact.size, "created_at": artifact.created_at,
-                               "expires_at": rows[0].get("expires_at")}}
+                  "artifact": {key: state[key] for key in ("id", "name", "digest", "size", "created_at",
+                                                           "expires_at")}}
     validate_descriptor(descriptor)
-    _authenticate(api, descriptor, plan, source_admission=source_admission)
-    latest = newest()
-    check(latest is not None and run_order(latest) == run_order(current)
-          and latest.get("workflow_id") == current["workflow_id"],
-          "$.run", "newest exact Build changed during artifact selection")
-    final = get_run(api, current["id"])
-    validate_run(final, repository=api.repository, workflow_path=workflow_path,
-                 events=("pull_request_target",), head_branch=identity["base_branch"],
-                 head_sha=identity["controller_sha"], workflow_id=current["workflow_id"],
-                 display_title=title)
-    check(run_order(final) == run_order(current), "$.run", "selected attempt changed before return")
-    source_admission()
+    _authenticate_artifacts(reads, watch, [descriptor], identity)
     return descriptor
 
 
-def wait_for_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str,
-                             monotonic: Callable[[], float] = time.monotonic,
-                             sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
-    """Wait at most the protected 5400s admission budget, without an independent PR compiler.
+def select_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any]) -> dict[str, Any] | None:
+    """Admit the live pull request, then describe the complete bundle of its newest Build run.
 
-    Every observation repeats newest/source authentication; only absence or valid pending state
-    waits. API/corruption/failed producer errors propagate. An in-flight bounded API call may
-    finish after the deadline, but its result can never admit evidence then. Sleep/clock hooks
-    belong to the protected runtime, never candidate configuration.
+    None means absent, pending or deferred, never permission to compile or succeed. A failed or
+    cancelled newest run, another graph, a missing bundle or an API failure is fatal, with no old
+    fallback. This is one observation: a consumer repeats it immediately before its effect
+    (:func:`revalidate_latest_pr_build`). Native byte validity and status authority remain
+    additional required phases; a non-PR subject is not selected here.
     """
 
-    validate_plan(plan)
+    plan = _pr_plan(plan)
+    reads, watch = CommandReads.of(api), Watch()
+    _admit_source(reads, watch, plan["identity"])
+    return _select(reads, watch, plan)
+
+
+def select_latest_merged_pr_build(api: GitHubApi, *, plan: dict[str, Any], controller_sha: str,
+                                  merged_sha: str) -> dict[str, Any] | None:
+    """Describe the newest original PR Build after actual historical source admission.
+
+    The original plan and the current controller/final merge require independent admission. The
+    original runs stay recorded under the pull request's head. None is absence, pending or a
+    deferral, not reuse approval. Both coherent historical gates, native bytes, original/current
+    policy and pin and authority remain mandatory. No compiler, fallback, upload or status is admitted.
+    """
+
+    plan = _pr_plan(plan)
+    merged = _merged(plan, controller_sha, merged_sha)
+    reads, watch = CommandReads.of(api), Watch()
+    _admit_source(reads, watch, plan["identity"], merged)
+    return _select(reads, watch, plan)
+
+
+def revalidate_latest_merged_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any],
+                                      controller_sha: str, merged_sha: str) -> None:
+    """Repeat the historical newest-run observation around independent consumption.
+
+    The selected descriptor must still describe the newest original Build. This proves neither
+    native payloads nor the packaged partner nor final reuse authority.
+    """
+
+    descriptor = _descriptor(descriptor)
+    latest = select_latest_merged_pr_build(api, plan=plan, controller_sha=controller_sha, merged_sha=merged_sha)
+    check(latest is not None and latest == descriptor, "$.descriptor",
+          "historical Build is no longer the newest exact available producer")
+
+
+def _wait(reads: CommandReads, plan: dict[str, Any], monotonic: Callable[[], float],
+          sleep: Callable[[float], None]) -> tuple[dict[str, Any], Watch]:
+    """Poll the newest Build run until its bundle can be described; return it with what was read."""
+
     check(callable(monotonic) and callable(sleep), "$.wait", "protected clock/sleep must be callable")
-    plan = copy.deepcopy(plan)
     previous: float | None = None
 
     def now() -> float:
@@ -202,15 +177,21 @@ def wait_for_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_p
         return value
 
     deadline = now() + limits.CI_BUILD_WAIT_SECONDS
+    admitted = False
     for _ in range(limits.MAX_CI_BUILD_POLLS):
         if now() >= deadline:
             break
-        selected = select_latest_pr_build(api, plan=plan, workflow_path=workflow_path)
+        watch = Watch()
+        if not admitted:
+            _admit_source(reads, watch, plan["identity"])
+            admitted = True
+        selected = _select(reads, watch, plan)
         remaining = deadline - now()
         if remaining <= 0:
             break
         if selected is not None:
-            return selected
+            _admit_source(reads, watch, plan["identity"])
+            return selected, watch
         try:
             sleep(min(limits.CI_BUILD_POLL_SECONDS, remaining))
         except OSError as exc:
@@ -218,37 +199,50 @@ def wait_for_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_p
     raise MbError("Build wait exhausted the 5400-second/observation budget; rerun complete Build and E2E")
 
 
-def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any],
-                               plan: dict[str, Any], workflow_path: str) -> None:
-    """Reject a superseded/unavailable selected descriptor immediately around consumption.
+def wait_for_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any],
+                             monotonic: Callable[[], float] = time.monotonic,
+                             sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    """Wait at most the protected 5400s admission budget, without an independent PR compiler.
 
-    Call before and after independent byte/native verification. This checks current producer
-    selection and metadata, not downloaded bytes, native validity, or caller/status authority.
+    The pull request is admitted when the wait starts and again when a bundle is returned. In
+    between, a poll reads only the run listing: one request while nothing has completed. Only
+    absence, a pending run or a deferral waits; API, corruption and failed-producer errors
+    propagate. An in-flight bounded API call may finish after the deadline, but its result can
+    never admit evidence then. Sleep/clock hooks belong to the protected runtime, never candidate
+    configuration.
     """
 
-    validate_descriptor(descriptor)
-    latest = select_latest_pr_build(api, plan=plan, workflow_path=workflow_path)
+    return _wait(CommandReads.of(api), _pr_plan(plan), monotonic, sleep)[0]
+
+
+def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any]) -> None:
+    """Reject a superseded/unavailable selected descriptor immediately around consumption.
+
+    Call before independent byte/native verification consumes the selected Build. This repeats the
+    newest-run observation and requires the same descriptor; it checks neither downloaded bytes,
+    native validity nor status authority.
+    """
+
+    descriptor = _descriptor(descriptor)
+    latest = select_latest_pr_build(api, plan=plan)
     check(latest is not None and latest == descriptor, "$.descriptor",
           "selected Build is no longer the newest exact available producer; rerun complete Build and E2E")
 
 
-def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str,
-                              output: Path, monotonic: Callable[[], float] = time.monotonic,
-                              sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], output: Path,
+                             monotonic: Callable[[], float] = time.monotonic,
+                             sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
     """Wait/select, download by immutable ID, and reject supersession inside atomic publication.
 
-    Caller owns a private output parent inaccessible to both worker UIDs. Downloaded full tuple/
-    canonical bytes are verified; native second-account validation and final gate authority
-    remain separate. The 5400s waiting budget does not replace transport/validator timeouts.
+    Caller owns a private output parent inaccessible to both worker UIDs. The downloaded tuple and
+    canonical bytes are verified; immediately before publication the pull request, the newest run,
+    its latest attempt and the bundle's availability are observed again and must be unchanged.
+    Native second-account validation and final gate authority remain separate. The 5400s waiting
+    budget does not replace transport/validator timeouts.
     """
 
-    validate_plan(plan)
-    plan = copy.deepcopy(plan)
-    descriptor = wait_for_latest_pr_build(api, plan=plan, workflow_path=workflow_path,
-                                          monotonic=monotonic, sleep=sleep)
-    def revalidate() -> None:
-        revalidate_latest_pr_build(api, descriptor=descriptor, plan=plan, workflow_path=workflow_path)
-    revalidate()
-    envelope = _download_export(api, descriptor=descriptor, plan=plan, workflow_path=workflow_path,
-                                output=output, target_id=None, before_publish=revalidate)
-    return {"descriptor": descriptor, "envelope": envelope}
+    plan = _pr_plan(plan)
+    check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
+    reads = CommandReads.of(api)
+    descriptor, watch = _wait(reads, plan, monotonic, sleep)
+    return {"descriptor": descriptor, "envelope": _download_build(reads, watch, descriptor, plan, output)}

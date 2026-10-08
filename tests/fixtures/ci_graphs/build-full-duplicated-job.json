@@ -1,0 +1,450 @@
+{
+  "total_count": 8,
+  "jobs": [
+    {
+      "id": 112398926100,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa26100",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398926100",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398926100",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:00:02Z",
+      "started_at": "2026-10-07T10:00:05Z",
+      "completed_at": "2026-10-07T10:00:20Z",
+      "name": "Verify pinned mod-base / Authenticate the pinned kit",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:00:05.000Z",
+          "completed_at": "2026-10-07T10:00:05.000Z"
+        },
+        {
+          "name": "Verify the pin, kit reachability and referenced workflows",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:00:06.000Z",
+          "completed_at": "2026-10-07T10:00:19.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:00:20.000Z",
+          "completed_at": "2026-10-07T10:00:20.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398926100",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132592,
+      "runner_name": "GitHub Actions 1000132592",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 112398927643,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa27643",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398927643",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398927643",
+      "status": "completed",
+      "conclusion": "skipped",
+      "created_at": "2026-10-07T10:00:21Z",
+      "started_at": "2026-10-07T10:00:21Z",
+      "completed_at": "2026-10-07T10:00:21Z",
+      "name": "Build deferred for draft",
+      "steps": [],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398927643",
+      "labels": [],
+      "runner_id": null,
+      "runner_name": null,
+      "runner_group_id": null,
+      "runner_group_name": null
+    },
+    {
+      "id": 112398929186,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa29186",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398929186",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398929186",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:00:25Z",
+      "started_at": "2026-10-07T10:00:25Z",
+      "completed_at": "2026-10-07T10:00:50Z",
+      "name": "Shared Build / Plan protected Build",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:00:25.000Z",
+          "completed_at": "2026-10-07T10:00:25.000Z"
+        },
+        {
+          "name": "Derive the protected plan",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:00:30.000Z",
+          "completed_at": "2026-10-07T10:00:49.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:00:50.000Z",
+          "completed_at": "2026-10-07T10:00:50.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398929186",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132594,
+      "runner_name": "GitHub Actions 1000132594",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 112398930729,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa30729",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398930729",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398930729",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:00:55Z",
+      "started_at": "2026-10-07T10:00:55Z",
+      "completed_at": "2026-10-07T10:01:50Z",
+      "name": "Shared Build / Verify protected policy",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:00:55.000Z",
+          "completed_at": "2026-10-07T10:00:55.000Z"
+        },
+        {
+          "name": "Run the protected policy suite",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:01:00.000Z",
+          "completed_at": "2026-10-07T10:01:49.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:01:50.000Z",
+          "completed_at": "2026-10-07T10:01:50.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398930729",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132595,
+      "runner_name": "GitHub Actions 1000132595",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 112398932272,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa32272",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398932272",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398932272",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:00:55Z",
+      "started_at": "2026-10-07T10:00:55Z",
+      "completed_at": "2026-10-07T10:02:05Z",
+      "name": "Shared Build / Compile target target-a",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:00:55.000Z",
+          "completed_at": "2026-10-07T10:00:55.000Z"
+        },
+        {
+          "name": "Build the target as the candidate",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:00:56.000Z",
+          "completed_at": "2026-10-07T10:00:58.000Z"
+        },
+        {
+          "name": "Validate frozen native exports",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:00:58.000Z",
+          "completed_at": "2026-10-07T10:01:00.000Z"
+        },
+        {
+          "name": "Upload sealed outputs",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-07T10:01:00.000Z",
+          "completed_at": "2026-10-07T10:02:00.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-07T10:02:05.000Z",
+          "completed_at": "2026-10-07T10:02:05.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398932272",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132596,
+      "runner_name": "GitHub Actions 1000132596",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 112398933815,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa33815",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398933815",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398933815",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:02:10Z",
+      "started_at": "2026-10-07T10:02:10Z",
+      "completed_at": "2026-10-07T10:03:35Z",
+      "name": "Shared Build / Seal complete Build bundle",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:02:10.000Z",
+          "completed_at": "2026-10-07T10:02:10.000Z"
+        },
+        {
+          "name": "Assemble the exact target union",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:02:12.000Z",
+          "completed_at": "2026-10-07T10:02:20.000Z"
+        },
+        {
+          "name": "Validate frozen native exports",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:02:20.000Z",
+          "completed_at": "2026-10-07T10:02:30.000Z"
+        },
+        {
+          "name": "Upload sealed outputs",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-07T10:02:30.000Z",
+          "completed_at": "2026-10-07T10:03:30.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-07T10:03:35.000Z",
+          "completed_at": "2026-10-07T10:03:35.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398933815",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132597,
+      "runner_name": "GitHub Actions 1000132597",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 112398935358,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa35358",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398935358",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398935358",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:03:40Z",
+      "started_at": "2026-10-07T10:03:40Z",
+      "completed_at": "2026-10-07T10:06:05Z",
+      "name": "Shared Build / Verify complete Build",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:03:40.000Z",
+          "completed_at": "2026-10-07T10:03:40.000Z"
+        },
+        {
+          "name": "Validate frozen native exports",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:04:00.000Z",
+          "completed_at": "2026-10-07T10:05:00.000Z"
+        },
+        {
+          "name": "Upload sealed outputs",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:05:00.000Z",
+          "completed_at": "2026-10-07T10:06:00.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-07T10:06:05.000Z",
+          "completed_at": "2026-10-07T10:06:05.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398935358",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132598,
+      "runner_name": "GitHub Actions 1000132598",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 112398936901,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa36901",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398936901",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398936901",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:00:55Z",
+      "started_at": "2026-10-07T10:00:55Z",
+      "completed_at": "2026-10-07T10:02:05Z",
+      "name": "Shared Build / Compile target target-a",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:00:55.000Z",
+          "completed_at": "2026-10-07T10:00:55.000Z"
+        },
+        {
+          "name": "Build the target as the candidate",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:00:56.000Z",
+          "completed_at": "2026-10-07T10:00:58.000Z"
+        },
+        {
+          "name": "Validate frozen native exports",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:00:58.000Z",
+          "completed_at": "2026-10-07T10:01:00.000Z"
+        },
+        {
+          "name": "Upload sealed outputs",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-07T10:01:00.000Z",
+          "completed_at": "2026-10-07T10:02:00.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-07T10:02:05.000Z",
+          "completed_at": "2026-10-07T10:02:05.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398936901",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132599,
+      "runner_name": "GitHub Actions 1000132599",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

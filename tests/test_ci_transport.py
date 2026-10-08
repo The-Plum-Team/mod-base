@@ -1,4 +1,9 @@
-"""Real fake-API transport provenance; filesystem seams are explicit on Windows."""
+"""Numeric-ID transport against a fake GitHub that answers as the REST API does.
+
+Only the API is faked. Archives are real ZIPs, extraction, verification and atomic publication
+run on the real filesystem (Linux), and job listings are the literal ones of
+``tests/fixtures/ci_graphs``. Runs and artifacts carry the head GitHub records them under.
+"""
 
 import copy
 import hashlib
@@ -6,425 +11,550 @@ import io
 import tempfile
 import unittest
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from mod_base.build_ci import transport
-from mod_base.build_ci.graph import BuildGraphV1, authenticate_graph
-from mod_base.github.jobs import job_graph_sha256
+from mod_base.build_ci.exports import verify_build_export
+from mod_base.build_ci.protocol import plan_sha256
+from mod_base.build_ci.reads import CommandReads
 from mod_base.errors import MbError
-from mod_base.io import bounded_zip
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
-from mod_base.workflow import CI_BUILD_CALL, CI_BUILD_JOBS
-from tests.helpers import ci_descriptor, ci_envelope
-from tests.test_ci_protocol import protected_subject, seeded_graph, seeded_pr
-from tests.test_ci_exports import partitions_fixture
+from tests.helpers import (ci_api_artifact, ci_api_run, ci_graph_jobs, ci_run_descriptor, ci_run_gate,
+                           ci_runtime_envelope)
+from tests.test_ci_protocol import protected_subject, seeded_pr
+
+#: Upload windows and creation times of the literal listings, as a descriptor stores them.
+WINDOWS = {
+    "target": ("2026-10-07T10:01:00Z", "2026-10-07T10:02:00Z", "2026-10-07T10:01:30Z"),
+    "build": ("2026-10-07T10:02:30Z", "2026-10-07T10:03:30Z", "2026-10-07T10:03:00Z"),
+    "tested-build": ("2026-10-07T10:05:00Z", "2026-10-07T10:06:00Z", "2026-10-07T10:05:30Z"),
+    "runtime": ("2026-10-07T10:08:00Z", "2026-10-07T10:09:00Z", "2026-10-07T10:08:30Z"),
+    "results": ("2026-10-07T10:09:30Z", "2026-10-07T10:10:30Z", "2026-10-07T10:10:00Z"),
+    "tested-packaged": ("2026-10-07T10:12:00Z", "2026-10-07T10:13:00Z", "2026-10-07T10:12:30Z"),
+}
+IDS = {"build": 100, "runtime": 101, "results": 102, "tested-build": 200, "tested-packaged": 201}
+ASSEMBLE = "Shared Build / Seal complete Build bundle"
+GATE = "Shared Build / Verify complete Build"
 
 
-def transport_fixture(*, target=False, event="pull_request_target", historical=False):
-    plan, api, _ = seeded_pr()
-    if event != "pull_request_target":
-        protected_subject(plan, api, current=not historical)
-    _, _, jobs = seeded_graph()
-    api.add_jobs(42, 2, jobs)
-    descriptor = ci_descriptor("target", unit_id="target-a") if target else ci_descriptor()
-    for key in ("identity", "plan_sha256", "profile"):
-        descriptor[key] = copy.deepcopy(plan[key])
-    api_head = plan["identity"]["tested_sha"] if event == "push" else plan["identity"]["controller_sha"]
-    descriptor["producer"].update(event=event, api_head_sha=api_head)
-    descriptor["producer"]["graph_sha256"] = authenticate_graph(api, plan=plan, producer="build",
-                                                              run_id=42, run_attempt=2)
-    envelope = ci_envelope()
-    for key in ("identity", "plan_sha256", "profile"):
-        envelope[key] = copy.deepcopy(plan[key])
-    if target:
-        envelope.update(scope="target", target_id="target-a")
-    envelope["producer"] = {key: copy.deepcopy(value) for key, value in descriptor["producer"].items()
-                            if key != "upload_window"}
+def build_archive(plan, producer, *, target_id=None):
+    """A real export ZIP for a producer record: every planned file and the canonical envelope."""
+
+    outputs = sorted((output for target in plan["targets"] if target_id in (None, target["id"])
+                      for output in target["outputs"]), key=lambda output: output["path"])
+    files = []
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as archive:
-        for file in envelope["files"]:
-            data = (file["path"] + "\n").encode()
-            file.update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
-            archive.writestr(file["path"], data)
-        archive.writestr("ci-envelope.json", canonical_json(envelope))
-    data = stream.getvalue()
-    descriptor["artifact"].update(size=len(data), digest="sha256:" + hashlib.sha256(data).hexdigest())
-    producer, artifact = descriptor["producer"], descriptor["artifact"]
-    run = {"id": 42, "run_attempt": 2, "workflow_id": 11, "path": producer["workflow_path"],
-           "created_at": "2026-10-07T10:00:00Z", "event": event, "head_sha": api_head,
-           "head_branch": "master", "head_repository": {"full_name": api.repository},
-           "status": "completed", "conclusion": "success", "referenced_workflows": [
-               {"path": f"{plan['identity']['kit']['repository']}/.github/workflows/build.yml@{plan['identity']['kit']['sha']}",
-                "sha": plan["identity"]["kit"]["sha"]}]}
-    api.add_run(run)
-    if target:
-        run.update(status="in_progress", conclusion=None)
-        api.add_run(run)
-        api.add_jobs(42, 2, [job for job in jobs if "target-a" in job["name"]])
-    record = {"id": artifact["id"], "name": artifact["name"], "size_in_bytes": artifact["size"],
-              "digest": artifact["digest"], "created_at": artifact["created_at"],
-              "expires_at": artifact["expires_at"], "expired": False,
-              "workflow_run": {"id": 42, "head_branch": "master", "head_sha": api_head}}
-    api.add_artifact(record, data)
-    return plan, api, descriptor, envelope, run, record, data
+        for output in outputs:
+            data = (output["path"] + "\n").encode()
+            files.append({**output, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+            archive.writestr(output["path"], data)
+        envelope = {"kind": "mod-base.build.envelope", "schema_version": 1,
+                    "identity": copy.deepcopy(plan["identity"]), "plan_sha256": plan["plan_sha256"],
+                    "profile": plan["profile"],
+                    "producer": {key: value for key, value in producer.items() if key != "upload_window"},
+                    "scope": "complete" if target_id is None else "target", "target_id": target_id, "files": files,
+                    "native_reports": [file["path"] for file in files if file["role"] == "native-report"]}
+        archive.writestr(grammar.CI_ENVELOPE_NAME, canonical_json(envelope))
+    return stream.getvalue(), envelope
 
 
-def target_set_fixture():
-    plan, partitions = partitions_fixture()
-    _, api, _, _, run, record, _ = transport_fixture(target=True)
-    graph = BuildGraphV1()
-    _, _, template_jobs = seeded_graph()
-    steps = next(job["steps"] for job in template_jobs if job["steps"])
-    jobs = [{**entry, "status": "completed", "steps": copy.deepcopy(steps) if entry["name"] in
-             graph.sealed_jobs(plan) else []} for entry in graph.jobs(plan)]
-    api.add_jobs(42, 2, [job for job in jobs if job["name"] not in
-                        {f"{CI_BUILD_CALL} / {CI_BUILD_JOBS[key]}" for key in ("assemble", "gate")}])
-    descriptors = []
-    for partition in partitions:
-        descriptor, envelope = partition["descriptor"], partition["envelope"]
-        descriptor["producer"]["graph_sha256"] = job_graph_sha256(graph.jobs(plan))
-        envelope["producer"] = {key: copy.deepcopy(value) for key, value in descriptor["producer"].items()
-                                if key != "upload_window"}
-        stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w") as archive:
-            for file in envelope["files"]:
-                data = (file["path"] + "\n").encode()
-                file.update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
-                archive.writestr(file["path"], data)
-            archive.writestr("ci-envelope.json", canonical_json(envelope))
-        data = stream.getvalue()
-        descriptor["artifact"].update(size=len(data), digest="sha256:" + hashlib.sha256(data).hexdigest())
-        selected = descriptor["artifact"]
-        api.add_artifact({**record, "id": selected["id"], "name": selected["name"],
-                          "size_in_bytes": selected["size"], "digest": selected["digest"]}, data)
-        descriptors.append(descriptor)
-    return plan, api, descriptors, partitions, jobs, run
+def runtime_archive(plan, producer, owning_build):
+    """A real complete results ZIP: one report, one empty log and the canonical runtime envelope."""
+
+    contents = {"lanes/lane-a/result.json": b'{"opaque":"authored fixture"}\n', "lanes/lane-a/runtime.log": b""}
+    envelope = ci_runtime_envelope()
+    envelope.update(identity=copy.deepcopy(plan["identity"]), plan_sha256=plan["plan_sha256"], profile=plan["profile"],
+                    producer={key: value for key, value in producer.items() if key != "upload_window"},
+                    owning_build=copy.deepcopy(owning_build))
+    envelope["files"] = [{"path": name, "lane_id": "lane-a",
+                          "role": "runtime-log" if name.endswith(".log") else "native-report",
+                          "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                         for name, data in sorted(contents.items())]
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as archive:
+        for name, data in contents.items():
+            archive.writestr(name, data)
+        archive.writestr(grammar.CI_RUNTIME_ENVELOPE_NAME, canonical_json(envelope))
+    return stream.getvalue(), envelope
+
+
+def record_archive(document, filename=grammar.CI_GATE_NAME, raw=None):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr(filename, canonical_json(document) if raw is None else raw)
+    return stream.getvalue()
+
+
+class World:
+    """One generation on a fake GitHub: its source, runs, literal job listings and real archives."""
+
+    def __init__(self, *, push=False):
+        self.plan, self.api, self.pr = seeded_pr()
+        if push:
+            protected_subject(self.plan, self.api, current=True)
+        self.runs, self.jobs, self.records, self.archives = {}, {}, {}, {}
+
+    def add_run(self, producer, listing, **changes):
+        run = ci_api_run(self.plan, producer, **changes)
+        self.runs[run["id"]] = run
+        self.api.add_run(run)
+        self.set_jobs(run["id"], ci_graph_jobs(listing))
+        return run
+
+    def set_run(self, run_id, **changes):
+        self.runs[run_id].update(changes)
+        self.api.add_run(self.runs[run_id])
+
+    def set_jobs(self, run_id, jobs):
+        self.jobs[run_id] = jobs
+        self.api.add_jobs(run_id, 2, jobs)
+
+    def job(self, run_id, name):
+        return next(job for job in self.jobs[run_id] if job["name"] == name)
+
+    def describe(self, producer, mode, key, data, *, unit_id=None, artifact_id=None):
+        kind = key.split("-")[0]
+        unit_id = key.split("-")[1] if kind == "tested" else unit_id
+        descriptor = ci_run_descriptor(self.plan, producer, mode, kind, unit_id=unit_id,
+                                       artifact_id=artifact_id or IDS[key])
+        started, completed, created = WINDOWS[key]
+        descriptor["producer"]["upload_window"] = {"started_at": started, "completed_at": completed}
+        descriptor["artifact"].update(created_at=created, size=len(data),
+                                      digest="sha256:" + hashlib.sha256(data).hexdigest())
+        return descriptor
+
+    def publish(self, descriptor, data, **changes):
+        record = ci_api_artifact(descriptor, **changes)
+        self.records[record["id"]], self.archives[record["id"]] = record, data
+        self.api.add_artifact(record, data)
+        return descriptor
+
+    def set_artifact(self, artifact_id, **changes):
+        workflow_run = changes.pop("workflow_run", {})
+        self.records[artifact_id].update(changes)
+        self.records[artifact_id]["workflow_run"].update(workflow_run)
+        self.api.add_artifact(self.records[artifact_id], self.archives[artifact_id])
+
+    def add_bundle(self, producer="build", mode="full"):
+        """The complete Build bundle of the run of ``producer`` (a packaged run only when it rebuilt)."""
+
+        record = ci_run_descriptor(self.plan, producer, mode, "build")["producer"]
+        data, self.envelope = build_archive(self.plan, record)
+        self.bundle = self.publish(self.describe(producer, mode, "build", data), data)
+        return self.bundle
+
+
+def build_world(*, push=False, **run):
+    """A subject and its finished full Build run with a real complete bundle."""
+
+    world = World(push=push)
+    world.add_run("build", "build-full", **run)
+    world.add_bundle()
+    return world
+
+
+def transport_fixture():
+    """``(plan, api, descriptor, envelope, run, record, archive)`` of a finished pull-request Build."""
+
+    world = build_world()
+    return (world.plan, world.api, world.bundle, world.envelope, world.runs[42], world.records[100],
+            world.archives[100])
+
+
+def two_target_plan(plan):
+    target, lane = copy.deepcopy(plan["targets"][0]), copy.deepcopy(plan["lanes"][0])
+    target["id"] = "target-b"
+    for output in target["outputs"]:
+        output.update(path=output["path"].replace("lane-a", "lane-b"), lane_id="lane-b")
+    lane.update(id="lane-b", target_id="target-b")
+    plan["targets"].append(target)
+    plan["lanes"].append(lane)
+    plan["plan_sha256"] = plan_sha256(plan)
+
+
+def target_set_world():
+    """A two-target Build still running: both targets are sealed, the assembling job is the reader."""
+
+    world = World()
+    two_target_plan(world.plan)
+    world.add_run("build", "build-full", status="in_progress", conclusion=None)
+    jobs = [job for job in world.jobs[42] if job["name"] != GATE]
+    assemble = next(job for job in jobs if job["name"] == ASSEMBLE)
+    assemble.update(status="in_progress", conclusion=None, completed_at=None)
+    assemble["steps"] = assemble["steps"][:1]
+    second = copy.deepcopy(next(job for job in jobs if job["name"] == "Shared Build / Compile target target-a"))
+    second.update(id=second["id"] + 7, name="Shared Build / Compile target target-b")
+    jobs.insert(-1, second)
+    world.set_jobs(42, jobs)
+    world.descriptors, world.partitions = [], []
+    for index, target in enumerate(world.plan["targets"]):
+        record = ci_run_descriptor(world.plan, "build", "full", "target", unit_id=target["id"])["producer"]
+        data, envelope = build_archive(world.plan, record, target_id=target["id"])
+        descriptor = world.publish(world.describe("build", "full", "target", data, unit_id=target["id"],
+                                                  artifact_id=110 + index), data)
+        world.descriptors.append(descriptor)
+        world.partitions.append({"descriptor": descriptor, "envelope": envelope})
+    return world
+
+
+@contextmanager
+def after_download(api, action, *, count=1):
+    """Run ``action`` right after the ``count``-th artifact download: the API moving mid-command."""
+
+    original, seen = api.download, [0]
+
+    def download(path, **kwargs):
+        data = original(path, **kwargs)
+        seen[0] += 1
+        if seen[0] == count:
+            action()
+        return data
+
+    with patch.object(api, "download", side_effect=download) as downloads:
+        yield downloads
+
+
+def exported(root):
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+
+class CompletedBuildTransportTests(unittest.TestCase):
+    def call(self, world, output, **changes):
+        arguments = {"descriptor": world.bundle, "plan": world.plan, "output": output, **changes}
+        return transport.download_completed_build(world.api, **arguments)
+
+    def test_real_download_extraction_verification_and_private_copy(self):
+        world = build_world()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            self.assertEqual(self.call(world, output), world.envelope)
+            self.assertEqual(verify_build_export(output, plan=world.plan), world.envelope)
+            self.assertEqual(exported(output), sorted([grammar.CI_ENVELOPE_NAME,
+                                                       *(file["path"] for file in world.envelope["files"])]))
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+        self.assertEqual(world.api.mutations, [])
+        self.assertNotIn("upload_window", world.envelope["producer"])
+
+    def test_request_budget_and_single_reads_of_immutable_objects(self):
+        world = build_world()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(world.api, "get_json", wraps=world.api.get_json) as reads:
+            self.call(world, Path(directory) / "output")
+        paths = [call.args[0] for call in reads.call_args_list]
+        # Source, run and artifact twice (start, before publication); commit and jobs once; one download.
+        self.assertEqual(world.api.request_count, 14)
+        self.assertEqual(sum("/git/commits/" in path for path in paths), 1)
+        self.assertEqual(sum(path.endswith("/attempts/2/jobs") for path in paths), 1)
+        self.assertEqual(sum(path.endswith("/actions/runs/42") for path in paths), 2)
+        self.assertEqual(sum(path.endswith("/pulls/7") for path in paths), 2)
+        self.assertEqual(sum(path.endswith("/actions/artifacts/100") for path in paths), 2)
+
+    def test_run_is_authenticated_under_the_pull_request_head_not_the_controller(self):
+        world = build_world()
+        identity = world.plan["identity"]
+        self.assertEqual((world.runs[42]["head_sha"], world.runs[42]["head_branch"]),
+                         (identity["head_sha"], identity["head_branch"]))
+        self.assertEqual(world.records[100]["workflow_run"]["head_sha"], identity["head_sha"])
+        # The shape the kit used to expect: a run recorded under the base branch and controller commit.
+        for changes in ({"head_sha": identity["controller_sha"]}, {"head_branch": identity["base_branch"]},
+                        {"head_sha": identity["tested_sha"]},
+                        {"head_repository": {"full_name": "fork/mod"}}):
+            world = build_world(**changes)
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(world.api, "download") as download, \
+                    self.assertRaisesRegex(MbError, "not recorded under this subject"):
+                self.call(world, Path(directory) / "output")
+            download.assert_not_called()
+
+    def test_wrong_attempt_event_path_conclusion_controller_and_kit_reject_before_download(self):
+        def controller(run):
+            entry = run["referenced_workflows"][0]
+            entry.update(path=entry["path"].rsplit("@", 1)[0] + "@" + "9" * 40, sha="9" * 40)
+
+        mutations = [lambda r: r.update(run_attempt=3), lambda r: r.update(event="pull_request"),
+                     lambda r: r.update(conclusion="failure"), lambda r: r.update(status="in_progress", conclusion=None),
+                     lambda r: r.update(referenced_workflows=[]), controller,
+                     lambda r: r["referenced_workflows"][1].update(sha="9" * 40),
+                     lambda r: r["referenced_workflows"].pop(1),
+                     lambda r: r.update(path=".github/workflows/mod-base-packaged-e2e.yml")]
+        for index, mutate in enumerate(mutations):
+            world = build_world()
+            mutate(world.runs[42])
+            world.api.add_run(world.runs[42])
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(world.api, "download") as download, self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output")
+            download.assert_not_called()
+
+    def test_artifact_metadata_owner_head_and_expiry_reject_before_download(self):
+        mutations = [{"expired": True}, {"name": "mb-ci-build--43--a2"}, {"digest": "sha256:" + "f" * 64},
+                     {"size_in_bytes": 1}, {"created_at": "2026-10-07T10:03:01Z"},
+                     {"expires_at": "2026-10-09T00:00:00Z"}, {"workflow_run": {"id": 43}},
+                     {"workflow_run": {"head_sha": "2" * 40}}, {"workflow_run": {"head_branch": "master"}}]
+        for changes in mutations:
+            world = build_world()
+            world.set_artifact(100, **copy.deepcopy(changes))
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(world.api, "download") as download, self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output")
+            download.assert_not_called()
+
+    def test_api_times_with_fractions_and_offsets_equal_the_stored_whole_second_form(self):
+        world = build_world()
+        world.set_artifact(100, created_at="2026-10-07T12:03:00.917+02:00", expires_at="2026-10-14T10:01:30.000Z")
+        for step in world.job(42, ASSEMBLE)["steps"]:
+            for key in ("started_at", "completed_at"):
+                self.assertTrue(step[key].endswith(".000Z"))
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self.call(world, Path(directory) / "output"), world.envelope)
+        world = build_world()
+        world.set_artifact(100, created_at="2026-10-07T10:03:01.000Z")
+        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(MbError, "created_at"):
+            self.call(world, Path(directory) / "output")
+
+    def test_graph_and_upload_window_are_mandatory(self):
+        for change in ("graph", "window", "jobs", "seal"):
+            world = build_world()
+            if change == "graph":
+                world.bundle["producer"]["graph_sha256"] = "f" * 64
+            elif change == "window":
+                world.bundle["producer"]["upload_window"]["started_at"] = "2026-10-07T10:02:29Z"
+            elif change == "jobs":
+                world.set_jobs(42, ci_graph_jobs("build-full-extra-job"))
+            else:
+                world.job(42, ASSEMBLE)["steps"][2]["conclusion"] = "failure"
+                world.set_jobs(42, world.jobs[42])
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(world.api, "download") as download, self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output")
+            download.assert_not_called()
+
+    def test_deferred_attest_only_and_reuse_shaped_runs_are_not_a_complete_build(self):
+        for listing in ("build-deferred", "build-reuse", "build-attest-only", "build-full-missing-job"):
+            world = build_world()
+            world.set_jobs(42, ci_graph_jobs(listing))
+            with self.subTest(listing=listing), tempfile.TemporaryDirectory() as directory, \
+                    self.assertRaisesRegex(MbError, "exact job graph mismatch"):
+                self.call(world, Path(directory) / "output")
+
+    def test_corrupt_archive_and_wrong_envelope_never_publish(self):
+        world = build_world()
+        other = copy.deepcopy(world.bundle["producer"])
+        other["run_id"] = 44
+        cases = {"bytes": b"x" * len(world.archives[100]), "short": b"bad",
+                 "producer": build_archive(world.plan, other)[0],
+                 "scope": build_archive(world.plan, world.bundle["producer"], target_id="target-a")[0]}
+        for name, data in cases.items():
+            world = build_world()
+            if name in ("producer", "scope"):  # a self-consistent archive of something else
+                world.bundle["artifact"].update(size=len(data), digest="sha256:" + hashlib.sha256(data).hexdigest())
+                world.archives[100] = data
+                world.set_artifact(100, size_in_bytes=len(data), digest=world.bundle["artifact"]["digest"])
+            else:
+                world.api.add_artifact(world.records[100], data)
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(MbError):
+                    self.call(world, Path(directory) / "output")
+                self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_source_run_and_artifact_movement_after_download_forbid_publication(self):
+        changes = {"source": lambda w: w.api.set_branch("master", "f" * 40, "e" * 40),
+                   "draft": lambda w: w.api.add_response("/repos/example/mod/pulls/7", {**w.pr, "draft": True}),
+                   "attempt": lambda w: w.set_run(42, run_attempt=3, status="queued", conclusion=None),
+                   "expired": lambda w: w.set_artifact(100, expired=True)}
+        for name, change in changes.items():
+            world = build_world()
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                with after_download(world.api, lambda: change(world)), self.assertRaises(MbError):
+                    self.call(world, Path(directory) / "output")
+                self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_protected_push_and_dispatch_run_from_the_commit_they_test(self):
+        for event in ("push", "workflow_dispatch"):
+            world = build_world(push=True, event=event)
+            world.bundle["producer"]["event"] = event
+            data, world.envelope = build_archive(world.plan, world.bundle["producer"])
+            world.bundle["artifact"].update(size=len(data), digest="sha256:" + hashlib.sha256(data).hexdigest())
+            world.publish(world.bundle, data)
+            identity = world.plan["identity"]
+            self.assertEqual(world.runs[42]["head_sha"], identity["tested_sha"])
+            self.assertEqual(identity["tested_sha"], identity["controller_sha"])
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as directory:
+                self.assertEqual(self.call(world, Path(directory) / "output"), world.envelope)
+
+    def test_historical_non_pr_subject_has_no_producer_run(self):
+        world = World()
+        protected_subject(world.plan, world.api)
+        self.assertNotEqual(world.plan["identity"]["tested_sha"], world.plan["identity"]["controller_sha"])
+        descriptor = ci_run_descriptor(world.plan, "build", "full", "build")
+        with tempfile.TemporaryDirectory() as directory, patch.object(world.api, "get_json") as reads, \
+                self.assertRaisesRegex(MbError, "runs from the commit it tests"):
+            transport.download_completed_build(world.api, descriptor=descriptor, plan=world.plan,
+                                               output=Path(directory) / "output")
+        reads.assert_not_called()
+
+    def test_existing_destination_other_plan_kind_and_rebuilt_bundle_reject_before_any_read(self):
+        world = build_world()
+        with tempfile.TemporaryDirectory() as directory, patch.object(world.api, "get_json") as reads:
+            with self.assertRaises(MbError):
+                self.call(world, Path(directory))
+            with self.assertRaises(MbError):
+                self.call(world, "output")
+            changed = copy.deepcopy(world.bundle)
+            changed["plan_sha256"] = "f" * 64
+            with self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output", descriptor=changed)
+            target = ci_run_descriptor(world.plan, "build", "full", "target", unit_id="target-a")
+            with self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output", descriptor=target)
+            push = World(push=True)
+            rebuilt = ci_run_descriptor(push.plan, "packaged", "rebuilt", "build")
+            with self.assertRaisesRegex(MbError, "read by that run only"):
+                transport.download_completed_build(world.api, descriptor=rebuilt, plan=push.plan,
+                                                   output=Path(directory) / "output")
+        reads.assert_not_called()
+
+    def test_caller_documents_are_copied_on_entry(self):
+        world = build_world()
+        with tempfile.TemporaryDirectory() as directory:
+            with after_download(world.api, lambda: (world.plan.clear(), world.bundle.clear())):
+                observed = self.call(world, Path(directory) / "output")
+        self.assertEqual(observed, world.envelope)
 
 
 class TargetSetTransportTests(unittest.TestCase):
-    def call(self, fixture, output):
-        return transport.download_target_set(fixture[1], descriptors=fixture[2], plan=fixture[0],
-            workflow_path=".github/workflows/build-gate.yml", run_id=42, run_attempt=2, output=output)
+    def call(self, world, output, **changes):
+        arguments = {"descriptors": world.descriptors, "plan": world.plan, "run_id": 42, "run_attempt": 2,
+                     "output": output, **changes}
+        return transport.download_target_set(world.api, **arguments)
 
-    def test_complete_ordered_inputs_use_one_atomic_publication_and_shared_api_context(self):
-        fixture = target_set_fixture()
+    def test_running_attempt_publishes_every_ordered_target_once(self):
+        world = target_set_world()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "inputs"
+            self.assertEqual(self.call(world, output), world.partitions)
+            self.assertEqual(sorted(path.name for path in output.iterdir()), ["target-0", "target-1"])
+            for index, partition in enumerate(world.partitions):
+                self.assertEqual(verify_build_export(output / f"target-{index}", plan=world.plan),
+                                 partition["envelope"])
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+        # Source 4+3, run 2, jobs 2, the run's artifact listing 2 and two downloads of two requests.
+        self.assertEqual(world.api.request_count, 17)
+        self.assertEqual(world.api.mutations, [])
+
+    def test_request_count_does_not_grow_with_metadata_reads_per_target(self):
+        world = target_set_world()
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(transport, "atomic_directory", side_effect=lambda p, writer: writer(Path(directory), 0)) as publication, \
-                patch.object(transport, "extract_build"), patch.object(transport, "validate_tree_entries"), \
-                patch.object(transport, "verify_build_export", side_effect=[item["envelope"] for item in fixture[3]]):
-            before = fixture[1].request_count
-            self.assertEqual(self.call(fixture, Path(directory) / "output"), fixture[3])
-            self.assertLess(fixture[1].request_count - before, 30)
-        publication.assert_called_once()
+                patch.object(world.api, "get_json", wraps=world.api.get_json) as reads:
+            self.call(world, Path(directory) / "inputs")
+        paths = [call.args[0] for call in reads.call_args_list]
+        self.assertEqual(sum(path.endswith("/actions/runs/42/artifacts") for path in paths), 2)
+        self.assertEqual(sum("/actions/artifacts/" in path for path in paths), 0)
 
-    def test_missing_extra_reordered_duplicate_mixed_and_wrong_plan_sets_reject_before_fetch(self):
+    def test_missing_extra_reordered_duplicate_mixed_and_wrong_plan_sets_reject_before_any_read(self):
         mutations = [lambda d: d.pop(), lambda d: d.append(copy.deepcopy(d[0])), lambda d: d.reverse(),
-                     lambda d: d[1]["artifact"].update(id=d[0]["artifact"]["id"]),
-                     lambda d: d[1]["producer"].update(run_id=43),
+                     lambda d: d[1]["producer"].update(graph_sha256="f" * 64),
                      lambda d: d[1].update(plan_sha256="f" * 64)]
         for index, mutate in enumerate(mutations):
-            fixture = target_set_fixture()
-            mutate(fixture[2])
+            world = target_set_world()
+            mutate(world.descriptors)
             with self.subTest(index=index), tempfile.TemporaryDirectory() as directory, \
-                    patch.object(fixture[1], "download") as download, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
-            download.assert_not_called()
+                    patch.object(world.api, "get_json") as reads, self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output")
+            reads.assert_not_called()
+        for changes in ({"run_id": 43}, {"run_attempt": 1}, {"run_id": True}):
+            world = target_set_world()
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(world.api, "get_json") as reads, self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output", **changes)
+            reads.assert_not_called()
 
-    def test_additional_compressed_set_budget_applies_before_any_fetch(self):
-        fixture = target_set_fixture()
-        with tempfile.TemporaryDirectory() as directory, \
-                patch.object(limits, "MAX_CI_TARGET_DOWNLOAD_BYTES", sum(d["artifact"]["size"] for d in fixture[2]) - 1), \
-                patch.object(fixture[1], "download") as download, self.assertRaisesRegex(MbError, "compressed-byte"):
-            self.call(fixture, Path(directory) / "output")
-        download.assert_not_called()
-
-    def test_policy_and_plan_success_are_required_before_fetch(self):
-        for name in ("policy", "plan"):
-            fixture = target_set_fixture()
-            job = next(j for j in fixture[4] if j["name"] == f"{CI_BUILD_CALL} / {CI_BUILD_JOBS[name]}")
-            job["conclusion"] = "skipped"
-            fixture[1].add_jobs(42, 2, fixture[4])
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
-
-    def test_late_target_failure_cannot_return_partial_input_set(self):
-        fixture = target_set_fixture()
-        with tempfile.TemporaryDirectory() as directory, \
-                patch.object(transport, "atomic_directory", side_effect=lambda p, writer: writer(Path(directory), 0)), \
-                patch.object(transport, "extract_build", side_effect=[[], MbError("second ZIP rejected")]), \
-                patch.object(transport, "verify_build_export", return_value=fixture[3][0]["envelope"]), \
-                self.assertRaisesRegex(MbError, "second ZIP"):
-            self.call(fixture, Path(directory) / "output")
-
-    def test_changed_source_at_last_download_forbids_set_publication(self):
-        fixture = target_set_fixture()
-        original = fixture[1].download
-        count = 0
-        def downloading(path, **kwargs):
-            nonlocal count
-            data = original(path, **kwargs)
-            count += 1
-            if count == 2:
-                fixture[1].set_branch("master", "f" * 40, "e" * 40)
-            return data
-        with tempfile.TemporaryDirectory() as directory, \
-                patch.object(transport, "atomic_directory", side_effect=lambda p, writer: writer(Path(directory), 0)), \
-                patch.object(fixture[1], "download", side_effect=downloading), \
-                patch.object(transport, "extract_build"), patch.object(transport, "validate_tree_entries"), \
-                patch.object(transport, "verify_build_export", side_effect=[item["envelope"] for item in fixture[3]]), \
+    def test_duplicate_artifact_and_compressed_budget_reject_before_fetch(self):
+        world = target_set_world()
+        world.descriptors[1]["artifact"]["id"] = world.descriptors[0]["artifact"]["id"]
+        with tempfile.TemporaryDirectory() as directory, patch.object(world.api, "download") as download, \
                 self.assertRaises(MbError):
-            self.call(fixture, Path(directory) / "output")
-
-    def test_original_expanded_export_budget_is_not_multiplied_by_targets(self):
-        fixture = target_set_fixture()
-        total = sum(file["size"] for partition in fixture[3] for file in partition["envelope"]["files"])
+            self.call(world, Path(directory) / "output")
+        download.assert_not_called()
+        world = target_set_world()
+        total = sum(descriptor["artifact"]["size"] for descriptor in world.descriptors)
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(transport, "atomic_directory", side_effect=lambda p, writer: writer(Path(directory), 0)), \
-                patch.object(limits, "MAX_CI_EXPORT_TREE_BYTES", total - 1), \
-                patch.object(transport, "extract_build"), \
-                patch.object(transport, "verify_build_export", side_effect=[item["envelope"] for item in fixture[3]]), \
-                self.assertRaisesRegex(MbError, "original logical export budget"):
-            self.call(fixture, Path(directory) / "output")
+                patch.object(limits, "MAX_CI_TARGET_DOWNLOAD_BYTES", total - 1), \
+                patch.object(world.api, "get_json") as reads, self.assertRaisesRegex(MbError, "compressed-byte"):
+            self.call(world, Path(directory) / "output")
+        reads.assert_not_called()
 
+    def test_plan_policy_and_every_target_must_have_finished_and_sealed(self):
+        def unsealed(job):
+            job["steps"].pop(3)
 
-class TargetPartitionTransportTests(unittest.TestCase):
-    def test_latest_and_attempt_workflow_ids_must_agree(self):
-        for target in (False, True):
-            fixture = transport_fixture(target=target)
-            attempt = copy.deepcopy(fixture[4])
-            attempt["workflow_id"] = 12
-            fixture[1].add_response(f"/repos/{fixture[1].repository}/actions/runs/42/attempts/2", attempt)
-            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory, self.assertRaises(MbError):
-                if target:
-                    self.call(fixture, Path(directory) / "output")
-                else:
-                    transport.download_completed_build(fixture[1], descriptor=fixture[2], plan=fixture[0],
-                        workflow_path=".github/workflows/build-gate.yml", output=Path(directory) / "output")
-
-    def call(self, fixture, output, **changes):
-        plan, api, descriptor, *_ = fixture
-        values = dict(workflow_path=".github/workflows/build-gate.yml", run_id=42, run_attempt=2,
-                      target_id="target-a", output=output)
-        values.update(changes)
-        return transport.download_target_partition(api, descriptor=descriptor, plan=plan, **values)
-
-    def test_finished_target_is_admitted_while_aggregate_and_gate_are_not_visible(self):
-        fixture = transport_fixture(target=True)
-        with tempfile.TemporaryDirectory() as directory, patch.object(transport, "extract_build"), \
-                patch.object(transport, "verify_build_export", return_value=fixture[3]), \
-                patch.object(transport, "materialize_build_export", return_value=fixture[3]):
-            self.assertEqual(self.call(fixture, Path(directory) / "output"), fixture[3])
-        self.assertEqual(fixture[1].mutations, [])
-
-    def test_assembler_context_and_artifact_target_must_be_exact(self):
-        for changes in ({"run_id": 43}, {"run_attempt": 1}, {"run_id": True}, {"target_id": "foreign"}):
-            fixture = transport_fixture(target=True)
-            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as directory, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output", **changes)
-        fixture = transport_fixture(target=True)
-        fixture[2]["artifact"]["name"] = grammar.ci_artifact_name("build", 42, 2)
-        with tempfile.TemporaryDirectory() as directory, self.assertRaises(MbError):
-            self.call(fixture, Path(directory) / "output")
-
-    def test_partial_graph_cannot_hide_duplicates_unknown_jobs_or_failed_unsealed_target(self):
-        mutations = [lambda j: j.append(copy.deepcopy(j[0])),
-                     lambda j: j.append({**j[0], "name": "foreign job"}),
-                     lambda j: j[0].update(status="in_progress"),
-                     lambda j: j[0].update(conclusion="skipped"),
-                     lambda j: j[0]["steps"].pop(0),
-                     lambda j: j[0]["steps"][0].update(completed_at="2026-10-07T10:01:30Z"),
-                     lambda j: j[0].update(run_attempt=1)]
-        for index, mutate in enumerate(mutations):
-            fixture = transport_fixture(target=True)
-            _, _, jobs = seeded_graph()
-            jobs = [job for job in jobs if "target-a" in job["name"]]
-            mutate(jobs)
-            fixture[1].add_jobs(42, 2, jobs)
-            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory, \
-                    patch.object(fixture[1], "download") as download, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
+        mutations = {"Shared Build / Plan protected Build": lambda j: j.update(conclusion="failure"),
+                     "Shared Build / Verify protected policy": lambda j: j.update(conclusion="skipped"),
+                     "Shared Build / Compile target target-a": lambda j: j.update(status="in_progress", conclusion=None),
+                     "Shared Build / Compile target target-b": unsealed}
+        for name, mutate in mutations.items():
+            world = target_set_world()
+            mutate(world.job(42, name))
+            world.set_jobs(42, world.jobs[42])
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(world.api, "download") as download, self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output")
             download.assert_not_called()
+        for extra in ({"name": "foreign job"}, {}):
+            world = target_set_world()
+            world.set_jobs(42, world.jobs[42] + [{**copy.deepcopy(world.jobs[42][2]), "id": 5, **extra}])
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory, self.assertRaises(MbError):
+                self.call(world, Path(directory) / "output")
 
     def test_queued_cancelled_failed_or_incoherent_producer_status_rejects(self):
         for status, conclusion in (("queued", None), ("completed", "cancelled"),
                                    ("completed", "failure"), ("in_progress", "success")):
-            fixture = transport_fixture(target=True)
-            fixture[4].update(status=status, conclusion=conclusion)
-            fixture[1].add_run(fixture[4])
+            world = target_set_world()
+            world.set_run(42, status=status, conclusion=conclusion)
             with self.subTest(status=status, conclusion=conclusion), tempfile.TemporaryDirectory() as directory, \
                     self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
+                self.call(world, Path(directory) / "output")
 
-    def test_new_attempt_after_download_forbids_publication(self):
-        fixture = transport_fixture(target=True)
-        def extracted(*args):
-            fixture[4]["run_attempt"] = 3
-            fixture[1].add_run(fixture[4])
-        with tempfile.TemporaryDirectory() as directory, patch.object(transport, "extract_build", side_effect=extracted), \
-                patch.object(transport, "verify_build_export", return_value=fixture[3]), \
-                patch.object(transport, "materialize_build_export") as copying, self.assertRaises(MbError):
-            self.call(fixture, Path(directory) / "output")
-        copying.assert_not_called()
-
-    def test_complete_build_route_still_requires_completed_full_run(self):
-        fixture = transport_fixture()
-        fixture[4].update(status="in_progress", conclusion=None)
-        fixture[1].add_run(fixture[4])
-        with tempfile.TemporaryDirectory() as directory, self.assertRaises(MbError):
-            transport.download_completed_build(fixture[1], descriptor=fixture[2], plan=fixture[0],
-                                                workflow_path=".github/workflows/build-gate.yml",
-                                                output=Path(directory) / "output")
-
-
-class CompletedBuildTransportTests(unittest.TestCase):
-    def test_real_api_window_observed_after_serialization_does_not_rewrite_zip(self):
-        fixture = transport_fixture()
-        plan, api, descriptor, envelope, _, record, archive = fixture
-        descriptor["producer"]["upload_window"] = {
-            "started_at": "2026-10-07T10:03:00Z", "completed_at": "2026-10-07T10:04:00Z"}
-        descriptor["artifact"]["created_at"] = record["created_at"] = "2026-10-07T10:03:30Z"
-        _, _, jobs = seeded_graph()
-        aggregate = next(job for job in jobs if job["name"] == f"{CI_BUILD_CALL} / {CI_BUILD_JOBS['assemble']}")
-        aggregate["steps"][1].update(started_at="2026-10-07T10:03:00Z", completed_at="2026-10-07T10:04:00Z")
-        api.add_jobs(42, 2, jobs)
-        api.add_artifact(record, archive)
-        with tempfile.TemporaryDirectory() as directory, patch.object(transport, "extract_build"), \
-                patch.object(transport, "verify_build_export", return_value=envelope), \
-                patch.object(transport, "materialize_build_export", return_value=envelope):
-            self.assertEqual(self.call(fixture, Path(directory) / "output"), envelope)
-        self.assertEqual(descriptor["artifact"]["digest"], "sha256:" + hashlib.sha256(archive).hexdigest())
-        self.assertNotIn("upload_window", envelope["producer"])
-
-    def test_historical_push_cannot_claim_a_different_live_controller(self):
-        fixture = transport_fixture(event="push", historical=True)
-        with tempfile.TemporaryDirectory() as directory, patch.object(transport, "extract_build"), \
-                patch.object(transport, "verify_build_export", return_value=fixture[3]), \
-                patch.object(transport, "materialize_build_export", return_value=fixture[3]), self.assertRaises(MbError):
-            self.call(fixture, Path(directory) / "output")
-
-    def test_current_push_and_historical_protected_dispatch_preserve_distinct_subjects(self):
-        for event, historical in (("push", False), ("workflow_dispatch", True)):
-            fixture = transport_fixture(event=event, historical=historical)
-            with self.subTest(event=event), tempfile.TemporaryDirectory() as directory, \
-                    patch.object(transport, "extract_build"), \
-                    patch.object(transport, "verify_build_export", return_value=fixture[3]), \
-                    patch.object(transport, "materialize_build_export", return_value=fixture[3]):
-                self.assertEqual(self.call(fixture, Path(directory) / "output"), fixture[3])
-
-    def test_real_zip_preflight_rejects_traversal_and_entry_overflow_before_publication(self):
-        for hostile in (True, False):
-            stream = io.BytesIO()
-            with zipfile.ZipFile(stream, "w") as archive:
-                archive.writestr("../escape" if hostile else "one", b"x")
-                if not hostile:
-                    archive.writestr("two", b"y")
-            with tempfile.TemporaryDirectory() as directory, \
-                    patch.object(limits, "MAX_CI_EXPORT_ENTRIES", 1), \
-                    patch.object(bounded_zip.atomic, "atomic_directory") as publication, \
-                    self.assertRaisesRegex(MbError, "unsafe entry|entry count|entries"):
-                bounded_zip.extract_build(stream.getvalue(), Path(directory) / "output")
-            publication.assert_not_called()
-
-    def test_build_extraction_has_fixed_separate_bounds_without_widening_pages(self):
-        with patch.object(bounded_zip, "_extract", return_value=[]) as extraction:
-            bounded_zip.extract_build(b"zip", Path("output"))
-            bounds = extraction.call_args.args[2]
-            self.assertEqual(bounds.max_entries, limits.MAX_CI_EXPORT_ENTRIES)
-            self.assertEqual(bounds.max_total_bytes, limits.MAX_CI_EXPORT_TREE_BYTES + limits.MAX_CI_ENVELOPE_BYTES)
-            self.assertEqual(bounds.max_entry_bytes, limits.MAX_CI_EXPORT_FILE_BYTES)
-        with self.assertRaises(MbError):
-            bounded_zip.archive_limit(bounds)
-
-    def call(self, fixture, output):
-        plan, api, descriptor, *_ = fixture
-        return transport.download_completed_build(api, descriptor=descriptor, plan=plan,
-                                                  workflow_path=".github/workflows/build-gate.yml", output=output)
-
-    def test_exact_numeric_download_and_checked_copy_order(self):
-        fixture = transport_fixture()
-        envelope = fixture[3]
-        calls = []
-        with tempfile.TemporaryDirectory() as directory, \
-                patch.object(transport, "extract_build", side_effect=lambda *a: calls.append("extract_build")), \
-                patch.object(transport, "verify_build_export", return_value=envelope), \
-                patch.object(transport, "materialize_build_export", side_effect=lambda *a, **k: calls.append("copy") or envelope):
-            self.assertEqual(self.call(fixture, Path(directory) / "output"), envelope)
-        self.assertEqual(calls, ["extract_build", "copy"])
-        self.assertEqual(fixture[1].mutations, [])
-
-    def test_wrong_run_attempt_event_head_kit_and_conclusion_reject_before_download(self):
-        mutations = [lambda r: r.update(run_attempt=3), lambda r: r.update(event="pull_request"),
-                     lambda r: r.update(head_sha="f" * 40), lambda r: r.update(head_branch="other"),
-                     lambda r: r.update(conclusion="failure"), lambda r: r.update(referenced_workflows=[]),
-                     lambda r: r.update(path=".github/workflows/other.yml")]
-        for index, mutate in enumerate(mutations):
-            fixture = transport_fixture()
-            mutate(fixture[4])
-            fixture[1].add_run(fixture[4])
-            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory, \
-                    patch.object(fixture[1], "download") as download, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
-            download.assert_not_called()
-
-    def test_metadata_owner_name_digest_size_time_expiry_and_head_reject(self):
-        mutations = [lambda r: r.update(expired=True), lambda r: r.update(name="mb-ci-build--43--a2"),
-                     lambda r: r.update(digest="sha256:" + "f" * 64), lambda r: r.update(size_in_bytes=1),
-                     lambda r: r.update(created_at="2026-10-07T10:01:31Z"),
-                     lambda r: r.update(expires_at="2026-10-09T00:00:00Z"),
-                     lambda r: r["workflow_run"].update(id=43),
-                     lambda r: r["workflow_run"].update(head_sha="f" * 40)]
-        for index, mutate in enumerate(mutations):
-            fixture = transport_fixture()
-            mutate(fixture[5])
-            fixture[1].add_artifact(fixture[5], fixture[6])
-            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory, \
-                    patch.object(fixture[1], "download") as download, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
-            download.assert_not_called()
-
-    def test_graph_and_authenticated_upload_window_are_mandatory(self):
-        for change in ("graph", "window"):
-            fixture = transport_fixture()
-            if change == "graph":
-                fixture[2]["producer"]["graph_sha256"] = "f" * 64
-            else:
-                fixture[2]["producer"]["upload_window"]["started_at"] = "2026-10-07T10:00:59Z"
-            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
-
-    def test_digest_and_length_are_checked_before_extraction(self):
-        for data in (b"bad", b"x" * len(transport_fixture()[6])):
-            fixture = transport_fixture()
-            with tempfile.TemporaryDirectory() as directory, patch.object(fixture[1], "download", return_value=data), \
-                    patch.object(transport, "extract_build") as extraction, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
-            extraction.assert_not_called()
-
-    def test_moved_source_after_download_and_wrong_envelope_never_publish(self):
-        for change in ("source", "producer", "scope"):
-            fixture = transport_fixture()
-            envelope = copy.deepcopy(fixture[3])
-            def extracted(*args):
-                if change == "source":
-                    fixture[1].set_branch("master", "f" * 40, "e" * 40)
-                elif change == "producer":
-                    envelope["producer"]["run_id"] = 43
-                else:
-                    envelope.update(scope="target", target_id="target-a")
-            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory, \
-                    patch.object(transport, "extract_build", side_effect=extracted), \
-                    patch.object(transport, "verify_build_export", return_value=envelope), \
-                    patch.object(transport, "materialize_build_export") as copying, self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
-            copying.assert_not_called()
-
-    def test_existing_destination_and_unenrolled_workflow_reject(self):
-        fixture = transport_fixture()
+    def test_late_archive_failure_and_movement_publish_nothing(self):
+        world = target_set_world()
+        world.api.add_artifact(world.records[111], b"not a ZIP of the right digest")
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(MbError):
-                self.call(fixture, Path(directory))
-            fixture[2]["producer"]["workflow_path"] = ".github/workflows/other.yml"
-            with self.assertRaises(MbError):
-                self.call(fixture, Path(directory) / "output")
+                self.call(world, Path(directory) / "output")
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        changes = {"source": lambda w: w.api.set_branch("master", "f" * 40, "e" * 40),
+                   "attempt": lambda w: w.set_run(42, run_attempt=3),
+                   "cancelled": lambda w: w.set_run(42, status="completed", conclusion="cancelled"),
+                   "expired": lambda w: w.set_artifact(110, expired=True)}
+        for name, change in changes.items():
+            world = target_set_world()
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                with after_download(world.api, lambda: change(world), count=2), self.assertRaises(MbError):
+                    self.call(world, Path(directory) / "output")
+                self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_logical_export_budget_is_not_multiplied_by_targets(self):
+        world = target_set_world()
+        total = sum(file["size"] for partition in world.partitions for file in partition["envelope"]["files"])
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(limits, "MAX_CI_EXPORT_TREE_BYTES", total - 1), self.assertRaises(MbError):
+            self.call(world, Path(directory) / "output")
+
+    def test_reads_of_one_command_share_immutable_objects(self):
+        world = target_set_world()
+        reads = CommandReads.of(world.api)
+        with tempfile.TemporaryDirectory() as directory:
+            transport.download_target_set(reads, descriptors=world.descriptors, plan=world.plan, run_id=42,
+                                          run_attempt=2, output=Path(directory) / "first")
+            before = world.api.request_count
+            transport.download_target_set(reads, descriptors=world.descriptors, plan=world.plan, run_id=42,
+                                          run_attempt=2, output=Path(directory) / "second")
+        self.assertEqual(world.api.request_count - before, 16)  # the tested commit is not read again
+
+
+if __name__ == "__main__":
+    unittest.main()

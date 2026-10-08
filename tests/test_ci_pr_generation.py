@@ -37,8 +37,9 @@ class PrGenerationTests(unittest.TestCase):
                     self.assertEqual(observed.repository, api.repository)
                     self.assertEqual(observed.pr_number, 7)
                     self.assertEqual(observed.head_branch, pr["head"]["ref"])
-                    self.assertEqual(sum(call.args[0] == path for call in reads.call_args_list), 2)
-                    self.assertFalse(any("/git/" in call.args[0] for call in reads.call_args_list))
+                    # One observation: the repository, its default head and the pull request, once each.
+                    self.assertEqual([call.args[0] for call in reads.call_args_list],
+                                     [f"/repos/{api.repository}", f"/repos/{api.repository}/branches/master", path])
                     self.assertEqual(api.mutations, [])
                     with self.assertRaises(dataclasses.FrozenInstanceError):
                         observed.draft = not draft
@@ -69,63 +70,47 @@ class PrGenerationTests(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(MbError):
                 read_pr_generation(api, pr_number=7, controller_sha=controller)
 
-    def test_readiness_and_source_changes_on_same_head_are_not_reused(self):
-        changes = [lambda p: p.update(draft=False), lambda p: p.update(state="closed"),
-                   lambda p: p["head"].update(sha="e" * 40),
-                   lambda p: p["head"].update(ref="renamed"),
-                   lambda p: p.update(merge_commit_sha="e" * 40),
-                   lambda p: p["base"].update(sha="e" * 40)]
+    def test_a_later_observation_shows_every_readiness_and_source_change(self):
+        changes = [lambda p: p.update(draft=False), lambda p: p["head"].update(sha="e" * 40),
+                   lambda p: p["head"].update(ref="renamed"), lambda p: p.update(merge_commit_sha="e" * 40)]
         for index, change in enumerate(changes):
             api, pr, path, controller = self.seed(draft=True)
-            original = api.get_json
-            seen = 0
-            def read(endpoint, **kwargs):
-                nonlocal seen
-                if endpoint == path:
-                    seen += 1
-                    if seen == 2:
-                        change(pr)
-                        api.add_response(path, pr)
-                return original(endpoint, **kwargs)
-            with patch.object(api, "get_json", side_effect=read), self.subTest(index=index):
-                with self.assertRaises(MbError):
-                    read_pr_generation(api, pr_number=7, controller_sha=controller)
+            first = read_pr_generation(api, pr_number=7, controller_sha=controller)
+            self.assertEqual(read_pr_generation(api, pr_number=7, controller_sha=controller), first)
+            change(pr)
+            api.add_response(path, pr)
+            with self.subTest(index=index):
+                self.assertNotEqual(read_pr_generation(api, pr_number=7, controller_sha=controller), first)
+        for change in (lambda p: p.update(state="closed"), lambda p: p["base"].update(sha="e" * 40)):
+            api, pr, path, controller = self.seed(draft=True)
+            read_pr_generation(api, pr_number=7, controller_sha=controller)
+            change(pr)
+            api.add_response(path, pr)
+            with self.assertRaises(MbError):
+                read_pr_generation(api, pr_number=7, controller_sha=controller)
 
-    def test_stale_controller_and_late_default_tree_movement_refuse(self):
+    def test_stale_controller_and_moved_default_head_refuse(self):
         api, _, _, controller = self.seed()
         with self.assertRaises(MbError):
             read_pr_generation(api, pr_number=7, controller_sha="e" * 40)
-        for tree in ("8" * 40, "e" * 40):
-            api, _, _, controller = self.seed()
-            original = api.get_json
-            seen = 0
-            def read(endpoint, **kwargs):
-                nonlocal seen
-                response = original(endpoint, **kwargs)
-                if "/branches/" in endpoint:
-                    seen += 1
-                    if seen == 2:
-                        response["commit"]["sha"] = "e" * 40 if tree == "8" * 40 else controller
-                        response["commit"]["commit"]["tree"]["sha"] = tree
-                return response
-            with patch.object(api, "get_json", side_effect=read), self.subTest(tree=tree):
-                with self.assertRaises(MbError):
-                    read_pr_generation(api, pr_number=7, controller_sha=controller)
+        api, _, _, controller = self.seed()
+        read_pr_generation(api, pr_number=7, controller_sha=controller)
+        api.set_branch("master", "e" * 40, "e" * 40)
+        with self.assertRaisesRegex(MbError, "controller has moved"):
+            read_pr_generation(api, pr_number=7, controller_sha=controller)
 
-    def test_api_error_on_either_read_is_not_absence_or_deferral(self):
-        for failing_read in (1, 2):
-            api, _, path, controller = self.seed(draft=True)
+    def test_api_error_is_not_absence_or_deferral(self):
+        for target in ("", "/branches/master", "/pulls/7"):
+            api, _, _, controller = self.seed(draft=True)
             original = api.get_json
-            seen = 0
             failure = MbError("unavailable API")
+
             def read(endpoint, **kwargs):
-                nonlocal seen
-                if endpoint == path:
-                    seen += 1
-                    if seen == failing_read:
-                        raise failure
+                if endpoint == f"/repos/{api.repository}{target}":
+                    raise failure
                 return original(endpoint, **kwargs)
-            with patch.object(api, "get_json", side_effect=read), self.subTest(read=failing_read):
+
+            with patch.object(api, "get_json", side_effect=read), self.subTest(target=target):
                 with self.assertRaises(MbError) as caught:
                     read_pr_generation(api, pr_number=7, controller_sha=controller)
                 self.assertIs(caught.exception, failure)
@@ -134,8 +119,10 @@ class PrGenerationTests(unittest.TestCase):
         api, pr, path, controller = self.seed()
         original = api.get_json
         shared = copy.deepcopy(pr)
+
         def read(endpoint, **kwargs):
             return shared if endpoint == path else original(endpoint, **kwargs)
+
         with patch.object(api, "get_json", side_effect=read):
             observed = read_pr_generation(api, pr_number=7, controller_sha=controller)
         shared["head"].clear()
@@ -143,23 +130,13 @@ class PrGenerationTests(unittest.TestCase):
         self.assertEqual(observed.head_sha, pr["head"]["sha"])
         self.assertFalse(observed.draft)
 
-    def test_default_branch_change_rejects_without_following_new_branch(self):
-        api, _, _, controller = self.seed()
-        original = api.get_json
-        seen = 0
-        paths = []
-        def read(endpoint, **kwargs):
-            nonlocal seen
-            paths.append(endpoint)
-            response = original(endpoint, **kwargs)
-            if endpoint == f"/repos/{api.repository}":
-                seen += 1
-                if seen == 2:
-                    response["default_branch"] = "renamed"
-            return response
-        with patch.object(api, "get_json", side_effect=read), self.assertRaises(MbError):
-            read_pr_generation(api, pr_number=7, controller_sha=controller)
-        self.assertFalse(any(endpoint.endswith("/branches/renamed") for endpoint in paths))
+    def test_renamed_default_branch_refuses_whatever_its_head(self):
+        for head in ("e" * 40, None):
+            api, _, _, controller = self.seed()
+            api.set_branch("renamed", head or controller, "8" * 40)
+            api.add_response(f"/repos/{api.repository}", {"full_name": api.repository, "default_branch": "renamed"})
+            with self.subTest(head=head), self.assertRaises(MbError):
+                read_pr_generation(api, pr_number=7, controller_sha=controller)
 
     def test_observation_does_not_replace_full_ready_merge_admission(self):
         for draft, merge in ((True, True), (True, False), (False, False)):
@@ -168,7 +145,7 @@ class PrGenerationTests(unittest.TestCase):
             with self.subTest(draft=draft, merge=merge), self.assertRaises(MbError):
                 authenticate_pr_identity(api, ci_plan()["identity"])
 
-    def test_full_merge_authentication_rechecks_generation_after_git_read(self):
+    def test_a_second_merge_admission_refuses_every_change_since_the_first(self):
         changes = [lambda a, p, path: p.update(draft=True),
                    lambda a, p, path: p["head"].update(sha="e" * 40),
                    lambda a, p, path: p.update(merge_commit_sha="e" * 40),
@@ -179,16 +156,11 @@ class PrGenerationTests(unittest.TestCase):
                        {"full_name": a.repository, "default_branch": "renamed"})]
         for index, change in enumerate(changes):
             api, pr, path, _ = self.seed()
-            original = api.get_json
-            def read(endpoint, **kwargs):
-                response = original(endpoint, **kwargs)
-                if "/git/commits/" in endpoint:
-                    change(api, pr, path)
-                    api.add_response(path, pr)
-                return response
-            with patch.object(api, "get_json", side_effect=read), self.subTest(index=index):
-                with self.assertRaises(MbError):
-                    authenticate_pr_identity(api, ci_plan()["identity"])
+            authenticate_pr_identity(api, ci_plan()["identity"])
+            change(api, pr, path)
+            api.add_response(path, pr)
+            with self.subTest(index=index), self.assertRaises(MbError):
+                authenticate_pr_identity(api, ci_plan()["identity"])
 
 
 if __name__ == "__main__":

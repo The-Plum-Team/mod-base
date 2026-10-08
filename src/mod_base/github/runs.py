@@ -151,6 +151,32 @@ def referenced_kit_sha(run: Mapping[str, Any], *, kit_repository: str = KIT_REPO
     return shas.pop()
 
 
+def referenced_workflows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """Every ``referenced_workflows[]`` entry of ``run`` as ``(workflow, sha)``, in listing order:
+    ``workflow`` is ``<owner>/<repo>/.github/workflows/<file>`` and ``sha`` the 40-hex commit the run
+    resolved it at. An entry whose ``path`` does not end in ``@<sha>`` equal to its own ``sha``, or
+    that is malformed in any other way, raises: a run that called a workflow by a branch or tag
+    cannot be bound to a commit.
+
+    GitHub lists a called workflow whether or not its calling job ran, in no fixed order."""
+
+    if not isinstance(run, Mapping):
+        raise _fail("workflow run must be an object")
+    entries = run.get("referenced_workflows")
+    if not isinstance(entries, list) or len(entries) > MAX_REFERENCED_WORKFLOWS:
+        raise _fail("workflow run has no bounded referenced_workflows list")
+    resolved: list[tuple[str, str]] = []
+    for index, entry in enumerate(entries):
+        path = entry.get("path") if isinstance(entry, Mapping) else None
+        match = _REFERENCED_PATH.fullmatch(path) if isinstance(path, str) else None
+        if match is None or not grammar.is_match(grammar.SHA1, entry.get("sha")) or match.group("ref") != entry["sha"]:
+            raise _fail(f"referenced_workflows[{index}] is not a workflow file pinned to its own 40-hex SHA")
+        if entry.get("ref") is not None and not isinstance(entry["ref"], str):
+            raise _fail(f"referenced_workflows[{index}].ref is malformed")
+        resolved.append((match.group("prefix") + match.group("file"), entry["sha"]))
+    return resolved
+
+
 def workflow_runs(api: GitHubApi, workflow_path: str, *, branch: str | None = None, head_sha: str | None = None,
                   event: str | None = None, status: str | None = None,
                   max_items: int = 1000) -> list[dict[str, Any]]:

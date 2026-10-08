@@ -321,7 +321,7 @@ Integration-round amendments:
 | MB9 | `mod_base.pin`, `mod_base.pin_commands`, `mod_base.template.tool`, `mod_base.template.commands`, `mod_base.template.lock` |
 | MB10 | `mod_base.conformance.run`, `mod_base.conformance.commands` |
 | MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject` |
-| MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.installation`, `mod_base.build_ci.installation_schema`, `mod_base.build_ci.installation_record`, `mod_base.build_ci.bootstrap_installation`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.privileged_launch`, `mod_base.build_ci.python_archive`, `mod_base.build_ci.python_installation`, `mod_base.build_ci.python_transport`, `mod_base.build_ci.python_setup`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff`, `mod_base.build_ci.runtime_root_request_schema`, `mod_base.build_ci.runtime_root_request` |
+| MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.installation`, `mod_base.build_ci.installation_schema`, `mod_base.build_ci.installation_record`, `mod_base.build_ci.bootstrap_installation`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.privileged_launch`, `mod_base.build_ci.python_archive`, `mod_base.build_ci.python_installation`, `mod_base.build_ci.python_transport`, `mod_base.build_ci.python_setup`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff`, `mod_base.build_ci.runtime_root_request_schema`, `mod_base.build_ci.runtime_root_request` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -476,16 +476,32 @@ Constants:
 
 Owner: MB0 (implemented).
 
-THE single source of the Pages workflow, job and step display names (SPEC §5.9).
+THE single source of the Pages and Build/E2E workflow, job and step display names (SPEC §5.9).
 
 Constants:
 
 * `PAGES_WORKFLOW_NAME = 'Project site'`
 * `PAGES_WORKFLOW_PATH = '.github/workflows/pages.yml'`
 * `PAGES_EVENTS = frozenset({'schedule', 'workflow_dispatch'})`
-* `CI_BUILD_CALL`, `CI_PACKAGED_CALL`: exact shared producer call prefixes.
-* `CI_BUILD_JOBS`, `CI_PACKAGED_JOBS`: frozen full-execution graph name templates.
-* `CI_SEAL_STEP`, `CI_UPLOAD_STEP`: exact independent validation and sealed upload names.
+* `CI_GUARD_WORKFLOW_PATH = '.github/workflows/mod-base-guard.yml'`
+* `CI_CALLER_WORKFLOWS`: managed caller id (`build`, `packaged`, `status`) -> its path in the mod
+  (`.github/workflows/mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`);
+  `build` and `packaged` are the two producers.
+* `CI_CALLEE_WORKFLOWS`: Build/E2E callee id (`build`, `select-build`, `packaged-e2e`) -> its path
+  in the kit repository. Its own registry: never `CALLEE_WORKFLOWS`, which stays the Pages table.
+* `CI_GUARD_CALL`, `CI_BUILD_CALL`, `CI_SELECT_CALL`, `CI_PACKAGED_CALL`: bare names of the calling
+  jobs (`Verify pinned mod-base`, `Shared Build`, `Select exact Build`, `Shared Packaged E2E`), the
+  prefix of every job of the workflow each calls.
+* `CI_CALLER_JOBS`: managed caller id -> job key -> bare display name of that caller-owned job
+  (`build`: `guard`, `deferred`, `shared`; `packaged`: `guard`, `deferred`, `select`, `rebuild`,
+  `shared`; `status`: `evaluate`, `publish`).
+* `CI_CALLS`: producer id -> calling job key -> the workflow it calls: `guard` (the mod's own
+  `CI_GUARD_WORKFLOW_PATH`) or a `CI_CALLEE_WORKFLOWS` id.
+* `CI_GUARD_JOBS`, `CI_BUILD_JOBS`, `CI_SELECT_JOBS`, `CI_PACKAGED_JOBS`: job key -> `name:`
+  template of the guard workflow and of each kit callee; `{id}` is the target or lane.
+* `CI_CALLEE_JOBS`: called workflow id (`guard` or a `CI_CALLEE_WORKFLOWS` id) -> its job table.
+* `CI_SEAL_STEP`, `CI_UPLOAD_STEP`: exact step names of the sealing step and of the upload that
+  follows it in every target, assemble, lane, aggregate and gate job.
 * `PAGES_CRON = '43 * * * *'`
 * `OPERATIONS = ('manual', 'deploy', 'family', 'rotate')`
 * `PUBLISH_OPERATIONS = ('recovery', 'manual', 'deploy', 'family')`
@@ -497,13 +513,21 @@ Constants:
   refuses a mod job reusing one of these names).
 * `CALLEE`: callee workflow id -> job key -> its `name:` template (`callee_job_name`).
 * `STEPS`: step key -> its exact display name (`step_name`).
-* `MATRIX_EXPRESSIONS`: placeholder -> the `${{ matrix.* }}` expression the callee YAML uses.
+* `MATRIX_EXPRESSIONS`: placeholder (`key`, `family`, `id`) -> the `${{ matrix.* }}` expression the
+  callee YAML uses.
 
 * `def caller_job_name(key: str) -> str`: Return the bare display name of a caller-owned job, e.g. ``"Deploy GitHub Pages"``.
 * `def callee_job_name(workflow: str, job: str, **fields: str) -> str`: Return the callee's own ``name:`` value with its placeholders filled (no caller prefix).
 * `def api_job_name(workflow: str, job: str, **fields: str) -> str`: Return the name the jobs API reports for a callee job, e.g. ``"Publish / Collect mc1.20.1"``.
 * `def workflow_template_name(workflow: str, job: str) -> str`: Return the callee job ``name:`` exactly as written in its YAML (``${{ matrix.* }}`` form).
 * `def unexpanded_api_job_name(workflow: str, job: str) -> str`: Return the name the jobs API reports, once, for a matrix callee job that its job-level ``if`` skipped before its matrix expanded (added in the integration round; `build` accepts it only for a publication without family legs, and only `completed/skipped`).
+* `def ci_producer(workflow_path: str) -> str`: The producer id (``build`` or ``packaged``) of the managed caller at that path; any other path raises.
+* `def ci_caller_job_name(caller: str, job: str) -> str`: The bare display name of a job the managed caller owns, as the jobs API reports a caller job that has steps.
+* `def ci_callee_job_name(callee: str, job: str, **fields: str) -> str`: A called workflow's own ``name:`` with its placeholders filled (no caller prefix).
+* `def ci_api_job_name(producer: str, call: str, job: str, **fields: str) -> str`: The name the jobs API reports for a job of the workflow the producer's calling job calls: ``"<calling job> / <callee job>"``.
+* `def ci_skipped_call_job_name(producer: str, call: str) -> str`: The name the jobs API reports, once, for a calling job whose job-level ``if`` skipped the call: the caller's bare job name.
+* `def ci_workflow_template_name(callee: str, job: str) -> str`: A called workflow's job ``name:`` exactly as written in its YAML (``${{ matrix.id }}`` form).
+* `def ci_unexpanded_api_job_name(producer: str, call: str, job: str) -> str`: The name the jobs API reports, once, for a matrix job of a called workflow skipped before its matrix expanded.
 * `def step_name(key: str) -> str`
 * `def find_job(jobs: Sequence[Mapping[str, Any]], name: str, *, run_attempt: int) -> dict[str, Any]`: Return the single job named exactly ``name`` in ``run_attempt``.
 
@@ -533,11 +557,6 @@ Constants:
 * `CI_RUNTIME_ROOT_REQUEST_NAME`: separate fixed local runtime Root request filename.
 * `CI_RUNTIME_FREEZE_OPERATION`: closed runtime process capability `runtime-validation-v1`; independently enrolled caller selects it explicitly, never request data.
 * `CI_PLAN_NAME`: fixed existing-kind plan filename for protected verifier input.
-* `CI_PR_BUILD_TITLE`: closed initial v1 protected PR Build selection-marker grammar; never success evidence.
-* `class CIPrBuildTitle`
-  * fields: `profile: str, pr_number: int, head_sha: str, base_sha: str, tested_sha: str`
-* `def ci_pr_build_title(*, profile: str, pr_number: int, head_sha: str, base_sha: str, tested_sha: str) -> str`
-* `def parse_ci_pr_build_title(value: object) -> CIPrBuildTitle | None`
 * `CI_ARTIFACT_PREFIXES`: separate attempt-specific CI name prefixes, excluded from the Pages parser.
 * `class CIArtifactName`
   * fields: `kind: str, name: str, run_id: int, run_attempt: int, unit_id: str | None = None`
@@ -556,7 +575,7 @@ Compiled full-match patterns (use `is_match`/`require`; the grammar is SCHEMAS.m
 * `KEY`, `FAMILY`, `LANE_ID`, `SHA1`, `SHA256`, `DIGEST`, `BRANCH`, `REPOSITORY`, `VERSION`, `IDENT`
 * `ARTIFACT_NODE`, `MINECRAFT`, `LOADER`, `SCENARIO`, `ROLE`, `STEP`, `REVIEW_TIER`, `PROFILE`
 * `VARIANT_ID`, `NATIVE_KIND`, `CONTRACT_NAME`, `EXTENSION_NAME`, `EVENT`, `WORKFLOW_PATH`
-* `RFC3339Z`, `POSITIVE_DECIMAL`, `RUN_URL`, `WORKFLOW_REF`
+* `RFC3339Z`, `ACTIONS_TIMESTAMP`, `POSITIVE_DECIMAL`, `RUN_URL`, `WORKFLOW_REF`
 * `ARTIFACT_PREFIXES`: artifact kind -> name prefix (`mb-handoff`, `mb-anchor`, ...), the kinds
   of `ArtifactName.kind` other than `promotion` and `pages`.
 
@@ -574,6 +593,7 @@ Compiled full-match patterns (use `is_match`/`require`; the grammar is SCHEMAS.m
 * `def is_repo_path(value: object) -> bool`: True for a repository-relative path: a bundle path none of whose components is ``.git`` (compared case-insensitively, for case-insensitive filesystems).
 * `def is_export_path(value: object) -> bool`: True for a canonical path of a file a Build or runtime export holds: the length, depth and traversal rules of a bundle path, with components of ASCII letters, digits, `.`, `_`, `-`, `+` and single inner spaces that neither start nor end with a space or a dot (`Quick Skin - Fabric - 1.20.1-3.1.0.jar`).
 * `def parse_timestamp(value: object, label: str = 'timestamp') -> datetime`: Parse a GitHub ``YYYY-MM-DDTHH:MM:SSZ`` timestamp into an aware UTC datetime.
+* `def normalize_timestamp(value: object, label: str = 'timestamp') -> str`: Return an Actions API time (``...Z``, fractional seconds or a numeric offset) as whole-second UTC ``YYYY-MM-DDTHH:MM:SSZ``, the one form Build/E2E records store; two results compare as text in time order.
 * `class WorkflowRef`: A parsed ``GITHUB_WORKFLOW_REF`` (``owner/repo/.github/workflows/f.yml@refs/heads/b``).
   * fields: `repository: str, path: str, branch: str`
 * `def parse_workflow_ref(value: object) -> WorkflowRef`: Parse a branch-scoped workflow ref; tags, pull refs and malformed values are rejected.
@@ -1017,6 +1037,7 @@ Workflow-run reads and exact run validation (MB1).
 * `def validate_run(run: Mapping[str, Any], *, repository: str, workflow_path: str, events: Collection[str], head_branch: str | None = None, head_sha: str | None = None, workflow_id: int | None = None, require_success: bool = True, display_title: str | None = None) -> None`: Require exact provenance: ``path``, ``event`` in ``events``, ``head_repository.full_name``, and (when given) ``head_branch``, ``head_sha``, ``workflow_id``, ``display_title``; with ``require_success`` also ``status == "completed"`` and ``conclusion == "success"``. Raises :class:`mod_base.errors.MbError` on any difference.
 * `def run_order(run: Mapping[str, Any]) -> tuple[datetime, int, int]`: ``(created_at, id, run_attempt)`` after strict shape validation (a total dispatch order).
 * `def referenced_kit_sha(run: Mapping[str, Any], *, kit_repository: str = 'The-Plum-Team/mod-base') -> str`: The single kit SHA a run resolved: every ``referenced_workflows[]`` entry whose ``path`` starts with ``<kit_repository>/.github/workflows/`` must end in ``@<sha>`` equal to its ``sha``, and exactly one distinct 40-hex SHA must result (SPEC §1.2 step 3).
+* `def referenced_workflows(run: Mapping[str, Any]) -> list[tuple[str, str]]`: Every ``referenced_workflows[]`` entry as ``(workflow, sha)`` in listing order: ``workflow`` is ``<owner>/<repo>/.github/workflows/<file>`` and ``sha`` the 40-hex commit the run resolved it at. An entry not pinned to its own SHA, or malformed, raises. GitHub lists a called workflow whether or not its calling job ran, in no fixed order.
 * `def workflow_runs(api: GitHubApi, workflow_path: str, *, branch: str | None = None, head_sha: str | None = None, event: str | None = None, status: str | None = None, max_items: int = 1000) -> list[dict[str, Any]]`: List runs of ``workflow_path`` (by file name) newest first with the given filters; the response ``total_count`` must equal the listed rows when it is at most ``max_items``. Beyond ``max_items`` runs, or beyond the ``limits.MAX_FILTERED_RUNS_LISTED`` newest runs GitHub lists for a filtered search, the read must list exactly that many rows; otherwise only a short page ends it. A snapshot whose ``total_count`` changes between pages or disagrees with its rows, or that repeats a run, is read again through ``api.read_listing`` (``limits.LISTING_READ_ATTEMPTS`` reads at most).
 * `def wait_for_completion(api: GitHubApi, run_id: int, *, attempts: int = 30, interval: float = 2.0, sleep: Callable[[float], None] = sleep) -> dict[str, Any]`: Poll a run until ``status == "completed"`` (at most ``attempts`` reads); raise otherwise.
 * `def run_record(run: Mapping[str, Any], claim: Mapping[str, Any], *, require_controller_head: bool = True) -> dict[str, Any]`: Build the ``RunRecord`` (SPEC §3.0) for an authenticated API ``run`` and its ``RunClaim``: the claim's run id/attempt/workflow path must equal the run's; ``head_sha``, ``event``, ``created_at``, ``conclusion`` (``success``) and ``display_title`` come from the run. The result validates as ``documents.run_record``.
@@ -1776,29 +1797,84 @@ BUILD-PROTOCOL.md. The hook contract itself is `mod_base.build_ci.adapter`.
 
 ## `mod_base.build_ci.graph`
 
-Owner: MB11. Full-execution graph contracts; live canary verification remains required.
+Owner: MB11. Exact job graphs of the managed Build and packaged-E2E callers: the exact multiset of
+the jobs the caller owns and the jobs of every workflow it calls, each with one conclusion, as a
+function of the producer, one closed mode and the plan. Never chosen to fit observed jobs. Literal
+API listings of every mode are in `tests/fixtures/ci_graphs`; how GitHub names a skipped call and a
+skipped unexpanded matrix, and which workflows a run lists as referenced, is confirmed only by a
+hosted canary.
 
-* `class BuildGraphV1`
+* `BUILD_MODES = ('full', 'deferred', 'reuse')`
+* `PACKAGED_MODES = ('pull-request', 'deferred', 'selected', 'rebuilt', 'reuse')`
+* `class BuildGraphV1`: a run of the managed Build caller in one mode of `BUILD_MODES`. `jobs` is
+  the exact sorted `[{name, conclusion}]`; `sealed_jobs` the jobs that seal and upload (gates
+  included); `sha256` the digest a producer record carries as `graph_sha256`; `called` every kit
+  callee the caller references -> whether its calling job runs in this mode; `prerequisites` the
+  successful jobs that must finish before a gate job validates.
+  * fields: `mode: str = 'full'`
   * `jobs(self, plan: dict[str, Any]) -> list[dict[str, str]]`
   * `sealed_jobs(self, plan: dict[str, Any]) -> list[str]`
-* `class PackagedGraphV1`
+  * `sha256(self, plan: dict[str, Any]) -> str`
+  * `called(self) -> dict[str, bool]`
+  * `prerequisites(self, plan: dict[str, Any], gate_job: str) -> list[str]`
+* `class PackagedGraphV1`: the same for the managed packaged-E2E caller and `PACKAGED_MODES`.
+  * fields: `mode: str = 'pull-request'`
   * `jobs(self, plan: dict[str, Any]) -> list[dict[str, str]]`
   * `sealed_jobs(self, plan: dict[str, Any]) -> list[str]`
-* `def authenticate_graph(api: GitHubApi, *, plan: dict[str, Any], producer: str, run_id: int, run_attempt: int) -> str`: exact attempt graph and seal-before-upload check; not admission or status authority.
-* `def authenticate_gate_timeline(api: GitHubApi, *, document: dict[str, Any], descriptor: dict[str, Any], plan: dict[str, Any]) -> str`: Bind a full tested gate record to the complete exact attempt graph, actual source and gate upload steps, bounded job/step windows and every prerequisite completing before gate validation starts. Packaged's owning Build requires its independent full graph and completed sealed jobs. Run/source/pin authority, artifact metadata/bytes, native reports and caller graph remain separate.
+  * `sha256(self, plan: dict[str, Any]) -> str`
+  * `called(self) -> dict[str, bool]`
+  * `prerequisites(self, plan: dict[str, Any], gate_job: str) -> list[str]`
+* `def run_graph(producer: str, mode: str) -> BuildGraphV1 | PackagedGraphV1`: The graph contract of ``producer`` (``build`` or ``packaged``) in ``mode``.
+* `def job_name(producer: str, callee: str, job: str, unit_id: str | None = None) -> str`: The API name of a job of a kit workflow in a run of that producer; ``unit_id`` is the target or lane of a matrix job.
+* `def upload_job_name(producer: str, kind: str, unit_id: str | None) -> str`: The API name of the job that uploads that artifact kind in a run of that producer.
+* `def gate_mode(producer: str, gate: str, plan: dict[str, Any], digest: str) -> str`: The mode a gate's producer record was sealed in: the one admissible mode of ``records.GATE_MODES`` whose exact graph for the plan has that digest. Settled before any job is read.
+* `def authenticate_referenced_workflows(references: Sequence[tuple[str, str]], *, identity: dict[str, Any], producer: str, mode: str) -> None`: Bind a producer run to its controller commit and kit pin: the guard workflow at ``controller_sha``, every kit callee whose calling job runs in that mode at the pinned kit SHA, optionally the caller's skipped callees at the same SHA, no other entry and no repeat.
+* `def sealed_upload(job: dict[str, Any]) -> tuple[str, str]`: The upload window of a sealing job as whole-second UTC text: one successful seal step finished before one successful upload step started, both inside the successful job.
+* `def require_graph(jobs: list[dict[str, Any]], *, plan: dict[str, Any], producer: str, mode: str, run_attempt: int) -> str`: Require the jobs of a completed attempt to be exactly that graph, every sealing job sealed before it uploaded; return the graph digest.
+* `def require_partial_graph(jobs: list[dict[str, Any]], *, plan: dict[str, Any], producer: str, mode: str, run_attempt: int, finished: list[str]) -> None`: Admit the jobs of a still-running attempt for an in-run reader: no unenrolled or repeated job, and every job named in ``finished`` completed as the graph expects. Never proof that the remaining jobs succeed.
+* `def authenticate_graph(api: GitHubApi, *, plan: dict[str, Any], producer: str, mode: str, run_id: int, run_attempt: int) -> str`: Read one attempt's jobs and require the exact completed graph; a graph check only, not run, source or artifact admission.
+* `def authenticate_gate_timeline(api: GitHubApi, *, document: dict[str, Any], descriptor: dict[str, Any], plan: dict[str, Any]) -> str`: Bind a tested record to the exact graph of its mode and to real execution times: every prerequisite job finished before the gate's seal step started, the gate's upload window is the descriptor's, and every source artifact's window is its producing job's actual upload. A Build consumed from another run needs that run's own exact full graph, finished first. Run/source/pin authority, artifact metadata and bytes remain separate.
 
 ## `mod_base.build_ci.authenticate`
 
-Owner: MB11. Inert live and historical source authentication; never publishes a status.
+Owner: MB11. Inert live and historical source authentication; never publishes a status. Every
+function is one observation: a caller that acts on it observes again immediately before its effect
+(`mod_base.build_ci.reads.Watch`). Passing a `mod_base.build_ci.reads.CommandReads` as `api` reads
+each Git object once per command.
 
 * `class PrGeneration`: Frozen live readiness/source observation, not execution evidence.
   * fields: `repository: str, pr_number: int, base_branch: str, base_sha: str, controller_tree: str, head_branch: str, head_sha: str, draft: bool, merge_sha: str | None`
 * `class MergedPr`: Frozen historical PR/tested/final Git observations, not policy, gate, reuse or settlement authority.
   * fields: `repository: str, pr_number: int, identity_sha256: str, merged_sha: str, merged_tree: str, merged_parents: tuple[str, ...], merged_at: str, controller_sha: str`
-* `def authenticate_merged_pr_identity(api: GitHubApi, identity: dict[str, Any], *, controller_sha: str, merged_sha: str) -> MergedPr`: Bind an independently admitted original PR identity and current controller/final SHA to a closed merged same-repository PR, original synthetic merge with exact ordered parents, equal complete final tree and original/current protected history. Repeat Git/PR reads and close controller/PR/caller identity checks. Live admission remains separate; full historical gates, native policy/pin, source seals and writer/owner approval remain required.
-* `def read_pr_generation(api: GitHubApi, *, pr_number: int, controller_sha: str) -> PrGeneration`: Read/recheck an open same-repository PR and protected live default/base against the executing controller before planning. Draft and unavailable merge states do not authorize workers; ready merge/policy/plan admission remains independent.
-* `def authenticate_pr_identity(api: GitHubApi, identity: dict[str, Any]) -> None`: Bind the ready PR generation and protected default/base, authenticate exact ordered merge parents/tree, then recheck default/controller and the same PR generation. Does not establish native policy, approval, bytes or status authority.
-* `def authenticate_source_identity(api: GitHubApi, identity: dict[str, Any]) -> None`: Dispatch to ready-PR authentication or independently authenticate an exact non-PR Git commit/tree/ordered parents in protected default history, with live controller freshness checks. Historical subject and current controller remain distinct. Request/run/profile authorization and full recovery policy remain caller obligations.
+* `def run_head(identity: dict[str, Any]) -> tuple[str, str, str]`: ``(head_sha, head_branch, head_repository)`` GitHub records on every run and artifact a managed caller produces for the identity: a pull request's head commit, branch and source repository, or the default-branch commit a protected push or dispatch runs from, which must also be its tested commit.
+* `def authenticate_merged_pr_identity(api: GitHubApi, identity: dict[str, Any], *, controller_sha: str, merged_sha: str) -> MergedPr`: Bind an independently admitted original PR identity and current controller/final SHA to a closed merged same-repository PR, the original synthetic merge with exact ordered parents, an equal complete final tree and original/current protected history, in one pass. The identity is copied on entry. Live admission remains separate; full historical gates, native policy/pin, source seals and writer/owner approval remain required.
+* `def read_pr_generation(api: GitHubApi, *, pr_number: int, controller_sha: str) -> PrGeneration`: One read of the repository, its default head and an open same-repository PR against the executing controller. Draft and unavailable merge states do not authorize workers; ready merge/policy/plan admission remains independent.
+* `def authenticate_pr_identity(api: GitHubApi, identity: dict[str, Any]) -> None`: Check the ready PR generation and protected default/base, then the exact ordered merge parents and tree of the tested commit, in one pass. Does not establish native policy, approval, bytes or status authority.
+* `def authenticate_source_identity(api: GitHubApi, identity: dict[str, Any]) -> None`: Dispatch to ready-PR authentication or authenticate an exact non-PR Git commit/tree/ordered parents in protected default history against the live controller, in one pass. Request/run/profile authorization and full recovery policy remain caller obligations.
+
+## `mod_base.build_ci.reads`
+
+Owner: MB11. How one Build/E2E command reads GitHub: immutable objects once, mutable state at the
+start of the command and again immediately before its effect.
+
+* `class CommandReads`: One command's reads through its one budgeted client. It offers the client's
+  read surface, so it is passed wherever a client is read from. A commit, tree or blob named by SHA
+  and a comparison of two SHAs are fetched once; so is the job list of an attempt that `run` saw
+  completed. Everything else reaches the client every time.
+  * `@classmethod of(cls, api: GitHubApi | CommandReads) -> CommandReads`
+  * `repository` (property) -> `str`
+  * `request_count` (property) -> `int`
+  * `get_json(self, path: str, *, params: Mapping[str, str | int] | None = None) -> Any`
+  * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`
+  * `read_listing(self, read: Callable[[], _T]) -> _T`
+  * `download(self, path: str, *, max_bytes: int) -> bytes`
+  * `run(self, run_id: int) -> dict[str, Any]`
+  * `attempt_jobs(self, run_id: int, run_attempt: int) -> list[dict[str, Any]]`
+* `class Watch`: The mutable state one effect depends on. `read` performs a read the first time its
+  key is asked for and answers from that observation afterwards; `recheck`, called immediately
+  before the effect, performs every read again and requires the same answers.
+  * `read(self, key: tuple[Any, ...], reader: Callable[[], _T]) -> _T`
+  * `recheck(self) -> None`
 
 ## `mod_base.build_ci.records`
 
@@ -1806,7 +1882,10 @@ Owner: MB11. Strict evidence records with exact identity/attempt/coverage checks
 validity alone is never status authority. Full admission supplies a protected plan and independently
 authenticates the API, graph, native witnesses and actual frozen bytes.
 
-* `def validate_descriptor(value: Any, path: str = '$') -> dict[str, Any]`
+* `GATE_MODES`: gate -> producer (the managed caller whose run sealed it) -> the run modes that end
+  in that gate's receipt: `build` from a `full` Build run or a `rebuilt` packaged run; `packaged`
+  from a `pull-request`, `selected` or `rebuilt` packaged run. Deferred and reuse runs seal none.
+* `def validate_descriptor(value: Any, path: str = '$') -> dict[str, Any]`: A producer is a run of a managed caller, recorded under the pull request's head commit or, for a protected push or dispatch, the commit it both runs from and tests. Runtime, results and packaged-gate artifacts come from the packaged caller; a pull request's Build artifacts from its Build caller. Times are whole-second UTC.
 * `def validate_build_envelope(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
 * `def bind_build_envelope(envelope: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Strictly bind pre-upload producer identity, full plan/profile and artifact scope/target to a selected descriptor retaining actual API window and immutable artifact metadata. Pure structural binding; API authentication and native validity remain independently required.
 * `def validate_source_selection(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
@@ -2175,34 +2254,39 @@ pre-import bootstrap; the executing caller has already admitted its kit before e
 
 ## `mod_base.build_ci.selection`
 
-Owner: MB11. Newest PR Build selection before success; inactive initial title contract.
+Owner: MB11. Newest pull-request Build selection before success. A producer run is found by the
+managed Build caller's workflow file, the `pull_request_target` event and the pull request's head
+commit, head branch and source repository, with no status filter and no run-title contract. The
+newest run by `(created_at, id)` and its latest attempt are chosen before any result is read: no
+run or an unfinished one means nothing yet; a completed run with the exact deferral graph is not a
+producer and the wait continues; a successful run with the exact full graph is described; anything
+else is a rejection, never a fall back to an older run.
 
-Both live and historical selection retain bounded independent canonical plan snapshots and
-reject original caller/retained-plan drift before every successful, absent or pending return.
-
-* `def select_latest_merged_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str, controller_sha: str, merged_sha: str) -> dict[str, Any] | None`: Bind original same-repository PR parents/tree to the actual merged PR and current protected history, retaining that historical observation around original-controller newest run/attempt selection, complete Build graph, pinned kit, aggregate seal/upload and immutable bundle metadata. Select before evaluating outcome with no success filter or old fallback; no result for absent/pending and fatal failed/cancelled/corrupt/moved evidence. Original plan/workflow/current controller/final SHA require independent admission. Both coherent original gates, actual native payloads, policy/pin equivalence, later consumer chronology and authority remain mandatory; this performs no execution/download/status or reuse effect.
-* `def revalidate_latest_merged_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], workflow_path: str, controller_sha: str, merged_sha: str) -> None`: Retain the original canonical descriptor, repeat complete historical newest/source/metadata selection and require original caller descriptor bytes and exact selected descriptor equality. Reject absent/pending/superseded/mutated evidence around independent consumption. The packaged partner, native bytes, consumer chronology and final authority remain separate obligations.
-
-* `def select_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str) -> dict[str, Any] | None`: Source-bracket a bounded unfiltered-success listing under the protected workflow/default/controller/event, choose the newest exact v1 PR/head/base/tested/profile marker before evaluating outcome, return no bundle for absent/pending and fail on newest failed/cancelled/corrupt evidence. Authenticate the complete latest attempt/kit/graph/upload and unique immutable bundle metadata, then relist/recheck selected run/attempt/source before returning an expected-plan-bound descriptor. Marker is only a hint; embedded whole tuple/native bytes, bounded wait, consumption-time newest proof, caller/status authority and non-PR requests remain separate.
-* `def wait_for_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str, monotonic: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]`: Retain an independent validated plan, repeat exact newest/source selection while absent/pending, enforce the fixed monotonic 5400-second admission deadline and 91-observation cap, and clip 60-second sleeps to remaining time. Late API results never admit; API/corruption/failed-producer errors propagate. Clock/sleep are protected runtime seams, never candidate options. Exhaustion visibly requires complete Build/E2E recovery; no PR compiler route.
-* `def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], workflow_path: str) -> None`: Repeat complete newest producer/source/metadata admission and require exact selected descriptor equality before/after consumption. Reject absent/pending/superseded/drifted evidence; payload/native validity and final authority remain independent obligations.
-* `def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], workflow_path: str, output: Path, monotonic: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]`: Retain an independent plan, wait/select and revalidate before immutable numeric-ID download, bind actual canonical envelope/payload bytes, and revalidate newest/source/descriptor inside private atomic copy before exclusive publication. Reinspect the stage after final API admission. Return descriptor/envelope data; no compiler fallback, native receipt or status authority. Caller protects output ancestry and later native/final consumption rechecks; transport has independent bounds from the wait budget.
+* `def select_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any]) -> dict[str, Any] | None`: Admit the live pull request, then describe the complete bundle of its newest Build run, or return None while it is absent, pending or deferred. One observation: a consumer repeats it before its effect.
+* `def select_latest_merged_pr_build(api: GitHubApi, *, plan: dict[str, Any], controller_sha: str, merged_sha: str) -> dict[str, Any] | None`: The same after historical admission of the merged pull request; the original runs stay recorded under the pull request's head. None is absence, not reuse approval.
+* `def revalidate_latest_merged_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str) -> None`: Repeat the historical newest-run observation and require the same descriptor.
+* `def wait_for_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], monotonic: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]`: Wait at most the fixed monotonic 5400-second deadline and 91 observations. The pull request is admitted when the wait starts and again when a bundle is returned; in between a poll reads only the run listing. Late API results never admit; API, corruption and failed-producer errors propagate.
+* `def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any]) -> None`: Repeat the newest-run observation around consumption and require the same descriptor.
+* `def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], output: Path, monotonic: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]`: Wait/select, download by immutable numeric ID, verify the canonical envelope and bytes, and observe the pull request, the newest run, its latest attempt and the bundle's availability again inside the private atomic copy before publication. Returns the descriptor and envelope.
 
 ## `mod_base.build_ci.transport`
 
-Owner: MB11. Complete Build numeric-ID transport; selection/native/final authority remain separate.
+Owner: MB11. Numeric-ID transport for Build/runtime exports and tested gates. A producer run is
+authenticated as GitHub records it (a pull request's run under its head commit and branch, a
+protected push or dispatch under the commit it runs from); its controller commit and kit pin come
+from `referenced_workflows`. The producers are the managed callers of `workflow.CI_CALLER_WORKFLOWS`,
+so no route takes a workflow path. Each route reads commits and completed job lists once and the
+source, each run's latest attempt and each artifact's availability at its start and again
+immediately before it publishes or returns. Plans and descriptors are copied on entry.
 
-* `def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], plan: dict[str, Any], workflow_path: str, run_id: int, run_attempt: int, output: Path) -> list[dict[str, Any]]`: Preflight exact ordered complete same-attempt target descriptors and extra compressed-set budget; share protected source/producer/job context, require successful plan/policy and each sealed target, stream checked ZIPs into fixed target-ordinal children of a private atomic stage, verify original whole-logical-export limits and canonical complete union, reauthenticate all metadata and publish one private input set. Returns retained descriptor/envelope pairs. Native aggregate receipt, normalized complete bundle construction and final full graph remain separate mandatory phases.
-
-* `def download_target_partition(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], workflow_path: str, run_id: int, run_attempt: int, target_id: str, output: Path) -> dict[str, Any]`: Same authenticated assembler run/attempt and enrolled target only. Admit a sealed successful target job in a closed partial planned graph while the producer runs; retain immutable metadata/digest/envelope checks and private independent copying. The expected full graph digest is a protected contract, not proof that remaining jobs succeeded. Whole-union/policy/native validation and final full-graph admission remain mandatory.
-
-* `def download_completed_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], workflow_path: str, output: Path) -> dict[str, Any]`: Authenticate current source, exact completed latest producer attempt, executing kit, complete Build graph and aggregate upload window; bind artifact metadata/expiry/owner/head and ZIP digest, verify canonical envelope/inventory, reauthenticate and atomically copy a private independent export. Protected producer enrollment/plan/pin policy, newest-run selection, native validity and final authorization remain required. In-progress target fan-in is a separate route.
-* `def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], build_workflow_path: str, packaged_workflow_path: str, controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: Privately materialize the exact original complete Build bundle from a coherent historical seal pair, sharing original bounded ZIP/hash/envelope/scope/byte/atomic-copy checks. Retain historical source and caller snapshots, reread/compare both full seals inside final atomic publication, and preserve original producer identity. Caller owns a private writer-excluded parent; native Build/runtime validity, complete runtime payloads, newest eligible runs, policy/pin, consumer chronology and authority remain required. No native code, reuse status or settlement effect is admitted.
-* `def download_merged_runtime(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], build_workflow_path: str, packaged_workflow_path: str, controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: Copy only the coherent original pair's complete results artifact by numeric ID, with ZIP size/digest, fixed runtime extraction, exact envelope/bytes/producer/scope/owning Build bindings and final full pair/source/caller revalidation inside private publication. Compare original extracted envelope again so a self-consistent replacement cannot publish. Independent actual owning Build bytes, native validators, original/current policy/pin, newest eligible sources, later consumer chronology and writer authority remain mandatory.
-* `def download_merged_inputs(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], build_workflow_path: str, packaged_workflow_path: str, controller_sha: str, merged_sha: str, output: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Publish exact original complete Build/runtime bytes together under fixed private build/runtime children, retained source/plan/seals and one final coherent pair/fingerprint/caller and whole-byte revalidation. Either input/final admission failure publishes neither caller output. This is not native success or effect authority; actual native mapping/JDK/package/frame, protected policy/pin, newest sources, later consumer/writer admission and private writer exclusion remain mandatory.
-* `def download_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, workflow_path: str, build_workflow_path: str, temporary_root: Path) -> dict[str, Any]`: Download a full tested record by immutable numeric ID with latest completed attempt, exact protected workflow/head/kit/graph/upload and artifact metadata/digest admission. Extract only the fixed root canonical JSON record under existing record limits, bind actual gate/source execution timeline and every source artifact's metadata/availability, independently authenticate packaged's enrolled owning Build, and repeat API admission before returning. Caller owns a private temporary parent; source bytes/native validity, newest-run/caller/status authority and historical reuse remain separate.
-* `def download_merged_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, workflow_path: str, build_workflow_path: str, controller_sha: str, merged_sha: str, temporary_root: Path) -> dict[str, Any]`: Read one original full PR tested seal after merge using repeated retained historical PR identity admission, independently supplied current controller/final SHA and original protected plan/workflows. Share all original complete run/attempt/kit/graph/upload/numeric artifact/canonical record/source timeline/owning Build checks without rewriting original producer identity. Bounded caller snapshots reject substitution. Both coherent gates, original/current native policy/pin, source bytes/native validity, newest-run selection, later actual consumer chronology and writer/owner authority remain required; no reuse or settlement effect is approved.
-* `def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], build_workflow_path: str, packaged_workflow_path: str, controller_sha: str, merged_sha: str, temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Read two independent original full tested seals twice with retained historical source and bounded caller snapshots, require packaged's whole immutable owning Build descriptor equal Build's actual complete bundle, and reject changed records/source/caller inputs. Returns original Build/packaged records together, never a partial result or reuse authority. Native payloads, newest eligible runs, original/current policy/pin, actual consumer chronology and owner/writer admission remain required.
+* `def download_completed_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], output: Path) -> dict[str, Any]`: Authenticate the live subject, the exact completed latest attempt of a full Build-caller run, its controller and kit pin, exact graph and the assembling job's upload window; bind artifact metadata, expiry, owner and head and the ZIP digest; verify the canonical envelope and inventory and atomically publish a private copy. Newest-run selection, native validity and final authorization remain required.
+* `def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], plan: dict[str, Any], run_id: int, run_attempt: int, output: Path) -> list[dict[str, Any]]`: For the assembling job of a still-running full Build run (or of a standalone packaged run that rebuilds): require the exact ordered complete same-attempt target descriptors and the extra compressed-set budget, finished plan, policy and target jobs with their sealed upload windows, download each checked ZIP into fixed target-ordinal children of one private atomic stage, verify the whole logical export and publish all or nothing. Returns descriptor/envelope pairs.
+* `def download_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, temporary_root: Path) -> dict[str, Any]`: Read one tested record of the live subject by numeric ID: the mode of its run is settled from the descriptor's graph digest, the run, exact graph, gate seal and upload and artifact metadata are authenticated, only the fixed canonical root JSON record is extracted, the execution timeline and every source artifact's metadata and availability are bound, and a Build consumed from a separate run is authenticated as its own completed full run.
+* `def download_merged_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, controller_sha: str, merged_sha: str, temporary_root: Path) -> dict[str, Any]`: The same for one original PR seal after merge, under historical admission of the merged pull request; original producer identities are preserved. No reuse or settlement effect is approved.
+* `def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Read both original tested seals once and require the packaged gate's owning Build to be the Build gate's bundle. Never a partial result or reuse authority.
+* `def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: Privately materialize the exact original complete Build bundle of a coherent historical seal pair, observing the pair's mutable state again inside the atomic publication.
+* `def download_merged_runtime(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: The same for the pair's complete results aggregate, bound to the original owning Build. The extracted source is verified against the bound envelope once more inside the atomic copy, so a source replaced after binding is never published.
+* `def download_merged_inputs(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Publish both under fixed private build/runtime children after one final admission. Each child must carry the very envelope that was bound when its archive was extracted; either failure publishes neither.
 
 ## `mod_base.build_ci.handoff`
 

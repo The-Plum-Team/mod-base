@@ -763,12 +763,118 @@ def ci_plan() -> dict[str, Any]:
     return document
 
 
-def ci_producer(gate: str = "build") -> dict[str, Any]:
-    workflow = ".github/workflows/build-gate.yml" if gate == "build" else ".github/workflows/on-demand-e2e.yml"
-    return {"run_id": 42 if gate == "build" else 43, "run_attempt": 2,
-            "workflow_path": workflow, "workflow_ref": f"example/mod/{workflow}@refs/heads/master",
-            "api_head_sha": "2" * 40, "event": "pull_request_target", "graph_sha256": h(gate + "-graph"),
+#: The managed producer callers, written out: a rename in ``mod_base.workflow`` must not follow.
+CI_WORKFLOWS = {"build": ".github/workflows/mod-base-build.yml",
+                "packaged": ".github/workflows/mod-base-packaged-e2e.yml"}
+#: The kit workflows each managed caller references, whether or not their calling jobs run.
+CI_KIT_CALLEES = {"build": ("build.yml",), "packaged": ("select-build.yml", "build.yml", "packaged-e2e.yml")}
+CI_GRAPH_FIXTURES = FIXTURES / "ci_graphs"
+
+
+def ci_push_plan() -> dict[str, Any]:
+    """The fixture plan for a protected push: one default-branch commit is the commit tested, the
+    commit executed and the head GitHub records the run under."""
+
+    from mod_base.build_ci.protocol import plan_sha256
+
+    plan = ci_plan()
+    plan["identity"].update(pr_number=0, head_branch="master", head_sha="2" * 40, tested_sha="2" * 40,
+                            tested_tree="8" * 40, tested_parents=["a" * 40])
+    plan["plan_sha256"] = plan_sha256(plan)
+    return plan
+
+
+def ci_run_producer(plan: dict[str, Any], producer: str = "build", mode: str | None = None) -> dict[str, Any]:
+    """The run of one managed caller for the plan's subject, as GitHub records it: a pull request's
+    under its head commit, a push under the commit it runs from. ``mode`` is the run's graph mode
+    (by default the full Build and the pull-request packaged run)."""
+
+    from mod_base.build_ci.graph import run_graph
+
+    identity, workflow = plan["identity"], CI_WORKFLOWS[producer]
+    mode = mode or ("full" if producer == "build" else "pull-request")
+    return {"run_id": 42 if producer == "build" else 43, "run_attempt": 2, "workflow_path": workflow,
+            "workflow_ref": f"{identity['repository']}/{workflow}@refs/heads/{identity['base_branch']}",
+            "api_head_sha": identity["head_sha"],
+            "event": "pull_request_target" if identity["pr_number"] else "push",
+            "graph_sha256": run_graph(producer, mode).sha256(plan),
             "upload_window": {"started_at": "2026-10-07T10:01:00Z", "completed_at": "2026-10-07T10:02:00Z"}}
+
+
+def ci_producer(gate: str = "build") -> dict[str, Any]:
+    return ci_run_producer(ci_plan(), gate)
+
+
+def ci_graph_jobs(name: str) -> list[dict[str, Any]]:
+    """The jobs of the literal Jobs API listing ``tests/fixtures/ci_graphs/<name>.json``."""
+
+    listing = load_json_bytes((CI_GRAPH_FIXTURES / f"{name}.json").read_bytes())
+    if listing["total_count"] != len(listing["jobs"]):
+        raise ValueError(f"{name}: total_count disagrees with the listed jobs")
+    return listing["jobs"]
+
+
+def ci_api_run(plan: dict[str, Any], producer: str = "build", **changes: Any) -> dict[str, Any]:
+    """A completed successful run of a managed caller as ``GET /actions/runs/{id}`` reports it.
+
+    A ``pull_request_target`` run carries the pull request's head branch and commit; the commit it
+    executed from appears only in ``referenced_workflows``, as the commit of the mod's local guard
+    workflow (Block Pops run 37501309423). A protected push carries the commit it runs from."""
+
+    identity, kit = plan["identity"], plan["identity"]["kit"]
+    pull_request = bool(identity["pr_number"])
+    run = {
+        "id": 42 if producer == "build" else 43,
+        "name": "Build" if producer == "build" else "Packaged E2E",
+        "display_title": "Example change",
+        "path": CI_WORKFLOWS[producer],
+        "event": "pull_request_target" if pull_request else "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": identity["head_branch"],
+        "head_sha": identity["head_sha"],
+        "head_repository": {"full_name": identity["source_repository"]},
+        "repository": {"full_name": identity["repository"]},
+        "run_attempt": 2,
+        "run_number": 246,
+        "workflow_id": 331005979 if producer == "build" else 331006079,
+        "created_at": "2026-10-07T10:00:00Z",
+        "run_started_at": "2026-10-07T10:00:00Z",
+        "updated_at": "2026-10-07T10:15:00Z",
+        "previous_attempt_url": f"https://api.github.com/repos/{identity['repository']}/actions/runs/42/attempts/1",
+        "pull_requests": [],
+        "referenced_workflows": [
+            {"path": f"{identity['repository']}/.github/workflows/mod-base-guard.yml@{identity['controller_sha']}",
+             "sha": identity["controller_sha"], "ref": f"refs/heads/{identity['base_branch']}"},
+            *({"path": f"{kit['repository']}/.github/workflows/{name}@{kit['sha']}", "sha": kit["sha"]}
+              for name in CI_KIT_CALLEES[producer]),
+        ],
+    }
+    run.update(changes)
+    return run
+
+
+def ci_api_artifact(descriptor: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """The artifact a descriptor selects as the REST API reports it: its ``workflow_run`` carries
+    the head branch and commit of the producer run, like the run itself."""
+
+    selected, producer = descriptor["artifact"], descriptor["producer"]
+    record = {
+        "id": selected["id"],
+        "node_id": f"MDg6QXJ0aWZhY3Q{selected['id']}",
+        "name": selected["name"],
+        "size_in_bytes": selected["size"],
+        "url": f"https://api.github.com/repos/{descriptor['identity']['repository']}/actions/artifacts/{selected['id']}",
+        "expired": False,
+        "digest": selected["digest"],
+        "created_at": selected["created_at"],
+        "updated_at": selected["created_at"],
+        "expires_at": selected["expires_at"],
+        "workflow_run": {"id": producer["run_id"], "repository_id": 1082631496, "head_repository_id": 1082631496,
+                         "head_branch": descriptor["identity"]["head_branch"], "head_sha": producer["api_head_sha"]},
+    }
+    record.update(changes)
+    return record
 
 
 def ci_config() -> dict[str, Any]:
@@ -802,15 +908,21 @@ def ci_validation(hook: str = "verify_build", unit_id: str | None = None) -> dic
                          "sha256": h(canonical_json({"fixture_unit": unit["id"]}).decode())} for unit in units]}
 
 
-def ci_descriptor(kind: str = "build", *, gate: str = "build", unit_id: str | None = None,
-                  artifact_id: int = 100) -> dict[str, Any]:
-    plan = ci_plan()
-    producer = ci_producer(gate)
-    return {"identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
-            "producer": producer,
-            "artifact": {"id": artifact_id, "name": grammar.ci_artifact_name(kind, producer["run_id"], 2, unit_id),
+def ci_run_descriptor(plan: dict[str, Any], producer: str, mode: str | None, kind: str, *,
+                      unit_id: str | None = None, artifact_id: int = 100) -> dict[str, Any]:
+    """One artifact of a run of ``producer`` in ``mode`` for the plan's subject."""
+
+    record = ci_run_producer(plan, producer, mode)
+    return {"identity": copy.deepcopy(plan["identity"]), "plan_sha256": plan["plan_sha256"],
+            "profile": plan["profile"], "producer": record,
+            "artifact": {"id": artifact_id, "name": grammar.ci_artifact_name(kind, record["run_id"], 2, unit_id),
                          "digest": "sha256:" + h(kind + "-zip"), "size": 512,
                          "created_at": "2026-10-07T10:01:30Z", "expires_at": "2026-10-14T10:01:30Z"}}
+
+
+def ci_descriptor(kind: str = "build", *, gate: str = "build", unit_id: str | None = None,
+                  artifact_id: int = 100) -> dict[str, Any]:
+    return ci_run_descriptor(ci_plan(), gate, None, kind, unit_id=unit_id, artifact_id=artifact_id)
 
 
 def ci_envelope() -> dict[str, Any]:
@@ -834,29 +946,45 @@ def ci_selection() -> dict[str, Any]:
             "build": ci_descriptor(), "envelope_sha256": canonical_sha256(ci_envelope())}
 
 
-def ci_gate(gate: str = "build") -> dict[str, Any]:
-    plan = ci_plan()
+def ci_run_gate(plan: dict[str, Any], gate: str, mode: str) -> dict[str, Any]:
+    """The receipt of ``gate`` for the plan's subject, sealed by a run in ``mode``: ``full`` is a
+    Build run; ``pull-request``, ``selected`` and ``rebuilt`` are packaged runs, and a rebuilt
+    packaged run also seals the Build gate of the Build it rebuilt."""
+
+    producer = "build" if mode == "full" else "packaged"
     units = plan["targets"] if gate == "build" else plan["lanes"]
-    artifacts = [ci_descriptor()] if gate == "build" else [
-        ci_descriptor("runtime", gate="packaged", unit_id="lane-a", artifact_id=101),
-        ci_descriptor("results", gate="packaged", artifact_id=102)]
-    return {"kind": "mod-base.ci.gate", "schema_version": 1, "identity": plan["identity"],
+    if gate == "build":
+        artifacts, owning = [ci_run_descriptor(plan, producer, mode, "build")], None
+    else:
+        artifacts = [ci_run_descriptor(plan, producer, mode, "runtime", unit_id=lane["id"], artifact_id=101 + index)
+                     for index, lane in enumerate(plan["lanes"])]
+        artifacts.append(ci_run_descriptor(plan, producer, mode, "results", artifact_id=101 + len(plan["lanes"])))
+        owning = (ci_run_descriptor(plan, "packaged", "rebuilt", "build") if mode == "rebuilt"
+                  else ci_run_descriptor(plan, "build", "full", "build"))
+    return {"kind": "mod-base.ci.gate", "schema_version": 1, "identity": copy.deepcopy(plan["identity"]),
             "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
-            "producer": {key: value for key, value in ci_producer(gate).items() if key != "upload_window"},
-            "gate": gate, "mode": "full", "artifacts": artifacts,
-            "owning_build": None if gate == "build" else ci_descriptor(),
+            "producer": {key: value for key, value in ci_run_producer(plan, producer, mode).items()
+                         if key != "upload_window"},
+            "gate": gate, "mode": mode, "artifacts": artifacts, "owning_build": owning,
             "native_receipts": [{"unit_id": unit["id"], "native_contract_sha256": unit["native_contract_sha256"],
                                  "report_sha256": h(unit["id"] + "-native")} for unit in units]}
 
 
+def ci_gate(gate: str = "build") -> dict[str, Any]:
+    return ci_run_gate(ci_plan(), gate, "full" if gate == "build" else "pull-request")
+
+
 def ci_reuse() -> dict[str, Any]:
+    from mod_base.build_ci.graph import run_graph
+
     plan = ci_plan()
     identity = copy.deepcopy(plan["identity"])
     identity.update(pr_number=0, head_sha="8" * 40, head_branch="master", tested_sha="8" * 40,
                     controller_sha="8" * 40, base_sha="8" * 40, tested_parents=["2" * 40])
     producer = ci_producer()
-    producer.update(run_id=44, event="push", api_head_sha="8" * 40, graph_sha256=h("reuse-graph"),
-                    upload_window={"started_at": "2026-10-07T10:05:00Z", "completed_at": "2026-10-07T10:06:00Z"})
+    # The covering run is a push to the default branch: recorded under the commit it runs from.
+    producer.update(run_id=44, event="push", api_head_sha="8" * 40,
+                    graph_sha256=run_graph("build", "reuse").sha256(plan))
     producer.pop("upload_window")
     return {"kind": "mod-base.ci.reuse", "schema_version": 1, "identity": identity,
             "plan_sha256": h("covered-plan"), "profile": plan["profile"], "producer": producer,

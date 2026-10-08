@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from mod_base.build_ci import authenticate
 from mod_base.build_ci.authenticate import authenticate_merged_pr_identity, authenticate_pr_identity
+from mod_base.build_ci.reads import CommandReads
 from mod_base.errors import MbError
 from mod_base.model.canonical import canonical_json
 from tests.test_ci_protocol import seeded_pr
@@ -134,52 +135,41 @@ class MergedPrTests(unittest.TestCase):
         with self.assertRaises(MbError):
             authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
 
-    def test_late_original_or_final_object_movement_refuses(self):
-        for target in ('tested', 'merged'):
-            api, identity, pr, merged, controller = self.seed()
-            sha = identity['tested_sha'] if target == 'tested' else merged
-            endpoint = f'/repos/{api.repository}/git/commits/{sha}'
-            original = api.get_json
-            seen = 0
-            def get(path, **kwargs):
-                nonlocal seen
-                value = original(path, **kwargs)
-                if path == endpoint:
-                    seen += 1
-                    if seen == 2:
-                        value['parents'] = [{'sha': 'f'*40}]
-                return value
-            with self.subTest(target=target), patch.object(api, 'get_json', side_effect=get), self.assertRaises(MbError):
-                authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
+    def test_a_later_observation_shows_or_refuses_every_record_controller_and_default_change(self):
+        def merged_at(api, pr):
+            pr['merged_at'] = '2026-10-08T10:01:00Z'
+            api.add_response(f'/repos/{api.repository}/pulls/7', pr)
 
-    def test_early_and_closing_record_controller_default_movement_refuses(self):
-        for timing in ('second-pr', 'closing-history', 'controller', 'default'):
+        def head(api, pr):
+            pr['head']['sha'] = 'f'*40
+            api.add_response(f'/repos/{api.repository}/pulls/7', pr)
+
+        changes = {'merged-at': merged_at, 'head': head,
+                   'controller': lambda api, pr: api.set_branch('master', 'f'*40, 'd'*40),
+                   'default': lambda api, pr: api.add_response(
+                       f'/repos/{api.repository}', {'full_name': api.repository, 'default_branch': 'other'})}
+        for name, change in changes.items():
             api, identity, pr, merged, controller = self.seed()
-            original = api.get_json
-            seen = 0
-            def get(path, **kwargs):
-                nonlocal seen
-                if timing == 'second-pr' and path.endswith('/pulls/7'):
-                    seen += 1
-                    if seen == 2:
-                        pr['merged_at'] = '2026-10-08T10:01:00Z'
-                        api.add_response(path, pr)
-                if '/branches/' in path and timing != 'default':
-                    seen += 1 if timing != 'second-pr' else 0
-                    if seen == 2 and timing == 'closing-history':
-                        pr['head']['sha'] = 'f'*40
-                        api.add_response(f'/repos/{api.repository}/pulls/7', pr)
-                    if seen == 2 and timing == 'controller':
-                        api.set_branch('master', 'f'*40, 'd'*40)
-                if timing == 'default' and path == f'/repos/{api.repository}':
-                    seen += 1
-                    if seen == 2:
-                        response = original(path, **kwargs)
-                        response['default_branch'] = 'other'
-                        return response
-                return original(path, **kwargs)
-            with self.subTest(timing=timing), patch.object(api, 'get_json', side_effect=get), self.assertRaises(MbError):
-                authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
+            first = authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
+            self.assertEqual(authenticate_merged_pr_identity(api, identity, controller_sha=controller,
+                                                             merged_sha=merged), first)
+            change(api, pr)
+            with self.subTest(change=name):
+                if name == 'merged-at':
+                    self.assertNotEqual(authenticate_merged_pr_identity(
+                        api, identity, controller_sha=controller, merged_sha=merged), first)
+                else:
+                    with self.assertRaises(MbError):
+                        authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
+
+    def test_one_observation_reads_mutable_state_once_and_git_objects_once_per_command(self):
+        api, identity, pr, merged, controller = self.seed()
+        authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
+        self.assertEqual(api.request_count, 7)  # repository, head, pull request; two commits, two ancestries
+        reads = CommandReads.of(api)
+        for _ in range(3):
+            authenticate_merged_pr_identity(reads, identity, controller_sha=controller, merged_sha=merged)
+        self.assertEqual(api.request_count, 7 + 3 * 3 + 4)
 
     def test_api_failure_is_not_missing_proof_or_full_run_fallback(self):
         for target in ('/pulls/7', '/git/commits/', '/compare/', '/branches/'):
@@ -194,17 +184,21 @@ class MergedPrTests(unittest.TestCase):
                 authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
             self.assertIs(caught.exception, failure)
 
-    def test_caller_identity_substitution_rejects_and_caps_precede_encoding(self):
-        for oversized in (False, True):
-            api, identity, pr, merged, controller = self.seed()
-            original = api.get_json
-            def get(path, **kwargs):
-                identity['kit']['sha'] = 'f'*40
-                if oversized:
-                    identity['head_branch'] = 'x'*1000
-                return original(path, **kwargs)
-            def encode(value):
-                self.assertLessEqual(len(value['head_branch']), 200)
-                return canonical_json(value)
-            with self.subTest(oversized=oversized), patch.object(api, 'get_json', side_effect=get), patch.object(authenticate, 'canonical_json', side_effect=encode), self.assertRaises(MbError):
-                authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
+    def test_identity_is_read_on_entry_and_validated_before_it_is_encoded(self):
+        api, identity, pr, merged, controller = self.seed()
+        expected = hashlib.sha256(canonical_json(identity)).hexdigest()
+        original = api.get_json
+
+        def get(path, **kwargs):
+            identity['kit']['sha'] = 'f'*40  # the caller's value changes while the API is read
+            return original(path, **kwargs)
+
+        with patch.object(api, 'get_json', side_effect=get):
+            result = authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
+        self.assertEqual(result.identity_sha256, expected)
+        api, identity, pr, merged, controller = self.seed()
+        identity['head_branch'] = 'x'*1000
+        with patch.object(authenticate, 'canonical_json') as encode, patch.object(api, 'get_json') as reads,                 self.assertRaises(MbError):
+            authenticate_merged_pr_identity(api, identity, controller_sha=controller, merged_sha=merged)
+        encode.assert_not_called()
+        reads.assert_not_called()

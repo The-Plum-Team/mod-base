@@ -65,13 +65,13 @@
   ],
   "plan_sha256": "5a9992dcdc11f5b2d8c1b1696ec51871c215117e5b974818c41ef5e7c281c961",
   "producer": {
-    "api_head_sha": "2222222222222222222222222222222222222222",
+    "api_head_sha": "1111111111111111111111111111111111111111",
     "event": "pull_request_target",
-    "graph_sha256": "b92966b81c7c242d4a1eb98817852d40fe825bac364335b7c761fe22cab80148",
+    "graph_sha256": "e774fe528ecc0d05cd2dd854fb41baa1c789c9207320a9d813a74b52bac6e90d",
     "run_attempt": 2,
     "run_id": 42,
-    "workflow_path": ".github/workflows/build-gate.yml",
-    "workflow_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master"
+    "workflow_path": ".github/workflows/mod-base-build.yml",
+    "workflow_ref": "example/mod/.github/workflows/mod-base-build.yml@refs/heads/master"
   },
   "profile": "block-pops",
   "schema_version": 1,
