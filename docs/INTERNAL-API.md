@@ -325,7 +325,7 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
 | MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
 | MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
-| MB11 | `mod_base.build_ci.reuse` |
+| MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -706,6 +706,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_IDENTITY_BYTES`: 16 KiB for the private `identity.json` state record.
 * `MAX_CI_GATE_REQUESTS`: the 96-request budget of one `ci seal-gate` (a Build gate costs 15, the packaged gate of a pull request 20 and the gate of a reuse run, which decides the reuse again, 47, whatever the number of targets and lanes).
 * `MAX_CI_COMMIT_PULLS`: 100, the pull requests GitHub associates with one pushed commit: the one page post-merge reuse reads to find the merge.
+* `MAX_CI_REUSE_ADMIT_REQUESTS`: 96, the request budget of `ci reuse-admit` (38 for an admitted reuse, 1 for a direct push, 11 when the merged tree differs, whatever the number of targets and lanes).
 * `MAX_CI_SUBJECT_REQUESTS`: the 16-request budget of one `ci subject` (a pull request costs 4, a protected subject 5).
 * `MAX_CI_STATUS_CONTEXT_CHARS`: 100 characters for one status context of the protected Build config.
 * `CI_BUILD_POLL_SECONDS`, `MAX_CI_BUILD_POLLS`: Protected 60-second polling cadence and independent 91-observation ceiling within the existing 5400-second admission budget.
@@ -2492,6 +2493,19 @@ being the Build gate's bundle); every artifact both records name is still availa
   * `recheck(self) -> None`
 * `def admit_post_merge_reuse(api: GitHubApi | CommandReads, *, plan: dict[str, Any], event: str, temporary_root: Path) -> ReuseAdmitted | FullRunRequired`: Decide for the subject of `plan` (the job's protected plan) in a run of `event`. Any event but a push answers `FullRunRequired('not-a-push')` without a request. One observation that writes nothing: whoever acts on an admission calls its `recheck` immediately before. The Build record is downloaded twice (as the claim that names the test merge, then as evidence) and the packaged record once, into `temporary_root`, and removed; no bundle and no lane result is read.
 * `def download_reuse_reference(api: GitHubApi | CommandReads, *, descriptor: dict[str, Any], plan: dict[str, Any], temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]`: For a consumer that trusts a reused generation: `(reference, Build receipt, packaged receipt)` of the `mb-ci-reuse` artifact `descriptor` selects, for the consumer's own plan of the live default-branch commit. The covering run must be the latest attempt of a completed successful push run in exactly the reuse graph whose attempt lists no other evidence of its own (a mixed generation is rejected), and its gate must have started sealing after its own prerequisites and every job of both original runs had finished. The original pair is authenticated again by id; an original artifact that has expired since raises `transport.OriginalUnavailable`. Everything mutable is observed again before return. Whether that run is the newest one of its caller for the commit stays the consumer's own selection.
+
+## `mod_base.build_ci.commands_reuse`
+
+Owner: MB11. `ci reuse-admit`, listed in `commands.VERB_MODULES`: the step after `ci plan` in the
+plan job of a Build run and in the one job of `select-build.yml`, on a push to the default branch.
+It takes the job arguments and `--github-output FILE`, reads `identity.json` and `ci-plan.json`
+of the state and decides (`reuse.admit_post_merge_reuse`). Both managed callers run the same
+decision over the same evidence; neither takes the other's answer, and each gate decides once
+more before it seals.
+
+* `ADMISSION_NAME = 'ci-reuse-admission.json'`: the state record the command writes: `{"mode": "reuse", "reason", "pr_number", "identity", "plan_sha256", "profile", "source"}` (the covered binding and the source the gate's reference will name) or `{"mode": "full", "reason", "detail"}`.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `reuse-admit --github-output FILE` on the `ci` verb group.
+* `def run_reuse_admit(args: argparse.Namespace) -> int`: The `reuse-admit` handler: outputs `mode` (`reuse` or `full`) and `reason` (`reuse.ADMITTED_REASON` or a key of `reuse.FULL_RUN_REASONS`), writes the state record and prints one line. A `reuse` is written only after the admission was rechecked; what must stop the job writes nothing and fails the step. The state must belong to the executing repository and controller commit. Budget `MAX_CI_REUSE_ADMIT_REQUESTS`.
 
 ## `mod_base.build_ci.handoff`
 

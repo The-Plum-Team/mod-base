@@ -13,7 +13,7 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from mod_base.build_ci import reuse
+from mod_base.build_ci import commands_reuse, identity, reuse
 from mod_base.build_ci.protocol import plan_sha256
 from mod_base.errors import MbError, Unavailable
 from mod_base.github.api import ApiError, ApiNotFound, RequestBudgetExhausted
@@ -568,6 +568,122 @@ class EventTests(ReuseCase):
             self.assertEqual(reuse.FullRunRequired(reason, words).detail, words)
         with self.assertRaises(MbError):
             reuse.FullRunRequired("identical-tested-tree", "not a reason for a full run")
+
+
+class CommandTests(ReuseCase):
+    """``ci reuse-admit`` through the real ``ci`` parser, on a real state directory."""
+
+    def run_command(self, attempt, **environment):
+        output = attempt.directory / "github-output"
+        code, stdout, stderr = attempt.command("reuse-admit", "--github-output", str(output),
+                                               environment={**attempt.environment, **environment} or None)
+        return code, stdout, stderr, output.read_text(encoding="utf-8") if output.exists() else None
+
+    def admission(self, attempt):
+        name = commands_reuse.ADMISSION_NAME
+        if not (attempt.state / name).exists():
+            return None
+        return identity.read_state_record(attempt.state, name, max_bytes=limits.MAX_CI_RECORD_BYTES)
+
+    def assert_nothing_written(self, attempt, code: int, stdout: str, outputs) -> None:
+        self.assertEqual((code, stdout, outputs, self.admission(attempt)), (2, "", None, None))
+        self.assertEqual([path for path in attempt.state.iterdir() if path.is_dir()], [])
+
+    def test_an_admitted_reuse_is_written_after_it_was_observed_again(self) -> None:
+        for caller in ("build", "packaged"):
+            world = self.world(caller=caller)
+            attempt = world.attempt
+            with self.subTest(caller=caller):
+                code, stdout, stderr, outputs = self.run_command(attempt)
+                self.assertEqual((code, stderr), (0, ""))
+                self.assertEqual(stdout, "reuse-admit: reuse of pull request #7: Build run 142 attempt 2, packaged run "
+                                         "143 attempt 2\n")
+                self.assertEqual(outputs, "mode=reuse\nreason=identical-tested-tree\n")
+                plan = world.covered
+                self.assertEqual(self.admission(attempt), canonical_json({
+                    "mode": "reuse", "reason": "identical-tested-tree", "pr_number": 7, "identity": plan["identity"],
+                    "plan_sha256": plan["plan_sha256"], "profile": plan["profile"], "source": world.source}))
+                self.assertEqual(attempt.budgets, [limits.MAX_CI_REUSE_ADMIT_REQUESTS])
+                self.assertEqual(world.api.request_count, RECHECKED_REQUESTS)
+                self.assertEqual([path for path in attempt.state.iterdir() if path.is_dir()], [])
+
+    def test_a_full_run_is_written_with_its_reason(self) -> None:
+        world = self.world(tested_tree="7" * 40)
+        code, stdout, stderr, outputs = self.run_command(world.attempt)
+        words = reuse.FULL_RUN_REASONS["merged-tree-differs"] + " (pull request #7)"
+        self.assertEqual((code, stderr, outputs), (0, "", "mode=full\nreason=merged-tree-differs\n"))
+        self.assertEqual(stdout, f"reuse-admit: full run (merged-tree-differs): {words}\n")
+        self.assertEqual(self.admission(world.attempt), canonical_json(
+            {"mode": "full", "reason": "merged-tree-differs", "detail": words}))
+        self.assertEqual(world.api.request_count, CLAIM_REQUESTS)
+        # The commonest answer of all: a commit pushed without a pull request costs one request.
+        world = self.world()
+        world.associated = []
+        world.seed_pull()
+        code, _, _, outputs = self.run_command(world.attempt)
+        self.assertEqual((code, outputs), (0, "mode=full\nreason=no-merged-pull-request\n"))
+        self.assertEqual(world.api.request_count, DIRECT_PUSH_REQUESTS)
+        self.assertLess(CLAIM_REQUESTS, 60)
+
+    def test_any_other_event_is_a_full_run_without_a_request(self) -> None:
+        world = self.world()
+        attempt = world.attempt
+        for event in ("workflow_dispatch", "schedule"):
+            attempt.state = attempt.directory / f"state-{event}"
+            identity.write_subject(attempt.state, {**attempt.record, "event": event})
+            identity.write_state_record(attempt.state, grammar.CI_PLAN_NAME, canonical_json(attempt.plan))
+            with self.subTest(event=event):
+                code, stdout, stderr, outputs = self.run_command(attempt, GITHUB_EVENT_NAME=event)
+                self.assertEqual((code, stderr), (0, ""))
+                self.assertIn("mode=full\nreason=not-a-push\n", outputs)
+                self.assertEqual(stdout,
+                                 f"reuse-admit: full run (not-a-push): {reuse.FULL_RUN_REASONS['not-a-push']}\n")
+        pull_request = self.attempt(listing="build-full")
+        code, _, _, outputs = self.run_command(pull_request)
+        self.assertEqual((code, outputs), (0, "mode=full\nreason=not-a-push\n"))
+        self.assertEqual((world.api.request_count, pull_request.api.request_count), (0, 0))
+
+    def test_what_must_stop_the_job_writes_nothing(self) -> None:
+        world = self.world()
+        world.set_run("packaged", status="in_progress", conclusion=None)
+        code, stdout, stderr, outputs = self.run_command(world.attempt)
+        self.assertTrue(stderr.startswith("mod_base: ci-original-pending: packaged run 143 of pull request #7 has not "
+                                          "finished"), stderr)
+        self.assert_nothing_written(world.attempt, code, stdout, outputs)
+
+        world = self.world()
+        world.seal("build", raw=canonical_json(world.documents["build"]) + b"\n")
+        code, stdout, stderr, outputs = self.run_command(world.attempt)
+        self.assertTrue(stderr.startswith("mod_base: invalid-document: "), stderr)
+        self.assert_nothing_written(world.attempt, code, stdout, outputs)
+
+        world = self.world()
+        failure = ApiError("GitHub is unavailable", status=502, method="GET", path=PULL)
+        with patch.object(world.api, "paginate", side_effect=failure):
+            code, stdout, stderr, outputs = self.run_command(world.attempt)
+        self.assertEqual(stderr, "mod_base: github-api: GitHub is unavailable\n")
+        self.assert_nothing_written(world.attempt, code, stdout, outputs)
+
+        # Admitted, and then the evidence moved before the answer was written.
+        world = self.world()
+        with after_download(world.api, lambda: world.set_artifact(BUILD_SEAL, expired=True), count=3):
+            code, stdout, stderr, outputs = self.run_command(world.attempt)
+        self.assertIn("changed between the start of the command and its effect", stderr)
+        self.assert_nothing_written(world.attempt, code, stdout, outputs)
+
+    def test_the_state_must_be_this_jobs_and_is_decided_once(self) -> None:
+        world = self.world()
+        code, stdout, stderr, outputs = self.run_command(world.attempt, GITHUB_SHA="f" * 40)
+        self.assertIn("the state directory belongs to another repository or controller commit", stderr)
+        self.assert_nothing_written(world.attempt, code, stdout, outputs)
+        self.assertEqual(world.api.request_count, 0)
+        self.assertEqual(self.run_command(world.attempt)[0], 0)
+        first = self.admission(world.attempt)
+        code, stdout, stderr, outputs = self.run_command(world.attempt)
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertTrue(stderr.startswith("mod_base: ci-state: "), stderr)
+        self.assertEqual((self.admission(world.attempt), outputs),
+                         (first, "mode=reuse\nreason=identical-tested-tree\n"))
 
 
 if __name__ == "__main__":

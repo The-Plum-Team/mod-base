@@ -626,13 +626,18 @@ direct `build_seal`/`packaged_seal` tested descriptors. Covered default-branch c
 tested commit retain separate current/non-PR and original/PR bindings even when the final merged
 SHA equals the original synthetic tested SHA. SHA inequality is not an admission rule. Repository,
 policy, pin, graph, tree, inventory,
-scenario and selection semantics must agree; source seals must precede actual protected reuse
-verification, independently authenticated through API execution evidence. Reuse
-references cannot chain. This structural check does not yet authenticate the actual merged PR,
-latest attempts, original complete graphs or artifact availability: full K6 admission is pending.
-This corrects the inactive initial schema-1 semantics before first release; no fields, versions,
-common-kind predecessor support or Pages schemas change. An equal SHA alone supplies no merged
-PR, historical gate, protected-policy, chronology or native admission.
+scenario and selection semantics must agree, and with the covered plan the original plan hash must
+be the hash of that plan under the original identity (`records.original_plan`); source seals must
+precede actual protected reuse verification, independently authenticated through API execution
+evidence. Reuse references cannot chain. The structure proves none of this by itself: `ci
+reuse-admit` and the gate of the reuse run (`reuse.admit_post_merge_reuse`) authenticate the
+merged pull request found from the pushed commit, the newest original runs as their latest
+attempts, their complete graphs, both tested records as a coherent pair and every artifact's
+availability, and `reuse.download_reuse_reference` does so again for a consumer, together with
+the reuse run itself. The record is the one canonical file `ci-reuse.json` of the artifact
+`mb-ci-reuse--R--aN`. No fields, versions, common-kind predecessor support or Pages schemas
+change. An equal SHA alone supplies no merged PR, historical gate, protected-policy, chronology
+or native admission.
 
 ## Initial v1 PR Build run selection
 

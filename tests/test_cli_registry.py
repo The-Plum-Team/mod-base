@@ -114,6 +114,8 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
     "ci worker-validate lane": (["ci", "worker-validate", *REPO, "--state", "state", "--hook", "verify_runtime",
                                  "--unit", "fabric-1.20.1", "--output", "upload"],
                                 {"hook": "verify_runtime", "unit": "fabric-1.20.1"}),
+    "ci reuse-admit": (["ci", "reuse-admit", *REPO, "--state", "state", "--github-output", "out"],
+                       {"ci_command": "reuse-admit", "state": Path("state"), "github_output": Path("out")}),
     "ci batch-prepare": (["ci", "batch-prepare", *REPO, "--state", "state", "--name", "run-1", "--allowed-paths",
                           "allowed.json", "--dry-run", "--github-output", "out", "12", "7"],
                          {"ci_command": "batch-prepare", "state": Path("state"), "name": "run-1",
@@ -245,6 +247,10 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_build", "--output", ""],
             ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_build", "--output", "o",
              "--github-output", "out"],
+            ["ci", "reuse-admit", *REPO, "--state", "s"],
+            ["ci", "reuse-admit", *REPO, "--github-output", "o"],
+            ["ci", "reuse-admit", *REPO, "--state", "s", "--github-output", "o", "--mode", "reuse"],
+            ["ci", "reuse-admit", *REPO, "--state", "s", "--github-output", "o", "--pr", "7"],
             ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "run-1", "--allowed-paths", "a.json"],
             ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "Run/1", "--allowed-paths", "a.json", "7"],
             ["ci", "batch-prepare", *REPO, "--name", "run-1", "--allowed-paths", "a.json", "7"],
@@ -319,8 +325,9 @@ class CiVerbsTest(unittest.TestCase):
             with self.subTest(module=name):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
-        self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-finish", "batch-prepare",
-                              "batch-settle", "select-build", "fetch-build", "gate-status", "worker-validate"}, set(verbs))
+        self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-finish", "batch-prepare", "batch-settle",
+                              "select-build", "fetch-build", "gate-status", "worker-validate", "reuse-admit"},
+                             set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

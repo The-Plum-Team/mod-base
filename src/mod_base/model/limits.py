@@ -300,6 +300,10 @@ MAX_CI_GATE_REQUESTS = 96
 #: Pull requests GitHub associates with one pushed commit: one page of that listing. A merge commit
 #: has one; more than a page is no merge post-merge reuse attributes (``reuse.admit_post_merge_reuse``).
 MAX_CI_COMMIT_PULLS = 100
+#: ``ci reuse-admit`` sends 38 requests for an admitted reuse, 1 for a direct push and 11 when the
+#: merged tree differs, whatever the number of targets and lanes; the rest is for retries and for
+#: the further pages of a run that lists more than 100 jobs or artifacts.
+MAX_CI_REUSE_ADMIT_REQUESTS = 96
 #: ``ci aggregate`` sends 13 requests and 2 per lane, the two of a download (81 for 34 lanes); the
 #: rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_AGGREGATE_REQUESTS = 48 + 3 * MAX_CI_LANES

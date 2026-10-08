@@ -23,6 +23,7 @@ VERB_MODULES = (
     "mod_base.build_ci.commands_packaged",
     "mod_base.build_ci.commands_status",
     "mod_base.build_ci.commands_build",
+    "mod_base.build_ci.commands_reuse",
     "mod_base.build_ci.commands_batch",
 )
 
