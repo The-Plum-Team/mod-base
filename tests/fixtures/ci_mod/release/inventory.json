@@ -2,7 +2,7 @@
   "schema_version": 1,
   "mod": {
     "name": "Synthetic Mod",
-    "version": "1.0.0",
+    "version_property": "mod_version",
     "harness_version": "0.0.0"
   },
   "targets": [

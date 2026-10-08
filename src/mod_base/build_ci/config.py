@@ -1,8 +1,9 @@
 """Closed protected Build configuration, distinct from the Pages v1 config.
 
 ``scripts/ci/mod-base-build.json`` names the adapter entry points and their hashed import closure,
-the two candidate files a plan is derived from, where a lane's checkout expects the staged Build,
-the two required status contexts and the native timeouts. :func:`validate_build_config` is the
+the candidate files a plan is derived from (the inventory, the scenario contract and up to
+``limits.MAX_CI_PLAN_INPUTS`` extra ``plan_inputs``), where a lane's checkout expects the staged
+Build, the two required status contexts and the native timeouts. :func:`validate_build_config` is the
 pure schema; :func:`load_build_config` reads the file from the protected checkout the prologue
 verified and requires every listed source there to have its configured hash, so its result is the
 complete protected adapter that planning hashes into the policy digest.
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from mod_base import readable_schema_versions
+from mod_base.build_ci.adapter import plan_input_name, plan_sources
 from mod_base.build_ci.protocol import BUILD_ADAPTER_API, PROFILES, check_output_paths, repo_path
 from mod_base.errors import MbError
 from mod_base.io.secure_json import loads
@@ -45,6 +47,9 @@ def _context(value: Any, path: str) -> str:
 
 _FILE = Obj({"path": repo_path, "sha256": Str(g.SHA256, max_len=64)})
 _PATH = Obj({"path": repo_path})
+#: One more candidate file the plan is derived from: the name it is staged under for the protected
+#: hooks, next to the inventory and the scenario contract, and its path in the tested tree.
+_PLAN_INPUT = Obj({"name": plan_input_name, "path": repo_path})
 _CONFIG = Obj({
     "kind": Const("mod-base.build.config"),
     "schema_version": Int(min(readable_schema_versions("mod-base.build.config")),
@@ -57,6 +62,7 @@ _CONFIG = Obj({
                                   unique_by=lambda item: item["path"])}),
     "inventory": _PATH,
     "scenario_contract": _PATH,
+    "plan_inputs": List(_PLAN_INPUT, max_items=lim.MAX_CI_PLAN_INPUTS, unique_by=lambda item: item["name"]),
     "bundle": _PATH,
     "contexts": Obj({"build": _context, "packaged": _context}),
     "timeouts": Obj({key: Int(1, lim.MAX_CI_WORKER_TIMEOUT_SECONDS)
@@ -76,10 +82,13 @@ def validate_build_config(document: Any, *, path: str = "$") -> dict[str, Any]:
     inventory = [file["path"] for file in adapter["files"]]
     check(inventory == sorted(inventory), f"{path}.adapter.files", "source inventory must be sorted")
     check(set(entries) <= set(inventory), f"{path}.adapter.files", "all fixed entrypoints must be hash-inventoried")
-    # One tree holds them all: the config, the protected sources, the two candidate files and the
-    # directory the Build is staged into. None may alias, contain or replace another.
-    check_output_paths([BUILD_CONFIG_PATH, *inventory, document["inventory"]["path"],
-                        document["scenario_contract"]["path"], document["bundle"]["path"]], path)
+    extra = [item["name"] for item in document["plan_inputs"]]
+    check(extra == sorted(extra), f"{path}.plan_inputs", "extra plan inputs must be sorted by name")
+    # One tree holds them all: the config, the protected sources, every candidate file a plan is
+    # derived from and the directory the Build is staged into. None may alias, contain or replace
+    # another.
+    check_output_paths([BUILD_CONFIG_PATH, *inventory, *plan_sources(document).values(),
+                        document["bundle"]["path"]], path)
     contexts = document["contexts"]
     check(contexts["build"].casefold() != contexts["packaged"].casefold(), f"{path}.contexts",
           "Build and packaged contexts must be distinct")

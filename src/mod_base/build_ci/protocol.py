@@ -136,9 +136,14 @@ def _header(kind: str) -> dict[str, Any]:
                                                      max(readable_schema_versions(kind)))}
 
 
+#: One extra candidate file the plan was derived from, beside the inventory and the scenario
+#: contract its identity binds: the name the protected config stages it under and the SHA-256 of
+#: the bytes ``derive_plan`` was given.
+_PLAN_INPUT = Obj({"name": ID, "sha256": SHA256})
 _PLAN = Obj({
     **_header("mod-base.build.plan"), "build_adapter_api": Const(BUILD_ADAPTER_API),
     "identity": validate_identity, "profile": Str(choices=PROFILES),
+    "plan_inputs": List(_PLAN_INPUT, max_items=lim.MAX_CI_PLAN_INPUTS, unique_by=lambda item: item["name"]),
     **_UNIT_FIELDS,
     "plan_sha256": SHA256,
 })
@@ -222,5 +227,7 @@ def validate_plan_units(value: Any, path: str = "$") -> dict[str, Any]:
 def validate_plan(document: Any, *, path: str = "$") -> dict[str, Any]:
     _PLAN(document, path)
     check(document["plan_sha256"] == plan_sha256(document), f"{path}.plan_sha256", "does not bind this plan")
+    names = [item["name"] for item in document["plan_inputs"]]
+    check(names == sorted(names), f"{path}.plan_inputs", "must be sorted by name")
     _unit_rules(document, path)
     return document

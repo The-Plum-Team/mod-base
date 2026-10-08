@@ -20,7 +20,8 @@ protected default branch, never from a pull request.
 | `adapter.dispatcher` | the one program every hook runs |
 | `adapter.path`, `adapter.policy` | the adapter module and the policy entry point the dispatcher uses |
 | `adapter.files` | every file the dispatcher imports, with its SHA-256. Protected hooks run from a copy that holds this config and exactly these files, so an import that is not listed fails |
-| `inventory.path`, `scenario_contract.path` | the two candidate files the plan is derived from |
+| `inventory.path`, `scenario_contract.path` | the two candidate files every plan is derived from |
+| `plan_inputs` | up to eight more candidate files the plan needs, each `{"name", "path"}`, sorted by name: `path` is the file in the tested tree, `name` the file name the protected hooks find it under. Quick Skin lists `{"name": "gradle-properties", "path": "gradle.properties"}`, because that file holds the version in its JAR names; a mod that needs nothing more writes `[]` |
 | `bundle.path` | the directory, relative to a lane's checkout, where the verified Build is staged before `run_lane` |
 | `contexts.build`, `contexts.packaged` | the two required status contexts |
 | `timeouts` | `validator_seconds` for every protected hook, `policy_seconds`, `target_seconds` and `runtime_seconds` for the three candidate hooks |
@@ -50,7 +51,7 @@ instead of a reuse of the pull request's evidence.
 
 | Hook | Account, checkout | Extra environment | Reads | Must write |
 |---|---|---|---|---|
-| `derive_plan` | validator, `controller/` | none | `validation-input/inventory`, `validation-input/scenario-contract` | `validator-home/validation/plan.json` |
+| `derive_plan` | validator, `controller/` | none | `validation-input/inventory`, `validation-input/scenario-contract` and one `validation-input/<name>` for every `plan_inputs` entry | `validator-home/validation/plan.json` |
 | `policy` | candidate, `repository/` | none | its checkout | nothing (exit status and log) |
 | `build_target` | candidate, `repository/` | `MB_TARGET_ID` | its checkout | every planned output of that target at `candidate-home/export/<path>`, and nothing else |
 | `verify_target` | validator, `controller/` | `MB_TARGET_ID` | `validation-input/`, `sealed-build/` (that target) | `validator-home/validation/<target id>.json` |
@@ -63,10 +64,14 @@ instead of a reuse of the pull request's evidence.
 commit, so a candidate hook runs the pull request's own copy of the dispatcher; whatever it
 produces is checked by the protected hooks.
 
-`validation-input/` holds `inventory` and `scenario-contract` (the bytes of the two candidate
-files at the tested commit) and, after `derive_plan`, `ci-plan.json`. The plan's
-`identity.inventory_sha256` and `identity.scenario_sha256` are the SHA-256 of those two files: a
-hook that uses them should compare first. `sealed-build/` and `sealed-runtime/` hold the frozen
+`validation-input/` holds the bytes of every candidate file at the tested commit: `inventory`,
+`scenario-contract` and one file per `plan_inputs` entry under its `name` (which is never
+`inventory`, `scenario-contract` or `ci-plan.json`). After `derive_plan` it also holds
+`ci-plan.json`. The plan binds each of them by SHA-256: `identity.inventory_sha256` and
+`identity.scenario_sha256` for the first two, and `plan_inputs`, a list of `{"name", "sha256"}`
+in the config's order, for the others. A hook that uses a candidate file should compare first.
+A candidate hook reads the same files from its own checkout, at the paths the config names.
+`sealed-build/` and `sealed-runtime/` hold the frozen
 exports; `ci-envelope.json` and `ci-runtime-envelope.json` in them belong to the kit and are to be
 ignored.
 
@@ -99,8 +104,8 @@ ignored.
   a bare `artifacts.json`. The JARs are unique by their own names (`files/…`, `harness/…`).
 * One file is at most 256 MiB as a JAR, 16 MiB as an SBOM or a build log, and as a native report
   8 MiB (profile `block-pops`) or 4 MiB (`quick-skin`).
-* No identity, hash of the plan, command, runner or permission: the kit adds the identity and
-  rejects any other key.
+* No identity, `plan_inputs`, hash of the plan, command, runner or permission: the kit adds the
+  identity and the hashes of the candidate files, and rejects any other key.
 
 The same inputs must give the same document: every job of a generation derives the plan again
 and the hashes must agree.
@@ -120,8 +125,8 @@ exit non-zero on any difference; it writes its report only when everything holds
 ## What protected code does afterwards
 
 1. `derive_plan`: parses `plan.json`, adds the authenticated identity, binds the policy digest, the
-   inventory's Git blob id and SHA-256, the scenario contract's SHA-256 and the runtime selection
-   digest, and computes `plan_sha256`.
+   inventory's Git blob id and SHA-256, the scenario contract's SHA-256, the SHA-256 of every
+   extra plan input and the runtime selection digest, and computes `plan_sha256`.
 2. `build_target` and `run_lane`: terminates and locks the account, proves the tracked sources are
    unchanged, freezes the export and writes its envelope. The Build file set must equal the plan.
 3. `verify_*`: requires exactly the expected reports, freezes them and records them in the

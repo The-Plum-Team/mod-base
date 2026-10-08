@@ -64,12 +64,16 @@ UNIT_ENVIRONMENT = {"target": "MB_TARGET_ID", "lane": "MB_LANE_ID"}
 #: The names ``derive_runtime`` returns for its lane; ``run_lane`` receives exactly these.
 RUNTIME_VALUES = ("E2E_ROW_JSON", "E2E_SCENARIOS")
 
-#: Files of ``validation-input/``: the bytes of the two candidate files the config names, then
-#: the plan those bytes produced. Every later protected hook may read all three (the plan's
-#: identity binds both candidate files by SHA-256).
+#: Files of ``validation-input/``: the bytes of the candidate files the config names (the
+#: inventory, the scenario contract and every extra ``plan_inputs`` file under its configured
+#: name), then the plan those bytes produced. Every later protected hook may read all of them:
+#: the plan binds each candidate file by SHA-256, the first two in its identity and the extra ones
+#: in ``plan_inputs`` (:func:`plan_sources` lists them with their repository paths).
 INVENTORY_INPUT = "inventory"
 SCENARIO_INPUT = "scenario-contract"
 PLAN_INPUT = grammar.CI_PLAN_NAME
+#: The names of ``validation-input/`` the kit gives out itself; no extra plan input takes one.
+RESERVED_INPUT_NAMES = frozenset({INVENTORY_INPUT, SCENARIO_INPUT, PLAN_INPUT})
 #: Files a derivation hook leaves in ``validation/``; a verification hook leaves one report per unit.
 PLAN_OUTPUT = "plan.json"
 RUNTIME_OUTPUT = "runtime.json"
@@ -159,13 +163,33 @@ def plan_unit(plan: dict[str, Any], hook: str, unit_id: str | None) -> dict[str,
     raise AdapterError(f"{contract.name} was requested for a {contract.unit} outside the protected plan")
 
 
-def hook_inputs(hook: str) -> tuple[str, ...]:
-    """The files of ``validation-input/`` a protected hook may read (none for a candidate hook)."""
+def plan_input_name(value: Any, path: str) -> str:
+    """The name a protected config gives an extra plan input: the file's name in
+    ``validation-input/``, a lower-case token like a unit id that is none of the kit's own."""
+
+    ID(value, path)
+    check(value not in RESERVED_INPUT_NAMES, path, "is a name the kit stages itself")
+    return value
+
+
+def plan_sources(config: Mapping[str, Any]) -> dict[str, str]:
+    """``{staged name: repository path}`` of every candidate file a plan is derived from, in the
+    order of ``validation-input/``: the inventory, the scenario contract, then the config's
+    ``plan_inputs`` by name. ``config`` is the validated protected config document; a job stages
+    the blob of each path at the tested tree under its name before ``derive_plan`` runs."""
+
+    return {INVENTORY_INPUT: config["inventory"]["path"], SCENARIO_INPUT: config["scenario_contract"]["path"],
+            **{item["name"]: item["path"] for item in config["plan_inputs"]}}
+
+
+def hook_inputs(hook: str, config: Mapping[str, Any]) -> tuple[str, ...]:
+    """The files of ``validation-input/`` a protected hook may read (none for a candidate hook):
+    every candidate file of :func:`plan_sources` and, once it exists, the plan."""
 
     contract = _hook(hook)
     if contract.role != "validator":
         return ()
-    candidate = (INVENTORY_INPUT, SCENARIO_INPUT)
+    candidate = tuple(plan_sources(config))
     return candidate if contract.name == "derive_plan" else (PLAN_INPUT, *candidate)
 
 

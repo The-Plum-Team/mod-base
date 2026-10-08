@@ -67,20 +67,28 @@ def _files(root: Path) -> set[str]:
     return found
 
 
-def _protected_inputs(root: Path) -> tuple[dict[str, Any], dict[str, Any], bytes, bytes]:
+def _protected_inputs(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, bytes]]:
+    """The inventory and the contract a protected hook was given, and the bytes of every candidate
+    file by its name in ``validation-input/``."""
+
     inputs = root / "validation-input"
-    inventory, contract = _read(inputs, "inventory"), _read(inputs, "scenario-contract")
-    return adapter.parse_inventory(inventory), adapter.parse_contract(contract), inventory, contract
+    raw = {name: _read(inputs, name) for name in ("inventory", "scenario-contract", adapter.PROPERTIES_INPUT)}
+    properties = adapter.parse_properties(raw[adapter.PROPERTIES_INPUT])
+    return adapter.parse_inventory(raw["inventory"], properties), adapter.parse_contract(raw["scenario-contract"]), raw
 
 
-def _plan(root: Path, inventory: bytes, contract: bytes) -> dict[str, Any]:
-    """The protected plan, which must bind the two candidate files this hook was given."""
+def _plan(root: Path, raw: dict[str, bytes]) -> dict[str, Any]:
+    """The protected plan, which must bind every candidate file this hook was given: the
+    inventory and the scenario contract in its identity, ``gradle.properties`` in ``plan_inputs``."""
 
     plan = adapter.decode(_read(root / "validation-input", "ci-plan.json"), "plan")
     identity = plan["identity"]
-    if (identity["inventory_sha256"], identity["scenario_sha256"]) != (adapter.sha256(inventory),
-                                                                      adapter.sha256(contract)):
+    if (identity["inventory_sha256"], identity["scenario_sha256"]) != (adapter.sha256(raw["inventory"]),
+                                                                      adapter.sha256(raw["scenario-contract"])):
         raise adapter.AdapterError("the plan was not derived from this inventory and scenario contract")
+    extra = [{"name": adapter.PROPERTIES_INPUT, "sha256": adapter.sha256(raw[adapter.PROPERTIES_INPUT])}]
+    if plan["plan_inputs"] != extra:
+        raise adapter.AdapterError("the plan was not derived from this gradle.properties")
     return plan
 
 
@@ -92,8 +100,8 @@ def _unit(plan: dict[str, Any], kind: str, unit: str) -> dict[str, Any]:
 
 
 def _verify_targets(root: Path, output: Output, hook: str, unit: str | None) -> None:
-    inventory, contract, raw_inventory, raw_contract = _protected_inputs(root)
-    plan = _plan(root, raw_inventory, raw_contract)
+    inventory, contract, raw = _protected_inputs(root)
+    plan = _plan(root, raw)
     sealed = root / "sealed-build"
     planned = {entry["path"] for target in plan["targets"] for entry in target["outputs"]}
     present = _files(sealed) - set(KIT_FILES)
@@ -114,8 +122,8 @@ def _verify_targets(root: Path, output: Output, hook: str, unit: str | None) -> 
 
 
 def _verify_runtime(root: Path, output: Output, lane: str) -> None:
-    inventory, contract, raw_inventory, raw_contract = _protected_inputs(root)
-    plan = _plan(root, raw_inventory, raw_contract)
+    inventory, contract, raw = _protected_inputs(root)
+    plan = _plan(root, raw)
     entry = _unit(plan, "lanes", lane)
     target, loader = adapter.lane_of(inventory, lane)
     if entry["native_contract_sha256"] != adapter.lane_contract(contract, target, loader):
@@ -135,8 +143,7 @@ def _verify_runtime(root: Path, output: Output, lane: str) -> None:
 
 def _candidate_inputs(checkout: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     config = adapter.decode(_read(checkout, policy_suite.CONFIG), policy_suite.CONFIG)
-    return (config, adapter.parse_inventory(_read(checkout, config["inventory"]["path"])),
-            adapter.parse_contract(_read(checkout, config["scenario_contract"]["path"])))
+    return (config, *policy_suite.documents(checkout))
 
 
 def _run_lane(checkout: Path, output: Output, lane: str) -> None:
@@ -156,11 +163,11 @@ def _run_lane(checkout: Path, output: Output, lane: str) -> None:
 
 def _hook(hook: str, unit: str | None, root: Path, output: Output) -> None:
     if hook == "derive_plan":
-        inventory, contract, _, _ = _protected_inputs(root)
+        inventory, contract, _ = _protected_inputs(root)
         output.write("plan.json", adapter.encode(adapter.derive_plan(inventory, contract)))
     elif hook == "derive_runtime":
-        inventory, contract, raw_inventory, raw_contract = _protected_inputs(root)
-        _unit(_plan(root, raw_inventory, raw_contract), "lanes", unit)
+        inventory, contract, raw = _protected_inputs(root)
+        _unit(_plan(root, raw), "lanes", unit)
         output.write("runtime.json", adapter.encode({"values": adapter.runtime_values(inventory, contract, unit)}))
     elif hook in ("verify_target", "verify_build"):
         _verify_targets(root, output, hook, unit)

@@ -42,7 +42,8 @@ class SchemaTests(unittest.TestCase):
         document = ci_config()
         self.assertIs(validate_build_config(document), document)
         self.assertEqual(set(document), {"kind", "schema_version", "repository", "profile", "build_adapter_api",
-                                         "adapter", "inventory", "scenario_contract", "bundle", "contexts", "timeouts"})
+                                         "adapter", "inventory", "scenario_contract", "plan_inputs", "bundle",
+                                         "contexts", "timeouts"})
         for key in document:
             changed = copy.deepcopy(document)
             del changed[key]
@@ -82,8 +83,55 @@ class SchemaTests(unittest.TestCase):
                 validate_build_config(document)
         accepted = ci_config()
         accepted["bundle"]["path"] = "out"
-        accepted["inventory"]["path"] = "gradle.properties"
+        accepted["inventory"]["path"] = "settings.gradle"
         validate_build_config(accepted)
+
+    def test_extra_plan_inputs_are_optional_named_and_bounded(self) -> None:
+        def inputs(*entries: tuple[str, str]) -> dict:
+            document = ci_config()
+            document["plan_inputs"] = [{"name": name, "path": path} for name, path in entries]
+            return document
+
+        self.assertEqual(ci_config()["plan_inputs"], [{"name": "gradle-properties", "path": "gradle.properties"}])
+        validate_build_config(inputs())  # Block Pops needs none.
+        validate_build_config(inputs(("gradle-properties", "gradle.properties"),
+                                     ("versions.toml", "gradle/libs.versions.toml")))
+        most = [(f"input-{index}", f"inputs/{index}.json") for index in range(limits.MAX_CI_PLAN_INPUTS)]
+        self.assertEqual(len(most), 8)
+        validate_build_config(inputs(*most))
+        rejected = {
+            "one too many": [*most, ("input-8", "inputs/8.json")],
+            "not sorted by name": [("versions", "a.toml"), ("gradle-properties", "gradle.properties")],
+            "repeated name": [("gradle-properties", "gradle.properties"), ("gradle-properties", "other.properties")],
+            "the inventory's name": [("inventory", "gradle.properties")],
+            "the scenario contract's name": [("scenario-contract", "gradle.properties")],
+            "the plan's name": [("ci-plan.json", "gradle.properties")],
+            "a name with a directory": [("gradle/properties", "gradle.properties")],
+            "a name in upper case": [("Gradle-Properties", "gradle.properties")],
+            "an empty name": [("", "gradle.properties")],
+            "one file under two names": [("first", "gradle.properties"), ("second", "gradle.properties")],
+            "two names for one file ignoring case": [("first", "gradle.properties"), ("second", "Gradle.properties")],
+            "the inventory again": [("matrix", "release/release-matrix.json")],
+            "the scenario contract again": [("scenarios", "e2e/scenario-contract.json")],
+            "a protected source": [("gate", "scripts/ci/pr_gate.py")],
+            "the config itself": [("config", "scripts/ci/mod-base-build.json")],
+            "a file of the staged Build": [("manifest", "build/release/artifacts.json")],
+            "a directory of another input": [("release", "release")],
+            "a path outside the repository": [("gradle-properties", "../gradle.properties")],
+            "an absolute path": [("gradle-properties", "/gradle.properties")],
+            "Git metadata": [("head", ".git/HEAD")],
+            "a path with a space": [("gradle-properties", "gradle properties")],
+        }
+        for label, entries in rejected.items():
+            with self.subTest(case=label), self.assertRaises(MbError):
+                validate_build_config(inputs(*entries))
+        for label, value in (("no list", {"gradle-properties": "gradle.properties"}), ("a bare path", ["gradle.properties"]),
+                             ("a hash, like an adapter file", [{"name": "a", "path": "a.json", "sha256": "0" * 64}]),
+                             ("no path", [{"name": "a"}]), ("no name", [{"path": "a.json"}]), ("null", None)):
+            document = ci_config()
+            document["plan_inputs"] = value
+            with self.subTest(case=label), self.assertRaises(MbError):
+                validate_build_config(document)
 
     def test_the_adapter_closure_is_sorted_complete_and_free_of_aliases(self) -> None:
         def closure(*paths: str) -> dict:

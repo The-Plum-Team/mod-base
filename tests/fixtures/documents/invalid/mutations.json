@@ -2902,6 +2902,66 @@
       ]
     },
     {
+      "delete": [
+        "/plan_inputs"
+      ],
+      "error": "is missing required keys ['plan_inputs']",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-without-plan-inputs"
+    },
+    {
+      "error": "$.plan_inputs[0]: has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-plan-input-with-a-repository-path",
+      "set": [
+        [
+          "/plan_inputs/0/path",
+          "gradle.properties"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].sha256: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-plan-input-short-hash",
+      "set": [
+        [
+          "/plan_inputs/0/sha256",
+          "abc"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].name: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-plan-input-name-is-a-path",
+      "set": [
+        [
+          "/plan_inputs/0/name",
+          "gradle/properties"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[1]: duplicates an earlier item",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-plan-input-repeated",
+      "set": [
+        [
+          "/plan_inputs/1",
+          {
+            "name": "gradle-properties",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      ]
+    },
+    {
       "error": "has unknown keys",
       "expect": "invalid",
       "fixture": "ci-envelope",
@@ -3178,6 +3238,159 @@
         [
           "/scenario_contract/path",
           "release/release-matrix.json"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-config",
+      "name": "ci-config-no-extra-plan-inputs",
+      "set": [
+        [
+          "/plan_inputs",
+          []
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-config",
+      "name": "ci-config-two-extra-plan-inputs",
+      "set": [
+        [
+          "/plan_inputs/1",
+          {
+            "name": "versions.toml",
+            "path": "gradle/libs.versions.toml"
+          }
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/plan_inputs"
+      ],
+      "error": "is missing required keys ['plan_inputs']",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-inputs-missing"
+    },
+    {
+      "error": "$.plan_inputs[0].name: is a name the kit stages itself",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-takes-the-inventory-name",
+      "set": [
+        [
+          "/plan_inputs/0/name",
+          "inventory"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].name: is a name the kit stages itself",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-takes-the-plan-name",
+      "set": [
+        [
+          "/plan_inputs/0/name",
+          "ci-plan.json"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].name: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-name-is-a-path",
+      "set": [
+        [
+          "/plan_inputs/0/name",
+          "gradle/properties"
+        ]
+      ]
+    },
+    {
+      "error": "$: output inventory has a case-insensitive alias",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-is-the-inventory-file",
+      "set": [
+        [
+          "/plan_inputs/0/path",
+          "release/release-matrix.json"
+        ]
+      ]
+    },
+    {
+      "error": "$: a file is also an inventory directory",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-inside-the-bundle",
+      "set": [
+        [
+          "/plan_inputs/0/path",
+          "build/release/gradle.properties"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-traversal",
+      "set": [
+        [
+          "/plan_inputs/0/path",
+          "../gradle.properties"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs: extra plan inputs must be sorted by name",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-inputs-not-sorted",
+      "set": [
+        [
+          "/plan_inputs/1",
+          {
+            "name": "a-first",
+            "path": "a.txt"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[1]: duplicates an earlier item",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-repeated-name",
+      "set": [
+        [
+          "/plan_inputs/1",
+          {
+            "name": "gradle-properties",
+            "path": "other.properties"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0]: has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-with-a-hash",
+      "set": [
+        [
+          "/plan_inputs/0/sha256",
+          {
+            "$repeat": [
+              "0",
+              64
+            ]
+          }
         ]
       ]
     },

@@ -30,6 +30,12 @@
     "path": "release/release-matrix.json"
   },
   "kind": "mod-base.build.config",
+  "plan_inputs": [
+    {
+      "name": "gradle-properties",
+      "path": "gradle.properties"
+    }
+  ],
   "profile": "block-pops",
   "repository": "example/mod",
   "scenario_contract": {

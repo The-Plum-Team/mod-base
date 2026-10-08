@@ -22,6 +22,17 @@ from tests.test_ci_adapter import derived, encoded
 
 INVENTORY = b"hello\n"
 SCENARIOS = b'{"scenarios": ["smoke"]}\n'
+PROPERTIES = b"mod_version=1.0.0\n"
+#: The fixture mod's config names one extra plan input, staged as ``gradle-properties``.
+EXTRA = {h.PROPERTIES_INPUT: PROPERTIES}
+
+
+def fixture_mod(root: Path, **changes) -> Path:
+    """A copy of the fixture mod at ``root`` with ``changes`` to the fields of its Build config."""
+
+    path = h.materialize(root) / "scripts/ci/mod-base-build.json"
+    path.write_bytes(h.pretty({**json.loads(path.read_bytes()), **changes}))
+    return root
 
 
 class BuildPlanTests(unittest.TestCase):
@@ -31,7 +42,7 @@ class BuildPlanTests(unittest.TestCase):
 
     def build(self, **changes) -> dict:
         arguments = {"subject": self.subject, "config": self.config, "inventory": INVENTORY,
-                     "scenario_contract": SCENARIOS, "derived": encoded(derived()), **changes}
+                     "scenario_contract": SCENARIOS, "plan_inputs": EXTRA, "derived": encoded(derived()), **changes}
         return planning.build_plan(**arguments)
 
     def test_the_plan_is_complete_valid_and_bound_to_the_actual_bytes(self) -> None:
@@ -50,7 +61,56 @@ class BuildPlanTests(unittest.TestCase):
             "scenario_sha256": hashlib.sha256(SCENARIOS).hexdigest(),
             "runtime_selection_sha256": canonical_sha256({"profile": "quick-skin", "lanes": derived()["lanes"]}),
         })
+        self.assertEqual(plan["plan_inputs"], [{"name": "gradle-properties",
+                                                "sha256": hashlib.sha256(PROPERTIES).hexdigest()}])
         self.assertEqual(plan["plan_sha256"], plan_sha256(plan))
+
+    def test_extra_plan_inputs_are_exactly_the_files_the_config_names(self) -> None:
+        self.assertEqual([item["name"] for item in self.config.data["plan_inputs"]], [h.PROPERTIES_INPUT])
+        baseline = self.build()
+        changed = self.build(plan_inputs={h.PROPERTIES_INPUT: b"mod_version=1.0.1\n"})
+        # The extra file is bound by the plan and its hash, and by nothing in the identity: no
+        # other record kind changes shape for it.
+        self.assertEqual(changed["identity"], baseline["identity"])
+        self.assertNotEqual(changed["plan_inputs"], baseline["plan_inputs"])
+        self.assertNotEqual(changed["plan_sha256"], baseline["plan_sha256"])
+        cases = {
+            "missing": {},
+            "another name": {"gradle.properties": PROPERTIES},
+            "one more": {**EXTRA, "versions": b"x"},
+            "the inventory under its staged name": {**EXTRA, "inventory": INVENTORY},
+            "text": {h.PROPERTIES_INPUT: "mod_version=1.0.0\n"},
+            "empty": {h.PROPERTIES_INPUT: b""},
+            "oversized": {h.PROPERTIES_INPUT: bytes(limits.MAX_CI_PLAN_SOURCE_BYTES + 1)},
+            "a list": [PROPERTIES],
+            "nothing": None,
+        }
+        for label, value in cases.items():
+            with self.subTest(case=label), self.assertRaises(MbError):
+                self.build(plan_inputs=value)
+        self.build(plan_inputs={h.PROPERTIES_INPUT: bytes(limits.MAX_CI_PLAN_SOURCE_BYTES)})
+
+    def test_a_config_without_extra_inputs_takes_none(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = load_build_config(fixture_mod(Path(directory) / "mod", plan_inputs=[]), repository=h.REPOSITORY)
+        plan = self.build(config=config, plan_inputs={})
+        self.assertEqual(plan["plan_inputs"], [])
+        validate_plan(plan)
+        with self.assertRaises(MbError):
+            self.build(config=config)  # A file the protected config does not name is never bound.
+
+    def test_several_extra_inputs_are_bound_in_name_order(self) -> None:
+        names = ["a-first", "gradle-properties", "versions.toml"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = fixture_mod(Path(directory) / "mod", plan_inputs=[
+                {"name": name, "path": f"inputs/{index}.txt"} for index, name in enumerate(names)])
+            config = load_build_config(root, repository=h.REPOSITORY)
+        data = {name: name.encode("utf-8") for name in reversed(names)}
+        plan = self.build(config=config, plan_inputs=data)
+        self.assertEqual(plan["plan_inputs"], [{"name": name, "sha256": hashlib.sha256(name.encode("utf-8")).hexdigest()}
+                                               for name in names])
+        swapped = {**data, "a-first": data["versions.toml"], "versions.toml": data["a-first"]}
+        self.assertNotEqual(self.build(config=config, plan_inputs=swapped)["plan_sha256"], plan["plan_sha256"])
 
     def test_the_same_inputs_give_the_same_plan_and_stay_untouched(self) -> None:
         subject, document = copy.deepcopy(self.subject), encoded(derived())
@@ -69,18 +129,18 @@ class BuildPlanTests(unittest.TestCase):
         moved = copy.deepcopy(self.subject)
         moved.update(head_sha="9" * 40, tested_parents=[h.CONTROLLER_SHA, "9" * 40])
         with tempfile.TemporaryDirectory() as directory:
-            root = h.materialize(Path(directory) / "mod")
-            path = root / "scripts/ci/mod-base-build.json"
-            path.write_bytes(h.pretty({**json.loads(path.read_bytes()), "profile": "block-pops"}))
+            root = fixture_mod(Path(directory) / "mod", profile="block-pops")
             changed = [
                 self.build(inventory=INVENTORY + b" "),
                 self.build(scenario_contract=SCENARIOS + b" "),
                 self.build(derived=encoded(other_lanes)),
                 self.build(subject=moved),
                 self.build(config=load_build_config(root, repository=h.REPOSITORY)),
+                self.build(plan_inputs={h.PROPERTIES_INPUT: PROPERTIES + b" "}),
             ]
         hashes = {plan["plan_sha256"] for plan in (baseline, *changed)}
-        self.assertEqual(len(hashes), 6)
+        self.assertEqual(len(hashes), 7)
+        self.assertEqual(changed[5]["identity"], baseline["identity"])
         self.assertEqual(changed[0]["identity"]["scenario_sha256"], baseline["identity"]["scenario_sha256"])
         self.assertNotEqual(changed[0]["identity"]["inventory_blob"], baseline["identity"]["inventory_blob"])
         self.assertNotEqual(changed[2]["identity"]["runtime_selection_sha256"],
@@ -142,7 +202,8 @@ class RequirePlanTests(unittest.TestCase):
     def setUp(self) -> None:
         self.subject = h.subject()
         self.plan = planning.build_plan(subject=self.subject, config=load_build_config(h.MOD, repository=h.REPOSITORY),
-                                        inventory=INVENTORY, scenario_contract=SCENARIOS, derived=encoded(derived()))
+                                        inventory=INVENTORY, scenario_contract=SCENARIOS, plan_inputs=EXTRA,
+                                        derived=encoded(derived()))
 
     def test_the_plan_of_this_subject_with_the_agreed_hash_is_returned(self) -> None:
         self.assertIs(planning.require_plan(self.plan, subject=self.subject), self.plan)
@@ -178,7 +239,8 @@ class MatrixTests(unittest.TestCase):
             {**output, "lane_id": "lane-z", "path": "z/" + output["path"]} for output in target["outputs"]]})
         document["lanes"].append({**copy.deepcopy(lane), "id": "lane-z", "target_id": "target-z"})
         plan = planning.build_plan(subject=h.subject(), config=load_build_config(h.MOD, repository=h.REPOSITORY),
-                                   inventory=INVENTORY, scenario_contract=SCENARIOS, derived=encoded(document))
+                                   inventory=INVENTORY, scenario_contract=SCENARIOS, plan_inputs=EXTRA,
+                                   derived=encoded(document))
         self.assertEqual(planning.matrices(plan), {"targets": ["target-z", "target-a"], "lanes": ["lane-a", "lane-z"]})
         outputs = planning.plan_outputs(plan)
         self.assertEqual(outputs, {"plan_sha256": plan["plan_sha256"], "targets": '["target-z","target-a"]',

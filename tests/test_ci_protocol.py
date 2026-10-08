@@ -87,6 +87,45 @@ class PlanTests(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(MbError):
                 validate_plan(plan)
 
+    def test_extra_plan_inputs_are_bound_by_the_plan_hash_in_name_order(self):
+        def inputs(*names):
+            return [{"name": name, "sha256": hashlib.sha256(name.encode()).hexdigest()} for name in names]
+
+        plan = ci_plan()
+        self.assertEqual([item["name"] for item in plan["plan_inputs"]], ["gradle-properties"])
+        plan["plan_inputs"][0]["sha256"] = "f" * 64
+        with self.assertRaisesRegex(MbError, "does not bind this plan"):
+            validate_plan(plan)
+        most = [f"input-{index}" for index in range(8)]
+        cases = (
+            ("none", [], None), ("two", inputs("gradle-properties", "versions.toml"), None), ("eight", inputs(*most), None),
+            ("nine", inputs(*most, "input-8"), "must hold between 0 and 8 items"),
+            ("unsorted", inputs("versions.toml", "gradle-properties"), "$.plan_inputs: must be sorted by name"),
+            ("repeated", inputs("gradle-properties", "gradle-properties"), "duplicates an earlier item"),
+            ("a path instead of a name", inputs("gradle/properties"), "does not match the required grammar"),
+            ("a name in upper case", inputs("Gradle"), "does not match the required grammar"),
+            ("a repository path", [{**inputs("gradle-properties")[0], "path": "gradle.properties"}], "has unknown keys"),
+            ("no hash", [{"name": "gradle-properties"}], "missing required keys"),
+            ("a short hash", [{"name": "gradle-properties", "sha256": "f" * 63}], "does not match the required grammar"),
+            ("a mapping", {"gradle-properties": "f" * 64}, "must be an array"),
+        )
+        for label, value, message in cases:
+            plan = ci_plan()
+            plan["plan_inputs"] = value
+            plan["plan_sha256"] = plan_sha256(plan)
+            with self.subTest(case=label):
+                if message is None:
+                    validate_plan(plan)
+                else:
+                    with self.assertRaises(MbError) as caught:
+                        validate_plan(plan)
+                    self.assertIn(message, str(caught.exception))
+        missing = ci_plan()
+        del missing["plan_inputs"]
+        missing["plan_sha256"] = plan_sha256(missing)
+        with self.assertRaisesRegex(MbError, "missing required keys"):
+            validate_plan(missing)
+
     def staged(self, mutate=None):
         plan = ci_staged_plan()
         if mutate is not None:

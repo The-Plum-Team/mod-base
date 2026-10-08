@@ -42,8 +42,10 @@ class FixtureTests(unittest.TestCase):
     def test_the_mod_is_a_complete_repository_for_every_ci_command(self) -> None:
         invocation = runtime.build_invocation(h.MOD, h.MOD / "site" / "mod-base.json", h.environment())
         self.assertEqual((invocation.repository, invocation.config.canonical_branch), (h.REPOSITORY, h.BRANCH))
-        for key in ("inventory", "scenario_contract"):
-            self.assertTrue((h.MOD / h.build_config()[key]["path"]).is_file())
+        sources = adapter.plan_sources(h.build_config())
+        self.assertEqual(list(sources), ["inventory", "scenario-contract", h.PROPERTIES_INPUT])
+        for path in sources.values():
+            self.assertTrue((h.MOD / path).is_file(), path)
 
     def test_the_dispatcher_knows_exactly_the_eight_hooks(self) -> None:
         source = (h.MOD / "scripts/ci/mod_base_build_adapter.py").read_text(encoding="utf-8")
@@ -120,6 +122,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([lane["target_id"] for lane in self.plan["lanes"]], ["1.20.1", "1.20.1", "1.21.1"])
         inventory = (h.MOD / "release" / "inventory.json").read_bytes()
         self.assertEqual(self.plan["identity"]["inventory_sha256"], hashlib.sha256(inventory).hexdigest())
+        properties = (h.MOD / "gradle.properties").read_bytes()
+        self.assertEqual(self.plan["plan_inputs"], [{"name": h.PROPERTIES_INPUT,
+                                                     "sha256": hashlib.sha256(properties).hexdigest()}])
         self.assertEqual(self.plan["profile"], "quick-skin")
 
     def test_planned_outputs_carry_the_real_mods_file_names(self) -> None:
@@ -298,14 +303,68 @@ class TamperTests(unittest.TestCase):
         return data
 
     def test_protected_hooks_refuse_inputs_the_plan_does_not_bind(self) -> None:
-        inventory = self.box.inputs / adapter.INVENTORY_INPUT
-        document = json.loads(inventory.read_bytes())
-        document["mod"]["version"] = "1.0.1"
-        inventory.write_bytes(h.pretty(document))
-        for hook, unit in (("verify_target", "1.21.1"), ("verify_build", None), ("derive_runtime", "fabric-1.21.1"),
-                           ("verify_runtime", "fabric-1.21.1")):
-            with self.subTest(hook=hook):
-                self.rejected(hook, unit)
+        # Each candidate file in turn: the two the identity binds and the extra one of ``plan_inputs``.
+        self.assertEqual(h.files(self.box.inputs), {*adapter.hook_inputs("verify_build", self.box.config.data)})
+        self.box.build("1.20.1")
+        for name in adapter.hook_inputs("derive_plan", self.box.config.data):
+            staged = self.box.inputs / name
+            original = staged.read_bytes()
+            staged.write_bytes(original + b"\n")
+            for hook, unit in (("verify_target", "1.21.1"), ("verify_build", None), ("derive_runtime", "fabric-1.21.1"),
+                               ("verify_runtime", "fabric-1.21.1")):
+                with self.subTest(changed=name, hook=hook):
+                    self.rejected(hook, unit)
+            staged.write_bytes(original)
+        self.accepted("verify_build", None)
+
+
+class PlanInputTests(unittest.TestCase):
+    """The mod version comes from ``gradle.properties``, the one extra plan input of the fixture."""
+
+    def sandbox(self, properties: bytes | None = None) -> h.Sandbox:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        candidate = h.materialize(Path(directory.name) / "candidate")
+        if properties is not None:
+            (candidate / "gradle.properties").write_bytes(properties)
+        return h.Sandbox(Path(directory.name), candidate=candidate)
+
+    def test_the_extra_file_decides_the_jar_names_and_is_bound_by_the_plan(self) -> None:
+        released, bumped = self.sandbox(), self.sandbox(b"mod_version=2.3.4\n")
+        plans = [box.derive_plan() for box in (released, bumped)]
+        paths = [[output["path"] for target in plan["targets"] for output in target["outputs"]] for plan in plans]
+        self.assertIn("files/Synthetic Mod - Fabric - 1.20.1-1.0.0.jar", paths[0])
+        self.assertIn("files/Synthetic Mod - Fabric - 1.20.1-2.3.4.jar", paths[1])
+        self.assertFalse(any("1.0.0" in path for path in paths[1]))
+        # Nothing but the extra file differs: the identity is the same, and the plan is another.
+        self.assertEqual(plans[0]["identity"], plans[1]["identity"])
+        self.assertEqual(plans[1]["plan_inputs"], [{"name": h.PROPERTIES_INPUT,
+                                                    "sha256": hashlib.sha256(b"mod_version=2.3.4\n").hexdigest()}])
+        self.assertNotEqual(plans[0]["plan_sha256"], plans[1]["plan_sha256"])
+        # The candidate hook reads the same file from its own checkout and builds what was planned.
+        bumped.build("1.21.1")
+        self.assertIn("files/Synthetic Mod - Fabric - 1.21.1-2.3.4.jar", h.files(bumped.sealed_build))
+        process = bumped.run("verify_target", unit_id="1.21.1")
+        self.assertEqual(process.returncode, 0, process.stdout)
+
+    def test_derive_plan_needs_the_extra_file_with_one_version_in_it(self) -> None:
+        box = self.sandbox()
+        box.stage_inputs()
+        staged = box.inputs / h.PROPERTIES_INPUT
+        staged.unlink()
+        self.assertEqual(box.run("derive_plan").returncode, 1)
+        for properties in (b"# no version\n", b"mod_version=\n", b"mod_version=one\n", b"mod_version\n",
+                           b"mod_version=1.0.0\nmod_version=1.0.1\n", b"\xff\n"):
+            staged.write_bytes(properties)
+            with self.subTest(properties=properties):
+                process = box.run("derive_plan")
+                self.assertEqual(process.returncode, 1, process.stdout)
+                self.assertNotIn(b"Traceback", process.stdout)
+                self.assertEqual(h.files(box.validation), set())
+        staged.write_bytes(b"other=1\nmod_version = 4.5.6 \n")
+        self.assertEqual(box.run("derive_plan").returncode, 1)  # A padded key is malformed, not trimmed.
+        staged.write_bytes(b"other=1\nmod_version= 4.5.6 \n")
+        self.assertEqual(box.run("derive_plan").returncode, 0)
 
 
 class DeterminismTests(unittest.TestCase):

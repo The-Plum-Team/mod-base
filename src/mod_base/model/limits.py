@@ -187,8 +187,12 @@ MAX_TEMPLATE_PATHS = 32
 
 # -- Protected Build/packaged runtime (independent from Pages budgets) -----------------------------
 MAX_CI_PLAN_BYTES = 4 * MIB
-#: One candidate file a plan is derived from (the release inventory, the scenario contract).
+#: One candidate file a plan is derived from (the release inventory, the scenario contract, or an
+#: extra plan input the protected Build config names).
 MAX_CI_PLAN_SOURCE_BYTES = 4 * MIB
+#: Extra candidate files a protected Build config may name for plan derivation (``plan_inputs``).
+#: Quick Skin needs one: ``gradle.properties`` holds the mod version its JAR names carry.
+MAX_CI_PLAN_INPUTS = 8
 #: The private ``identity.json`` state record ``ci subject`` writes.
 MAX_CI_IDENTITY_BYTES = 16 * KIB
 #: API requests of one ``ci subject``: a pull request costs 4, a protected subject 5; the rest is

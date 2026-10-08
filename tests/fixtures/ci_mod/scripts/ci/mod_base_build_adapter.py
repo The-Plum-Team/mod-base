@@ -1,10 +1,11 @@
 """Synthetic mod: everything the Build hooks know about this mod (``BUILD_ADAPTER_API = 1``).
 
 The mod is a stand-in. Its "release inventory" lists Minecraft targets and their loaders, its
-"scenario contract" lists scenarios and checkpoints, a "JAR" is a tiny stored ZIP that embeds the
-tested commit, and a "screenshot" is a 16x9 one-colour PNG. Nothing here launches Gradle or
-Minecraft; every byte is derived from the inputs, so the same inputs always give the same plan and
-the same Build outputs.
+"scenario contract" lists scenarios and checkpoints, its ``gradle.properties`` holds the mod version
+under the property the inventory names (so three candidate files decide the plan: the Build config
+lists the third as an extra plan input), a "JAR" is a tiny stored ZIP that embeds the tested commit,
+and a "screenshot" is a 16x9 one-colour PNG. Nothing here launches Gradle or Minecraft; every byte
+is derived from the inputs, so the same inputs always give the same plan and the same Build outputs.
 
 Standard library only, Python 3.11 or newer. The dispatcher next to this file is the only caller.
 Every JSON input is decoded strictly (no duplicate key, no non-finite number) against a closed
@@ -40,6 +41,8 @@ HOOKS = ("derive_plan", "policy", "build_target", "verify_target", "verify_build
 FAULT_MODES = ("fail", "hang", "missing", "extra", "orphan")
 LOADERS = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge"}
 MAX_INPUT_BYTES = 1 << 20
+#: The name the Build config stages ``gradle.properties`` under for the protected hooks.
+PROPERTIES_INPUT = "gradle-properties"
 BUILD_IDENTITY = "META-INF/synthetic-build.json"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 SCREENSHOT_SIZE = (16, 9)
@@ -108,15 +111,39 @@ def _strings(value: Any, label: str, alphabet: str) -> list[str]:
 # -- Native inputs -------------------------------------------------------------------------------------
 
 
-def parse_inventory(data: bytes) -> dict[str, Any]:
-    """The release inventory: the mod, its targets (one per Minecraft version) and the faults."""
+def parse_properties(data: bytes) -> dict[str, str]:
+    """``gradle.properties``: ``key=value`` lines, with comments and blank lines left out."""
+
+    if not data or len(data) > MAX_INPUT_BYTES:
+        raise AdapterError(f"gradle.properties must hold 1..{MAX_INPUT_BYTES} bytes")
+    try:
+        lines = data.decode("utf-8").split("\n")
+    except UnicodeDecodeError as error:
+        raise AdapterError("gradle.properties is not UTF-8") from error
+    properties: dict[str, str] = {}
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key != key.strip() or key in properties:
+            raise AdapterError("gradle.properties has a malformed or repeated property")
+        properties[_text(key, "property name", _LOWER + _LOWER.upper() + _DIGITS + "._")] = value.strip()
+    return properties
+
+
+def parse_inventory(data: bytes, properties: dict[str, str]) -> dict[str, Any]:
+    """The release inventory: the mod, its targets (one per Minecraft version) and the faults.
+    ``mod.version`` of the result is the value of the Gradle property the inventory names."""
 
     document = _object(decode(data, "release inventory"), ("schema_version", "mod", "targets", "faults"),
                        "release inventory")
     if document["schema_version"] != 1 or type(document["schema_version"]) is not int:
         raise AdapterError("release inventory schema_version must be 1")
-    mod = _object(document["mod"], ("name", "version", "harness_version"), "mod")
+    mod = _object(document["mod"], ("name", "version_property", "harness_version"), "mod")
     _text(mod["name"], "mod.name", _LOWER + _LOWER.upper() + _DIGITS + " ")
+    if _text(mod["version_property"], "mod.version_property", _LOWER + "_") not in properties:
+        raise AdapterError(f"gradle.properties does not set {mod['version_property']}")
+    mod["version"] = properties[mod["version_property"]]
     for key in ("version", "harness_version"):
         _text(mod[key], f"mod.{key}", _DIGITS + ".")
     targets = document["targets"]

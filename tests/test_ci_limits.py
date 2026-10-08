@@ -120,6 +120,8 @@ PLATFORM: dict[str, tuple[Any, str]] = {
 KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_PLAN_BYTES": (4 * MIB, "one canonical plan"),
     "MAX_CI_PLAN_SOURCE_BYTES": (4 * MIB, "one candidate file a plan is derived from, and one derive hook output"),
+    "MAX_CI_PLAN_INPUTS": (8, "candidate files a protected Build configuration may name for plan derivation beside "
+                              "the inventory and the scenario contract; Quick Skin needs one (gradle.properties)"),
     "MAX_CI_IDENTITY_BYTES": (16 * KIB, "the private subject record of one job"),
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),

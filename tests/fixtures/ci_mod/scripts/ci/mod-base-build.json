@@ -4,15 +4,15 @@
     "files": [
       {
         "path": "scripts/ci/mod_base_build_adapter.py",
-        "sha256": "2a3ab33d134c14abe3f07fd3d40be14b1fea6e916e711830a4aed4194ae939d4"
+        "sha256": "6a828a41facd335893b0a9b5430108d649c40d303b9064c8dcc0a262cdcf80c2"
       },
       {
         "path": "scripts/ci/mod_base_build_dispatch.py",
-        "sha256": "e501cb74f86c2bc18ce8c33234db49cdd8d39b02cae401bb19615d03440199e9"
+        "sha256": "bffeb7d2908188f6bf296edf785796832d6339badf58f44009b799e87df7b328"
       },
       {
         "path": "scripts/ci/policy_suite.py",
-        "sha256": "d64e698307598745f1b34524a6bddb88bea15e1504bba6a7f7dd9b5b6ee97ed6"
+        "sha256": "7e91cc220eb5dd4d6cf9f8564ef953d4f50955e3e0650fd133ae67d897d5b119"
       }
     ],
     "path": "scripts/ci/mod_base_build_adapter.py",
@@ -30,6 +30,12 @@
     "path": "release/inventory.json"
   },
   "kind": "mod-base.build.config",
+  "plan_inputs": [
+    {
+      "name": "gradle-properties",
+      "path": "gradle.properties"
+    }
+  ],
   "profile": "quick-skin",
   "repository": "example/synthetic-mod",
   "scenario_contract": {

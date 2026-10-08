@@ -41,6 +41,16 @@ SOURCES = {path: f"# {path}\n".encode("utf-8") for path in (
     "scripts/ci/mod_base_build_adapter.py", "scripts/ci/mod_base_build_dispatch.py", "scripts/ci/pr_gate.py")}
 #: Where an adapter stages a file every target writes under the same native name.
 PER_TARGET = "targets/{target}/{name}"
+#: Native files a plan needs beside the inventory and the scenario contract, by the name the
+#: mod's config stages them under. Quick Skin's JAR names carry ``mod_version`` of ``gradle.properties``.
+EXTRA_INPUTS = {"gradle.properties": "gradle-properties"}
+
+
+def extra_inputs(profile: str) -> dict[str, str]:
+    """``{staged name: native fixture file}`` of the extra plan inputs of a profile."""
+
+    native = ci_native.manifest()["profiles"][profile]["native"]
+    return {name: file for file, name in EXTRA_INPUTS.items() if file in native}
 
 
 def beside(profile: str) -> dict[str, str]:
@@ -104,18 +114,22 @@ def protected_config(root: Path, profile: str) -> BuildConfig:
                                     for path, data in sorted(SOURCES.items())]
     document["inventory"]["path"] = entry["native"]["release-matrix.json"]["path"]
     document["scenario_contract"]["path"] = entry["native"]["scenario-contract.json"]["path"]
+    document["plan_inputs"] = [{"name": name, "path": entry["native"][file]["path"]}
+                               for name, file in sorted(extra_inputs(profile).items())]
     for path, data in {BUILD_CONFIG_PATH: json.dumps(document).encode("utf-8"), **SOURCES}.items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_bytes(data)
     return load_build_config(root, repository=entry["repository"])
 
 
-def build_plan(root: Path, profile: str, document: dict[str, Any] | None = None) -> dict[str, Any]:
-    return planning.build_plan(
-        subject=subject(profile), config=protected_config(root, profile),
-        inventory=ci_native.read(profile, "release-matrix.json"),
-        scenario_contract=ci_native.read(profile, "scenario-contract.json"),
-        derived=canonical_json(derived(profile) if document is None else document))
+def build_plan(root: Path, profile: str, document: dict[str, Any] | None = None, **changes: Any) -> dict[str, Any]:
+    arguments = {
+        "subject": subject(profile), "config": protected_config(root, profile),
+        "inventory": ci_native.read(profile, "release-matrix.json"),
+        "scenario_contract": ci_native.read(profile, "scenario-contract.json"),
+        "plan_inputs": {name: ci_native.read(profile, file) for name, file in extra_inputs(profile).items()},
+        "derived": canonical_json(derived(profile) if document is None else document), **changes}
+    return planning.build_plan(**arguments)
 
 
 class NativePlanTests(unittest.TestCase):
@@ -155,6 +169,31 @@ class NativePlanTests(unittest.TestCase):
                                  ci_native.records(profile)["scenario-contract.json"]["sha256"])
                 self.assertEqual({key: plan[key] for key in ("targets", "lanes")},
                                  adapter.parse_derived_plan(canonical_json(derived(profile))))
+
+    def test_quick_skin_plans_from_three_candidate_files_and_block_pops_from_two(self) -> None:
+        # Quick Skin's inventory names the Gradle property that holds the version of every
+        # production JAR; Block Pops' inventory carries the version of each artifact itself.
+        quick_skin = ci_native.load("quick-skin", "release-matrix.json")
+        self.assertTrue(all("{mod_version}" in row["jar"] and "mod_version" not in row
+                            for row in quick_skin["artifacts"]))
+        properties = ci_native.read("quick-skin", "gradle.properties").decode("utf-8")
+        self.assertIn(f"{quick_skin['project']['mod_version_property']}=", properties)
+        self.assertTrue(all("mod_version" in row for row in ci_native.load("block-pops", "release-matrix.json")["artifacts"]))
+        self.assertEqual((extra_inputs("quick-skin"), extra_inputs("block-pops")),
+                         ({"gradle-properties": "gradle.properties"}, {}))
+        plan = self.plans["quick-skin"]
+        self.assertEqual(plan["plan_inputs"], [{"name": "gradle-properties",
+                                                "sha256": ci_native.records("quick-skin")["gradle.properties"]["sha256"]}])
+        self.assertEqual(self.plans["block-pops"]["plan_inputs"], [])
+        # Another version file is another plan of the same identity, and without the file there is none.
+        bumped = build_plan(self.root / "quick-skin-bumped", "quick-skin",
+                            plan_inputs={"gradle-properties": properties.encode("utf-8") + b"\n"})
+        self.assertEqual(bumped["identity"], plan["identity"])
+        self.assertNotEqual(bumped["plan_sha256"], plan["plan_sha256"])
+        with self.assertRaisesRegex(MbError, "extra candidate files"):
+            build_plan(self.root / "quick-skin-missing", "quick-skin", plan_inputs={})
+        with self.assertRaisesRegex(MbError, "extra candidate files"):
+            build_plan(self.root / "block-pops-extra", "block-pops", plan_inputs={"gradle-properties": b"x"})
 
     def test_outputs_are_the_real_staged_files_of_every_target(self) -> None:
         for profile, (targets, lanes) in COUNTS.items():

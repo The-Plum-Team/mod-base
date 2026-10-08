@@ -23,22 +23,27 @@ def _read(root: Path, relative: str) -> bytes:
     return path.read_bytes()
 
 
-def _documents(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def documents(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The inventory and the scenario contract of the checkout ``root``, read from the paths its
+    own Build config names: the two fixed candidate files and ``gradle.properties``, the extra one."""
+
     config = adapter.decode(_read(root, CONFIG), CONFIG)
-    return (adapter.parse_inventory(_read(root, config["inventory"]["path"])),
+    extra = {entry["name"]: entry["path"] for entry in config["plan_inputs"]}
+    properties = adapter.parse_properties(_read(root, extra[adapter.PROPERTIES_INPUT]))
+    return (adapter.parse_inventory(_read(root, config["inventory"]["path"]), properties),
             adapter.parse_contract(_read(root, config["scenario_contract"]["path"])))
 
 
 def _inventory_and_contract_are_well_formed(root: Path) -> None:
-    _documents(root)
+    documents(root)
 
 
 def _every_lane_has_a_scenario(root: Path) -> None:
-    adapter.derive_plan(*_documents(root))
+    adapter.derive_plan(*documents(root))
 
 
 def _every_scenario_is_used(root: Path) -> None:
-    inventory, contract = _documents(root)
+    inventory, contract = documents(root)
     loaders = {loader for target in inventory["targets"] for loader in target["loaders"]}
     for scenario in contract["scenarios"]:
         if not loaders & set(scenario["loaders"]):

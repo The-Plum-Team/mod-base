@@ -685,7 +685,8 @@ Adapter host, config and retention:
 Protected Build/runtime (independent ceilings, no change to Pages budgets):
 
 * `MAX_CI_PLAN_BYTES`, `MAX_CI_TARGETS`, `MAX_CI_BUILD_RUNS`, `MAX_CI_LANES`, `MAX_CI_OUTPUTS_PER_TARGET`
-* `MAX_CI_PLAN_SOURCE_BYTES`: 4 MiB for each candidate file a plan is derived from (the release inventory, the scenario contract).
+* `MAX_CI_PLAN_SOURCE_BYTES`: 4 MiB for each candidate file a plan is derived from (the release inventory, the scenario contract, an extra plan input).
+* `MAX_CI_PLAN_INPUTS`: 8 extra candidate files a protected Build config may name under `plan_inputs` and a plan may bind.
 * `MAX_CI_IDENTITY_BYTES`: 16 KiB for the private `identity.json` state record.
 * `MAX_CI_SUBJECT_REQUESTS`: the 16-request budget of one `ci subject` (a pull request costs 4, a protected subject 5).
 * `MAX_CI_STATUS_CONTEXT_CHARS`: 100 characters for one status context of the protected Build config.
@@ -1907,7 +1908,7 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 Owner: MB11. Closed data at scripts/ci/mod-base-build.json. Protected policy must authenticate
 every source hash/path before import and confirm native timeout parity before activation.
 
-* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `bundle.path`, the two `contexts` and the timeouts; no named path may alias or contain another.
+* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `plan_inputs` (0..`MAX_CI_PLAN_INPUTS` extra candidate files `{name, path}` sorted by name, each name an `adapter.plan_input_name`), `bundle.path`, the two `contexts` and the timeouts; no named path may alias or contain another.
 * `class BuildConfigError(MbError)`: The protected Build configuration or a source it lists cannot be trusted (reason `ci-config`).
 * `class AdapterFile`: One source of the protected adapter import closure, as read from the protected checkout.
   * fields: `path: str, sha256: str, data: bytes`
@@ -1932,6 +1933,7 @@ writes. It imports no worker module; `tests/test_ci_adapter.py` pins its directo
 * `INVENTORY_INPUT = 'inventory'`
 * `SCENARIO_INPUT = 'scenario-contract'`
 * `PLAN_INPUT = 'ci-plan.json'`
+* `RESERVED_INPUT_NAMES = frozenset({'inventory', 'scenario-contract', 'ci-plan.json'})`: the names of `validation-input/` the kit gives out itself.
 * `PLAN_OUTPUT = 'plan.json'`
 * `RUNTIME_OUTPUT = 'runtime.json'`
 * `REPORT_SUFFIX = '.json'`
@@ -1947,7 +1949,9 @@ writes. It imports no worker module; `tests/test_ci_adapter.py` pins its directo
 * `def hook_values(hook: str, *, unit_id: str | None = None, runtime: Mapping[str, str] | None = None) -> dict[str, str]`: The extra environment of one hook run beyond `worker.worker_environment`'s fixed names: the unit id under `UNIT_ENVIRONMENT`, and for `run_lane` only the parsed `derive_runtime` values.
 * `def hook_timeout_seconds(hook: str, config: Mapping[str, Any]) -> int`: The timeout the validated protected config sets for the hook.
 * `def plan_unit(plan: dict[str, Any], hook: str, unit_id: str | None) -> dict[str, Any] | None`: The target or lane of the protected plan a hook run is for; a unit outside the plan is a rejection.
-* `def hook_inputs(hook: str) -> tuple[str, ...]`: The files of `validation-input/` a protected hook may read: the two candidate files, and for every hook after `derive_plan` the plan.
+* `def plan_input_name(value: Any, path: str) -> str`: The validator of the name a config gives an extra plan input: a `protocol.ID` token that is not one of `RESERVED_INPUT_NAMES`.
+* `def plan_sources(config: Mapping[str, Any]) -> dict[str, str]`: `{staged name: repository path}` of every candidate file a plan is derived from, in staging order: `inventory`, `scenario-contract`, then the config's `plan_inputs` by name. `config` is the validated config document. A job stages the blob of each path at the tested tree under its name in `validation-input/` and passes the same bytes to `planning.build_plan`.
+* `def hook_inputs(hook: str, config: Mapping[str, Any]) -> tuple[str, ...]`: The files of `validation-input/` a protected hook may read: every candidate file of `plan_sources(config)`, and for every hook after `derive_plan` the plan first. Empty for a candidate hook.
 * `def hook_outputs(hook: str, *, plan: dict[str, Any] | None = None, unit_id: str | None = None) -> tuple[str, ...]`: The exact files a protected hook must leave in `validation/`: `plan.json`, `runtime.json`, or `<unit id>.json` per verified unit (for `verify_build` every target, in plan order).
 * `def target_outputs(plan: dict[str, Any], target_id: str) -> tuple[str, ...]`: The exact files `build_target` must leave below `export/` for one target, sorted.
 * `def parse_derived_plan(data: bytes) -> dict[str, Any]`: Strictly decode `derive_plan`'s `plan.json` (at most `MAX_CI_PLAN_BYTES`): `protocol.validate_plan_units` and no reserved unit id.
@@ -1982,7 +1986,7 @@ into the protected plan. Running the hook belongs to the job (`ci plan`).
 
 * `class PlanError(MbError)`: A plan is not the one this job must work on (reason `ci-plan`; `plan-mismatch` for another hash than the expected one).
 * `def runtime_selection_sha256(profile: str, lanes: list[dict[str, Any]]) -> str`: Canonical SHA-256 of `{profile, lanes}`, that is every derived lane with its native contract and ordered obligations.
-* `def build_plan(*, subject: dict[str, Any], config: BuildConfig, inventory: bytes, scenario_contract: bytes, derived: bytes) -> dict[str, Any]`: The complete validated `mod-base.build.plan`, built from the subject plus `policy_sha256` (`identity.policy_sha256`), the inventory's Git blob id and SHA-256, the scenario contract's SHA-256 and `runtime_selection_sha256`; the config's profile; the parsed `derive_plan` units; `plan_sha256`. `inventory` and `scenario_contract` are the candidate Git blobs at the tested tree (1..`MAX_CI_PLAN_SOURCE_BYTES` bytes each), exactly what the hook was given.
+* `def build_plan(*, subject: dict[str, Any], config: BuildConfig, inventory: bytes, scenario_contract: bytes, plan_inputs: Mapping[str, bytes], derived: bytes) -> dict[str, Any]`: The complete validated `mod-base.build.plan`, built from the subject plus `policy_sha256` (`identity.policy_sha256`), the inventory's Git blob id and SHA-256, the scenario contract's SHA-256 and `runtime_selection_sha256`; the config's profile; `plan_inputs` as `[{name, sha256}]` in the config's order; the parsed `derive_plan` units; `plan_sha256`. `inventory`, `scenario_contract` and the values of `plan_inputs` are the candidate Git blobs at the tested tree (1..`MAX_CI_PLAN_SOURCE_BYTES` bytes each), exactly what the hook was given; `plan_inputs` has one entry for every name of the config's `plan_inputs` and no other (`{}` when the config names none).
 * `def require_plan(plan: dict[str, Any], *, subject: dict[str, Any], expected_sha256: str | None = None) -> dict[str, Any]`: Require a valid plan of exactly this subject and, when given, the expected `plan_sha256` (`ci plan --expect-sha256`).
 * `def matrices(plan: dict[str, Any]) -> dict[str, list[str]]`: The ids of `{targets, lanes}` in plan order.
 * `def plan_outputs(plan: dict[str, Any]) -> dict[str, str]`: The workflow outputs `plan_sha256`, `targets` and `lanes` (single-line JSON arrays of ids).

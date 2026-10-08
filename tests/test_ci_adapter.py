@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from mod_base.build_ci import adapter, controller, exports, inputs, runtime_inputs, validation
+from mod_base.build_ci.config import validate_build_config
 from mod_base.build_ci.worker import WORKER_ACCOUNTS, WORKER_ROOT, _execution_command, worker_environment
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
@@ -140,11 +141,42 @@ class EnvironmentTests(unittest.TestCase):
 
 class FileSetTests(unittest.TestCase):
     def test_inputs(self) -> None:
-        self.assertEqual(adapter.hook_inputs("derive_plan"), ("inventory", "scenario-contract"))
+        config = ci_config()
+        config["plan_inputs"] = []
+        self.assertEqual(adapter.plan_sources(config), {"inventory": "release/release-matrix.json",
+                                                        "scenario-contract": "e2e/scenario-contract.json"})
+        self.assertEqual(adapter.hook_inputs("derive_plan", config), ("inventory", "scenario-contract"))
         for hook in ("derive_runtime", "verify_target", "verify_build", "verify_runtime"):
-            self.assertEqual(adapter.hook_inputs(hook), ("ci-plan.json", "inventory", "scenario-contract"))
+            self.assertEqual(adapter.hook_inputs(hook, config), ("ci-plan.json", "inventory", "scenario-contract"))
         for hook in adapter.CANDIDATE_HOOKS:
-            self.assertEqual(adapter.hook_inputs(hook), ())
+            self.assertEqual(adapter.hook_inputs(hook, config), ())
+        with self.assertRaises(MbError):
+            adapter.hook_inputs("compile", config)
+
+    def test_extra_plan_inputs_are_staged_for_every_protected_hook_under_their_names(self) -> None:
+        config = ci_config()
+        config["plan_inputs"] = [{"name": "gradle-properties", "path": "gradle.properties"},
+                                 {"name": "versions.toml", "path": "gradle/libs.versions.toml"}]
+        validate_build_config(config)
+        self.assertEqual(list(adapter.plan_sources(config).items()), [
+            ("inventory", "release/release-matrix.json"), ("scenario-contract", "e2e/scenario-contract.json"),
+            ("gradle-properties", "gradle.properties"), ("versions.toml", "gradle/libs.versions.toml")])
+        extra = ("inventory", "scenario-contract", "gradle-properties", "versions.toml")
+        self.assertEqual(adapter.hook_inputs("derive_plan", config), extra)
+        for hook in ("derive_runtime", "verify_target", "verify_build", "verify_runtime"):
+            self.assertEqual(adapter.hook_inputs(hook, config), ("ci-plan.json", *extra))
+        for hook in adapter.CANDIDATE_HOOKS:
+            self.assertEqual(adapter.hook_inputs(hook, config), ())
+
+    def test_an_extra_plan_input_never_takes_a_name_the_kit_stages(self) -> None:
+        self.assertEqual(adapter.RESERVED_INPUT_NAMES, frozenset({"inventory", "scenario-contract", "ci-plan.json"}))
+        for name in ("gradle-properties", "gradle.properties", "a", "x" * 80, "plan.json", "inventory.json"):
+            with self.subTest(name=name):
+                self.assertEqual(adapter.plan_input_name(name, "$.name"), name)
+        for name in (*sorted(adapter.RESERVED_INPUT_NAMES), "Inventory", "gradle properties", "gradle/properties",
+                     "../inventory", ".hidden", "a--b", "x" * 81, "", None, 7, ["inventory"]):
+            with self.subTest(name=name), self.assertRaises(MbError):
+                adapter.plan_input_name(name, "$.name")
 
     def test_outputs_are_exact(self) -> None:
         plan = ci_plan()

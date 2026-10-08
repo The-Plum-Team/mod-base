@@ -2,7 +2,8 @@
 
 Pure functions: nothing here runs a hook, reads a file or calls the API. The job that plans runs
 ``derive_plan`` inside the validator account and passes its bytes here, together with the bytes
-of the two candidate files the hook read and the protected Build config. Every job of a
+of the candidate files the hook read (``adapter.plan_sources`` names them) and the protected
+Build config. Every job of a
 generation plans again and compares the hash (``ci plan --expect-sha256``), so a plan is authority
 only where protected code derived it.
 """
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from collections.abc import Mapping
 from typing import Any
 
 from mod_base import SCHEMA_VERSIONS
@@ -45,18 +47,26 @@ def runtime_selection_sha256(profile: str, lanes: list[dict[str, Any]]) -> str:
 
 
 def build_plan(*, subject: dict[str, Any], config: BuildConfig, inventory: bytes, scenario_contract: bytes,
-               derived: bytes) -> dict[str, Any]:
+               plan_inputs: Mapping[str, bytes], derived: bytes) -> dict[str, Any]:
     """The complete, validated ``mod-base.build.plan`` of ``subject``.
 
-    ``inventory`` and ``scenario_contract`` are the bytes of the candidate Git blobs at the tested
-    tree, at the paths the protected config names: exactly what ``derive_plan`` was given.
-    ``derived`` is what that hook wrote. The identity gains the policy digest
+    ``inventory``, ``scenario_contract`` and the values of ``plan_inputs`` are the bytes of the
+    candidate Git blobs at the tested tree, at the paths the protected config names: exactly what
+    ``derive_plan`` was given. ``plan_inputs`` holds one entry for every name of the config's
+    ``plan_inputs`` and no other (an empty mapping when the config names none). ``derived`` is
+    what that hook wrote. The identity gains the policy digest
     (:func:`mod_base.build_ci.identity.policy_sha256`), the inventory's Git blob id and SHA-256, the
-    scenario contract's SHA-256 and the runtime selection digest; ``plan_sha256`` binds all of it."""
+    scenario contract's SHA-256 and the runtime selection digest; the plan lists the SHA-256 of
+    every extra input under its name; ``plan_sha256`` binds all of it."""
 
     policy = policy_sha256(config, subject)
     _candidate_bytes(inventory, "$.inventory")
     _candidate_bytes(scenario_contract, "$.scenario_contract")
+    names = [item["name"] for item in config.data["plan_inputs"]]
+    check(isinstance(plan_inputs, Mapping) and len(plan_inputs) == len(names) and set(plan_inputs) == set(names),
+          "$.plan_inputs", "must hold exactly the extra candidate files the protected config names")
+    extra = [{"name": name, "sha256": sha256_hex(_candidate_bytes(plan_inputs[name], f"$.plan_inputs.{name}"))}
+             for name in names]
     units = parse_derived_plan(derived)
     profile = config.data["profile"]
     identity = {
@@ -69,7 +79,7 @@ def build_plan(*, subject: dict[str, Any], config: BuildConfig, inventory: bytes
     }
     plan = {"kind": "mod-base.build.plan", "schema_version": SCHEMA_VERSIONS["mod-base.build.plan"],
             "build_adapter_api": BUILD_ADAPTER_API, "identity": identity, "profile": profile,
-            "targets": units["targets"], "lanes": units["lanes"]}
+            "plan_inputs": extra, "targets": units["targets"], "lanes": units["lanes"]}
     plan["plan_sha256"] = plan_sha256(plan)
     validate_plan(plan)
     check(len(canonical_json(plan)) <= limits.MAX_CI_PLAN_BYTES, "$.plan", "exceeds the plan byte cap")

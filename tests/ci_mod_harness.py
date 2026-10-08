@@ -1,9 +1,10 @@
 """Run the synthetic mod's Build hooks as plain processes: no accounts, no sudo, only files.
 
 ``tests/fixtures/ci_mod`` is a tiny fake mod repository: a release inventory and a scenario
-contract (two targets, one of them with two loaders, so three lanes), the protected Build config,
-the adapter with its dispatcher and policy suite, and the minimum a Pages config needs. Its
-adapter module documents how a test makes any hook fail on purpose (``faults`` in the inventory).
+contract (two targets, one of them with two loaders, so three lanes), a ``gradle.properties`` that
+holds the mod version (the Build config's one extra plan input), the protected Build config, the
+adapter with its dispatcher and policy suite, and the minimum a Pages config needs. Its adapter
+module documents how a test makes any hook fail on purpose (``faults`` in the inventory).
 
 :class:`Sandbox` lays a temporary worker root out like the real one and runs one hook in it with
 the argv of ``adapter.hook_command`` and the environment ``worker.worker_environment`` builds
@@ -47,6 +48,8 @@ CONTROLLER_TREE = "d" * 40
 KIT_SHA = "3" * 40
 TARGETS = ("1.20.1", "1.21.1")
 LANES = ("fabric-1.20.1", "forge-1.20.1", "fabric-1.21.1")
+#: The name the fixture's Build config stages ``gradle.properties`` under (its one extra plan input).
+PROPERTIES_INPUT = "gradle-properties"
 _SCRIPTS = ("scripts/ci/mod_base_build_adapter.py", "scripts/ci/mod_base_build_dispatch.py",
             "scripts/ci/policy_suite.py")
 
@@ -62,6 +65,7 @@ def build_config() -> dict[str, Any]:
                               for name in _SCRIPTS]},
         "inventory": {"path": "release/inventory.json"},
         "scenario_contract": {"path": "e2e/scenario-contract.json"},
+        "plan_inputs": [{"name": PROPERTIES_INPUT, "path": "gradle.properties"}],
         "bundle": {"path": "build/release"},
         "contexts": {"build": "Synthetic / Build and verify", "packaged": "Synthetic / Packaged E2E gate"},
         "timeouts": {"policy_seconds": 300, "target_seconds": 600, "runtime_seconds": 600, "validator_seconds": 300},
@@ -169,10 +173,12 @@ class Sandbox:
         shutil.copytree(protected if candidate is None else candidate, self.checkout["candidate"],
                         ignore=shutil.ignore_patterns("__pycache__"))
 
-    def candidate_file(self, key: str) -> bytes:
-        """Bytes of the candidate file the protected config names under ``key``."""
+    def candidate_sources(self) -> dict[str, bytes]:
+        """Bytes of every candidate file the plan is derived from, by its name in
+        ``validation-input/``: what the protected config names, read from the tested checkout."""
 
-        return (self.checkout["candidate"] / self.config.data[key]["path"]).read_bytes()
+        return {name: (self.checkout["candidate"] / path).read_bytes()
+                for name, path in adapter.plan_sources(self.config.data).items()}
 
     def identity(self) -> dict[str, Any]:
         """The identity of the hook environment. ``worker_environment`` only accepts a complete
@@ -200,10 +206,10 @@ class Sandbox:
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, check=False)
 
     def stage_inputs(self) -> None:
-        """What ``ci plan`` stages first: the bytes of the two candidate files."""
+        """What ``ci plan`` stages first: the bytes of every candidate file, each under its name."""
 
-        (self.inputs / adapter.INVENTORY_INPUT).write_bytes(self.candidate_file("inventory"))
-        (self.inputs / adapter.SCENARIO_INPUT).write_bytes(self.candidate_file("scenario_contract"))
+        for name, data in self.candidate_sources().items():
+            (self.inputs / name).write_bytes(data)
 
     def derive_plan(self) -> dict[str, Any]:
         """Stage the inputs, run ``derive_plan``, build the plan and stage it for the later hooks."""
@@ -212,9 +218,10 @@ class Sandbox:
         process = self.run("derive_plan")
         if process.returncode != 0 or files(self.validation) != set(adapter.hook_outputs("derive_plan")):
             raise AssertionError(f"derive_plan failed: {process.stdout!r}")
+        sources = self.candidate_sources()
         self.plan = planning.build_plan(subject=self.subject, config=self.config,
-                                        inventory=self.candidate_file("inventory"),
-                                        scenario_contract=self.candidate_file("scenario_contract"),
+                                        inventory=sources.pop(adapter.INVENTORY_INPUT),
+                                        scenario_contract=sources.pop(adapter.SCENARIO_INPUT), plan_inputs=sources,
                                         derived=(self.validation / adapter.PLAN_OUTPUT).read_bytes())
         (self.inputs / adapter.PLAN_INPUT).write_bytes(canonical_json(self.plan))
         shutil.rmtree(self.validation)

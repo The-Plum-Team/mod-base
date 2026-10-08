@@ -125,11 +125,20 @@ described with the host fences below.
 ## Plan v1
 
 `mod-base.build.plan` has exactly `kind`, `schema_version`, `build_adapter_api`, `identity`,
-`profile`, `targets`, `lanes`, `plan_sha256`. The profile is `quick-skin` or `block-pops`, not an
+`profile`, `plan_inputs`, `targets`, `lanes`, `plan_sha256`. The profile is `quick-skin` or `block-pops`, not an
 execution activation flag. Strict bounded JSON decoding and exact key/type validators apply.
 The plan hash covers the canonical document excluding only `plan_sha256`, including identity.
-Protected adapters derive it from bounded inert inventory/scenario blobs and fan-in independently
+Protected adapters derive it from bounded inert candidate blobs (the inventory, the scenario
+contract and the extra files the protected config names) and fan-in independently
 re-derives it. A structurally valid candidate plan is never authority.
+
+`plan_inputs` lists the extra candidate files the plan was derived from, as `{name, sha256}` in
+name order (at most 8; `[]` for a config that names none): `name` is the staged file name of the
+protected config's `plan_inputs` entry and `sha256` the hash of the candidate blob at the tested
+tree. Quick Skin's plan binds `gradle.properties` this way, the file that holds the version in
+its JAR names. The identity keeps binding the inventory and the scenario contract, so no other
+record kind changes shape; every record binds the extra files through `plan_sha256`, and a reuse
+compares them through the tested tree and the policy digest, which fix the files and their paths.
 
 Identity has exactly these fields:
 

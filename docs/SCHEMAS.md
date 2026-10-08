@@ -671,12 +671,14 @@ source in the protected checkout to have its configured hash.
 | `profile` | `quick-skin` or `block-pops` (`build_ci.protocol.PROFILES`) |
 | `build_adapter_api` | `1` |
 | `adapter` | `{path, dispatcher, policy, files}`: three distinct `scripts/ci/*.py` entry points and the sorted, alias-free import closure `files: [{path, sha256}]` (3..256) that lists all three |
-| `inventory.path`, `scenario_contract.path` | canonical repository paths of the two candidate files a plan is derived from |
+| `inventory.path`, `scenario_contract.path` | canonical repository paths of the two candidate files every plan is derived from |
+| `plan_inputs` | `[{name, path}]`, 0..8, sorted by `name` without duplicates: more candidate files the plan is derived from. `name` is a lower-case token of `a-z 0-9 . _ -` (at most 80 characters, no `--`), the file's name in `validation-input/`, and never `inventory`, `scenario-contract` or `ci-plan.json`; `path` is a canonical repository path |
 | `bundle.path` | canonical repository path of the directory where a lane's checkout expects the staged Build |
 | `contexts.build`, `contexts.packaged` | the two required status contexts: trimmed printable ASCII without `<`, `>`, `{{`, `}}`, 1..100 characters, distinct ignoring case |
 | `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
 
-The config path, every adapter source, the two candidate files and the bundle directory are
+The config path, every adapter source, every candidate file (the inventory, the scenario contract
+and each `plan_inputs` path) and the bundle directory are
 checked as one tree: none may equal another (ignoring case), differ from one only by the case of a
 component, or lie inside another. No other key is accepted: no command, runner, permission, secret,
 matrix or scenario catalog. [BUILD-ADAPTER.md](BUILD-ADAPTER.md) describes what each field is used for.

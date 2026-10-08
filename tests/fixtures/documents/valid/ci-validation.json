@@ -32,7 +32,7 @@
   },
   "input_sha256": "32381523e63197c929b67f793a8098bed0ae3a6fa902634fdbcc6fa4567f3346",
   "kind": "mod-base.ci.validation",
-  "plan_sha256": "5a9992dcdc11f5b2d8c1b1696ec51871c215117e5b974818c41ef5e7c281c961",
+  "plan_sha256": "d58df54194e7f2b3e80305289a4eb71b4a4ee50feede2011dbc87b8e48799d80",
   "profile": "block-pops",
   "reports": [
     {

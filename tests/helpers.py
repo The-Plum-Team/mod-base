@@ -754,6 +754,7 @@ def ci_plan() -> dict[str, Any]:
             "policy_sha256": h("policy"), "inventory_blob": "7" * 40, "inventory_sha256": h("inventory"),
             "scenario_sha256": h("scenarios"), "runtime_selection_sha256": h("full"), "graph_version": 1,
         },
+        "plan_inputs": [{"name": "gradle-properties", "sha256": h("gradle-properties")}],
         "targets": [{"id": "target-a", "java": 21, "native_contract_sha256": h("target-contract"),
                      "outputs": [{"path": f"staged/lane-a/{role}.{'jar' if role in ('production', 'harness') else 'json'}",
                                   "lane_id": "lane-a", "role": role}
@@ -916,6 +917,7 @@ def ci_config() -> dict[str, Any]:
                         "files": [{"path": name, "sha256": h(name)} for name in sorted(files)]},
             "inventory": {"path": "release/release-matrix.json"},
             "scenario_contract": {"path": "e2e/scenario-contract.json"},
+            "plan_inputs": [{"name": "gradle-properties", "path": "gradle.properties"}],
             "bundle": {"path": "build/release"},
             "contexts": {"build": "Trusted PR / Build and verify", "packaged": "Trusted PR / Packaged E2E gate"},
             "timeouts": {"policy_seconds": 3600, "target_seconds": 7200,
