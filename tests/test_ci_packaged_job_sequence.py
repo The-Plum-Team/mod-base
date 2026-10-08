@@ -16,6 +16,7 @@ from unittest import mock
 
 from mod_base.build_ci import exports
 from tests.test_ci_commands_packaged import CommandTestCase, JobWorld, run_ci
+from tests.test_ci_packaged_selection import rebuild
 from tests.test_workflow_ci_policy import ci_callee
 
 #: Callee workflow -> the job whose ``select`` step runs ``ci select-build`` and hands its outputs on.
@@ -57,6 +58,32 @@ class PackagedJobSequenceTests(CommandTestCase):
         self.assertEqual(self.select(world, world.state("select")), (0, ""))
         self.assertLessEqual(read["select-build"], set(self.written()))
         self.assertEqual((self.written()["found"], self.written()["run_id"]), ("false", ""))
+
+    def named(self, world: JobWorld, *argv: str) -> str:
+        """Run ``ci select-build`` as the ``input`` job does, in a state of its own; return the
+        run it hands to the later jobs (``needs.input.outputs.build-run-id``)."""
+
+        self.assertEqual(self.select(world, world.state("input"), *argv), (0, ""))
+        run = self.written()["run_id"]
+        self.fresh()
+        return run
+
+    # packaged-e2e.yml gives the lane, aggregate and gate jobs the run their input job named
+    # (``--build-run-id <id>``), for a pull request too; ``selection.select_build`` refuses a run
+    # id for a pull request. The sequence is being replaced: the selection record crosses the jobs.
+    @unittest.expectedFailure
+    def test_a_later_job_of_a_pull_request_selects_the_run_its_input_job_named(self) -> None:
+        world = JobWorld(self.directory).build()
+        named = self.named(world)
+        self.assertEqual(self.select(world, world.state("lane"), "--build-run-id", named), (0, ""))
+
+    # The run a rebuilding input job names is the packaged run itself; a later job that names it
+    # is answered as if it had named a run of the Build caller.
+    @unittest.expectedFailure
+    def test_a_later_job_of_a_rebuilding_run_selects_the_run_its_input_job_named(self) -> None:
+        world = rebuild(JobWorld(self.directory, push=True))
+        named = self.named(world, "--build-run-id", "same-run")
+        self.assertEqual(self.select(world, world.state("lane"), "--build-run-id", named), (0, ""))
 
 
 if __name__ == "__main__":
