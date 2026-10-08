@@ -6,10 +6,9 @@ whose artifacts it reads:
 * ``assemble`` describes the partition of every planned target of this attempt
   (``describe.describe_attempt``), downloads them by numeric id and verifies each with the
   validation record its job uploaded (``transport.download_target_set``), and assembles their
-  exact union into the fixed
-  ``sealed-build/`` root (``exports.assemble_build_export``), where the next step runs the
-  validator. The descriptors it read and the SHA-256 of the assembled envelope are recorded in
-  the state directory as ``ci-partitions.json``.
+  exact union into the fixed ``sealed-build/`` root (``exports.assemble_build_export``), where
+  the next step runs the validator. The descriptors it read and the SHA-256 of the assembled
+  envelope are recorded in the state directory as ``ci-partitions.json``.
 * ``aggregate --output DIR`` authenticates the results of every planned lane of this attempt
   against the Build of the state's selection record (``ci-selection.json``, written by
   ``ci select-build``) and writes the results index as the one file ``ci-results.json`` of the
