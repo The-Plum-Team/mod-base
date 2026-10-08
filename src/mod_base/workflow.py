@@ -68,6 +68,32 @@ CI_CALLEE_JOBS = {"guard": CI_GUARD_JOBS, "build": CI_BUILD_JOBS, "select-build"
                   "packaged-e2e": CI_PACKAGED_JOBS}
 CI_SEAL_STEP = "Validate frozen native exports"
 CI_UPLOAD_STEP = "Upload sealed outputs"
+#: Build/E2E callee id -> job key -> the ``ci`` verbs its steps issue after the Build controller
+#: prologue, one verb per step and in step order. A callee enters this table and the two below
+#: with its workflow file: ``build.yml`` is the first.
+CI_JOB_VERBS = {
+    "build": {
+        "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
+        "policy": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+                   "worker-finish"),
+        "target": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+                   "worker-validate", "worker-finish"),
+        "assemble": ("subject", "worker-prepare", "plan", "assemble", "worker-validate", "worker-finish"),
+        "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
+    },
+}
+#: Build/E2E callee id -> sealing job key -> callee mode -> the kind (``grammar.ci_artifact_name``)
+#: of the one artifact the job uploads in that mode. Exactly these jobs have a ``CI_SEAL_STEP``
+#: directly followed by a ``CI_UPLOAD_STEP``.
+CI_JOB_ARTIFACTS = {
+    "build": {"target": {"full": "target"}, "assemble": {"full": "build"},
+              "gate": {"full": "tested", "reuse": "reuse"}},
+}
+#: Build/E2E callee id -> job key -> the complete ``permissions:`` of that job, which the calling
+#: job of a managed caller must grant.
+CI_JOB_PERMISSIONS = {
+    "build": {job: {"actions": "read", "contents": "read", "pull-requests": "read"} for job in CI_BUILD_JOBS},
+}
 PAGES_CRON = "43 * * * *"
 OPERATIONS = ("manual", "deploy", "family", "rotate")
 #: The ``operation`` the caller passes to ``publish.yml`` (a schedule becomes ``recovery``).

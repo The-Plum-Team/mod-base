@@ -26,8 +26,7 @@ from unittest import mock
 from mod_base import workflow
 from mod_base.errors import MbError
 from mod_base.pin import ACTIONS_LOCK, STAGED_LOCK, actions_listing, kit_tree_digest, staged_listing
-from tests.test_workflow_policy import (CALLEE_PATHS, PROLOGUE, ROOT, ShellHarness, callee, outputs,
-                                        require_tools, step)
+from tests.test_workflow_policy import PROLOGUE, ROOT, ShellHarness, callee, outputs, require_tools, step
 
 TOOL = ROOT / "tools/update_tree_digest.py"
 SHELL = ROOT / "tools/kit_digest.sh"
@@ -121,6 +120,15 @@ def write_lock(root: Path) -> None:
     (root / STAGED_LOCK).parent.mkdir(parents=True, exist_ok=True)
     (root / STAGED_LOCK).write_bytes(staged_listing(root))
     (root / ACTIONS_LOCK).write_bytes(actions_listing(root))
+
+
+def copy_callees(root: Path) -> Path:
+    """Give the fixture kit ``root`` a copy of every workflow whose literal the tool maintains."""
+
+    for relative in update_tree_digest.CALLEES:
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, root / relative)
+    return root
 
 
 class DigestParityTests(unittest.TestCase):
@@ -315,15 +323,13 @@ class LiteralTests(unittest.TestCase):
     def test_write_and_check_modes(self) -> None:
         require_tools("git")
         with tempfile.TemporaryDirectory(prefix="kit literal ") as temporary:
-            root = stage(make_kit(Path(temporary)))
-            (root / ".github/workflows").mkdir(parents=True)
-            for path in CALLEE_PATHS.values():
-                shutil.copyfile(path, root / ".github/workflows" / path.name)
+            root = copy_callees(stage(make_kit(Path(temporary))))
             tool = [sys.executable, str(TOOL), "--root", str(root)]
             check = subprocess.run([*tool, "--check"], capture_output=True, text=True, timeout=60)
             self.assertEqual(check.returncode, 1)
-            self.assertIn(".github/workflows/publish.yml", check.stderr)
-            before = {path.name: (root / ".github/workflows" / path.name).read_text() for path in CALLEE_PATHS.values()}
+            for relative in update_tree_digest.CALLEES:
+                self.assertIn(relative, check.stderr)
+            before = {Path(relative).name: (root / relative).read_text() for relative in update_tree_digest.CALLEES}
             written = subprocess.run([*tool, "--write"], capture_output=True, text=True, timeout=60)
             self.assertEqual(written.returncode, 0, written.stderr)
             digest = reference_digest(root)
@@ -366,11 +372,7 @@ class StagedLockTests(unittest.TestCase):
     def kit(self, name: str) -> Path:
         """A staged fixture kit ``self.base/name`` carrying copies of the callee workflows."""
 
-        root = stage(make_kit(self.base / name))
-        (root / ".github/workflows").mkdir(parents=True)
-        for path in CALLEE_PATHS.values():
-            shutil.copyfile(path, root / ".github/workflows" / path.name)
-        return root
+        return copy_callees(stage(make_kit(self.base / name)))
 
     def tool(self, mode: str) -> subprocess.CompletedProcess[str]:
         environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}

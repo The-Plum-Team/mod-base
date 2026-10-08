@@ -40,6 +40,13 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   files of a mod whose activation mode lists them. They are not template-manifest entries and no
   mod without an activation manifest receives or is asked for one. Their templates in this change
   are provisional stand-ins; the managed `.gitattributes` has no `eol=lf` rule for them yet.
+- Add the first Build/E2E callee workflow, `.github/workflows/build.yml`: jobs `plan`, `policy`,
+  `target` (one per planned target), `assemble` and `gate`, inputs `kit-sha` and `pr-number`. It
+  has its own registry (`workflow.CI_CALLEE_WORKFLOWS` with the job tables `CI_JOB_VERBS`,
+  `CI_JOB_ARTIFACTS` and `CI_JOB_PERMISSIONS`), its own Build controller prologue, which admits
+  only the managed Build and packaged E2E callers of the canonical branch, and its own policy
+  tests. The Pages callees, their registry and their prologue are unchanged.
+  `tools/update_tree_digest.py` maintains its `MB_KIT_TREE_DIGEST` literal with the other three.
 - `mod-base.ci.activation` v1 (still unreleased) gains the required `rollback_from` field, which
   names the mode a `reviewed-rollback` leaves and is `null` otherwise. `template check|sync|init`
   accept every mode, manage exactly the callers of the mod's mode, report a caller outside its mode

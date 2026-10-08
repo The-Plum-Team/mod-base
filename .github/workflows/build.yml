@@ -1,0 +1,951 @@
+name: mod-base build
+
+# Reusable Build callee (docs/BUILD-E2E-DESIGN.md). A mod's managed mod-base-build.yml calls it for
+# a pull request (pull_request_target), for a push to the canonical branch and for a manual
+# dispatch there; the rebuild job of mod-base-packaged-e2e.yml calls it when a standalone run found
+# no Build to consume. Every job starts with the Build controller prologue and then runs one `ci`
+# command per step, with its private state in $RUNNER_TEMP/mb-state. Candidate code runs only
+# inside `ci worker-run`, as a separate account and without any token: the candidate tree is a
+# third checkout that no step of the runner user executes. On a push whose evidence `ci
+# reuse-admit` admits, policy, target and assemble are skipped and the gate seals the reuse
+# reference instead of a tested record. The two steps that must also run after a failure or a
+# cancellation (`ci worker-seal`, `ci worker-finish`) depend on a step that follows the prologue,
+# so no kit Python ever runs in a job whose prologue did not pass.
+on:
+  workflow_call:
+    inputs:
+      kit-sha:
+        description: The mod-base commit the caller's guard job bound to this run
+        required: true
+        type: string
+      pr-number:
+        description: The pull request whose synthetic merge is built (empty for a push or a dispatch)
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+env:
+  MB_KIT_TREE_DIGEST: "sha256:86a5b5ae5152afe80d23939e10f0c72f3acf8e1768b2810f166099b613abb4e0"
+
+jobs:
+  plan:
+    name: Plan protected Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      tested-sha: ${{ steps.subject.outputs.tested_sha }}
+      plan-sha256: ${{ steps.plan.outputs.plan_sha256 }}
+      targets: ${{ steps.plan.outputs.targets }}
+      mode: ${{ steps.reuse.outputs.mode == 'reuse' && 'reuse' || 'full' }}
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request_target) [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail pr-number ;;
+            push | workflow_dispatch) [[ -z "$PR_NUMBER" ]] || fail pr-number ;;
+            *) fail event ;;
+          esac
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-build.yml@refs/heads/$canonical_branch" ||
+             "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-packaged-e2e.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by a managed Build or packaged E2E caller of the canonical branch"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Authenticate the tested subject
+        id: subject
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --producer build --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Fence the host and prepare the worker accounts
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          interpreter="$(command -v python3)"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --roles validator --python "$interpreter" \
+            --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
+      - name: Derive the protected plan
+        id: plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Admit post-merge reuse
+        id: reuse
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci reuse-admit --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Terminate and lock the worker accounts
+        if: ${{ always() && steps.subject.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-finish --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"
+
+  policy:
+    name: Verify protected policy
+    needs: plan
+    if: needs.plan.outputs.mode != 'reuse'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request_target) [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail pr-number ;;
+            push | workflow_dispatch) [[ -z "$PR_NUMBER" ]] || fail pr-number ;;
+            *) fail event ;;
+          esac
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-build.yml@refs/heads/$canonical_branch" ||
+             "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-packaged-e2e.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by a managed Build or packaged E2E caller of the canonical branch"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Check out the tested candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Authenticate the tested subject
+        id: subject
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --producer build --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Fence the host and prepare the worker accounts
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          interpreter="$(command -v python3)"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --roles candidate+validator --python "$interpreter" \
+            --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
+      - name: Rederive the protected plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
+          TESTED_SHA: ${{ needs.plan.outputs.tested-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Protected plan: %s\n' "$1" >&2; exit 1; }
+          [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed planned digest"
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed tested commit"
+          [[ "$(git -C candidate rev-parse HEAD)" == "$TESTED_SHA" ]] ||
+            fail "the candidate checkout is not the planned tested commit"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+      - name: Stage the candidate for its worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-stage --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --candidate candidate
+      - name: Run the protected policy suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-run --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --hook policy
+      - name: Lock the candidate and freeze its export
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-seal --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"
+      - name: Terminate and lock the worker accounts
+        if: ${{ always() && steps.subject.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-finish --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"
+
+  target:
+    name: Compile target ${{ matrix.id }}
+    needs: plan
+    if: needs.plan.outputs.mode != 'reuse'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        id: ${{ fromJSON(needs.plan.outputs.targets) }}
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request_target) [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail pr-number ;;
+            push | workflow_dispatch) [[ -z "$PR_NUMBER" ]] || fail pr-number ;;
+            *) fail event ;;
+          esac
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-build.yml@refs/heads/$canonical_branch" ||
+             "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-packaged-e2e.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by a managed Build or packaged E2E caller of the canonical branch"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Check out the tested candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Authenticate the tested subject
+        id: subject
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --producer build --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Fence the host and prepare the worker accounts
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          interpreter="$(command -v python3)"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --roles candidate+validator --python "$interpreter" \
+            --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
+      - name: Rederive the protected plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
+          TESTED_SHA: ${{ needs.plan.outputs.tested-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Protected plan: %s\n' "$1" >&2; exit 1; }
+          [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed planned digest"
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed tested commit"
+          [[ "$(git -C candidate rev-parse HEAD)" == "$TESTED_SHA" ]] ||
+            fail "the candidate checkout is not the planned tested commit"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+      - name: Stage the candidate for its worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-stage --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --candidate candidate
+      - name: Build the target as the candidate
+        shell: bash
+        env:
+          TARGET: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Target build: %s\n' "$1" >&2; exit 1; }
+          [[ "$TARGET" =~ ^[a-z0-9][a-z0-9._-]{0,79}$ && "$TARGET" != *--* ]] || fail "malformed target"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-run --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --hook build_target --unit "$TARGET"
+      - name: Lock the candidate and freeze its export
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-seal --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"
+      - name: Validate frozen native exports
+        shell: bash
+        env:
+          TARGET: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Target validation: %s\n' "$1" >&2; exit 1; }
+          [[ "$TARGET" =~ ^[a-z0-9][a-z0-9._-]{0,79}$ && "$TARGET" != *--* ]] || fail "malformed target"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-validate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --hook verify_target --unit "$TARGET" --output "$RUNNER_TEMP/mb-upload"
+      - name: Upload sealed outputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mb-ci-target--${{ github.run_id }}--a${{ github.run_attempt }}--${{ matrix.id }}
+          path: ${{ runner.temp }}/mb-upload
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: 1
+      - name: Terminate and lock the worker accounts
+        if: ${{ always() && steps.subject.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-finish --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"
+
+  assemble:
+    name: Seal complete Build bundle
+    needs: [plan, target]
+    if: needs.plan.outputs.mode != 'reuse'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request_target) [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail pr-number ;;
+            push | workflow_dispatch) [[ -z "$PR_NUMBER" ]] || fail pr-number ;;
+            *) fail event ;;
+          esac
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-build.yml@refs/heads/$canonical_branch" ||
+             "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-packaged-e2e.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by a managed Build or packaged E2E caller of the canonical branch"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Authenticate the tested subject
+        id: subject
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --producer build --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Fence the host and prepare the worker accounts
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          interpreter="$(command -v python3)"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --roles validator --python "$interpreter" \
+            --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
+      - name: Rederive the protected plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Protected plan: %s\n' "$1" >&2; exit 1; }
+          [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed planned digest"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+      - name: Assemble the exact target union
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci assemble --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"
+      - name: Validate frozen native exports
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-validate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --hook verify_build --output "$RUNNER_TEMP/mb-upload"
+      - name: Upload sealed outputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mb-ci-build--${{ github.run_id }}--a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mb-upload
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: 7
+      - name: Terminate and lock the worker accounts
+        if: ${{ always() && steps.subject.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-finish --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"
+
+  gate:
+    name: Verify complete Build
+    needs: [plan, policy, target, assemble]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request_target) [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail pr-number ;;
+            push | workflow_dispatch) [[ -z "$PR_NUMBER" ]] || fail pr-number ;;
+            *) fail event ;;
+          esac
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-build.yml@refs/heads/$canonical_branch" ||
+             "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-packaged-e2e.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by a managed Build or packaged E2E caller of the canonical branch"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Authenticate the tested subject
+        id: subject
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --producer build --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Fence the host and prepare the worker accounts
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          interpreter="$(command -v python3)"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --roles validator --python "$interpreter" \
+            --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
+      - name: Rederive the protected plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Protected plan: %s\n' "$1" >&2; exit 1; }
+          [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed planned digest"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+      - name: Validate frozen native exports
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci seal-gate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --gate build --output "$RUNNER_TEMP/mb-upload"
+      - name: Upload sealed outputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ format(needs.plan.outputs.mode == 'reuse' && 'mb-ci-reuse--{0}--a{1}' || 'mb-ci-tested--{0}--a{1}--build', github.run_id, github.run_attempt) }}
+          path: ${{ runner.temp }}/mb-upload
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: 90
+      - name: Terminate and lock the worker accounts
+        if: ${{ always() && steps.subject.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-finish --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"

@@ -503,6 +503,14 @@ Constants:
 * `CI_CALLEE_JOBS`: called workflow id (`guard` or a `CI_CALLEE_WORKFLOWS` id) -> its job table.
 * `CI_SEAL_STEP`, `CI_UPLOAD_STEP`: exact step names of the sealing step and of the upload that
   follows it in every target, assemble, lane, aggregate and gate job.
+* `CI_JOB_VERBS`: Build/E2E callee id -> job key -> the `ci` verbs its steps issue after the Build
+  controller prologue, one verb per step and in step order. A callee enters this table and the two
+  below with its workflow file; `build` is the first.
+* `CI_JOB_ARTIFACTS`: Build/E2E callee id -> sealing job key -> callee mode (`full`, `reuse`) -> the
+  kind of the one artifact the job uploads in that mode. Exactly these jobs have a `CI_SEAL_STEP`
+  directly followed by a `CI_UPLOAD_STEP`.
+* `CI_JOB_PERMISSIONS`: Build/E2E callee id -> job key -> the complete `permissions:` of that job
+  (`actions`, `contents` and `pull-requests`, each `read`), which the calling job must grant.
 * `PAGES_CRON = '43 * * * *'`
 * `OPERATIONS = ('manual', 'deploy', 'family', 'rotate')`
 * `PUBLISH_OPERATIONS = ('recovery', 'manual', 'deploy', 'family')`
