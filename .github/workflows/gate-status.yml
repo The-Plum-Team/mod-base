@@ -1,17 +1,19 @@
-name: mod-base select-build
+name: mod-base gate-status
 
-# Reusable selection callee (docs/BUILD-E2E-DESIGN.md, "For a standalone E2E dispatch"). The select
-# job of a mod's managed mod-base-packaged-e2e.yml calls it for a push to the canonical branch and
-# for a manual dispatch there, never for a pull request: a pull request waits for its own separate
-# Build run inside packaged-e2e.yml. Its one job starts with the Build controller prologue,
-# authenticates the protected subject, derives the plan and decides what the run consumes. On a
-# push whose evidence `ci reuse-admit` admits, that is the result its pull request was tested
-# with: the mode is `reuse` and no Build is selected. Otherwise the mode is `full` and `ci
-# select-build` looks, without waiting, for the exact existing Build of this subject: found is
-# `true` with the run of that Build, or `false`, and then the caller builds in the same run
-# before it calls packaged-e2e.yml. The job runs no candidate code and uploads nothing: its
-# selection record stays in its private state, and packaged-e2e.yml selects the same run again by
-# its id.
+# Reusable status evaluation callee (docs/BUILD-E2E-DESIGN.md, "Stable contexts and exact graphs").
+# The evaluate job of a mod's managed mod-base-gate-status.yml calls it for one pull request,
+# whatever started that run: a gate run that was requested or has completed, an event of the pull
+# request, the hourly reconciliation or a manual request. Its one job starts with the Build
+# controller prologue, bound to the status caller of the canonical branch, and answers one
+# question: which state may each protected gate show on the current head of the pull request?
+# It first asks without a plan (`ci gate-status --settle`): a draft, a generation that has not
+# started or is still running and a newest run that failed are decided by the pull request and
+# the run listings alone, and the job is done. Only when a newest run finished successfully does
+# the job authenticate the pull request, derive the protected plan and evaluate again, now
+# verifying the exact graph of each run and its sealed gate record against that plan; without a
+# plan no gate is ever a success. The job only reads, runs no candidate code, receives no
+# credential but its own read-only token and uploads nothing. It returns the intents document;
+# a job the caller owns publishes it with the App credentials of the mod.
 on:
   workflow_call:
     inputs:
@@ -19,16 +21,15 @@ on:
         description: The mod-base commit the caller's guard job bound to this run
         required: true
         type: string
+      pr-number:
+        description: The pull request whose protected gates are evaluated
+        required: false
+        type: string
+        default: ""
     outputs:
-      mode:
-        description: reuse when the push reuses the result its pull request was tested with, otherwise full
-        value: ${{ jobs.select.outputs.mode }}
-      found:
-        description: In full mode, true when the exact Build of this subject exists and false when not (else empty)
-        value: ${{ jobs.select.outputs.found }}
-      build-run-id:
-        description: The run of the selected Build (empty when none was found or none was looked for)
-        value: ${{ jobs.select.outputs.build-run-id }}
+      intents:
+        description: The status intents for the current head of the pull request, one canonical JSON document
+        value: ${{ jobs.evaluate.outputs.intents }}
 
 permissions: {}
 
@@ -36,8 +37,8 @@ env:
   MB_KIT_TREE_DIGEST: "sha256:8d4f5b8460c32d79f3911cee130646c28eb0fcfedca3f8c2c3f382c771975ebb"
 
 jobs:
-  select:
-    name: Select exact Build source
+  evaluate:
+    name: Evaluate gate states
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -45,14 +46,13 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      mode: ${{ steps.reuse.outputs.mode == 'reuse' && 'reuse' || 'full' }}
-      found: ${{ steps.select.outputs.found }}
-      build-run-id: ${{ steps.select.outputs.run_id }}
+      intents: ${{ steps.settle.outputs.intents || steps.evaluate.outputs.intents }}
     steps:
       - name: Validate call inputs before any checkout
         shell: bash
         env:
           KIT_SHA: ${{ inputs.kit-sha }}
+          PR_NUMBER: ${{ inputs.pr-number }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
@@ -60,9 +60,10 @@ jobs:
           [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
           [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
           case "$GITHUB_EVENT_NAME" in
-            push | workflow_dispatch) ;;
+            workflow_run | pull_request_target | schedule | workflow_dispatch) ;;
             *) fail event ;;
           esac
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail pr-number
       - name: Check out the protected mod head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,9 +102,8 @@ jobs:
             fail "site/mod-base.json names no canonical branch"
           [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
              "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
-          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-build.yml@refs/heads/$canonical_branch" ||
-             "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-packaged-e2e.yml@refs/heads/$canonical_branch" ]] ||
-            fail "this job is not called by a managed Build or packaged E2E caller of the canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-gate-status.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by the managed gate status caller of the canonical branch"
           # >>> kit-digest-v1
           kit_digest_v1() {
             local root="$1" directory offending listing
@@ -144,19 +144,34 @@ jobs:
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
           python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
-      - name: Authenticate the tested subject
-        id: subject
+      - name: Settle the gates that need no plan
+        id: settle
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci gate-status --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --pr "$PR_NUMBER" --settle --github-output "$GITHUB_OUTPUT"
+      - name: Authenticate the pull request under evaluation
+        id: subject
+        if: steps.settle.outputs.settled == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --producer packaged --pr "" --github-output "$GITHUB_OUTPUT"
+            --producer status --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
       - name: Fence the host and prepare the worker accounts
         id: prepare
+        if: steps.settle.outputs.settled == 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -168,6 +183,7 @@ jobs:
             --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
       - name: Derive the protected plan
         id: plan
+        if: steps.settle.outputs.settled == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -177,30 +193,19 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --github-output "$GITHUB_OUTPUT"
-      - name: Admit post-merge reuse
-        id: reuse
-        if: github.event_name == 'push'
+      - name: Evaluate the protected gates
+        id: evaluate
+        if: steps.settle.outputs.settled == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
-            python3 -P -m mod_base ci reuse-admit --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --github-output "$GITHUB_OUTPUT"
-      - name: Select the exact Build source
-        id: select
-        if: steps.reuse.outputs.mode != 'reuse'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
-          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
-            python3 -P -m mod_base ci select-build --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --output "$RUNNER_TEMP/mb-state/build-selection.json" --github-output "$GITHUB_OUTPUT"
+            python3 -P -m mod_base ci gate-status --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
       - name: Terminate and lock the worker accounts
         if: ${{ always() && steps.subject.outcome == 'success' }}
         shell: bash

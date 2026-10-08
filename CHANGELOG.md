@@ -106,6 +106,19 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   separate Build run; a run id; or `same-run` after a rebuild in the same run). Every job after
   `input` selects that run again by its id, the `aggregate` job's sealing step is `ci aggregate`,
   and in reuse mode only the gate runs. It is tabled, policed and digested like the other two.
+- Add the Build/E2E callee workflow `.github/workflows/gate-status.yml`: one job, `evaluate`,
+  inputs `kit-sha` and `pr-number`, output `intents` (the canonical document of `ci gate-status`).
+  Its prologue admits the managed gate status caller of the canonical branch alone
+  (`workflow.CI_CALLEE_CALLERS`), on `workflow_run`, `pull_request_target`, `schedule` and
+  `workflow_dispatch`. The job issues `ci gate-status` twice. The first call, `--settle`, runs
+  before any subject and answers only when no gate needs the protected plan: a draft, a
+  generation that has not started or still runs, a newest run that failed (outputs `settled=true`
+  and `intents`). Otherwise it outputs `settled=false`, and only then the job runs
+  `ci subject --producer status --pr N`, `ci worker-prepare --roles validator`, `ci plan` and the
+  second call, which verifies each finished run against that plan. Without a plan no gate is ever
+  a success. `status` is a third producer of `ci subject` (never a gate): its subject is always
+  the pull request it names, on each event of the status caller, and its controller the
+  default-branch commit the run executes, so it derives the identity and the plan of the gates.
 - `ci select-build`: a protected push or dispatch whose newest Build run is still in progress now
   waits for it, within the same `--wait-seconds` (5400 at most, one listing request per poll) as
   a pull request, instead of failing: a push starts the Build caller and the packaged caller

@@ -8,8 +8,9 @@ sealing jobs and what they upload) and ``CI_JOB_PERMISSIONS``. A callee is polic
 its file exists: a workflow file without rows in those tables fails, and so do rows without a file.
 
 The module also holds what the per-workflow modules (``tests/test_workflow_build.py``,
-``tests/test_workflow_select_build.py`` and ``tests/test_workflow_packaged_e2e.py``) import
-(functions and tables only, so no test runs twice): the loader, the closed tables below and
+``tests/test_workflow_select_build.py``, ``tests/test_workflow_packaged_e2e.py`` and
+``tests/test_workflow_gate_status.py``) import (functions and tables only, so no test runs
+twice): the loader, the closed tables below and
 :class:`CiStepRunner`, which executes a step's ``run:`` body under the Pages tests' ``ShellHarness``
 and returns the ``ci`` command lines it issued.
 """
@@ -50,12 +51,14 @@ CI_CALLEES = tuple(workflow.CI_JOB_VERBS)
 
 #: The inputs of each callee, in order; ``kit-sha`` is the only required one.
 CI_INPUTS = {"build": ("kit-sha", "pr-number"), "select-build": ("kit-sha",),
-             "packaged-e2e": ("kit-sha", "pr-number", "mode", "build-run-id")}
+             "packaged-e2e": ("kit-sha", "pr-number", "mode", "build-run-id"),
+             "gate-status": ("kit-sha", "pr-number")}
 #: What each callee returns to its caller, in order: output -> the job that has an output of that name.
 CI_OUTPUTS = {"build": {}, "select-build": {"mode": "select", "found": "select", "build-run-id": "select"},
-              "packaged-e2e": {}}
-#: The producer each callee's jobs authenticate as (``ci subject --producer``, ``ci seal-gate --gate``).
-CI_PRODUCER = {"build": "build", "select-build": "packaged", "packaged-e2e": "packaged"}
+              "packaged-e2e": {}, "gate-status": {"intents": "evaluate"}}
+#: The producer each callee's jobs authenticate as (``ci subject --producer``, ``ci seal-gate --gate``):
+#: one of the managed callers its binding step admits (``workflow.CI_CALLEE_CALLERS``).
+CI_PRODUCER = {"build": "build", "select-build": "packaged", "packaged-e2e": "packaged", "gate-status": "status"}
 #: Where a callee reads its mode and the tested commit from (the callee's own spelling): the callees
 #: whose gate seals one of two records, and the callees with a job that stages candidate code.
 MODE_EXPRESSION = {"build": "needs.plan.outputs.mode", "packaged-e2e": "inputs.mode"}
@@ -64,16 +67,18 @@ CANDIDATE_REF = {"build": "${{ needs.plan.outputs.tested-sha }}",
 #: Where the environment of a callee's steps differs from a Build step of pull request 17: the
 #: managed caller that reaches the callee and, for the one no pull request reaches, the event.
 PACKAGED_CALLER_REF = "example/mod/" + workflow.CI_CALLER_WORKFLOWS["packaged"] + "@refs/heads/master"
+STATUS_CALLER_REF = "example/mod/" + workflow.CI_CALLER_WORKFLOWS["status"] + "@refs/heads/master"
 CI_ENVIRONMENT = {"build": {},
                   "select-build": {"GITHUB_EVENT_NAME": "push", "GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF},
-                  "packaged-e2e": {"GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF}}
+                  "packaged-e2e": {"GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF},
+                  "gate-status": {"GITHUB_WORKFLOW_REF": STATUS_CALLER_REF}}
 
 #: The third checkout, present exactly in the jobs that stage and run candidate code.
 CANDIDATE_CHECKOUT = "Check out the tested candidate"
 CANDIDATE_VERBS = frozenset({"worker-stage", "worker-run"})
 #: The verbs that call the API: exactly the steps that run one hold the step-scoped token.
 API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate", "select-build", "fetch-build",
-                       "aggregate"})
+                       "aggregate", "gate-status"})
 #: The verbs that must also run after a failure or a cancellation, and the step each depends on.
 #: A bare ``always()`` would run kit Python in a job whose prologue failed, that is from a kit tree
 #: nobody verified; a step that follows the prologue can only have succeeded when the prologue did.
@@ -83,14 +88,27 @@ ALWAYS_VERBS = {"worker-seal": "${{ always() && steps.prepare.outcome == 'succes
                 "worker-finish": "${{ always() && steps.subject.outcome == 'success' }}"}
 #: The step ids those conditions name, by the verb of the step that carries each.
 GATING_IDS = {"subject": "subject", "worker-prepare": "prepare"}
+#: The one job that issues a verb before it authenticates a subject, and that verb: the status
+#: evaluation first asks, without a plan, whether every gate is already decided (a draft, a run
+#: that has not finished or that failed). Such a step is unconditional; the job's rules for
+#: ``subject`` first, ``worker-prepare`` second and no verb twice apply to the verbs after it.
+SETTLE_VERBS = {("gate-status", "evaluate"): ("gate-status",)}
+#: Only when that first call could not settle does the status job authenticate, prepare, plan and
+#: evaluate again; ``'false'`` is what the call wrote, never an output that is merely missing.
+UNSETTLED = "steps.settle.outputs.settled == 'false'"
 #: The only other condition a step may carry, by callee, job and verb. Reuse is admitted for a push
 #: alone, and a job that also runs in reuse mode selects no Build then. (The packaged ``input``,
-#: ``lane`` and ``aggregate`` jobs are skipped as a whole in that mode.)
+#: ``lane`` and ``aggregate`` jobs are skipped as a whole in that mode.) In the status job the
+#: rows are the steps after its settling call (``SETTLE_VERBS``).
 CONDITIONAL_STEPS = {
     ("build", "plan", "reuse-admit"): "github.event_name == 'push'",
     ("select-build", "select", "reuse-admit"): "github.event_name == 'push'",
     ("select-build", "select", "select-build"): "steps.reuse.outputs.mode != 'reuse'",
     ("packaged-e2e", "gate", "select-build"): "inputs.mode != 'reuse'",
+    ("gate-status", "evaluate", "subject"): UNSETTLED,
+    ("gate-status", "evaluate", "worker-prepare"): UNSETTLED,
+    ("gate-status", "evaluate", "plan"): UNSETTLED,
+    ("gate-status", "evaluate", "gate-status"): UNSETTLED,
 }
 #: The verbs of a job's one ``workflow.CI_SEAL_STEP``: a hook of the validator account, a gate, or
 #: the kit's own index of the lane results (``ci aggregate`` runs no hook).
@@ -112,8 +130,10 @@ CI_COMMAND = re.compile(r"^  python3 -P -m mod_base ci ([a-z][a-z-]*) --repo mod
 #: the step-scoped token. Never an event payload field and never a secret.
 ENV_VALUE = re.compile(r"^\$\{\{ (?:inputs\.[a-z][a-z0-9-]*|needs\.[a-z][a-z-]*\.outputs\.[a-z][a-z0-9-]*|matrix\.id"
                        r"|github\.token) \}\}$")
-#: What a job may return: one output of one of its own steps, or a choice between two literals by it.
-JOB_OUTPUT = re.compile(r"^\$\{\{ steps\.[a-z]+\.outputs\.[a-z0-9_]+(?: == '[a-z]+' && '[a-z]+' \|\| '[a-z]+')? \}\}$")
+#: What a job may return: one output of one of its own steps, a choice between two literals by it,
+#: or the first written of two such outputs (the settling call's or the planned evaluation's).
+JOB_OUTPUT = re.compile(r"^\$\{\{ steps\.[a-z]+\.outputs\.[a-z0-9_]+(?: == '[a-z]+' && '[a-z]+' \|\| '[a-z]+'"
+                        r"| \|\| steps\.[a-z]+\.outputs\.[a-z0-9_]+)? \}\}$")
 DOCUMENT_KEYS = {"name", "on", "permissions", "env", "jobs"}
 JOB_KEYS = {"name", "needs", "if", "runs-on", "timeout-minutes", "permissions", "outputs", "strategy", "steps"}
 RUN_STEP_KEYS = {"name", "id", "if", "shell", "env", "run"}
@@ -124,10 +144,22 @@ USES_STEP_KEYS = {"name", "uses", "with"}
 PAGES_GUARD = ('[[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/' + workflow.PAGES_WORKFLOW_PATH
                + '@refs/heads/$canonical_branch" ]] ||\n'
                "  fail \"this job is not called by the canonical branch's pages.yml\"\n")
-CI_GUARD = ("[[ " + " ||\n   ".join(
-    '"$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/' + workflow.CI_CALLER_WORKFLOWS[producer]
-    + '@refs/heads/$canonical_branch"' for producer in workflow.CI_CALLS) + " ]] ||\n"
-    '  fail "this job is not called by a managed Build or packaged E2E caller of the canonical branch"\n')
+#: What the binding step says when none of the managed callers it admits is the calling workflow,
+#: by those callers (``workflow.CI_CALLEE_CALLERS``).
+CI_GUARD_FAILURES = {
+    ("build", "packaged"): "this job is not called by a managed Build or packaged E2E caller of the canonical branch",
+    ("status",): "this job is not called by the managed gate status caller of the canonical branch",
+}
+
+
+def ci_guard(name: str) -> str:
+    """The lines of the binding step that admit the managed callers of the callee ``name``."""
+
+    callers = workflow.CI_CALLEE_CALLERS[name]
+    return ("[[ " + " ||\n   ".join(
+        '"$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/' + workflow.CI_CALLER_WORKFLOWS[caller]
+        + '@refs/heads/$canonical_branch"' for caller in callers) + " ]] ||\n"
+        f'  fail "{CI_GUARD_FAILURES[callers]}"\n')
 
 
 def ci_callee(name: str) -> dict[str, Any]:
@@ -298,6 +330,9 @@ class CiRegistryTests(unittest.TestCase):
                 "aggregate": ("subject", "worker-prepare", "plan", "select-build", "aggregate", "worker-finish"),
                 "gate": ("subject", "worker-prepare", "plan", "select-build", "seal-gate", "worker-finish"),
             },
+            "gate-status": {
+                "evaluate": ("gate-status", "subject", "worker-prepare", "plan", "gate-status", "worker-finish"),
+            },
         })
         self.assertEqual(list(workflow.CI_JOB_VERBS),
                          [name for name in workflow.CI_CALLEE_WORKFLOWS if name in workflow.CI_JOB_VERBS],
@@ -311,14 +346,21 @@ class CiRegistryTests(unittest.TestCase):
         self.assertEqual(workflow.CI_JOB_PERMISSIONS, {
             "build": {"plan": read, "policy": read, "target": read, "assemble": read, "gate": read},
             "select-build": {"select": read},
-            "packaged-e2e": {"input": read, "lane": read, "aggregate": read, "gate": read}})
+            "packaged-e2e": {"input": read, "lane": read, "aggregate": read, "gate": read},
+            "gate-status": {"evaluate": read}})
 
     def test_every_table_describes_exactly_the_jobs_of_its_callee(self) -> None:
         self.assertEqual(set(workflow.CI_JOB_PERMISSIONS), set(CI_CALLEES))
         self.assertLessEqual(set(workflow.CI_JOB_ARTIFACTS), set(CI_CALLEES))
         self.assertLessEqual(set(CI_CALLEES), set(workflow.CI_CALLEE_WORKFLOWS))
-        for table in (CI_INPUTS, CI_OUTPUTS, CI_PRODUCER, CI_ENVIRONMENT):
+        for table in (CI_INPUTS, CI_OUTPUTS, CI_PRODUCER, CI_ENVIRONMENT, workflow.CI_CALLEE_CALLERS):
             self.assertEqual(set(table), set(CI_CALLEES))
+        self.assertEqual(set(CI_GUARD_FAILURES), set(workflow.CI_CALLEE_CALLERS.values()))
+        for (name, job_id), verbs in SETTLE_VERBS.items():
+            self.assertEqual(workflow.CI_JOB_VERBS[name][job_id][:len(verbs)], verbs, "a settling call runs first")
+            self.assertEqual(set(verbs) & (set(ALWAYS_VERBS) | set(GATING_IDS) | CANDIDATE_VERBS | SEAL_VERBS), set(),
+                             "before a subject exists a job only reads the API")
+            self.assertLessEqual(set(verbs), API_VERBS)
         # A mode is spelled where a gate seals one of two records, a tested commit where a job
         # stages candidate code; a callee without either has no row to go stale.
         self.assertEqual(set(MODE_EXPRESSION), {name for name, jobs in workflow.CI_JOB_ARTIFACTS.items()
@@ -334,10 +376,12 @@ class CiRegistryTests(unittest.TestCase):
             with self.subTest(callee=name):
                 self.assertEqual(list(workflow.CI_JOB_VERBS[name]), jobs)
                 self.assertEqual(list(workflow.CI_JOB_PERMISSIONS[name]), jobs)
-                self.assertIn(CI_PRODUCER[name], workflow.CI_CALLS)
+                self.assertIn(CI_PRODUCER[name], workflow.CI_CALLEE_CALLERS[name])
                 for job_id, verbs in workflow.CI_JOB_VERBS[name].items():
                     sealing = [verb for verb in verbs if verb in SEAL_VERBS]
                     self.assertEqual(len(sealing), int(job_id in workflow.CI_JOB_ARTIFACTS.get(name, {})), job_id)
+                    # What follows a settling call is a job like every other: subject, prepare, ...
+                    verbs = verbs[len(SETTLE_VERBS.get((name, job_id), ())):]
                     self.assertEqual(verbs[:2], ("subject", "worker-prepare"), job_id)
                     self.assertEqual(verbs[-1], "worker-finish", job_id)
                     self.assertEqual(len(set(verbs)), len(verbs), job_id)
@@ -370,7 +414,7 @@ class CiRegistryTests(unittest.TestCase):
 
     def test_the_artifact_table_names_the_uploading_jobs_of_the_run_graph(self) -> None:
         target = ci_plan()["targets"][0]["id"]
-        for name in CI_CALLEES:
+        for name in workflow.CI_JOB_ARTIFACTS:  # only a producer's callee seals and uploads
             producer = CI_PRODUCER[name]
             call = next(call for call, called in workflow.CI_CALLS[producer].items() if called == name)
             for job_id, kinds in workflow.CI_JOB_ARTIFACTS.get(name, {}).items():
@@ -472,30 +516,39 @@ class CiCalleePolicyTests(unittest.TestCase):
                     self.assertTrue(("uses" in item) != ("run" in item), item["name"])
 
     def test_prologue_steps_are_identical_wherever_they_repeat(self) -> None:
-        shared: dict[str, list[dict[str, Any]]] = {name: [] for name in PROLOGUE[1:]}
+        # The binding step names the managed callers of its callee, so it repeats byte for byte
+        # among the callees that admit the same callers; every other step repeats everywhere.
+        shared: dict[tuple[str, ...], list[dict[str, Any]]] = {}
         for name in CI_CALLEES:
             validations = []
             for job in ci_callee(name)["jobs"].values():
                 validations.append(step(job["steps"], PROLOGUE[0]))
-                for step_name in shared:
-                    shared[step_name].append(step(job["steps"], step_name))
+                for step_name in PROLOGUE[1:]:
+                    admitted = workflow.CI_CALLEE_CALLERS[name] if step_name == PROLOGUE[3] else ()
+                    shared.setdefault((step_name, *admitted), []).append(step(job["steps"], step_name))
             self.assertTrue(all(item == validations[0] for item in validations),
                             f"{name}: one input validation for every job")
-        for step_name, copies in shared.items():
+        self.assertEqual(len(shared), len(PROLOGUE) - 2 + len(set(workflow.CI_CALLEE_CALLERS.values())))
+        for key, copies in shared.items():
             self.assertTrue(all(item == copies[0] for item in copies),
-                            f"{step_name!r} is byte-identical in every Build/E2E callee job")
+                            f"{key!r} is byte-identical in every Build/E2E callee job")
 
-    def test_the_prologue_is_the_pages_prologue_bound_to_the_managed_build_callers(self) -> None:
+    def test_the_prologue_is_the_pages_prologue_bound_to_the_managed_callers_of_each_callee(self) -> None:
         pages = callee("finalize")["jobs"]["refresh"]["steps"]
         pages_bind = step(pages, PROLOGUE[3])
         self.assertEqual(pages_bind["run"].count(PAGES_GUARD), 1)
+        self.assertEqual(ci_guard("build"), ci_guard("select-build"))
+        self.assertEqual(ci_guard("build"), ci_guard("packaged-e2e"))
+        self.assertEqual(ci_guard("gate-status").count("GITHUB_WORKFLOW_REF"), 1, "the status caller alone")
+        self.assertIn(workflow.CI_CALLER_WORKFLOWS["status"], ci_guard("gate-status"))
+        self.assertNotIn(workflow.CI_CALLER_WORKFLOWS["status"], ci_guard("build"))
         for name, job_id, job in iter_ci_jobs():
             steps = job["steps"]
             with self.subTest(callee=name, job=job_id):
                 for index in (1, 2, 4, 5):
                     self.assertEqual(step(steps, PROLOGUE[index]), step(pages, PROLOGUE[index]))
                 self.assertEqual(step(steps, PROLOGUE[3]),
-                                 {**pages_bind, "run": pages_bind["run"].replace(PAGES_GUARD, CI_GUARD)})
+                                 {**pages_bind, "run": pages_bind["run"].replace(PAGES_GUARD, ci_guard(name))})
                 validation = step(steps, PROLOGUE[0])
                 self.assertEqual(validation["env"], {"KIT_SHA": "${{ inputs.kit-sha }}", **{
                     input_name.upper().replace("-", "_"): "${{ inputs." + input_name + " }}"
@@ -574,11 +627,16 @@ class CiCalleePolicyTests(unittest.TestCase):
 
     def test_steps_run_unconditionally_except_the_tabled_verbs(self) -> None:
         for name, job_id, job in iter_ci_jobs():
+            settling = len(SETTLE_VERBS.get((name, job_id), ()))
+            issued = 0
             for item in job["steps"]:
                 verb = step_verb(item)
+                issued += verb is not None
                 with self.subTest(callee=name, job=job_id, step=item["name"]):
-                    self.assertEqual(item.get("if"),
-                                     ALWAYS_VERBS.get(verb, CONDITIONAL_STEPS.get((name, job_id, verb))))
+                    # A settling call decides whether the rest of the job runs: it has no condition.
+                    expected = (None if verb is not None and issued <= settling
+                                else ALWAYS_VERBS.get(verb, CONDITIONAL_STEPS.get((name, job_id, verb))))
+                    self.assertEqual(item.get("if"), expected)
                     if verb in GATING_IDS:
                         self.assertEqual(item.get("id"), GATING_IDS[verb])
                     else:

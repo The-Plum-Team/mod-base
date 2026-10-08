@@ -2,6 +2,8 @@
 
 A copy of the synthetic mod with an activation manifest, a private state directory, literal job
 listings and real tested-record ZIPs on the real filesystem (Linux). Only the GitHub API is faked.
+The status job issues the command twice: ``--settle`` first, which answers without a plan or says
+that it cannot, and then, after ``ci subject`` and ``ci plan``, the evaluation that verifies.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from mod_base.build_ci import identity, status
+from mod_base.build_ci import commands_status, identity, status
 from mod_base.build_ci.config import load_build_config
 from mod_base.build_ci.protocol import plan_sha256
 from mod_base.errors import MbError
@@ -493,6 +495,242 @@ class GateStatusTests(GateStatusTestCase):
         self.assertEqual(code, 2)
         self.assertTrue(stderr.startswith("mod_base: usage: "), stderr)
         self.assertEqual((world.api.request_count, world.budgets), (0, []))
+
+
+class GateSettleTests(GateStatusTestCase):
+    """``ci gate-status --settle``: the first call of the status job, before any subject or plan."""
+
+    def settle(self, world: StatusWorld, *, state: Path | None = None, **options: Any) -> tuple[int, str, bytes]:
+        if self.output.exists():
+            self.output.unlink()
+        self.state = self.directory / "unborn" if state is None else state
+        return run_ci(self, world, self.state, "gate-status", "--pr", options.pop("pr", "7"), "--settle",
+                      "--github-output", str(self.output), mod=options.pop("mod", self.mod), **options)
+
+    def settled(self, world: StatusWorld, *, requests: int, **options: Any) -> dict[str, Any]:
+        """Require a settled answer: the document, on standard output and as the output ``intents``."""
+
+        code, stderr, stdout = self.settle(world, **options)
+        self.assertEqual((code, stderr), (0, ""))
+        document = strict_loads(stdout, label="status intents", max_bytes=limits.MAX_CI_RECORD_BYTES)
+        self.assertEqual(stdout, canonical_json(document))
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "settled=true\nintents=" + stdout.decode("utf-8"))
+        self.assertNotIn("success", {intent["state"] for intent in document["gates"].values()})
+        self.assertFalse(self.state.exists(), "`ci subject` creates the state: the first call leaves none")
+        self.assertEqual((world.api.request_count, world.api.mutations), (requests, []))
+        self.assertEqual(world.budgets[-1], limits.MAX_CI_GATE_STATUS_REQUESTS)
+        return document
+
+    def unsettled(self, world: StatusWorld, *, requests: int, **options: Any) -> None:
+        """Require the answer that sends the job on to its plan: no document at all."""
+
+        code, stderr, stdout = self.settle(world, **options)
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(stdout.decode("utf-8"), commands_status.UNSETTLED)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "settled=false\n")
+        self.assertFalse(self.state.exists())
+        self.assertEqual((world.api.request_count, world.api.mutations), (requests, []))
+
+    def test_a_draft_is_settled_as_pending_in_two_requests(self) -> None:
+        world = self.world().gated()
+        h.seed_pull_request(world.api, {**world.pr, "draft": True})
+        document = self.settled(world, requests=2)
+        self.assertEqual(self.states(document), {gate: ("pending", DRAFT, None) for gate in CONTEXTS})
+        self.assertEqual(document["target_sha"], h.HEAD_SHA)
+
+    def test_a_generation_that_has_not_started_or_still_runs_is_settled_as_pending(self) -> None:
+        world = self.world()
+        document = self.settled(world, requests=6)  # the pull request and both listings, twice
+        self.assertEqual(self.states(document), {gate: ("pending", WAITING[gate], None) for gate in CONTEXTS})
+        for status_ in ("queued", "in_progress", "waiting", "requested", "pending"):
+            world = self.world()
+            world.add_run("build", "build-full", status=status_, conclusion=None)
+            world.add_run("packaged", "packaged-pull-request", status=status_, conclusion=None)
+            with self.subTest(status=status_):
+                self.assertEqual(self.states(self.settled(world, requests=6)),
+                                 {"build": ("pending", RUNNING["build"], run_url(42)),
+                                  "packaged": ("pending", RUNNING["packaged"], run_url(43))})
+        # A newer run in progress decides the gate whatever an older run proved.
+        world = self.world().gated()
+        later_run(world, status="in_progress", conclusion=None)
+        world.later_packaged(status="queued", conclusion=None)
+        self.assertEqual(self.states(self.settled(world, requests=6)),
+                         {"build": ("pending", RUNNING["build"], run_url(44)),
+                          "packaged": ("pending", RUNNING["packaged"], run_url(45))})
+
+    def test_a_failed_or_cancelled_newest_run_is_settled_as_a_failure(self) -> None:
+        for conclusion in ("failure", "cancelled", "timed_out"):
+            world = self.world().gated()
+            later_run(world, conclusion=conclusion)
+            world.later_packaged(conclusion=conclusion)
+            with self.subTest(conclusion=conclusion):
+                # The pull request and both listings twice, and each failed run once.
+                self.assertEqual(self.states(self.settled(world, requests=8)), {
+                    "build": ("failure", "the newest Build run failed or was cancelled", run_url(44)),
+                    "packaged": ("failure", "the newest packaged E2E run failed or was cancelled", run_url(45))})
+        world = self.world()
+        world.add_run("build", "build-full", conclusion="failure")
+        self.assertEqual(self.states(self.settled(world, requests=7)),
+                         {"build": ("failure", "the newest Build run failed or was cancelled", run_url(42)),
+                          "packaged": ("pending", WAITING["packaged"], None)})
+
+    def test_a_finished_newest_run_is_left_to_the_plan_and_never_answered(self) -> None:
+        # Both gates green: the pull request, both listings and both runs; nothing is read again.
+        self.unsettled(self.world().gated(), requests=5)
+        # One finished run is enough, whatever the other gate shows.
+        self.unsettled(self.world().gated(packaged=False), requests=4)
+        world = self.world().gated()
+        world.later_packaged(conclusion="failure")
+        self.unsettled(world, requests=5)
+        world = self.world().gated()
+        later_run(world, status="in_progress", conclusion=None)
+        self.unsettled(world, requests=4)
+        # A draft deferral finished successfully too: only the plan tells it from a verified gate.
+        world = self.world()
+        world.add_run("build", "build-deferred")
+        world.add_run("packaged", "packaged-deferred")
+        self.unsettled(world, requests=5)
+
+    def test_the_two_calls_of_one_job_end_in_the_verified_document(self) -> None:
+        world = self.world().gated()
+        self.unsettled(world, requests=5)
+        state = self.state
+        # `ci subject --producer status` creates the state the first call left unborn...
+        code, stderr, stdout = run_ci(self, world, state, "subject", "--producer", "status", "--pr", "7",
+                                      "--github-output", str(self.directory / "subject-output"), mod=self.mod)
+        self.assertEqual((code, stderr, stdout), (0, "", b""))
+        record = identity.read_subject(state)
+        self.assertEqual((record["producer"], record["event"], record["subject"]["pr_number"]),
+                         ("status", "workflow_run", 7))
+        self.assertEqual(world.api.request_count, 5 + 4)
+        # ...`ci plan` writes the plan of that subject, and the second call verifies both gates.
+        identity.write_state_record(state, grammar.CI_PLAN_NAME, canonical_json(world.plan))
+        code, stderr, stdout = run_ci(self, world, state, "gate-status", "--pr", "7", "--github-output",
+                                      str(self.output), mod=self.mod)
+        self.assertEqual((code, stderr), (0, ""))
+        document = strict_loads(stdout, label="status intents", max_bytes=limits.MAX_CI_RECORD_BYTES)
+        self.assertEqual(self.states(document), {gate: ("success", VERIFIED[gate], run_url(run_id))
+                                                 for gate, run_id in (("build", 42), ("packaged", 43))})
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "settled=false\nintents=" + stdout.decode("utf-8"))
+        self.assertEqual(world.api.request_count, 5 + 4 + 45)
+        self.assertEqual(world.budgets, [limits.MAX_CI_GATE_STATUS_REQUESTS, limits.MAX_CI_SUBJECT_REQUESTS,
+                                         limits.MAX_CI_GATE_STATUS_REQUESTS])
+
+    def test_a_job_that_holds_a_state_has_passed_the_first_call(self) -> None:
+        world = self.world().gated()
+        for label, state in (("planned", world.planned()), ("empty", self.directory / "empty")):
+            if label == "empty":
+                identity.create_state(state)
+            code, stderr, stdout = self.settle(world, state=state)
+            with self.subTest(state=label):
+                self.assertEqual((code, stdout), (2, b""))
+                self.assertIn("runs before `ci subject`", stderr)
+                self.assertFalse(self.output.exists())
+        self.assertEqual((world.api.request_count, world.budgets), (0, []))
+
+    def test_a_change_an_api_failure_or_a_refused_pull_request_is_never_an_answer(self) -> None:
+        world = self.world()
+        world.add_run("build", "build-full", status="in_progress", conclusion=None)
+        world.api.during_listing(PACKAGED_LISTING, lambda: world.set_run(42, status="completed", conclusion="success"))
+        code, stderr, stdout = self.settle(world)
+        self.assertEqual((code, stdout), (2, b""))
+        self.assertIn("changed between the start of the command and its effect", stderr)
+        self.assertFalse(self.output.exists())
+        world = self.world(max_requests=5)
+        code, stderr, stdout = self.settle(world)
+        self.assertEqual((code, stdout), (2, b""))
+        self.assertIn("request-budget", stderr)
+        self.assertFalse(self.output.exists())
+        world = self.world()
+        world.api.add_response(PULL, {**world.pr, "state": "closed"})
+        code, _, stdout = self.settle(world)
+        self.assertEqual((code, stdout, self.output.exists()), (2, b"", False))
+        code, stderr, stdout = self.settle(self.world(), mod=activated(self.directory, "disabled"))
+        self.assertEqual((code, stdout, self.output.exists()), (2, b"", False))
+        self.assertIn("manages no gate status caller", stderr)
+
+    def test_shadow_mode_and_shared_build_settle_their_own_gates(self) -> None:
+        document = self.settled(self.world(), requests=6, mod=activated(self.directory, "shadow"))
+        self.assertEqual({gate: intent["context"] for gate, intent in document["gates"].items()},
+                         {gate: context + " (shadow)" for gate, context in CONTEXTS.items()})
+        # Without a managed packaged caller only the Build gate exists: one listing, read twice.
+        document = self.settled(self.world(), requests=4, mod=activated(self.directory, "shared-build"))
+        self.assertEqual(self.states(document), {"build": ("pending", WAITING["build"], None)})
+        # A finished packaged run of a mod that keeps its own packaged gate is nobody's business here.
+        world = self.world()
+        world.add_run("packaged", "packaged-pull-request")
+        self.settled(world, requests=4, mod=activated(self.directory, "shared-build"))
+
+
+class SettleGatesTests(unittest.TestCase):
+    """``status.settle_gates``: the document without a plan, or None; never a success."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        self.config = load_build_config(h.MOD, repository=h.REPOSITORY)
+        self.activation = {"kind": "mod-base.ci.activation", "schema_version": 1, "repository": h.REPOSITORY,
+                           "profile": "quick-skin", "mode": "shared-build-and-e2e", "rollback_from": None}
+
+    def settle(self, world: StatusWorld, **changes: Any) -> dict[str, Any] | None:
+        arguments = {"pr_number": 7, "config": self.config, "activation": self.activation,
+                     "controller_sha": h.CONTROLLER_SHA, **changes}
+        return status.settle_gates(world.api, **arguments)
+
+    def test_the_settled_document_is_the_one_the_full_evaluation_returns(self) -> None:
+        def running(world: StatusWorld) -> None:
+            world.add_run("build", "build-full", status="in_progress", conclusion=None)
+
+        def failed(world: StatusWorld) -> None:
+            world.add_run("build", "build-full", conclusion="failure")
+            world.add_run("packaged", "packaged-pull-request", conclusion="cancelled")
+
+        def draft(world: StatusWorld) -> None:
+            world.gated()
+            h.seed_pull_request(world.api, {**world.pr, "draft": True})
+
+        for change in (lambda world: None, running, failed, draft):
+            first, second = StatusWorld(Path(tempfile.mkdtemp(dir=self.directory))), \
+                StatusWorld(Path(tempfile.mkdtemp(dir=self.directory)))
+            change(first)
+            change(second)
+            settled = self.settle(first)
+            with self.subTest(change=getattr(change, "__name__", "nothing")):
+                self.assertIsNotNone(settled)
+                self.assertEqual(settled, status.evaluate_gates(
+                    second.api, pr_number=7, config=self.config, activation=self.activation,
+                    controller_sha=h.CONTROLLER_SHA, plan=second.plan, temporary_root=self.directory))
+                self.assertEqual(first.api.request_count, second.api.request_count)
+
+    def test_a_finished_run_is_none_and_no_plan_never_yields_success(self) -> None:
+        world = StatusWorld(self.directory).gated()
+        self.assertIsNone(self.settle(world))
+        self.assertEqual(world.api.request_count, 5)
+        # The full evaluation of a job that holds no plan keeps its restrictive answer.
+        document = status.evaluate_gates(world.api, pr_number=7, config=self.config, activation=self.activation,
+                                         controller_sha=h.CONTROLLER_SHA, plan=None, temporary_root=self.directory)
+        self.assertEqual({gate: (intent["state"], intent["description"]) for gate, intent in document["gates"].items()},
+                         {gate: ("failure", UNPLANNED[gate]) for gate in CONTEXTS})
+        # Even an evaluation that somehow answered success without a plan would be refused.
+        green = {"repository": h.REPOSITORY, "pr_number": 7, "target_sha": h.HEAD_SHA,
+                 "gates": {"build": {"context": CONTEXTS["build"], "state": "success", "description": "x",
+                                     "target_url": None}}}
+        with patch.object(status, "_evaluate", return_value=green), \
+                self.assertRaisesRegex(MbError, "may never answer success"):
+            self.settle(world)
+
+    def test_malformed_arguments_are_refused_before_any_request(self) -> None:
+        world = StatusWorld(self.directory)
+        for changes in ({"pr_number": 0}, {"pr_number": True}, {"pr_number": "7"}, {"controller_sha": "c" * 39},
+                        {"activation": None}, {"activation": {**self.activation, "mode": "disabled"}}):
+            with self.subTest(changes=changes), self.assertRaises(MbError):
+                self.settle(world, **changes)
+        self.assertEqual(world.api.request_count, 0)
+        with self.assertRaises(MbError):
+            status.evaluate_gates(world.api, pr_number=7, config=self.config, activation=self.activation,
+                                  controller_sha=h.CONTROLLER_SHA, plan=None, temporary_root=None)
+        self.assertEqual(world.api.request_count, 0)
 
 
 class GateContextTests(unittest.TestCase):

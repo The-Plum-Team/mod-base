@@ -26,6 +26,13 @@ receipt must cover are functions of it. The caller passes the plan its job holds
 finished run can be verified, so no gate can succeed. The plan is no trust root here: a success
 also requires both tested records, which the protected gate jobs sealed, to carry its exact hash.
 
+Deriving that plan costs a sandbox and a planning hook, and most evaluations do not need it: a
+draft, a generation that has not started, one that is still running and one whose newest run
+failed are all decided by the pull request and the run listings alone. :func:`settle_gates` is
+that evaluation. It answers with the same document when no gate depends on the plan and with
+``None`` as soon as one newest run finished successfully, which only :func:`evaluate_gates` with
+the plan can verify. It never answers ``success``.
+
 An API failure is never a state: it propagates, the job fails and no intent is produced.
 """
 
@@ -68,12 +75,14 @@ class StatusError(MbError):
 @dataclass(frozen=True)
 class _Verdict:
     """What one gate may show: its state, why, the run that decides it and, only when that run's
-    gate is verified, its receipt."""
+    gate is verified, its receipt. ``unverified`` marks the one state that stands for a check
+    nobody made: the newest run finished successfully and the job held no plan to verify it with."""
 
     state: str
     description: str
     run_id: int | None = None
     receipt: dict[str, Any] | None = None
+    unverified: bool = False
 
 
 def gate_contexts(config: BuildConfig, activation: dict[str, Any] | None) -> dict[str, str]:
@@ -135,7 +144,7 @@ def _generation_plan(plan: dict[str, Any], *, config: BuildConfig, controller_sh
 
 
 def _run_verdict(reads: CommandReads, gate: str, newest: dict[str, Any], plan: dict[str, Any] | None,
-                 temporary_root: Path) -> _Verdict:
+                 temporary_root: Path | None) -> _Verdict:
     """What the newest run of a gate's caller proves: its latest attempt, then its exact graph and
     its tested record. A rejection of that evidence is raised."""
 
@@ -153,9 +162,9 @@ def _run_verdict(reads: CommandReads, gate: str, newest: dict[str, Any], plan: d
         return waiting
     if run["conclusion"] != "success":
         return _Verdict("failure", f"the newest {label} run failed or was cancelled", run_id)
-    if plan is None:
+    if plan is None or temporary_root is None:
         return _Verdict("failure", f"the newest {label} run cannot be verified: this job derived no protected plan",
-                        run_id)
+                        run_id, unverified=True)
     attempt = run["run_attempt"]
     jobs = reads.attempt_jobs(run_id, attempt)
     if job_graph(jobs) == run_graph(producer, "deferred").jobs(plan):
@@ -169,7 +178,7 @@ def _run_verdict(reads: CommandReads, gate: str, newest: dict[str, Any], plan: d
 
 
 def _gate(reads: CommandReads, watch: Watch, gate: str, pull: dict[str, Any], plan: dict[str, Any] | None,
-          temporary_root: Path) -> _Verdict:
+          temporary_root: Path | None) -> _Verdict:
     """The verdict of one gate from the newest run of its caller under the pull request's head.
     A rejection of that run's evidence is a failure; an API failure propagates."""
 
@@ -203,6 +212,40 @@ def _coupled(build: _Verdict, packaged: _Verdict) -> _Verdict:
     return packaged
 
 
+def _evaluate(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None,
+              controller_sha: str, plan: dict[str, Any] | None,
+              temporary_root: Path | None) -> dict[str, Any] | None:
+    """The intents document of :func:`evaluate_gates`. Without a directory for tested records
+    (:func:`settle_gates`, which holds no plan either) the answer is None as soon as one gate
+    cannot be decided without the plan."""
+
+    contexts = gate_contexts(config, activation)
+    Int(1, limits.MAX_RUN_ID)(pr_number, "$.pr_number")
+    grammar.require_sha1(controller_sha, "executing controller SHA")
+    reads, watch = CommandReads.of(api), Watch()
+    if reads.repository != config.data["repository"]:
+        raise StatusError("the API client serves another repository than the protected Build config")
+    pull = watch.read(("pull request",), functools.partial(_pull_request, reads, pr_number))
+    if pull["draft"]:
+        verdicts = {gate: _Verdict("pending", "deferred: the pull request is a draft") for gate in contexts}
+    else:
+        if plan is not None:
+            plan = _generation_plan(plan, config=config, controller_sha=controller_sha, pr_number=pr_number, pull=pull)
+        verdicts = {gate: _gate(reads, watch, gate, pull, plan, temporary_root) for gate in contexts}
+        if temporary_root is None and any(verdict.unverified for verdict in verdicts.values()):
+            return None
+        if "packaged" in verdicts:
+            verdicts["packaged"] = _coupled(verdicts["build"], verdicts["packaged"])
+    watch.recheck()
+    return {"repository": reads.repository, "pr_number": pr_number, "target_sha": pull["head"]["sha"],
+            "gates": {gate: {"context": contexts[gate], "state": verdict.state,
+                             "description": single_line(verdict.description,
+                                                        limit=limits.MAX_CI_STATUS_DESCRIPTION_CHARS),
+                             "target_url": None if verdict.run_id is None
+                             else grammar.run_url(reads.repository, verdict.run_id)}
+                      for gate, verdict in verdicts.items()}}
+
+
 def evaluate_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None,
                    controller_sha: str, plan: dict[str, Any] | None, temporary_root: Path) -> dict[str, Any]:
     """The status intents of the protected gates for the current head of pull request ``pr_number``.
@@ -221,26 +264,34 @@ def evaluate_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activ
     already gone.
     """
 
-    contexts = gate_contexts(config, activation)
-    Int(1, limits.MAX_RUN_ID)(pr_number, "$.pr_number")
-    grammar.require_sha1(controller_sha, "executing controller SHA")
-    reads, watch = CommandReads.of(api), Watch()
-    if reads.repository != config.data["repository"]:
-        raise StatusError("the API client serves another repository than the protected Build config")
-    pull = watch.read(("pull request",), functools.partial(_pull_request, reads, pr_number))
-    if pull["draft"]:
-        verdicts = {gate: _Verdict("pending", "deferred: the pull request is a draft") for gate in contexts}
-    else:
-        if plan is not None:
-            plan = _generation_plan(plan, config=config, controller_sha=controller_sha, pr_number=pr_number, pull=pull)
-        verdicts = {gate: _gate(reads, watch, gate, pull, plan, temporary_root) for gate in contexts}
-        if "packaged" in verdicts:
-            verdicts["packaged"] = _coupled(verdicts["build"], verdicts["packaged"])
-    watch.recheck()
-    return {"repository": reads.repository, "pr_number": pr_number, "target_sha": pull["head"]["sha"],
-            "gates": {gate: {"context": contexts[gate], "state": verdict.state,
-                             "description": single_line(verdict.description,
-                                                        limit=limits.MAX_CI_STATUS_DESCRIPTION_CHARS),
-                             "target_url": None if verdict.run_id is None
-                             else grammar.run_url(reads.repository, verdict.run_id)}
-                      for gate, verdict in verdicts.items()}}
+    check(isinstance(temporary_root, Path), "$.temporary_root", "must be a private directory for the tested records")
+    document = _evaluate(api, pr_number=pr_number, config=config, activation=activation,
+                         controller_sha=controller_sha, plan=plan, temporary_root=temporary_root)
+    if document is None:  # only an evaluation without that directory may leave a gate open
+        raise StatusError("the evaluation left a gate undecided")
+    return document
+
+
+def settle_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None,
+                 controller_sha: str) -> dict[str, Any] | None:
+    """The status intents of pull request ``pr_number`` when no gate needs the protected plan,
+    else None.
+
+    The first step of the status callee's job, before a subject is authenticated or a plan is
+    derived. The document is the one :func:`evaluate_gates` returns, and it is complete exactly
+    when every gate is decided by the pull request and the run listings alone: the pull request
+    is a draft, or each gate's newest run is absent, still in progress, or failed or cancelled.
+    As soon as one newest run finished successfully the answer is None: only the plan can tell a
+    verified gate from a draft deferral or a foreign graph, so the job derives it and calls
+    :func:`evaluate_gates`. No state of a returned document is ``success``.
+
+    A returned document was observed twice like every other one (the pull request and the
+    listings are read again before it is returned). None is no observation anybody acts on, so
+    nothing is read again for it.
+    """
+
+    document = _evaluate(api, pr_number=pr_number, config=config, activation=activation,
+                         controller_sha=controller_sha, plan=None, temporary_root=None)
+    if document is not None and any(intent["state"] == "success" for intent in document["gates"].values()):
+        raise StatusError("an evaluation without the protected plan may never answer success")
+    return document

@@ -38,23 +38,40 @@ CI_CALLEE_WORKFLOWS = {
     "build": ".github/workflows/build.yml",
     "select-build": ".github/workflows/select-build.yml",
     "packaged-e2e": ".github/workflows/packaged-e2e.yml",
+    "gate-status": ".github/workflows/gate-status.yml",
 }
 CI_GUARD_CALL = "Verify pinned mod-base"
 CI_BUILD_CALL = "Shared Build"
 CI_SELECT_CALL = "Select exact Build"
 CI_PACKAGED_CALL = "Shared Packaged E2E"
+CI_STATUS_CALL = "Evaluate protected gates"
 #: Managed caller id -> job key -> the bare display name of that caller-owned job.
 CI_CALLER_JOBS = {
     "build": {"guard": CI_GUARD_CALL, "deferred": "Build deferred for draft", "shared": CI_BUILD_CALL},
     "packaged": {"guard": CI_GUARD_CALL, "deferred": "Packaged E2E deferred for draft",
                  "select": CI_SELECT_CALL, "rebuild": CI_BUILD_CALL, "shared": CI_PACKAGED_CALL},
-    "status": {"evaluate": "Evaluate protected gates", "publish": "Publish protected gate statuses"},
+    "status": {"guard": CI_GUARD_CALL, "locate": "Locate the pull request", "evaluate": CI_STATUS_CALL,
+               "publish": "Publish protected gate statuses"},
 }
 #: Producer id -> calling job key -> the workflow it calls: ``guard`` is the mod's own
 #: ``CI_GUARD_WORKFLOW_PATH``, every other value a ``CI_CALLEE_WORKFLOWS`` id.
 CI_CALLS = {
     "build": {"guard": "guard", "shared": "build"},
     "packaged": {"guard": "guard", "select": "select-build", "rebuild": "build", "shared": "packaged-e2e"},
+}
+#: The calls of the status caller, in the same form. It is tabled apart because it is no producer:
+#: its run seals nothing and is nobody's evidence, so :func:`ci_producer` never answers with it.
+CI_STATUS_CALLS = {"guard": "guard", "evaluate": "gate-status"}
+#: Managed caller id -> its calls: what the job-name functions below resolve a calling job with.
+_CI_CALLER_CALLS = {**CI_CALLS, "status": CI_STATUS_CALLS}
+#: Build/E2E callee id -> the managed callers whose jobs may call it: what the binding step of its
+#: prologue admits in ``GITHUB_WORKFLOW_REF``. The three callees of the producers admit both
+#: producers (the packaged caller also builds); the status evaluation admits its own caller alone.
+CI_CALLEE_CALLERS = {
+    "build": ("build", "packaged"),
+    "select-build": ("build", "packaged"),
+    "packaged-e2e": ("build", "packaged"),
+    "gate-status": ("status",),
 }
 CI_GUARD_JOBS = {"verify": "Authenticate the pinned kit"}
 CI_BUILD_JOBS = {"plan": "Plan protected Build", "policy": "Verify protected policy",
@@ -63,16 +80,20 @@ CI_BUILD_JOBS = {"plan": "Plan protected Build", "policy": "Verify protected pol
 CI_SELECT_JOBS = {"select": "Select exact Build source"}
 CI_PACKAGED_JOBS = {"input": "Authenticate exact Build", "lane": "Run packaged lane {id}",
                     "aggregate": "Seal complete packaged results", "gate": "Verify complete packaged E2E"}
-#: Called workflow id (a ``CI_CALLS`` value) -> job key -> its ``name:`` template.
+CI_STATUS_JOBS = {"evaluate": "Evaluate gate states"}
+#: Called workflow id (a ``CI_CALLS`` or ``CI_STATUS_CALLS`` value) -> job key -> its ``name:`` template.
 CI_CALLEE_JOBS = {"guard": CI_GUARD_JOBS, "build": CI_BUILD_JOBS, "select-build": CI_SELECT_JOBS,
-                  "packaged-e2e": CI_PACKAGED_JOBS}
+                  "packaged-e2e": CI_PACKAGED_JOBS, "gate-status": CI_STATUS_JOBS}
 CI_SEAL_STEP = "Validate frozen native exports"
 CI_UPLOAD_STEP = "Upload sealed outputs"
 #: Build/E2E callee id -> job key -> the ``ci`` verbs its steps issue after the Build controller
 #: prologue, one verb per step and in step order. A callee enters this table and the two below
-#: with its workflow file; all three are written. Every packaged job after ``input`` issues
+#: with its workflow file; all four are written. Every packaged job after ``input`` issues
 #: ``select-build`` again, with the run ``input`` authenticated: a selection record never leaves
-#: the job that wrote it. The ``aggregate`` job's sealing step is ``ci aggregate`` itself.
+#: the job that wrote it. The ``aggregate`` job's sealing step is ``ci aggregate`` itself. The
+#: status job issues ``gate-status`` twice: first with ``--settle``, before any subject, and
+#: again with the plan when that first call could not settle (the four steps between and the
+#: second call are skipped when it could).
 CI_JOB_VERBS = {
     "build": {
         "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
@@ -93,10 +114,14 @@ CI_JOB_VERBS = {
         "aggregate": ("subject", "worker-prepare", "plan", "select-build", "aggregate", "worker-finish"),
         "gate": ("subject", "worker-prepare", "plan", "select-build", "seal-gate", "worker-finish"),
     },
+    "gate-status": {
+        "evaluate": ("gate-status", "subject", "worker-prepare", "plan", "gate-status", "worker-finish"),
+    },
 }
 #: Build/E2E callee id -> sealing job key -> callee mode -> the kind (``grammar.ci_artifact_name``)
 #: of the one artifact the job uploads in that mode. Exactly these jobs have a ``CI_SEAL_STEP``
-#: directly followed by a ``CI_UPLOAD_STEP``; ``select-build`` has none and uploads nothing.
+#: directly followed by a ``CI_UPLOAD_STEP``; ``select-build`` and ``gate-status`` have none and
+#: upload nothing.
 CI_JOB_ARTIFACTS = {
     "build": {"target": {"full": "target"}, "assemble": {"full": "build"},
               "gate": {"full": "tested", "reuse": "reuse"}},
@@ -257,18 +282,20 @@ def ci_callee_job_name(callee: str, job: str, **fields: str) -> str:
 
 
 def ci_api_job_name(producer: str, call: str, job: str, **fields: str) -> str:
-    """Return the name the jobs API reports for job ``job`` of the workflow that the producer's
-    calling job ``call`` calls, e.g. ``"Shared Build / Compile target mc1.20.1"``."""
+    """Return the name the jobs API reports for job ``job`` of the workflow that the calling job
+    ``call`` of the managed caller ``producer`` (a producer or ``status``) calls, e.g.
+    ``"Shared Build / Compile target mc1.20.1"``."""
 
-    callee = _ci_name(CI_CALLS, producer, call, "calling job")
+    callee = _ci_name(_CI_CALLER_CALLS, producer, call, "calling job")
     return f"{ci_caller_job_name(producer, call)} / {ci_callee_job_name(callee, job, **fields)}"
 
 
 def ci_skipped_call_job_name(producer: str, call: str) -> str:
-    """Return the name the jobs API reports, once, for the producer's calling job ``call`` when its
-    job-level ``if`` skipped the call: the caller's bare job name, with no callee job behind it."""
+    """Return the name the jobs API reports, once, for the calling job ``call`` of the managed
+    caller ``producer`` when its job-level ``if`` skipped the call: the caller's bare job name,
+    with no callee job behind it."""
 
-    _ci_name(CI_CALLS, producer, call, "calling job")
+    _ci_name(_CI_CALLER_CALLS, producer, call, "calling job")
     return ci_caller_job_name(producer, call)
 
 
@@ -283,7 +310,7 @@ def ci_unexpanded_api_job_name(producer: str, call: str, job: str) -> str:
     """Return the name the jobs API reports, once, for a matrix job of a called workflow that was
     skipped before its matrix expanded, e.g. ``"Shared Build / Compile target ${{ matrix.id }}"``."""
 
-    template = _ci_name(CI_CALLEE_JOBS, _ci_name(CI_CALLS, producer, call, "calling job"), job, "callee job")
+    template = _ci_name(CI_CALLEE_JOBS, _ci_name(_CI_CALLER_CALLS, producer, call, "calling job"), job, "callee job")
     if not _placeholders(template):
         raise MbError(f"Build/E2E callee job {job!r} is not a matrix job")
     return f"{ci_caller_job_name(producer, call)} / {_yaml_template(template)}"

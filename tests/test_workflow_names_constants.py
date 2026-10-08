@@ -95,6 +95,7 @@ class BuildE2eNameTableTest(unittest.TestCase):
             "build": ".github/workflows/build.yml",
             "select-build": ".github/workflows/select-build.yml",
             "packaged-e2e": ".github/workflows/packaged-e2e.yml",
+            "gate-status": ".github/workflows/gate-status.yml",
         })
         # The Build/E2E callees are their own registry: the Pages table and its tests stay as they are.
         self.assertEqual(set(workflow.CI_CALLEE_WORKFLOWS.values()) & set(workflow.CALLEE_WORKFLOWS.values()), set())
@@ -106,12 +107,28 @@ class BuildE2eNameTableTest(unittest.TestCase):
             "packaged": {"guard": "Verify pinned mod-base", "deferred": "Packaged E2E deferred for draft",
                          "select": "Select exact Build", "rebuild": "Shared Build",
                          "shared": "Shared Packaged E2E"},
-            "status": {"evaluate": "Evaluate protected gates", "publish": "Publish protected gate statuses"},
+            "status": {"guard": "Verify pinned mod-base", "locate": "Locate the pull request",
+                       "evaluate": "Evaluate protected gates", "publish": "Publish protected gate statuses"},
         })
         self.assertEqual(workflow.CI_CALLS, {
             "build": {"guard": "guard", "shared": "build"},
             "packaged": {"guard": "guard", "select": "select-build", "rebuild": "build", "shared": "packaged-e2e"},
         })
+        # The status caller is no producer: its calls are tabled apart and `ci_producer` refuses it.
+        self.assertEqual(workflow.CI_STATUS_CALLS, {"guard": "guard", "evaluate": "gate-status"})
+        self.assertLessEqual(set(workflow.CI_STATUS_CALLS), set(workflow.CI_CALLER_JOBS["status"]))
+        self.assertNotIn("status", workflow.CI_CALLS)
+        with self.assertRaises(MbError):
+            workflow.ci_producer(workflow.CI_CALLER_WORKFLOWS["status"])
+        self.assertEqual(workflow.CI_CALLEE_CALLERS, {
+            "build": ("build", "packaged"), "select-build": ("build", "packaged"),
+            "packaged-e2e": ("build", "packaged"), "gate-status": ("status",)})
+        self.assertEqual(list(workflow.CI_CALLEE_CALLERS), list(workflow.CI_CALLEE_WORKFLOWS))
+        for callee, callers in workflow.CI_CALLEE_CALLERS.items():
+            self.assertLessEqual(set(callers), set(workflow.CI_CALLER_WORKFLOWS), callee)
+            called = {caller for caller, calls in {**workflow.CI_CALLS, "status": workflow.CI_STATUS_CALLS}.items()
+                      if callee in calls.values()}
+            self.assertLessEqual(called, set(callers), f"{callee}: a caller that calls it is admitted by it")
         self.assertEqual(workflow.CI_CALLEE_JOBS, {
             "guard": {"verify": "Authenticate the pinned kit"},
             "build": {"plan": "Plan protected Build", "policy": "Verify protected policy",
@@ -121,12 +138,15 @@ class BuildE2eNameTableTest(unittest.TestCase):
             "packaged-e2e": {"input": "Authenticate exact Build", "lane": "Run packaged lane {id}",
                              "aggregate": "Seal complete packaged results",
                              "gate": "Verify complete packaged E2E"},
+            "gate-status": {"evaluate": "Evaluate gate states"},
         })
         self.assertIs(workflow.CI_CALLEE_JOBS["build"], workflow.CI_BUILD_JOBS)
         self.assertIs(workflow.CI_CALLEE_JOBS["packaged-e2e"], workflow.CI_PACKAGED_JOBS)
+        self.assertIs(workflow.CI_CALLEE_JOBS["gate-status"], workflow.CI_STATUS_JOBS)
         self.assertEqual((workflow.CI_GUARD_CALL, workflow.CI_BUILD_CALL, workflow.CI_SELECT_CALL,
-                          workflow.CI_PACKAGED_CALL),
-                         ("Verify pinned mod-base", "Shared Build", "Select exact Build", "Shared Packaged E2E"))
+                          workflow.CI_PACKAGED_CALL, workflow.CI_STATUS_CALL),
+                         ("Verify pinned mod-base", "Shared Build", "Select exact Build", "Shared Packaged E2E",
+                          "Evaluate protected gates"))
         self.assertEqual((workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP),
                          ("Validate frozen native exports", "Upload sealed outputs"))
         self.assertEqual(set(workflow.CI_CALLEE_JOBS), set(workflow.CI_CALLEE_WORKFLOWS) | {"guard"})

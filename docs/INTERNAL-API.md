@@ -491,29 +491,39 @@ Constants:
 * `CI_CALLER_WORKFLOWS`: managed caller id (`build`, `packaged`, `status`) -> its path in the mod
   (`.github/workflows/mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`);
   `build` and `packaged` are the two producers.
-* `CI_CALLEE_WORKFLOWS`: Build/E2E callee id (`build`, `select-build`, `packaged-e2e`) -> its path
-  in the kit repository. Its own registry: never `CALLEE_WORKFLOWS`, which stays the Pages table.
-* `CI_GUARD_CALL`, `CI_BUILD_CALL`, `CI_SELECT_CALL`, `CI_PACKAGED_CALL`: bare names of the calling
-  jobs (`Verify pinned mod-base`, `Shared Build`, `Select exact Build`, `Shared Packaged E2E`), the
-  prefix of every job of the workflow each calls.
+* `CI_CALLEE_WORKFLOWS`: Build/E2E callee id (`build`, `select-build`, `packaged-e2e`,
+  `gate-status`) -> its path in the kit repository. Its own registry: never `CALLEE_WORKFLOWS`,
+  which stays the Pages table.
+* `CI_GUARD_CALL`, `CI_BUILD_CALL`, `CI_SELECT_CALL`, `CI_PACKAGED_CALL`, `CI_STATUS_CALL`: bare
+  names of the calling jobs (`Verify pinned mod-base`, `Shared Build`, `Select exact Build`,
+  `Shared Packaged E2E`, `Evaluate protected gates`), the prefix of every job of the workflow each
+  calls.
 * `CI_CALLER_JOBS`: managed caller id -> job key -> bare display name of that caller-owned job
   (`build`: `guard`, `deferred`, `shared`; `packaged`: `guard`, `deferred`, `select`, `rebuild`,
-  `shared`; `status`: `evaluate`, `publish`).
+  `shared`; `status`: `guard`, `locate`, `evaluate`, `publish`).
 * `CI_CALLS`: producer id -> calling job key -> the workflow it calls: `guard` (the mod's own
   `CI_GUARD_WORKFLOW_PATH`) or a `CI_CALLEE_WORKFLOWS` id.
-* `CI_GUARD_JOBS`, `CI_BUILD_JOBS`, `CI_SELECT_JOBS`, `CI_PACKAGED_JOBS`: job key -> `name:`
-  template of the guard workflow and of each kit callee; `{id}` is the target or lane.
+* `CI_STATUS_CALLS`: the calls of the status caller in the same form (`guard`, and `evaluate` ->
+  `gate-status`). Tabled apart because the status caller is no producer: `ci_producer` refuses it.
+* `CI_CALLEE_CALLERS`: Build/E2E callee id -> the managed callers whose jobs may call it, which is
+  what the binding step of its prologue admits: both producers for `build`, `select-build` and
+  `packaged-e2e`, the status caller alone for `gate-status`.
+* `CI_GUARD_JOBS`, `CI_BUILD_JOBS`, `CI_SELECT_JOBS`, `CI_PACKAGED_JOBS`, `CI_STATUS_JOBS`: job key
+  -> `name:` template of the guard workflow and of each kit callee; `{id}` is the target or lane.
 * `CI_CALLEE_JOBS`: called workflow id (`guard` or a `CI_CALLEE_WORKFLOWS` id) -> its job table.
 * `CI_SEAL_STEP`, `CI_UPLOAD_STEP`: exact step names of the sealing step and of the upload that
   follows it in every target, assemble, lane, aggregate and gate job.
 * `CI_JOB_VERBS`: Build/E2E callee id -> job key -> the `ci` verbs its steps issue after the Build
   controller prologue, one verb per step and in step order. A callee enters this table and the two
-  below with its workflow file; all three (`build`, `select-build`, `packaged-e2e`) are tabled.
-  Every packaged job after `input` issues `select-build` again, naming the run `input`
-  authenticated, and the `aggregate` job's sealing step is `ci aggregate` itself.
+  below with its workflow file; all four (`build`, `select-build`, `packaged-e2e`, `gate-status`)
+  are tabled. Every packaged job after `input` issues `select-build` again, naming the run `input`
+  authenticated, and the `aggregate` job's sealing step is `ci aggregate` itself. The status job
+  issues `gate-status` twice: first with `--settle`, before any subject, and again with the plan
+  when that call could not settle.
 * `CI_JOB_ARTIFACTS`: Build/E2E callee id -> sealing job key -> callee mode (`full`, `reuse`) -> the
   kind of the one artifact the job uploads in that mode. Exactly these jobs have a `CI_SEAL_STEP`
-  directly followed by a `CI_UPLOAD_STEP`; `select-build` has no row and uploads nothing.
+  directly followed by a `CI_UPLOAD_STEP`; `select-build` and `gate-status` have no row and upload
+  nothing.
 * `CI_JOB_PERMISSIONS`: Build/E2E callee id -> job key -> the complete `permissions:` of that job
   (`actions`, `contents` and `pull-requests`, each `read`), which the calling job must grant.
 * `PAGES_CRON = '43 * * * *'`
@@ -538,7 +548,7 @@ Constants:
 * `def ci_producer(workflow_path: str) -> str`: The producer id (``build`` or ``packaged``) of the managed caller at that path; any other path raises.
 * `def ci_caller_job_name(caller: str, job: str) -> str`: The bare display name of a job the managed caller owns, as the jobs API reports a caller job that has steps.
 * `def ci_callee_job_name(callee: str, job: str, **fields: str) -> str`: A called workflow's own ``name:`` with its placeholders filled (no caller prefix).
-* `def ci_api_job_name(producer: str, call: str, job: str, **fields: str) -> str`: The name the jobs API reports for a job of the workflow the producer's calling job calls: ``"<calling job> / <callee job>"``.
+* `def ci_api_job_name(producer: str, call: str, job: str, **fields: str) -> str`: The name the jobs API reports for a job of the workflow the producer's calling job calls: ``"<calling job> / <callee job>"``. `producer` may also be `status`, whose calls are `CI_STATUS_CALLS` (here and in the two functions below that take a calling job).
 * `def ci_skipped_call_job_name(producer: str, call: str) -> str`: The name the jobs API reports, once, for a calling job whose job-level ``if`` skipped the call: the caller's bare job name.
 * `def ci_workflow_template_name(callee: str, job: str) -> str`: A called workflow's job ``name:`` exactly as written in its YAML (``${{ matrix.id }}`` form).
 * `def ci_unexpanded_api_job_name(producer: str, call: str, job: str) -> str`: The name the jobs API reports, once, for a matrix job of a called workflow skipped before its matrix expanded.
@@ -2682,12 +2692,15 @@ gate the newest run of its managed caller under the head is chosen before any re
 a draft deferral. `success`: the newest run is complete, its exact graph for its mode
 authenticates, its tested record downloads and binds to the plan, the packaged gate's owning Build
 is the bundle the Build gate sealed, and the live pull request still has the plan's head, base and
-test merge and is no draft. `failure`: anything else. An API failure is never a state.
+test merge and is no draft. `failure`: anything else. An API failure is never a state. The job asks
+twice: `settle_gates` first, without a plan, and `evaluate_gates` with the plan only when a newest
+run finished successfully.
 
 * `SHADOW_SUFFIX = ' (shadow)'`: what `shadow` mode appends to both contexts.
 * `class StatusError`: The evaluation does not apply or its own inputs disagree (exit 2); no intent is produced.
 * `def gate_contexts(config: BuildConfig, activation: dict[str, Any] | None) -> dict[str, str]`: Gate -> the fixed context string of the protected Build config, for the gates the activation mode puts under the kit's status caller: both, with `SHADOW_SUFFIX` in `shadow`; the Build gate alone in `shared-build`; a rollback as the mode it leaves. A mode that manages no status caller is a `StatusError`.
 * `def evaluate_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None, controller_sha: str, plan: dict[str, Any] | None, temporary_root: Path) -> dict[str, Any]`: `{repository, pr_number, target_sha, gates}` for the current head of the pull request; `gates` maps each evaluated gate to `{context, state, description, target_url}` (the description is one line of at most `MAX_CI_STATUS_DESCRIPTION_CHARS`, the URL the canonical one of the deciding run or null). `plan` is the plan the job derived, which must be the plan of this pull request, controller and protected policy and of the pull request as it is now (`StatusError` otherwise); without one no gate can succeed. The pull request and both run listings are read again before the document is returned, and a difference raises.
+* `def settle_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None, controller_sha: str) -> dict[str, Any] | None`: The same document when no gate needs the protected plan, else None. It is complete exactly when the pull request is a draft or each gate's newest run is absent, in progress, or failed or cancelled; as soon as one newest run finished successfully the answer is None and the job derives the plan and calls `evaluate_gates`. No state of a returned document is `success` (`StatusError` otherwise). A returned document was read twice like every other (6 requests without a run, 2 for a draft); None reads nothing again (5 requests with both runs finished).
 
 ## `mod_base.build_ci.commands_packaged`
 
@@ -2703,12 +2716,18 @@ through `commands.api_client` with an explicit request budget and write nothing 
 
 ## `mod_base.build_ci.commands_status`
 
-Owner: MB11. `ci gate-status --pr N --github-output FILE`, listed in `commands.VERB_MODULES`: the
-read-only step of the status caller's `evaluate` job. It reads the protected Build config and the
-activation manifest of `--repo`, creates `--state` when no earlier step did, takes the plan from
-`ci-plan.json` there when the job derived one, prints the canonical document of
-`status.evaluate_gates` and writes it on one line as the output `intents`.
+Owner: MB11. `ci gate-status --pr N [--settle] --github-output FILE`, listed in
+`commands.VERB_MODULES`: the read-only command of the one job of `gate-status.yml`, issued twice.
+It reads the protected Build config and the activation manifest of `--repo`. With `--settle`
+(first, before `ci subject`: `--state` must not exist) it asks `status.settle_gates`; a settled
+document is printed and written as `settled=true` and `intents`, otherwise the outputs are
+`settled=false` alone and the job goes on to `ci subject --producer status`, `ci worker-prepare`,
+`ci plan` and the second call. Without the flag it creates `--state` when no earlier step did,
+takes the plan from `ci-plan.json` there when the job derived one, prints the canonical document
+of `status.evaluate_gates` and writes it on one line as the output `intents`. Both calls spend at
+most `MAX_CI_GATE_STATUS_REQUESTS`.
 
+* `UNSETTLED`: the line the `--settle` call prints when a finished run needs the plan.
 * `def add_verbs(verbs: argparse._SubParsersAction) -> None`
 * `def run_gate_status(args: argparse.Namespace) -> int`
 

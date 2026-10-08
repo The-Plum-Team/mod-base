@@ -142,7 +142,10 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
     "ci fetch-build": (["ci", "fetch-build", *REPO, "--state", "state", "--selection", "selection.json"],
                        {"ci_command": "fetch-build", "state": Path("state"), "selection": Path("selection.json")}),
     "ci gate-status": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--github-output", "out"],
-                       {"ci_command": "gate-status", "state": Path("state"), "pr": 7, "github_output": Path("out")}),
+                       {"ci_command": "gate-status", "state": Path("state"), "pr": 7, "settle": False,
+                        "github_output": Path("out")}),
+    "ci gate-status settle": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--settle",
+                               "--github-output", "out"], {"pr": 7, "settle": True}),
 }
 
 
@@ -274,6 +277,9 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "fetch-build", *REPO, "--selection", "f"],
             ["ci", "gate-status", *REPO, "--state", "s", "--pr", "0", "--github-output", "o"],
             ["ci", "gate-status", *REPO, "--state", "s", "--pr", "", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "7", "--settle", "true", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "7", "--settle=1", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--settle", "--github-output", "o"],
             ["ci", "gate-status", *REPO, "--state", "s", "--github-output", "o"],
             ["ci", "gate-status", *REPO, "--state", "s", "--pr", "7"],
             ["ci", "gate-status", *REPO, "--pr", "7", "--github-output", "o"],

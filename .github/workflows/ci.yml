@@ -159,7 +159,7 @@ jobs:
             tests.test_workflow_finalize tests.test_workflow_rotate tests.test_managed_caller \
             tests.test_composite_credential_boundary tests.test_tree_digest_literal \
             tests.test_workflow_ci_policy tests.test_workflow_build tests.test_workflow_select_build \
-            tests.test_workflow_packaged_e2e
+            tests.test_workflow_packaged_e2e tests.test_workflow_gate_status
 
   front-end:
     name: Front end
