@@ -217,7 +217,7 @@ class PullRequestTests(DerivationCase):
             "a regenerated test merge": (change("merge_commit_sha", value=again.sha), None,
                                          "not at the current test merge"),
             "a head in a fork": (change("head", "repo", "full_name", value="fork/synthetic-mod"), None, "fork"),
-            "another base branch": (change("base", "ref", value="release"), None, "PR base differs"),
+            "another base branch": (change("base", "ref", value="release"), None, "protected default branch"),
             "another base commit": (change("base", "sha", value=base.sha), None, "PR base differs"),
             "a base in another repository": (change("base", "repo", "full_name", value="example/other"), None,
                                              "fork"),
@@ -249,7 +249,7 @@ class PullRequestTests(DerivationCase):
             h.seed_pull_request(api, {**pull, "base": {**pull["base"], "sha": self.generation.base.sha}})
             with self.subTest(requests=requests), self.assertRaises(MbError) as caught:
                 function(api)
-            self.assertIn("update the pull request branch and push it again", str(caught.exception))
+            self.assertIn("update the branch and push it again", str(caught.exception))
             self.assertEqual(api.request_count, requests)
 
     def test_the_head_branch_is_the_live_one(self) -> None:

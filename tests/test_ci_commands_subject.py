@@ -70,6 +70,75 @@ class SubjectCommandTests(unittest.TestCase):
         self.assertEqual((self.state / identity.IDENTITY_NAME).read_bytes(), canonical_json(record))
         self.assertEqual(self.output.read_text(encoding="utf-8"), f"tested_sha={h.TESTED_SHA}\npr_number=7\n")
 
+    def test_pending_merge_fields_wait_then_write_the_same_subject(self) -> None:
+        for index, pending in enumerate(({"mergeable": None}, {"merge_commit_sha": None},
+                                         {"mergeable": None, "merge_commit_sha": None})):
+            with self.subTest(pending=pending):
+                self.api, self.pull = h.github(max_requests=limits.MAX_CI_SUBJECT_REQUESTS)
+                h.seed_pull_request(self.api, {**self.pull, **pending})
+                self.api.during_listing(f"/repos/{h.REPOSITORY}/pulls/7",
+                                        lambda: h.seed_pull_request(self.api, self.pull), after_pages=2)
+                state = self.temporary / f"pending-{index}"
+                with mock.patch.object(limits, "CI_TEST_MERGE_POLL_SECONDS", 0.001):
+                    self.assertEqual(self.run_subject(state=state), (0, ""))
+                self.assertEqual(self.api.request_count, 10)
+                self.assertEqual(identity.read_subject(state)["subject"]["tested_sha"], h.TESTED_SHA)
+                self.assertEqual(self.api.mutations, [])
+
+    def test_pending_merge_exhausts_the_poll_and_wall_time_bounds_without_writing(self) -> None:
+        for wait, requests in ((limits.CI_TEST_MERGE_WAIT_SECONDS, 3 * limits.MAX_CI_TEST_MERGE_POLLS), (0, 3)):
+            self.api, self.pull = h.github(max_requests=limits.MAX_CI_SUBJECT_REQUESTS)
+            h.seed_pull_request(self.api, {**self.pull, "mergeable": None, "merge_commit_sha": None})
+            with self.subTest(wait=wait), mock.patch.object(limits, "CI_TEST_MERGE_POLL_SECONDS", 0.001), \
+                    mock.patch.object(limits, "CI_TEST_MERGE_WAIT_SECONDS", wait):
+                code, stderr = self.run_subject()
+            self.assertEqual(code, 2)
+            self.assertIn("ci-test-merge-pending", stderr)
+            self.assertIn("rerun the job", stderr)
+            self.assertEqual(self.api.request_count, requests)
+            self.assertFalse(self.state.exists())
+            self.assertFalse(self.output.exists())
+
+    def test_conflicting_or_malformed_merge_state_is_not_polled(self) -> None:
+        for mergeable in (False, "unknown", 1):
+            self.api, self.pull = h.github(max_requests=limits.MAX_CI_SUBJECT_REQUESTS)
+            h.seed_pull_request(self.api, {**self.pull, "mergeable": mergeable})
+            code, stderr = self.run_subject()
+            with self.subTest(mergeable=mergeable):
+                self.assertEqual(code, 2)
+                self.assertEqual(self.api.request_count, 3)
+                self.assertFalse(self.state.exists())
+                self.assertFalse(self.output.exists())
+
+    def test_a_source_change_during_merge_computation_is_not_admitted(self) -> None:
+        h.seed_pull_request(self.api, {**self.pull, "mergeable": None})
+        changed = {**self.pull, "head": {**self.pull["head"], "sha": "9" * 40}}
+        self.api.during_listing(f"/repos/{h.REPOSITORY}/pulls/7",
+                                lambda: h.seed_pull_request(self.api, changed))
+        with mock.patch.object(limits, "CI_TEST_MERGE_POLL_SECONDS", 0.001):
+            code, stderr = self.run_subject()
+        self.assertEqual(code, 2)
+        self.assertIn("changed while waiting", stderr)
+        self.assertEqual(self.api.request_count, 6)
+        self.assertFalse(self.state.exists())
+        self.assertFalse(self.output.exists())
+
+    def test_an_outdated_base_has_an_actionable_reason(self) -> None:
+        for stale in ("base field", "merge parent"):
+            self.api, self.pull = h.github(max_requests=limits.MAX_CI_SUBJECT_REQUESTS)
+            if stale == "base field":
+                h.seed_pull_request(self.api, {**self.pull, "base": {**self.pull["base"], "sha": "9" * 40}})
+            else:
+                self.api.add_commit(h.TESTED_SHA, h.TESTED_TREE, parents=["9" * 40, h.HEAD_SHA])
+            code, stderr = self.run_subject()
+            with self.subTest(stale=stale):
+                self.assertEqual(code, 2)
+                self.assertIn("ci-pr-base-outdated", stderr)
+                self.assertIn("update the branch", stderr)
+                self.assertEqual(self.api.request_count, 3 if stale == "base field" else 4)
+                self.assertFalse(self.state.exists())
+                self.assertFalse(self.output.exists())
+
     def test_an_empty_pr_is_a_protected_subject_in_five_requests(self) -> None:
         self.assertEqual(self.run_subject(pr="", environment=h.environment(event="push")), (0, ""))
         self.assertEqual(self.api.request_count, 5)
@@ -219,6 +288,30 @@ class DerivedSubjectCommandTests(checkouts.GenerationCase):
         state = self.temporary / "derived-state"
         self.assertEqual((state.stat().st_mode & 0o7777, (state / identity.IDENTITY_NAME).stat().st_mode & 0o7777),
                          (0o700, 0o600))
+
+    def test_a_candidate_waits_for_pending_merge_in_the_same_request_budget(self) -> None:
+        api, pull = self.generation.github(max_requests=limits.MAX_CI_DERIVED_SUBJECT_REQUESTS)
+        path = f"/repos/{h.REPOSITORY}/pulls/{checkouts.PULL_REQUEST}"
+        api.add_response(path, {**pull, "mergeable": None})
+        api.during_listing(path, lambda: api.add_response(path, pull))
+        with mock.patch.object(limits, "CI_TEST_MERGE_POLL_SECONDS", 0.001):
+            self.assertEqual(self.run_subject(api, "pending", candidate=self.candidate), (0, ""))
+        self.assertEqual(api.request_count, 2)
+        self.assertEqual(api.paths, [path, path])
+        self.assertEqual(self.budgets, [limits.MAX_CI_DERIVED_SUBJECT_REQUESTS])
+        self.assertEqual(identity.read_subject(self.temporary / "pending-state")["subject"]["tested_sha"],
+                         self.generation.tested.sha)
+
+    def test_a_candidate_pending_merge_exhausts_the_bound_without_writing(self) -> None:
+        api, pull = self.generation.github(max_requests=limits.MAX_CI_DERIVED_SUBJECT_REQUESTS)
+        api.add_response(f"/repos/{h.REPOSITORY}/pulls/{checkouts.PULL_REQUEST}",
+                         {**pull, "merge_commit_sha": None})
+        with mock.patch.object(limits, "CI_TEST_MERGE_POLL_SECONDS", 0.001):
+            code, stderr = self.run_subject(api, "pending", candidate=self.candidate)
+        self.assertEqual(code, 2)
+        self.assertIn("ci-test-merge-pending", stderr)
+        self.assertEqual(api.request_count, limits.MAX_CI_TEST_MERGE_POLLS)
+        self.assert_nothing_written("pending")
 
     def test_a_protected_subject_writes_what_the_full_command_writes_from_one_budgeted_request(self) -> None:
         candidate = checkouts.copy(self.mod, self.temporary / "protected" / "candidate")

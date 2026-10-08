@@ -50,11 +50,12 @@ def run_subject(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
     if args.candidate is None:
         api = commands.api_client(invocation, max_requests=limits.MAX_CI_SUBJECT_REQUESTS)
-        record = identity.authenticate_subject(invocation, api, producer=args.producer, pr_number=args.pr)
+        record = identity.authenticate_subject(invocation, api, producer=args.producer, pr_number=args.pr,
+                                                wait_for_merge=True)
     else:
         api = commands.api_client(invocation, max_requests=limits.MAX_CI_DERIVED_SUBJECT_REQUESTS)
         record = identity.derive_subject(invocation, api, producer=args.producer, pr_number=args.pr,
-                                         candidate=args.candidate)
+                                         candidate=args.candidate, wait_for_merge=True)
     identity.write_subject(args.state, record)
     subject = identity.read_subject(args.state)["subject"]
     cli.write_github_output(args.github_output, {"tested_sha": subject["tested_sha"],

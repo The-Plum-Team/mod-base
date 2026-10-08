@@ -195,12 +195,18 @@ MAX_CI_PLAN_SOURCE_BYTES = 4 * MIB
 MAX_CI_PLAN_INPUTS = 8
 #: The private ``identity.json`` state record ``ci subject`` writes.
 MAX_CI_IDENTITY_BYTES = 16 * KIB
+#: Pending GitHub test merges: four observations over at most fifteen seconds. The ordinary
+#: subject route spends three requests per observation, the checkout route one. Both share
+#: their existing hard request cap with retries; a ready subject never polls again.
+CI_TEST_MERGE_WAIT_SECONDS = 15
+CI_TEST_MERGE_POLL_SECONDS = 5
+MAX_CI_TEST_MERGE_POLLS = CI_TEST_MERGE_WAIT_SECONDS // CI_TEST_MERGE_POLL_SECONDS + 1
 #: API requests of one ``ci subject``: a pull request costs 4, a protected subject 5; the rest is
-#: room for retried attempts.
+#: room for pending-merge observations and retried attempts.
 MAX_CI_SUBJECT_REQUESTS = 16
 #: API requests of one ``ci subject --candidate``, the subject of a job that holds the candidate
 #: checkout: one, the pull request or the head of the default branch; the rest is room for the
-#: retried attempts of that one request.
+#: retried attempts or pending-merge observations.
 MAX_CI_DERIVED_SUBJECT_REQUESTS = 4
 #: The private ``worker.json`` state record ``ci worker-prepare`` writes: the accounts, the tool
 #: receipt and at most ``MAX_CI_TOOL_ROOTS`` paths of ``MAX_CI_TOOL_PATH_BYTES`` each, twice.

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mod_base.build_ci.protocol import validate_identity
+from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.contents import branch_head, compare, default_branch
 from mod_base.model import grammar, limits
@@ -34,6 +35,7 @@ class PrGeneration:
     head_sha: str
     draft: bool
     merge_sha: str | None
+    mergeable: bool | None
 
 
 @dataclass(frozen=True)
@@ -161,15 +163,18 @@ def _pr_generation(api: GitHubApi, number: int, branch: str, controller: str,
               f"$.pr.{side}.repo", "foreign/fork candidate is unsupported")
         grammar.require_sha1(value.get("sha"), f"PR {side} SHA")
         grammar.require(grammar.BRANCH, value.get("ref"), f"PR {side} branch")
-    check(pr["base"]["ref"] == branch and pr["base"]["sha"] == controller,
-          "$.pr.base", "PR base differs from the protected executing controller; update the pull request branch "
-          "and push it again after the default branch moves")
+    check(pr["base"]["ref"] == branch, "$.pr.base", "PR must target the protected default branch")
+    if pr["base"]["sha"] != controller:
+        raise MbError("PR base differs from the protected executing controller; update the branch and push it "
+                      "again after the default branch moves", reason="ci-pr-base-outdated")
     check("merge_commit_sha" in pr, "$.pr.merge_commit_sha", "missing merge state")
+    check("mergeable" in pr and (pr["mergeable"] is None or type(pr["mergeable"]) is bool),
+          "$.pr.mergeable", "missing or malformed merge readiness")
     merge = pr["merge_commit_sha"]
     if merge is not None:
         grammar.require_sha1(merge, "PR merge SHA")
     return PrGeneration(api.repository, number, branch, controller, tree,
-                        pr["head"]["ref"], pr["head"]["sha"], pr["draft"], merge)
+                        pr["head"]["ref"], pr["head"]["sha"], pr["draft"], merge, pr["mergeable"])
 
 
 def read_pr_generation(api: GitHubApi, *, pr_number: int, controller_sha: str) -> PrGeneration:
@@ -261,7 +266,7 @@ def authenticate_pr_identity(api: GitHubApi, identity: dict[str, Any]) -> None:
     check(controller == identity["controller_sha"] == identity["base_sha"],
           "$.controller_sha", "protected default/base has moved")
     observed = _pr_generation(api, identity["pr_number"], branch, controller, controller_tree)
-    check(observed.draft is False, "$.pr", "PR must be open and ready")
+    check(observed.draft is False and observed.mergeable is True, "$.pr", "PR must be open and ready")
     check(observed.head_sha == identity["head_sha"] and observed.head_branch == identity["head_branch"],
           "$.pr.head", "source identity moved")
     check(observed.merge_sha == identity["tested_sha"], "$.tested_sha", "test merge moved or unavailable")

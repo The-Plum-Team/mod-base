@@ -108,7 +108,7 @@ class Generation:
     def pull_request(self, **changes: Any) -> dict[str, Any]:
         """The ready pull request of this generation as the API reports it, with ``changes``."""
 
-        return {"number": PULL_REQUEST, "state": "open", "draft": False, "merge_commit_sha": self.tested.sha,
+        return {"number": PULL_REQUEST, "state": "open", "draft": False, "mergeable": True, "merge_commit_sha": self.tested.sha,
                 "head": {"sha": self.head.sha, "ref": HEAD_BRANCH, "repo": {"full_name": h.REPOSITORY}},
                 "base": {"sha": self.controller.sha, "ref": h.BRANCH, "repo": {"full_name": h.REPOSITORY}},
                 **changes}

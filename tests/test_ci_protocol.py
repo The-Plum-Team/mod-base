@@ -28,7 +28,7 @@ def seeded_pr():
     api = FakeGitHub(repository=identity["repository"], default_branch="master")
     api.set_branch("master", identity["base_sha"], "8" * 40)
     api.add_commit(identity["tested_sha"], identity["tested_tree"], parents=identity["tested_parents"])
-    pr = {"number": 7, "state": "open", "draft": False, "merge_commit_sha": identity["tested_sha"]}
+    pr = {"number": 7, "state": "open", "draft": False, "mergeable": True, "merge_commit_sha": identity["tested_sha"]}
     for side in ("head", "base"):
         pr[side] = {"sha": identity[f"{side}_sha"], "ref": identity[f"{side}_branch"],
                     "repo": {"full_name": api.repository}}

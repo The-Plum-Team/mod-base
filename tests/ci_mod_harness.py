@@ -130,7 +130,7 @@ def github(*, max_requests: int | None = None) -> tuple[FakeGitHub, dict[str, An
     api.set_branch(BRANCH, CONTROLLER_SHA, CONTROLLER_TREE)
     api.add_commit(CONTROLLER_SHA, CONTROLLER_TREE, parents=["b" * 40])
     api.add_commit(TESTED_SHA, TESTED_TREE, parents=[CONTROLLER_SHA, HEAD_SHA])
-    pull = {"number": 7, "state": "open", "draft": False, "merge_commit_sha": TESTED_SHA,
+    pull = {"number": 7, "state": "open", "draft": False, "mergeable": True, "merge_commit_sha": TESTED_SHA,
             "head": {"sha": HEAD_SHA, "ref": "feature/synthetic", "repo": {"full_name": REPOSITORY}},
             "base": {"sha": CONTROLLER_SHA, "ref": BRANCH, "repo": {"full_name": REPOSITORY}}}
     seed_pull_request(api, pull)

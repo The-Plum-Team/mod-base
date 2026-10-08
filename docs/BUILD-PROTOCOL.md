@@ -42,8 +42,11 @@ evaluation needs the plan. It learns what the job tests from the API, never from
 - **A pull request** (`--pr N`) must be open, not a draft, have its head and base in this
   repository (a fork is refused) and be based on the default branch at exactly the executing
   commit. The tested commit is the merge GitHub offers (`merge_commit_sha`); its parents must be
-  the base and the head, in that order. A draft or a pull request without a test merge is a
-  rejection: the caller defers a draft and never calls. A gate job (`--producer build` or
+  the base and the head, in that order. While `mergeable` or `merge_commit_sha` is null,
+  `ci subject` waits at most 15 seconds and four observations, within its existing request cap.
+  A conflict or draft rejects immediately; the caller defers a draft and never calls. An outdated
+  base field or first merge parent rejects with `ci-pr-base-outdated`: update the branch and push
+  again after the default branch moves. The exact-current-base rule stays mandatory. A gate job (`--producer build` or
   `packaged`) takes a pull request on `pull_request_target` alone. A status job
   (`--producer status`) takes one on every event that starts the status caller and derives the
   same identity, and so the same plan, as the gates.

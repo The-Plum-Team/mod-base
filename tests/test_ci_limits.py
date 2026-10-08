@@ -126,6 +126,8 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_PLAN_INPUTS": (8, "candidate files a protected Build configuration may name for plan derivation beside "
                               "the inventory and the scenario contract; Quick Skin needs one (gradle.properties)"),
     "MAX_CI_IDENTITY_BYTES": (16 * KIB, "the private subject record of one job"),
+    "CI_TEST_MERGE_WAIT_SECONDS": (15, "maximum wait for GitHub to compute a pending PR test merge"),
+    "CI_TEST_MERGE_POLL_SECONDS": (5, "interval between observations of a pending PR test merge"),
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
     "MAX_CI_DERIVED_SUBJECT_REQUESTS": (4, "API requests one subject derivation in a job that holds the candidate "
                                            "checkout may spend: its one request and the retries of that request"),
@@ -193,6 +195,8 @@ KIT: dict[str, tuple[Any, str]] = {
 
 #: Computed from other bounds: name -> (value, the formula in words, the formula).
 DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
+    "MAX_CI_TEST_MERGE_POLLS": (4, "first observation plus one per interval of the test-merge wait",
+                                 lambda: limits.CI_TEST_MERGE_WAIT_SECONDS // limits.CI_TEST_MERGE_POLL_SECONDS + 1),
     "MAX_CI_ARTIFACTS_PER_GATE": (1000, "at most one artifact per job", lambda: limits.MAX_JOBS_PER_ATTEMPT),
     "MAX_CI_PLAN_INPUT_FILES": (11, "the validator's input tree: the plan, the inventory, the scenario contract "
                                     "and every extra plan input", lambda: 3 + limits.MAX_CI_PLAN_INPUTS),

@@ -44,7 +44,9 @@ from __future__ import annotations
 
 import os
 import stat
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -201,16 +203,43 @@ def _test_merge(generation: PrGeneration) -> str:
     number = generation.pr_number
     if generation.draft:
         raise SubjectError(f"pull request {number} is a draft: the caller must defer, not call", reason="draft")
-    if generation.merge_sha is None:
+    if generation.merge_sha is None or generation.mergeable is not True:
         raise SubjectError(f"pull request {number} has no test merge: it conflicts or is not computed yet",
                            reason="no-test-merge")
     return generation.merge_sha
+
+
+def _ready_generation(observe: Callable[[], PrGeneration], *, wait_for_merge: bool) -> PrGeneration:
+    """Wait only for GitHub's pending merge computation, keeping the original source fixed."""
+
+    deadline = time.monotonic() + limits.CI_TEST_MERGE_WAIT_SECONDS
+    original = None
+    for poll in range(limits.MAX_CI_TEST_MERGE_POLLS):
+        generation = observe()
+        if original is None:
+            original = generation
+        check(replace(generation, merge_sha=original.merge_sha, mergeable=original.mergeable) == original,
+              "$.pr", "pull request source or readiness changed while waiting for its test merge; rerun the job")
+        if (not wait_for_merge or generation.draft or generation.mergeable is False
+                or (generation.mergeable is True and generation.merge_sha is not None)):
+            _test_merge(generation)
+            return generation
+        remaining = deadline - time.monotonic()
+        if poll + 1 == limits.MAX_CI_TEST_MERGE_POLLS or remaining <= 0:
+            break
+        time.sleep(min(limits.CI_TEST_MERGE_POLL_SECONDS, remaining))
+    raise SubjectError(f"pull request {original.pr_number} test merge is still pending after the bounded "
+                       "wait; rerun the job when GitHub finishes computing it", reason="ci-test-merge-pending")
 
 
 def _record(run: _Run, *, producer: str, pr_number: int | None, branch: str, controller_tree: str,
             head_sha: str, head_branch: str, tested: Commit) -> dict[str, Any]:
     """The identity record both ways of learning a subject end in, validated as one."""
 
+    if (pr_number is not None and len(tested.parents) == 2 and tested.parents[1] == head_sha
+            and tested.parents[0] != run.controller):
+        raise SubjectError("the test merge must equal the ordered base/head parents; its base is out of date; update the branch and push it "
+                           "again after the default branch moves", reason="ci-pr-base-outdated")
     subject = {
         "repository": run.repository, "source_repository": run.repository, "pr_number": pr_number or 0,
         "head_sha": head_sha, "head_branch": head_branch, "base_sha": run.controller, "base_branch": branch,
@@ -224,19 +253,22 @@ def _record(run: _Run, *, producer: str, pr_number: int | None, branch: str, con
 
 
 def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str,
-                         pr_number: int | None) -> dict[str, Any]:
+                         pr_number: int | None, wait_for_merge: bool = False) -> dict[str, Any]:
     """Authenticate what this job tests and return its identity record (:func:`validate_subject_record`).
 
     ``pr_number`` is the pull request of a ``pull_request_target`` run and ``None`` for a protected
     push, dispatch or schedule. For the ``status`` producer it is the pull request under
     evaluation, on any event of the status caller (:func:`run_events`), and never ``None``.
     Everything the environment claims is checked before the first request; nothing is written
-    here."""
+    here. ``wait_for_merge`` enables the command's bounded pending-merge wait; otherwise an
+    unavailable merge remains an immediate rejection."""
 
     check(producer in SUBJECT_PRODUCERS, "$.producer", "must be build, packaged or status")
     run = _run(invocation, api, producer=producer, pull_request=pr_number is not None)
     if pr_number is not None:
-        generation = read_pr_generation(api, pr_number=pr_number, controller_sha=run.controller)
+        generation = _ready_generation(
+            lambda: read_pr_generation(api, pr_number=pr_number, controller_sha=run.controller),
+            wait_for_merge=wait_for_merge)
         branch, controller_tree = generation.base_branch, generation.controller_tree
         head_sha, head_branch = generation.head_sha, generation.head_branch
         # The subject rules require the parents of this commit to be exactly [base, head], in that order.
@@ -259,7 +291,7 @@ def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: st
 
 
 def derive_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None,
-                   candidate: Path) -> dict[str, Any]:
+                   candidate: Path, wait_for_merge: bool = False) -> dict[str, Any]:
     """The identity record of a job that holds the candidate checkout, from one live request.
 
     The record is the one :func:`authenticate_subject` returns for the same subject. Each part
@@ -283,7 +315,8 @@ def derive_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_
     plan hash of a job of its run that authenticated in full (``ci plan --expect-sha256``): the
     hash covers the whole identity, so an equal hash proves this record equal to the authenticated
     one. Whether both still hold is for the gate, which seals and authenticates in full again. A
-    status job holds no candidate checkout and is refused."""
+    status job holds no candidate checkout and is refused. ``wait_for_merge`` waits only for
+    pending computation, within the command's original request cap."""
 
     check(producer in PRODUCERS, "$.producer", "only a Build or packaged job holds a candidate checkout")
     run = _run(invocation, api, producer=producer, pull_request=pr_number is not None)
@@ -294,8 +327,9 @@ def derive_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_
           "the mod checkout is not at the executing controller commit")
     tested = head_commit(candidate)
     if pr_number is not None:
-        generation = read_pr_on_base(api, pr_number=pr_number, base_branch=branch, controller_sha=controller.sha,
-                                     controller_tree=controller.tree)
+        generation = _ready_generation(
+            lambda: read_pr_on_base(api, pr_number=pr_number, base_branch=branch, controller_sha=controller.sha,
+                                    controller_tree=controller.tree), wait_for_merge=wait_for_merge)
         head_sha, head_branch = generation.head_sha, generation.head_branch
         check(tested.sha == _test_merge(generation), "$.candidate",
               "the candidate checkout is not at the current test merge of the pull request")
