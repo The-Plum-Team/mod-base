@@ -21,6 +21,7 @@ from typing import Any
 import mod_base
 from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, ControllerSources,
                                           prepare_controller_validation)
+from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, prepare_build_validation
 from mod_base.build_ci.handoff import _context, freeze_handed_off_build_validation
 from mod_base.build_ci.host import (HostBoundary, _canonical_path, authenticate_privileged_host_boundary,
                                     fence_worker_host)
@@ -29,11 +30,11 @@ from mod_base.build_ci.inputs import (_accounts, _inspect_inputs, prepare_plan_i
 from mod_base.build_ci.root_request import (_inspect_sources, _restore_sources, _source_root_identity,
                                           read_root_request)
 from mod_base.build_ci.runtime_handoff import _context as _runtime_context, freeze_handed_off_runtime_validation
-from mod_base.build_ci.runtime_inputs import _inspect_inputs as _inspect_runtime_inputs
+from mod_base.build_ci.runtime_inputs import _inspect_inputs as _inspect_runtime_inputs, prepare_runtime_validation
 from mod_base.build_ci.source import GitSourceEntry
 from mod_base.build_ci.worker import WorkerAccount, WorkerError, authenticate_worker_account, terminate_worker
 from mod_base.build_ci.worker_preparation import prepare_privileged_worker_checkout
-from mod_base.io.tree import authenticate_tree_read_access
+from mod_base.io.tree import authenticate_tree_read_access, read_child_file
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.validators import check
@@ -106,6 +107,28 @@ def _grant_validation_inputs(boundary: HostBoundary, arguments: dict[str, Any], 
     validator = _job(boundary, arguments)
     _kit_binding(arguments["plan"], kit)
     prepare_validation_plan(boundary=boundary, validator=validator, plan=arguments["plan"])
+
+
+def _grant_build_validation(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    validator = _job(boundary, arguments)
+    plan, envelope = arguments["plan"], arguments["envelope"]
+    _kit_binding(plan, kit)
+    # Nothing is granted for another export than the one named: its envelope is compared first,
+    # and the handoff then verifies every file against that envelope before and after the grant.
+    named = "sealed-build/ is not the export the runner named"
+    check(read_child_file(BUILD_VALIDATION_ROOT, grammar.CI_ENVELOPE_NAME, max_bytes=limits.MAX_CI_ENVELOPE_BYTES)
+          == canonical_json(envelope), "$.request.envelope", named)
+    check(prepare_build_validation(boundary=boundary, validator=validator, plan=plan) == envelope,
+          "$.request.envelope", named)
+
+
+def _grant_runtime_validation(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    validator = _job(boundary, arguments)
+    _kit_binding(arguments["plan"], kit)
+    prepare_runtime_validation(boundary=boundary, validator=validator, plan=arguments["plan"],
+                               build=arguments["build"], runtime=arguments["runtime"],
+                               lane_id=arguments["lane_id"], run_id=arguments["run_id"],
+                               run_attempt=arguments["run_attempt"])
 
 
 def _controller_sources(boundary: HostBoundary, validator: WorkerAccount, metadata: dict[str, Any],
@@ -200,6 +223,8 @@ _OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
     "grant-plan-inputs": _grant_plan_inputs,
     "take-derived-plan": _take_derived_plan,
     "grant-validation-inputs": _grant_validation_inputs,
+    "grant-build-validation": _grant_build_validation,
+    "grant-runtime-validation": _grant_runtime_validation,
 }
 
 

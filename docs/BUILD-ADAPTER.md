@@ -105,6 +105,11 @@ ignored.
   file each target stages under the same name must carry the target in its path: plan
   `targets/<target id>/artifacts.json` and `targets/<target id>/sbom/quick-skin.cdx.json`, never
   a bare `artifacts.json`. The JARs are unique by their own names (`files/…`, `harness/…`).
+* No output takes the root-level name `ci-validation.json` or the report name of a unit it is
+  uploaded with (`<target id>.json`; for runtime results `<lane id>.json`), in any case, and none
+  lies below a directory of such a name: an uploaded artifact holds the kit's validation record
+  and the verification reports there, beside the envelope. Planning does not check this yet; the
+  job that would upload such an export fails.
 * One file is at most 256 MiB as a JAR, 16 MiB as an SBOM or a build log, and as a native report
   8 MiB (profile `block-pops`) or 4 MiB (`quick-skin`).
 * No identity, `plan_inputs`, hash of the plan, command, runner or permission: the kit adds the

@@ -5,10 +5,9 @@ import stat
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from mod_base.build_ci import inputs, runtime_inputs
-from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.build_ci.worker import WorkerResult
 from mod_base.errors import MbError
 from tests import test_ci_inputs as input_fixture
@@ -28,11 +27,10 @@ class RuntimeInputTests(unittest.TestCase):
     identities = ((1, 20), (1, 30), (1, 40))
 
     def exercise(self, *, documents=None, lane_id='lane-a', run_id=43, run_attempt=2,
-                 tools=None, reads=None, mutate=None, failure=None,
+                 reads=None, mutate=None, failure=None,
                  preflight=False, result=None):
         plan, build, runtime = fixture() if documents is None else documents
         original = copy.deepcopy((plan, build, runtime))
-        proof = ToolTreeProof(('/opt/python',), 'a' * 64, 1, 2, 100)
         execution = WorkerResult(0, b'opaque native output', False) if result is None else result
         events = []
         def read(*args):
@@ -44,27 +42,24 @@ class RuntimeInputTests(unittest.TestCase):
             if isinstance(value, BaseException):
                 raise value
             return value
-        def launch(**kwargs):
+        def launch():
             events.append('execute')
-            self.assertEqual((kwargs['hook'], kwargs['unit_id']), ('verify_runtime', lane_id))
-            self.assertEqual(kwargs['plan'], original[0])
             if mutate is not None:
                 mutate(plan, build, runtime)
             if failure is not None:
                 raise failure
             return execution
+        execute = Mock(side_effect=launch)
         with ExitStack() as stack:
             stack.enter_context(patch.object(inputs, 'authenticate_worker_account', return_value=self.validator))
             stack.enter_context(patch.object(inputs, 'authenticate_peer_account', return_value=self.candidate))
             checking = stack.enter_context(patch.object(runtime_inputs, '_read_inputs', side_effect=read))
-            execute = stack.enter_context(patch.object(runtime_inputs, 'execute_controller_validator', side_effect=launch))
             terminate = stack.enter_context(patch.object(runtime_inputs, 'terminate_worker'))
             try:
                 observed = runtime_inputs.execute_frozen_runtime_validator(
-                    boundary=self.boundary, validator=self.validator, sources=None,
-                    tools=proof if tools is None else tools,
+                    boundary=self.boundary, validator=self.validator,
                     plan=plan, build=build, runtime=runtime, lane_id=lane_id,
-                    python='/opt/python/bin/python', java_home=None, run_id=run_id, run_attempt=run_attempt)
+                    run_id=run_id, run_attempt=run_attempt, execute=execute)
                 self.assertEqual(observed.execution, execution)
                 self.assertEqual(observed.input_sha256, runtime_inputs._context(*original,
                     lane_id=lane_id, run_id=run_id, run_attempt=run_attempt)[0])
@@ -82,7 +77,7 @@ class RuntimeInputTests(unittest.TestCase):
         # Execution is data: downstream receipt freezing still requires successful native admission.
         self.exercise(result=WorkerResult(1, b'failed native output', True))
 
-    def test_wrong_scope_owner_lane_attempt_and_unadmitted_tools_fail_before_input_reads(self):
+    def test_wrong_scope_owner_lane_and_attempt_fail_before_input_reads(self):
         for change in ('aggregate', 'target', 'owner', 'plan'):
             documents = fixture()
             if change == 'aggregate':
@@ -95,8 +90,7 @@ class RuntimeInputTests(unittest.TestCase):
                 documents[0]['unknown'] = True
             with self.subTest(change=change), self.assertRaises(MbError):
                 self.exercise(documents=documents, preflight=True)
-        for args in ({'lane_id': 'lane-b'}, {'run_id': 42}, {'run_attempt': True}, {'tools': object()},
-                     {'tools': ('/opt/python',)}):
+        for args in ({'lane_id': 'lane-b'}, {'run_id': 42}, {'run_attempt': True}):
             with self.subTest(args=args), self.assertRaises(MbError):
                 self.exercise(**args, preflight=True)
 

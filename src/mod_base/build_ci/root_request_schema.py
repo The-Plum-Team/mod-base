@@ -102,8 +102,8 @@ def _build_validation(document: dict[str, Any], path: str) -> None:
     check(document["nonce"] != arguments["execution_nonce"], path, "root request needs a separate entry nonce")
 
 
-def _runtime_validation(document: dict[str, Any], path: str) -> None:
-    arguments = document["arguments"]
+def _runtime_lane(arguments: dict[str, Any], path: str) -> None:
+    """One lane of this run attempt with the complete Build its envelope names as its owner."""
     plan, build, runtime = arguments["plan"], arguments["build"], arguments["runtime"]
     validate_runtime_envelope(runtime, plan=plan, path=f"{path}.runtime")
     check(build["scope"] == "complete", f"{path}.build", "root runtime needs its complete owning Build")
@@ -113,6 +113,11 @@ def _runtime_validation(document: dict[str, Any], path: str) -> None:
     check((arguments["run_id"], arguments["run_attempt"]) ==
           (runtime["producer"]["run_id"], runtime["producer"]["run_attempt"]),
           path, "root runtime producing attempt differs")
+
+
+def _runtime_validation(document: dict[str, Any], path: str) -> None:
+    arguments = document["arguments"]
+    _runtime_lane(arguments, path)
     _sources(arguments, path)
     check(document["nonce"] != arguments["execution_nonce"], path, "root request needs a separate entry nonce")
 
@@ -151,6 +156,19 @@ def _plan_inputs(document: dict[str, Any], path: str) -> None:
           "must be the inventory, the scenario contract and the extra plan inputs sorted by name")
 
 
+def _build_grant(document: dict[str, Any], path: str) -> None:
+    """The sealed Build a verification reads: a partition or the complete Build of the plan. A
+    lane's owning Build may come from another run, so no producing attempt is named."""
+    _job(document, path)
+    arguments = document["arguments"]
+    validate_build_envelope(arguments["envelope"], plan=arguments["plan"], path=f"{path}.envelope")
+
+
+def _runtime_grant(document: dict[str, Any], path: str) -> None:
+    _job(document, path)
+    _runtime_lane(document["arguments"], path)
+
+
 #: Operation -> (closed argument object, cross-field checks over the whole request).
 _OPERATIONS = {
     "host-fence": (Obj({}), lambda document, path: None),
@@ -174,6 +192,10 @@ _OPERATIONS = {
         Obj({**_JOB, "inputs": List(_INPUT, min_items=2, max_items=2 + limits.MAX_CI_PLAN_INPUTS)}), _plan_inputs),
     "take-derived-plan": (Obj(_JOB), _job),
     "grant-validation-inputs": (Obj({**_JOB, "plan": _plan}), _job),
+    "grant-build-validation": (Obj({**_JOB, "plan": _plan, "envelope": _envelope}), _build_grant),
+    "grant-runtime-validation": (
+        Obj({**_JOB, "plan": _plan, "build": _envelope, "runtime": _runtime, "lane_id": _UNIT,
+             "run_id": _RUN, "run_attempt": _ATTEMPT}), _runtime_grant),
 }
 
 

@@ -103,7 +103,7 @@ RUN_EXPRESSION, ATTEMPT_EXPRESSION = "${{ github.run_id }}", "${{ github.run_att
 
 #: The ``ci`` verbs the workflows already issue but no work package has registered yet. Each one
 #: leaves this set in the change that registers it; from then on its command lines must parse.
-PENDING_VERBS = frozenset({"reuse-admit", "worker-stage", "worker-run", "worker-seal", "worker-validate"})
+PENDING_VERBS = frozenset({"reuse-admit", "worker-stage", "worker-run", "worker-seal"})
 
 #: The one fixed first line of every kit command of a Build/E2E job.
 CI_COMMAND = re.compile(r"^  python3 -P -m mod_base ci ([a-z][a-z-]*) --repo mod --config mod/site/mod-base\.json "

@@ -5,19 +5,19 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from mod_base.build_ci.controller import ControllerSources, execute_controller_validator
+from mod_base.build_ci.controller import ControllerSources
 from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, verify_build_export
 from mod_base.build_ci.host import (HostBoundary, _open_directory, authenticate_host_boundary,
                                    authenticate_privileged_host_boundary)
 from mod_base.build_ci.inputs import (VALIDATOR_INPUT_ROOT, _accounts, _inspect_inputs as _inspect_build_inputs,
-                                     _layout, _plan_bytes, verify_validation_plan)
+                                     _layout, _plan_bytes, read_sealed_build, verify_validation_plan)
 from mod_base.build_ci.records import bind_build_envelope, validate_build_envelope
 from mod_base.build_ci.runtime_exports import _bounds, verify_runtime_export
 from mod_base.build_ci.runtime_schema import validate_runtime_envelope
-from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.build_ci.validation import freeze_validation_export
 from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult, terminate_worker
 from mod_base.io.tree import (authenticate_tree_private_access, authenticate_tree_read_access,
@@ -111,7 +111,8 @@ def prepare_runtime_validation(*, boundary: HostBoundary, validator: WorkerAccou
     try:
         digest, raw = _context(plan, build, runtime, lane_id=lane_id, run_id=run_id, run_attempt=run_attempt)
         retained = _retained(raw)
-        terminate_worker(candidate)
+        if candidate is not None:
+            terminate_worker(candidate)
         terminate_worker(validator)
         build_identities = _inspect_build_inputs(boundary, validator, retained[0], retained[1])
         descriptor = _open_directory(tuple(RUNTIME_VALIDATION_ROOT.parts[1:]))
@@ -156,28 +157,49 @@ def prepare_runtime_validation(*, boundary: HostBoundary, validator: WorkerAccou
             terminate_worker(validator)
 
 
+def read_sealed_runtime(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any],
+                        lane_id: str, run_id: int, run_attempt: int) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """Runner-only: the envelopes of the lane's complete owning Build and of its sealed results,
+    and whether the validator reads that Build already.
+
+    ``sealed-build/`` is admitted as :func:`mod_base.build_ci.inputs.read_sealed_build` says.
+    ``sealed-runtime/`` must be the runner's private copy ``ci worker-seal`` froze (0700
+    directories, 0600 single-linked files, no ACL) holding exactly its canonical envelope: the
+    results of lane ``lane_id`` of ``plan``, produced by this run attempt, whose owning Build is
+    the complete one in ``sealed-build/``. Anything else is a rejection.
+    """
+    build, granted = read_sealed_build(boundary=boundary, validator=validator, plan=plan)
+    try:
+        authenticate_tree_private_access(RUNTIME_VALIDATION_ROOT, owner_uid=boundary.uid,
+            owner_gid=boundary.gid, max_entries=limits.MAX_CI_RUNTIME_ENTRIES)
+        runtime = verify_runtime_export(RUNTIME_VALIDATION_ROOT, plan=plan)
+        _context(plan, build, runtime, lane_id=lane_id, run_id=run_id, run_attempt=run_attempt)
+    except OSError as error:
+        raise WorkerError('cannot read the sealed runtime lane') from error
+    return build, runtime, granted
+
+
 def execute_frozen_runtime_validator(*, boundary: HostBoundary, validator: WorkerAccount,
-                                     sources: ControllerSources, tools: ToolTreeProof,
                                      plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any],
-                                     lane_id: str, python: str, java_home: str | None,
-                                     run_id: int, run_attempt: int) -> RuntimeValidationExecution:
+                                     lane_id: str, run_id: int, run_attempt: int,
+                                     execute: Callable[[], WorkerResult]) -> RuntimeValidationExecution:
     """Bind the protected verify_runtime hook to the frozen lane and its complete owning Build.
 
-    The same tool-fenced second-account route as Build verification: the selected tool roots are
-    re-inspected and the interpreter/JDK bound to them before dispatch, and the three read-only
-    input roots are authenticated before and after the hook. Caller retains protected source,
-    plan and API provenance and excludes writers. Native report/capture/JDK/package validation
-    belongs to the enrolled mod dispatcher. The returned execution is not a frozen receipt.
+    ``execute`` runs the hook as the validator for lane ``lane_id`` and returns its result
+    (``lifecycle.run_protected_hook``). The caller's plan, Build and runtime envelopes are
+    canonicalised once and a later change of them is a rejection; the three read-only input
+    roots (``validation-input/``, ``sealed-build/``, ``sealed-runtime/``) are authenticated in
+    metadata and bytes before and after the hook and must be the same directories. Caller
+    retains protected source, plan and API provenance and excludes writers. Native
+    report/capture/JDK/package validation belongs to the enrolled mod dispatcher. The returned
+    execution is not a frozen receipt. The validator is terminated whatever happens.
     """
     _accounts(boundary, validator)
     try:
-        check(type(tools) is ToolTreeProof, '$.tools', 'runtime verifier requires the admitted tool closure')
         digest, raw = _context(plan, build, runtime, lane_id=lane_id, run_id=run_id, run_attempt=run_attempt)
         retained = _retained(raw)
         initial = _read_inputs(boundary, validator, *retained)
-        result = execute_controller_validator(boundary=boundary, validator=validator, sources=sources,
-            tools=tools, plan=retained[0], hook='verify_runtime', unit_id=lane_id,
-            python=python, java_home=java_home, run_id=run_id, run_attempt=run_attempt)
+        result = execute()
         check(_read_inputs(boundary, validator, *retained) == initial,
               '$.input', 'runtime validation input directory identities changed during execution')
         closing_digest, closing_raw = _context(plan, build, runtime, lane_id=lane_id, run_id=run_id, run_attempt=run_attempt)

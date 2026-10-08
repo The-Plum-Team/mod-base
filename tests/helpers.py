@@ -1110,17 +1110,23 @@ def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any
         arguments = {"validator": validator, "sources": sources, "plan": plan, "build": ci_envelope(),
                      "runtime": runtime, "lane_id": "lane-a", "run_id": 43, "run_attempt": 2,
                      "execution_nonce": h("execution-nonce")}
-    elif operation in ("grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs"):
+    elif operation in ("grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs",
+                       "grant-build-validation", "grant-runtime-validation"):
         from mod_base.build_ci.protocol import subject_of
 
         identity = plan["identity"]
+        lane = ci_runtime_envelope()
+        lane.update(scope="lane", lane_id="lane-a")
         arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}, **{
             "grant-controller": {"subject": subject_of(identity), "sources": sources},
             "grant-plan-inputs": {"inputs": [{"name": "inventory", "sha256": identity["inventory_sha256"]},
                                              {"name": "scenario-contract", "sha256": identity["scenario_sha256"]},
                                              *plan["plan_inputs"]]},
             "take-derived-plan": {},
-            "grant-validation-inputs": {"plan": plan}}[operation]}
+            "grant-validation-inputs": {"plan": plan},
+            "grant-build-validation": {"plan": plan, "envelope": ci_envelope()},
+            "grant-runtime-validation": {"plan": plan, "build": ci_envelope(), "runtime": lane,
+                                         "lane_id": "lane-a", "run_id": 43, "run_attempt": 2}}[operation]}
     else:
         raise ValueError(f"no sample root request for {operation!r}")
     return {"kind": "mod-base.ci.root-request", "schema_version": 1, "operation": operation,

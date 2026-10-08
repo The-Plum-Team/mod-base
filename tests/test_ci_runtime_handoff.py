@@ -20,7 +20,7 @@ class RuntimeReadHandoffTests(unittest.TestCase):
     validator = runtime_fixture.RuntimeInputTests.validator
     candidate = runtime_fixture.RuntimeInputTests.candidate
 
-    def exercise(self, *, fault=None, mutate=None, documents=None, preflight=False):
+    def exercise(self, *, fault=None, mutate=None, documents=None, preflight=False, alone=False):
         documents = runtime_fixture.fixture() if documents is None else documents
         original = copy.deepcopy(documents)
         events = []
@@ -58,7 +58,8 @@ class RuntimeReadHandoffTests(unittest.TestCase):
             privilege = stack.enter_context(patch.object(runtime_inputs, 'authenticate_privileged_host_boundary',
                 side_effect=[None, MbError('Root changed') if fault == 'privilege' else None]))
             stack.enter_context(patch.object(inputs, 'authenticate_worker_account', return_value=self.validator))
-            stack.enter_context(patch.object(inputs, 'authenticate_peer_account', return_value=self.candidate))
+            stack.enter_context(patch.object(inputs, 'authenticate_peer_account',
+                                             return_value=None if alone else self.candidate))
             terminate = stack.enter_context(patch.object(runtime_inputs, 'terminate_worker', side_effect=kill))
             build_read = stack.enter_context(patch.object(runtime_inputs, '_inspect_build_inputs',
                 return_value=((1, 20), (1, 30)), side_effect=MbError('Build changed') if fault == 'build-bytes' else None))
@@ -80,8 +81,9 @@ class RuntimeReadHandoffTests(unittest.TestCase):
                     plan=documents[0], build=documents[1], runtime=documents[2], lane_id='lane-a', run_id=43, run_attempt=2)
                 self.assertEqual(observed, original[2])
                 self.assertIsNot(observed, documents[2])
-                self.assertEqual(events, [('terminate', self.candidate), ('terminate', self.validator),
-                                          'grant', 'closing', ('terminate', self.validator)])
+                self.assertEqual(events, [*([] if alone else [('terminate', self.candidate)]),
+                                          ('terminate', self.validator), 'grant', 'closing',
+                                          ('terminate', self.validator)])
                 self.assertEqual(privilege.call_count, 2)
                 opening.assert_called_once_with(tuple(runtime_inputs.RUNTIME_VALIDATION_ROOT.parts[1:]))
                 modes.assert_not_called()
@@ -103,6 +105,9 @@ class RuntimeReadHandoffTests(unittest.TestCase):
 
     def test_original_private_lane_uses_exact_scope_caps_and_existing_inputs(self):
         self.exercise()
+
+    def test_a_job_without_a_candidate_account_has_none_to_stop_before_the_grant(self):
+        self.exercise(alone=True)
 
     def test_candidate_survivor_foreign_private_metadata_and_wrong_bytes_forbid_read_grant(self):
         for fault in ('survivor', 'foreign', 'private', 'build-bytes', 'runtime-bytes'):

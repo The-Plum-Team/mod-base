@@ -9,6 +9,11 @@ those files. ``derive_plan`` answers in the validator's own home; root hands an 
 private copy to the runner and removes the original, so the next protected hook of the job
 starts clean.
 
+A Build verification reads ``sealed-build/`` beside it. :func:`read_sealed_build` is how the
+runner reads that directory before and after root hands it over, and
+:func:`execute_frozen_build_validator` binds one ``verify_build`` or ``verify_target`` run to both
+read-only roots.
+
 No schema or success authority is introduced: plan and envelope retain their existing kinds.
 Protected admission must retain genuine source/plan/export provenance and exclude other writers.
 """
@@ -19,21 +24,19 @@ import hashlib
 import copy
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mod_base.build_ci import adapter
-from mod_base.build_ci.controller import (ControllerFile, ControllerSources, _write_controller_files,
-                                          execute_controller_validator)
+from mod_base.build_ci.controller import ControllerFile, ControllerSources, _write_controller_files
 from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, verify_build_export
 from mod_base.build_ci.host import (HostBoundary, _open_directory, authenticate_host_boundary,
                                     authenticate_privileged_host_boundary)
 from mod_base.build_ci.protocol import SHA256, validate_plan
 from mod_base.build_ci.records import validate_build_envelope
 from mod_base.build_ci.validation import VALIDATOR_OUTPUT_ROOT, freeze_validation_export
-from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.build_ci.worker import (WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult,
                                       authenticate_peer_account, authenticate_worker_account, terminate_worker)
 from mod_base.io.atomic_directory import atomic_directory
@@ -373,71 +376,100 @@ def _inspect_inputs(boundary: HostBoundary, validator: WorkerAccount, plan: dict
     return tuple(identities)
 
 
+def build_input_sha256(*, plan: dict[str, Any], envelope: dict[str, Any], hook: str, unit_id: str | None,
+                       run_id: int, run_attempt: int) -> str:
+    """Require the sealed Build one verification is for and return the digest of that input.
+
+    ``envelope`` must be a Build export of ``plan`` sealed by this run attempt: the complete Build
+    for ``verify_build`` (which takes no unit), exactly the partition of target ``unit_id`` for
+    ``verify_target``. The digest is the SHA-256 of the canonical envelope, which names every
+    file the hook reads by size and hash; a validation record carries it as ``input_sha256``.
+    """
+
+    _plan_bytes(plan)
+    validate_build_envelope(envelope, plan=plan)
+    Int(1, limits.MAX_RUN_ID)(run_id, "$.run_id")
+    Int(1, limits.MAX_RUN_ATTEMPT)(run_attempt, "$.run_attempt")
+    if hook == "verify_build":
+        check(unit_id is None and envelope["scope"] == "complete" and envelope["target_id"] is None,
+              "$.input", "aggregate Build verification requires the complete bundle")
+    else:
+        check(hook == "verify_target" and type(unit_id) is str
+              and unit_id in {target["id"] for target in plan["targets"]},
+              "$.target_id", "target verification requires its exact protected enrolled target")
+        check(envelope["scope"] == "target" and envelope["target_id"] == unit_id, "$.input",
+              "target verification requires exactly its own frozen partition")
+    check((envelope["producer"]["run_id"], envelope["producer"]["run_attempt"]) == (run_id, run_attempt),
+          "$.input", "Build verifier differs from its producing run/attempt")
+    raw = canonical_json(envelope)
+    check(len(raw) <= limits.MAX_CI_ENVELOPE_BYTES, "$.input", "retained envelope exceeds byte cap")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def read_sealed_build(*, boundary: HostBoundary, validator: WorkerAccount,
+                      plan: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Runner-only: the envelope of ``sealed-build/`` and whether the validator reads it already.
+
+    The directory is the runner's private export (the partition ``ci worker-seal`` froze, the
+    Build ``ci assemble`` put together or the one ``ci fetch-build`` materialised: the runner's,
+    mode 0700) or that export after root handed it to this job's validator (the validator's group,
+    0750, every entry read-only for it). Either way its files are exactly its canonical envelope,
+    a Build export of ``plan``, and the directory is the same one before and after it was read.
+    A missing directory, another owner or mode and any other file set are rejections.
+    """
+
+    authenticate_host_boundary(boundary)
+    _accounts(boundary, validator)
+    _layout(boundary)
+
+    def state() -> tuple[int, ...]:
+        descriptor = _open_directory(tuple(BUILD_VALIDATION_ROOT.parts[1:]))
+        try:
+            info = os.fstat(descriptor)
+            return info.st_dev, info.st_ino, info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)
+        finally:
+            os.close(descriptor)
+
+    try:
+        initial = state()
+        granted = initial[2:] == (boundary.uid, validator.gid, 0o750)
+        check(granted or initial[2:] == (boundary.uid, boundary.gid, 0o700), "$.input",
+              "sealed-build/ is neither the runner's private export nor granted to this job's validator")
+        if granted:
+            authenticate_tree_read_access(BUILD_VALIDATION_ROOT, owner_uid=boundary.uid, reader_gid=validator.gid,
+                                          max_entries=limits.MAX_CI_EXPORT_ENTRIES)
+        envelope = verify_build_export(BUILD_VALIDATION_ROOT, plan=plan)
+        check(state() == initial, "$.input", "sealed-build/ changed while it was read")
+    except OSError as error:
+        raise WorkerError("cannot read the sealed Build export") from error
+    return envelope, granted
+
+
 def execute_frozen_build_validator(*, boundary: HostBoundary, validator: WorkerAccount,
-                                   sources: ControllerSources, tools: ToolTreeProof,
-                                   plan: dict[str, Any], envelope: dict[str, Any],
-                                   python: str, java_home: str | None, run_id: int,
-                                   run_attempt: int) -> BuildValidationExecution:
-    """Bind fixed aggregate verification to read-only plan/Build bytes before and after.
+                                   plan: dict[str, Any], envelope: dict[str, Any], hook: str,
+                                   unit_id: str | None, run_id: int, run_attempt: int,
+                                   execute: Callable[[], WorkerResult]) -> BuildValidationExecution:
+    """Bind one Build verification to the read-only plan and Build it is given.
 
-    Complete Build producer verification only; cross-run runtime selection is a separate protocol.
-    Native hook reads ci-plan.json in the fixed input root and the fixed sealed Build root.
-    Retain actual returned execution/input digest for output freezing; native closed schemas,
-    installer/import provenance, source admission and final API authority remain required.
+    ``hook`` is ``verify_build`` over the complete Build of this run attempt, or ``verify_target``
+    over exactly the frozen partition of target ``unit_id``; a complete bundle never stands in
+    for a partition. ``execute`` runs that hook as the validator and returns its result
+    (``lifecycle.run_protected_hook``). Both input roots (``validation-input/`` and
+    ``sealed-build/``) are authenticated in metadata and bytes before and after it and must be
+    the same directories. Returns the execution with the digest of the canonical envelope, for
+    the receipt freeze. The validator is terminated whatever happens. Native semantics, source
+    provenance and final API authority remain separate.
     """
 
-    return _execute_frozen_build_hook(boundary=boundary, validator=validator, sources=sources,
-                tools=tools, plan=plan, envelope=envelope, hook="verify_build", unit_id=None,
-                python=python, java_home=java_home, run_id=run_id, run_attempt=run_attempt)
-
-
-def execute_frozen_target_validator(*, boundary: HostBoundary, validator: WorkerAccount,
-                                    sources: ControllerSources, tools: ToolTreeProof,
-                                    plan: dict[str, Any], envelope: dict[str, Any], target_id: str,
-                                    python: str, java_home: str | None, run_id: int,
-                                    run_attempt: int) -> BuildValidationExecution:
-    """Bind fixed target verification to its exact enrolled frozen producer partition.
-
-    Complete bundles cannot substitute for target partitions. Native dispatcher receives only
-    the existing closed verify_target hook and protected MB_TARGET_ID. The same fixed read-only
-    plan/Build lifecycle and retained execution/input digest apply as aggregate verification.
-    Native compiler semantics, protected provenance and final API authority remain required.
-    """
-
-    return _execute_frozen_build_hook(boundary=boundary, validator=validator, sources=sources,
-                tools=tools, plan=plan, envelope=envelope, hook="verify_target", unit_id=target_id,
-                python=python, java_home=java_home, run_id=run_id, run_attempt=run_attempt)
-
-
-def _execute_frozen_build_hook(*, boundary: HostBoundary, validator: WorkerAccount,
-                               sources: ControllerSources, tools: ToolTreeProof,
-                               plan: dict[str, Any], envelope: dict[str, Any], hook: str,
-                               unit_id: str | None, python: str, java_home: str | None,
-                               run_id: int, run_attempt: int) -> BuildValidationExecution:
     _accounts(boundary, validator)
     try:
-        _plan_bytes(plan)
-        validate_build_envelope(envelope, plan=plan)
-        Int(1, limits.MAX_RUN_ID)(run_id, "$.run_id")
-        Int(1, limits.MAX_RUN_ATTEMPT)(run_attempt, "$.run_attempt")
-        if hook == "verify_build":
-            check(unit_id is None and envelope["scope"] == "complete" and envelope["target_id"] is None,
-                  "$.input", "aggregate Build verification requires the complete bundle")
-        else:
-            check(hook == "verify_target" and type(unit_id) is str
-                  and unit_id in {target["id"] for target in plan["targets"]},
-                  "$.target_id", "target verification requires its exact protected enrolled target")
-            check(envelope["scope"] == "target" and envelope["target_id"] == unit_id, "$.input",
-                  "target verification requires exactly its own frozen partition")
-        check((envelope["producer"]["run_id"], envelope["producer"]["run_attempt"]) == (run_id, run_attempt),
-              "$.input", "Build verifier differs from its producing run/attempt")
+        digest = build_input_sha256(plan=plan, envelope=envelope, hook=hook, unit_id=unit_id, run_id=run_id,
+                                    run_attempt=run_attempt)
         initial = _read_inputs(boundary, validator, plan, envelope)
-        result = execute_controller_validator(boundary=boundary, validator=validator, sources=sources,
-                    tools=tools, plan=plan, hook=hook, unit_id=unit_id, python=python,
-                    java_home=java_home, run_id=run_id, run_attempt=run_attempt)
+        result = execute()
         if _read_inputs(boundary, validator, plan, envelope) != initial:
             raise WorkerError("validation input directory identities changed during execution")
-        return BuildValidationExecution(result, hashlib.sha256(canonical_json(envelope)).hexdigest())
+        return BuildValidationExecution(result, digest)
     except OSError as error:
         raise WorkerError("cannot execute frozen Build verification") from error
     finally:

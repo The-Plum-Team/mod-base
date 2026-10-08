@@ -295,7 +295,7 @@ class BuildReadHandoffTests(unittest.TestCase):
     validator = WorkerAccount("validator", 2001, 2001, "/tmp/validator-home")
 
     def handoff(self, *, parent_owner=1001, initial_owner=1001, final_inode=30, final_mode=0o750,
-                terminate_error=None, grant_error=None, changed_envelope=False):
+                terminate_error=None, grant_error=None, changed_envelope=False, alone=False):
         def metadata(inode, owner, group, mode):
             return SimpleNamespace(st_dev=1, st_ino=inode, st_uid=owner, st_gid=group,
                                    st_mode=stat.S_IFDIR | mode)
@@ -305,7 +305,7 @@ class BuildReadHandoffTests(unittest.TestCase):
         expected = ci_envelope()
         def verify(*args, **kwargs):
             events.append("verify")
-            return {**expected, "profile": "changed"} if changed_envelope and len(events) > 3 else expected
+            return {**expected, "profile": "changed"} if changed_envelope and "grant" in events else expected
         def grant(*args, **kwargs):
             events.append("grant")
             self.assertEqual(args[0], exports.BUILD_VALIDATION_ROOT)
@@ -321,8 +321,9 @@ class BuildReadHandoffTests(unittest.TestCase):
                 raise terminate_error
         with ExitStack() as stack:
             stack.enter_context(patch.object(exports, "authenticate_privileged_host_boundary"))
-            stack.enter_context(patch.object(exports, "authenticate_worker_account",
-                                              side_effect=[self.validator, self.candidate]))
+            stack.enter_context(patch.object(exports, "authenticate_worker_account", return_value=self.validator))
+            stack.enter_context(patch.object(exports, "authenticate_peer_account",
+                                             return_value=None if alone else self.candidate))
             opening = stack.enter_context(patch.object(exports, "_open_directory", side_effect=[10, 11, 12]))
             stack.enter_context(patch.object(exports.os, "fstat", side_effect=info))
             stack.enter_context(patch.object(exports.os, "close"))
@@ -334,7 +335,7 @@ class BuildReadHandoffTests(unittest.TestCase):
             try:
                 result = exports.prepare_build_validation(boundary=self.boundary, validator=self.validator, plan=ci_plan())
                 self.assertEqual(result, expected)
-                self.assertEqual(events, ["terminate", "verify", "grant", "verify"])
+                self.assertEqual(events, [*([] if alone else ["terminate"]), "verify", "grant", "verify"])
                 self.assertEqual(opening.call_args.args[0], tuple(exports.BUILD_VALIDATION_ROOT.parts[1:]))
                 modes.assert_not_called()
             except MbError:
@@ -347,6 +348,12 @@ class BuildReadHandoffTests(unittest.TestCase):
     def test_fixed_host_accounts_copy_and_order_bind_the_read_handoff(self):
         self.handoff()
 
+    def test_a_job_with_the_validator_alone_hands_over_without_a_candidate_to_stop(self):
+        self.handoff(alone=True)
+        for args in ({"initial_owner": 2000}, {"final_mode": 0o777}, {"changed_envelope": True}):
+            with self.subTest(args=list(args)), self.assertRaises(MbError):
+                self.handoff(alone=True, **args)
+
     def test_foreign_layout_owner_kill_grant_identity_and_envelope_failures_cannot_succeed(self):
         for args in ({"parent_owner": 2000}, {"initial_owner": 2000},
                      {"terminate_error": WorkerError("survivor")}, {"grant_error": OSError("chmod failed")},
@@ -355,6 +362,7 @@ class BuildReadHandoffTests(unittest.TestCase):
                 self.handoff(**args)
 
     def test_forged_validator_and_runner_collisions_reject_before_mutation(self):
+        from mod_base.build_ci import worker
         for requested, actual, candidate in [(self.candidate, self.validator, self.candidate),
                                              (self.validator, self.candidate, self.candidate),
                                              (self.validator, self.validator,
@@ -363,7 +371,9 @@ class BuildReadHandoffTests(unittest.TestCase):
                                               WorkerAccount("candidate", 2000, 2001, "home"))]:
             with self.subTest(requested=requested), \
                     patch.object(exports, "authenticate_privileged_host_boundary"), \
-                    patch.object(exports, "authenticate_worker_account", side_effect=[actual, candidate]), \
+                    patch.object(exports, "authenticate_worker_account", return_value=actual), \
+                    patch.object(worker, "worker_account_exists", return_value=True), \
+                    patch.object(worker, "authenticate_worker_account", return_value=candidate), \
                     patch.object(exports, "_open_directory") as opening, self.assertRaises(MbError):
                 exports.prepare_build_validation(boundary=self.boundary, validator=requested, plan=ci_plan())
             opening.assert_not_called()

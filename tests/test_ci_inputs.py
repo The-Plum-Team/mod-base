@@ -7,11 +7,10 @@ import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from mod_base.build_ci import inputs
 from mod_base.build_ci.host import HostBoundary
-from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.build_ci.worker import WorkerAccount, WorkerError, WorkerResult
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
@@ -112,21 +111,21 @@ class InputExecutionTests(unittest.TestCase):
         envelope = ci_envelope() if envelope is None else envelope
         execution = WorkerResult(0, b"native verified", False)
         identities = ((1, 20), (1, 30))
+        execute = Mock(return_value=execution, side_effect=execution_error)
         with patch.object(inputs, "authenticate_worker_account", return_value=self.validator), \
                 patch.object(inputs, "authenticate_peer_account", return_value=self.candidate), \
                 patch.object(inputs, "_read_inputs", side_effect=reads or [identities, identities]) as checking, \
-                patch.object(inputs, "execute_controller_validator", return_value=execution,
-                             side_effect=execution_error) as execute, \
                 patch.object(inputs, "terminate_worker") as terminate:
             try:
                 result = inputs.execute_frozen_build_validator(boundary=self.boundary, validator=self.validator,
-                    sources=None, tools=ToolTreeProof(("/opt/hostedtoolcache/python",), "a" * 64, 1, 2, 100),
-                    plan=ci_plan(), envelope=envelope, python="/opt/hostedtoolcache/python/bin/python",
-                    java_home=None, run_id=42, run_attempt=2)
+                    plan=ci_plan(), envelope=envelope, hook="verify_build", unit_id=None, run_id=42, run_attempt=2,
+                    execute=execute)
                 self.assertEqual(result.execution, execution)
                 self.assertEqual(result.input_sha256, hashlib.sha256(canonical_json(envelope)).hexdigest())
+                self.assertEqual(result.input_sha256, inputs.build_input_sha256(
+                    plan=ci_plan(), envelope=envelope, hook="verify_build", unit_id=None, run_id=42, run_attempt=2))
                 self.assertEqual(checking.call_count, 2)
-                self.assertEqual((execute.call_args.kwargs["hook"], execute.call_args.kwargs["unit_id"]), ("verify_build", None))
+                execute.assert_called_once_with()
             finally:
                 terminate.assert_called_once_with(self.validator)
                 if envelope["producer"]["run_id"] != 42 or envelope["scope"] != "complete":
@@ -147,6 +146,22 @@ class InputExecutionTests(unittest.TestCase):
                      {"execution_error": WorkerError("native rejected")}):
             with self.subTest(args=list(args)), self.assertRaises(MbError):
                 self.exercise(**args)
+
+    def test_a_unit_or_another_hook_never_reaches_the_complete_build(self):
+        for hook, unit_id in (("verify_build", "target-a"), ("verify_runtime", "lane-a"), ("derive_plan", None),
+                              ("verify_target", None)):
+            execute = Mock()
+            with self.subTest(hook=hook), \
+                    patch.object(inputs, "authenticate_worker_account", return_value=self.validator), \
+                    patch.object(inputs, "authenticate_peer_account", return_value=self.candidate), \
+                    patch.object(inputs, "_read_inputs") as checking, \
+                    patch.object(inputs, "terminate_worker") as terminate, self.assertRaises(MbError):
+                inputs.execute_frozen_build_validator(boundary=self.boundary, validator=self.validator,
+                    plan=ci_plan(), envelope=ci_envelope(), hook=hook, unit_id=unit_id, run_id=42, run_attempt=2,
+                    execute=execute)
+            checking.assert_not_called()
+            execute.assert_not_called()
+            terminate.assert_called_once_with(self.validator)
 
     def test_fixed_read_inputs_require_exact_owners_modes_acls_and_inventory(self):
         info = lambda inode, owner=1001: SimpleNamespace(st_dev=1, st_ino=inode, st_uid=owner,
@@ -201,22 +216,20 @@ class TargetInputExecutionTests(unittest.TestCase):
                 raise value
             self.assertEqual(args, (self.boundary, self.validator, plan, envelope))
             return value
-        def launch(**kwargs):
+        def launch():
             events.append("execute")
-            self.assertEqual((kwargs["hook"], kwargs["unit_id"]), ("verify_target", target_id))
             if execution_error:
                 raise execution_error
             return execution
+        execute = Mock(side_effect=launch)
         with patch.object(inputs, "authenticate_worker_account", return_value=self.validator), \
                 patch.object(inputs, "authenticate_peer_account", return_value=self.candidate), \
                 patch.object(inputs, "_read_inputs", side_effect=read) as checking, \
-                patch.object(inputs, "execute_controller_validator", side_effect=launch) as execute, \
                 patch.object(inputs, "terminate_worker", side_effect=lambda account: events.append("terminate")) as terminate:
             try:
-                result = inputs.execute_frozen_target_validator(boundary=self.boundary, validator=self.validator,
-                    sources=None, tools=ToolTreeProof(("/opt/hostedtoolcache/python",), "a" * 64, 1, 2, 100),
-                    plan=plan, envelope=envelope, target_id=target_id,
-                    python="/opt/hostedtoolcache/python/bin/python", java_home=None, run_id=42, run_attempt=2)
+                result = inputs.execute_frozen_build_validator(boundary=self.boundary, validator=self.validator,
+                    plan=plan, envelope=envelope, hook="verify_target", unit_id=target_id, run_id=42, run_attempt=2,
+                    execute=execute)
                 self.assertEqual(result, inputs.BuildValidationExecution(execution, hashlib.sha256(canonical_json(envelope)).hexdigest()))
                 self.assertEqual(events, ["read", "execute", "read", "terminate"])
             finally:

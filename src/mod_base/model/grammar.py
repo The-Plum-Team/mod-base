@@ -48,7 +48,8 @@ CI_ROOT_REQUEST_NAME = "ci-root-request.json"
 #: The closed set of operations the root bootstrap dispatches (``tools/ci_privileged_bootstrap.py``
 #: mirrors it without importing the kit). A request never selects code outside this set.
 CI_ROOT_OPERATIONS = ("host-fence", "stage-candidate", "freeze-build-validation", "freeze-runtime-validation",
-                      "grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs")
+                      "grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs",
+                      "grant-build-validation", "grant-runtime-validation")
 MINECRAFT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$")
 LOADER = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SCENARIO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")

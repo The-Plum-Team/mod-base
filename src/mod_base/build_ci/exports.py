@@ -18,7 +18,7 @@ from mod_base import SCHEMA_VERSIONS
 from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.host import HostBoundary, _open_directory, authenticate_privileged_host_boundary
 from mod_base.build_ci.worker import (WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult,
-                                      authenticate_worker_account, terminate_worker)
+                                      authenticate_peer_account, authenticate_worker_account, terminate_worker)
 from mod_base.build_ci.source import GitSourceEntry, verify_source_copy
 from mod_base.build_ci.records import bind_build_envelope, validate_build_envelope, validate_descriptor
 from mod_base.io.secure_json import loads
@@ -220,9 +220,10 @@ def prepare_build_validation(*, boundary: HostBoundary, validator: WorkerAccount
                              plan: dict[str, Any]) -> dict[str, Any]:
     """Protected-root-only handoff of the fixed independent Build copy to the fixed validator.
 
-    Authenticates actual host/account/layout identities, terminates the candidate, verifies the
-    copy and grants only validator-group reads. Protected source immutability, provenance and
-    native second-account execution/receipt sealing remain separate required phases.
+    Authenticates actual host/account/layout identities, terminates the candidate when the job
+    has one (the assembling job allocates the validator alone), verifies the copy and grants only
+    validator-group reads. Protected source immutability, provenance and native second-account
+    execution/receipt sealing remain separate required phases.
     """
 
     authenticate_privileged_host_boundary(boundary)
@@ -231,10 +232,7 @@ def prepare_build_validation(*, boundary: HostBoundary, validator: WorkerAccount
         raise WorkerError("Build read handoff requires the fixed validator identity")
     if authenticate_worker_account("validator") != validator:
         raise WorkerError("Build validator identity changed")
-    candidate = authenticate_worker_account("candidate")
-    if (candidate.uid == validator.uid or candidate.gid == validator.gid
-            or any(account.uid == boundary.uid or account.gid == boundary.gid for account in (candidate, validator))):
-        raise WorkerError("Build handoff identities are not isolated from runner and peer")
+    candidate = authenticate_peer_account(validator, runner_uid=boundary.uid, runner_gid=boundary.gid)
     descriptor = None
     admitted = False
     try:
@@ -251,7 +249,8 @@ def prepare_build_validation(*, boundary: HostBoundary, validator: WorkerAccount
         if (initial.st_uid, initial.st_gid, stat.S_IMODE(initial.st_mode)) != (boundary.uid, boundary.gid, 0o700):
             raise WorkerError("Build handoff copy must be fresh private runner-owned bytes")
         admitted = True
-        terminate_worker(candidate)
+        if candidate is not None:
+            terminate_worker(candidate)
         expected = verify_build_export(BUILD_VALIDATION_ROOT, plan=plan)
         raw = canonical_json(expected)
         grant_tree_read_access(BUILD_VALIDATION_ROOT, source_owner_uid=boundary.uid,

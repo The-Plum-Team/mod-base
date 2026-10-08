@@ -117,10 +117,14 @@ The operations are the closed tuple `grammar.CI_ROOT_OPERATIONS`, mirrored by th
 | `grant-plan-inputs` | `validator`, `candidate`, `inputs` | Hands the staged candidate files in `validation-input/` (each named with its SHA-256: the inventory, the scenario contract, then the extra plan inputs by name) to the validator read-only, before `derive_plan` |
 | `take-derived-plan` | `validator`, `candidate` | Copies the one file `derive_plan` wrote into the runner-private `derived-plan/` and removes the original |
 | `grant-validation-inputs` | `validator`, `candidate`, `plan` | Hands the complete `validation-input/` (the plan and every candidate file it binds) to the validator read-only |
+| `grant-build-validation` | `validator`, `candidate`, `plan`, `envelope` | Hands the runner's private `sealed-build/` (a target's partition or the complete Build, exactly `envelope`) to the validator read-only |
+| `grant-runtime-validation` | `validator`, `candidate`, `plan`, `build`, `runtime`, `lane_id`, `run_id`, `run_attempt` | Hands the runner's private `sealed-runtime/` (one lane, exactly `runtime`) to the validator read-only; its complete owning Build must be granted already |
 
-The last four are the operations of the worker lifecycle below. `candidate` is the uid and gid of
+The last six are the operations of the worker lifecycle below. `candidate` is the uid and gid of
 the job's candidate account, or `null` in a job that allocated the validator alone; root requires
 the live accounts to be exactly the ones named and a candidate that is not named to be absent.
+`grant-build-validation` names no producing attempt: a lane's owning Build may come from another
+run. A job publishes at most one request per operation, so each of these runs once per job.
 
 `candidate` and `validator` are the uid and gid of the live fixed account and must differ from the
 runner's. For `stage-candidate`, `inventory` is the complete tested-tree inventory (one row of
@@ -164,7 +168,32 @@ worker root. State records are canonical JSON, written once, read strictly, neve
    file the hook wrote and compares its hash with `--expect-sha256` when given. It then stages the
    input root again with the plan, runs `grant-validation-inputs` and writes `ci-plan.json` to
    the state. Afterwards every protected hook of the job finds `validation-input/` complete.
-3. `ci worker-finish` (`if: always()`) terminates and locks every worker account the host has,
+3. `ci worker-validate --hook verify_target|verify_build|verify_runtime [--unit ID] --output DIR`
+   is the seal step of a job; `DIR` is what the next step uploads and must not exist, which is
+   checked before anything else. Each hook belongs to one kind of job: `verify_target` (a target's
+   partition) and `verify_runtime` (a lane's results) to the job whose candidate produced the
+   export, `verify_build` (the complete Build) to the assembling job, which allocated the
+   validator alone. The command reads no API. It
+   * reads the sealed input and requires it to be the plan's: for a target or the complete Build,
+     `sealed-build/` as the runner's private export of this run attempt; for a lane,
+     `sealed-runtime/` as the runner's private copy with the complete Build its envelope names in
+     `sealed-build/`;
+   * runs `grant-build-validation` for a Build the validator does not read yet and, for a lane,
+     `grant-runtime-validation` (`validation-input/` was granted by `ci plan`);
+   * runs the hook as the validator from `controller/`, with the read-only inputs authenticated
+     in metadata and bytes before and after it, and prints its neutralised log;
+   * publishes the result as a private `mod-base.ci.execution` record and runs
+     `freeze-build-validation` or `freeze-runtime-validation`: root requires the validator's
+     `validation/` to be exactly the reports of the hook (`<unit id>.json`, one per target for
+     `verify_build`), copies them into the runner-private `sealed-validation/` and writes the
+     `mod-base.ci.validation` record beside them. The hook never writes that record;
+   * writes `DIR`: the export root with every sealed file under its own path, the envelope
+     (`ci-envelope.json` or `ci-runtime-envelope.json`) and, beside it, `ci-validation.json` and
+     the reports. A report or the record that would take, alias or shadow an export path is a
+     rejection.
+
+   Every account ends terminated and locked; after a failure there is no `DIR`.
+4. `ci worker-finish` (`if: always()`) terminates and locks every worker account the host has,
    requires that neither owns a process once both are locked, and only then gives the runner home
    its original mode back. It reads nothing but the state and the host, and it is safe to run
    twice, after a prepare that failed anywhere and without one. An account entry it cannot
@@ -354,6 +383,19 @@ plan. Paths are unique without case/parent aliases and cannot overwrite ci-valid
 the Build envelope. There is no success boolean. Existing gate/envelope schemas are unchanged;
 the exhaustive ledger requires v1.0.3 to reject this new kind.
 
+The record is written by protected code only (`validation.build_validation_record`), never by a
+hook: a hook contributes the bytes of its reports and nothing else. `identity`, `plan_sha256` and
+`profile` are the plan's; `hook`, `unit_id`, `run_id` and `run_attempt` are the job's;
+`source_config_sha256` is the SHA-256 of the protected Build config the hook ran from;
+`input_sha256` is the digest of what the hook verified (the SHA-256 of the canonical Build
+envelope for `verify_build` and `verify_target`; for `verify_runtime` the canonical SHA-256 of
+`{"format": "mod-base.runtime-validation-input-v1", "plan_sha256", "build_envelope_sha256",
+"runtime_envelope_sha256"}`); each report row has the unit and its `native_contract_sha256` from
+the plan and the `path` (`<unit id>.json`), `size` and `sha256` of the report found. The reports
+directory must be exactly `adapter.hook_outputs` of the hook: a missing or an extra entry (also a
+`ci-validation.json` of the hook's own), a link, a directory, an empty file, a report above 4 MiB
+or one that is not a canonical JSON object is a rejection.
+
 `verify_validation_export` compares the record with retained protected execution/input context,
 not its own claims. The canonical outer record is at most 4 MiB; there are at most 256 reports,
 each at most the new 4 MiB validator-output report ceiling. Existing entry and complete-export byte
@@ -374,48 +416,39 @@ alternate canonical bytes reject. Protected-root handoff grants only the fixed v
 reads (0750 directories/0640 files), rechecking ownership, inode, absent ACLs and bytes. Complete
 import enrollment remains a protected caller obligation.
 
-`execute_frozen_build_validator` supports same-producer complete aggregate Build verification.
-It requires the retained plan and complete envelope, exact producing run/attempt, both fixed
-read-only input trees and protected account/layout identities. It independently verifies input
-metadata and all plan/Build bytes before and after the closed `verify_build` execution, retaining
-directory identities across execution. It returns the actual execution result and SHA-256 of
-the canonical Build envelope for `freeze_validation_export`'s input binding; the envelope's
-protected plan hash and file hashes transitively bind the complete input. Native hooks read the
-fixed plan and sealed Build paths and emit the existing verifier-output record. Cross-run runtime
-selection and runtime verification are separate unfinished lifecycle compositions. Zero exit and
-matching objects still cannot substitute for native closed schemas or API/status authority.
+`execute_frozen_build_validator` binds one Build verification to its read-only inputs:
+`verify_build` over the complete Build of this run attempt, or `verify_target` over exactly the
+partition of one enrolled target (`scope: target`, that `target_id`, its complete planned output
+inventory, the same producing run/attempt). A complete bundle or another target's partition
+cannot substitute. The hook itself is run by the caller's `execute` (`lifecycle.run_protected_hook`:
+the closed argv, the protected `MB_TARGET_ID` and nothing else); around it both fixed input trees
+are verified in metadata and bytes, and their directory identities must not change. It returns
+the actual execution result and the SHA-256 of the canonical Build envelope for the freeze's input
+binding; the envelope's plan hash and file hashes transitively bind the complete input.
+`execute_frozen_runtime_validator` does the same for `verify_runtime` over one lane, its complete
+owning Build and the plan. Zero exit and matching objects still cannot substitute for native
+closed schemas or API/status authority.
 
-`execute_frozen_target_validator` uses the same fixed read-only input lifecycle for an exact
-enrolled target partition. It requires `scope: target`, that exact `target_id`, its complete
-planned output inventory and the same producing run/attempt. Complete bundles and other target
-partitions cannot substitute. Only the existing protected `verify_target` hook and MB_TARGET_ID
-are forwarded; paths, environment and commands remain closed. The returned canonical partition
-digest binds subsequent verifier-output freezing. Native compiler/JDK/task/packaging witness
-validation and protected admission remain separate requirements.
+The hosted fixtures (`tests/ci_linux_worker.py`) run these paths with real accounts: an inert
+hook that checks its second-UID identity, arguments and read-only inputs, and the synthetic mod's
+verifiers through `ci worker-validate`. They are synthetic and unexecuted on this Windows host;
+they do not establish QS/BP native parity.
 
-Required hosted aggregate/target fixtures independently check actual second-UID hook/unit
-arguments, read the fixed plan/Build bytes, confirm input paths are not writable, produce the
-existing closed receipts and freeze them with retained execution/input digests. Both fixtures
-are synthetic and unexecuted on this Windows host; they do not establish QS/BP native parity.
+`materialize_validation_export` seals one verification: it requires the source directory to be
+exactly the hook's reports, creates new independent single-link copies in a private stage, builds
+the record from those copies, writes it beside them as `ci-validation.json` and verifies the stage
+as a consumer would before exclusive atomic publication. Existing outputs are never replaced and
+writer failure leaves no published output. Actual protected verification, validator UID
+termination/locking, excluded source writers, destination-parent protection and final
+receipt/status/API admission remain caller requirements.
 
-The required hosted controller fixture now reads/hashes real fixed plan/Build inputs from the
-second UID, returns that digest and freezes its output using the retained execution/digest.
-Additional Linux plan tests check existing-output preservation, changed bytes, links/specials,
-undeclared .pth files and stage cleanup. These cases remain unexecuted on the Windows host.
-
-`materialize_validation_export` creates new independent single-link files in a private stage,
-verifies the copied inventory and independently rechecks the stage before exclusive atomic
-publication. Existing outputs are never replaced and writer failure leaves no published output.
-Actual protected verification, validator UID termination/locking, readable ownership reclamation,
-excluded source writers, destination-parent protection and final receipt/status/API admission
-remain caller requirements. These inactive readers/copy functions do not seal a gate by themselves.
-
-`freeze_validation_export` composes the protected-root fixed output lifecycle. Verifiers emit
-their local packet at `WORKER_ROOT/validator-home/validation`, with 0700 directories/0600 files,
+`freeze_validation_export` composes the protected-root fixed output lifecycle. A verifier leaves
+its reports at `WORKER_ROOT/validator-home/validation`, with 0700 directories/0600 files,
 one validator UID/GID, single-link regular files and no ACLs. Protected setup authenticates
-host/passwd, retained successful actual execution/source evidence, profile and fixed/disjoint
-accounts; terminates/locks the validator; authenticates traversal roots, its private home and
-the complete private output metadata; then copies verified context/bytes independently into
+host/passwd, retained successful actual execution/source evidence, profile and the accounts (the
+validator, isolated from the runner and from the candidate when the job has one);
+terminates/locks the validator; authenticates traversal roots, its private home and
+the complete private output metadata; then seals the reports with the record into
 `WORKER_ROOT/sealed-validation`. Existing frozen copies are never replaced.
 
 Only the newly protected-root-created copy is transferred to runner UID/GID using
@@ -426,8 +459,25 @@ copies are not chmodded. `authenticate_tree_private_access` performs the corresp
 no-follow owner/group/mode/ACL checks and allows root ownership only as metadata for a fresh
 protected copy. Role/copy origin and byte authenticity still require the composition above.
 Constructed in-memory receipts are not provenance; native schema/semantic/input validation,
-complete import/installer provenance, production root dispatch, gate/API sealing and upload
-integration remain required and inactive.
+complete import/installer provenance, gate/API sealing and final status admission remain required.
+
+`materialize_validated_export` writes the directory a job uploads, and so the layout of the
+`mb-ci-target`, `mb-ci-build` and `mb-ci-runtime` artifacts. The artifact root is the export root:
+every sealed file under its own export path, the export's envelope (`ci-envelope.json`, or
+`ci-runtime-envelope.json` for a lane) and, beside the envelope, `ci-validation.json` and the
+reports it names (`<unit id>.json`: one for a target or a lane, one per target for the complete
+Build). Nothing is renamed or nested. The export must be exactly its envelope and sealed by the
+uploading run attempt; the verification must be the one sealed for this hook, unit, run, attempt,
+config digest and input digest (for a Build or a target, the SHA-256 of that envelope). No two
+paths of the upload may be equal, differ only in case or use one's file as the other's directory,
+so a plan that stages `ci-validation.json` or `<unit id>.json` at the export root cannot be
+uploaded. A reader verifies the artifact from itself: it takes `ci-validation.json` and every
+`reports[].path` out of the extracted root, verifies what remains as the export
+(`verify_build_export`, `verify_runtime_export`: exactly the envelope's inventory) and the
+detached files as the verification (`verify_validation_export`), and for a Build or a target
+requires `input_sha256` to be the SHA-256 of the envelope's bytes. The byte and entry budget of
+such an artifact is the export's plus one record of at most 4 MiB and its reports of at most
+4 MiB each.
 
 `mod-base.build.config` lives at `scripts/ci/mod-base-build.json`. Its remaining fields are
 `repository`, `profile`, `build_adapter_api`, `adapter`, `timeouts`. Adapter has distinct fixed

@@ -1,4 +1,5 @@
-"""``ci worker-prepare``, ``ci plan`` and ``ci worker-finish``: the worker lifecycle of a job.
+"""``ci worker-prepare``, ``ci plan``, ``ci worker-validate`` and ``ci worker-finish``: the worker
+lifecycle of a job.
 
 Each is one job step run by the runner, after ``ci subject`` created ``--state``:
 
@@ -14,6 +15,11 @@ Each is one job step run by the runner, after ``ci subject`` created ``--state``
 * ``worker-finish`` (``if: always()``) leaves both accounts terminated and locked and gives the
   runner home its mode back. It reads nothing but ``--state`` and the host, so it also works when
   the mod checkout or an earlier step failed.
+* ``worker-validate --hook verify_target|verify_build|verify_runtime [--unit ID] --output DIR``
+  runs the verification of the job's sealed export as the validator and writes ``DIR``, the
+  directory the job uploads next: the export with its envelope, the validation record and the
+  reports. ``--unit`` is the target or the lane; ``verify_build`` takes none. ``DIR`` must not
+  exist. It reads nothing from the API.
 
 A hook's output is printed with every line prefixed and neutralised (``worker.render_worker_log``).
 """
@@ -37,8 +43,13 @@ def _sha256(value: str) -> str:
     return grammar.require(grammar.SHA256, value, "SHA-256")
 
 
+def _unit_id(value: str) -> str:
+    return grammar.require(grammar.CI_UNIT_ID, value, "unit id")
+
+
 TOOL_PATH = cli.typed(_tool_path, "absolute tool path")
 PLAN_SHA256 = cli.typed(_sha256, "plan SHA-256")
+UNIT_ID = cli.typed(_unit_id, "target or lane id")
 
 
 def add_verbs(verbs: argparse._SubParsersAction) -> None:
@@ -64,6 +75,17 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     finish = verbs.add_parser("worker-finish", help="lock both accounts and restore the runner home (if: always())")
     commands.add_job_arguments(finish)
     finish.set_defaults(handler=run_worker_finish)
+
+    validate = verbs.add_parser("worker-validate",
+                                help="verify the sealed export as the validator and write the upload directory")
+    commands.add_job_arguments(validate)
+    validate.add_argument("--hook", choices=tuple(lifecycle.VALIDATION_HOOKS), required=True,
+                          help="the verification this job ends with")
+    validate.add_argument("--unit", type=UNIT_ID, default=None, metavar="ID",
+                          help="the target or lane to verify (none for verify_build)")
+    validate.add_argument("--output", type=cli.PATH, required=True, metavar="DIR",
+                          help="the new directory the job uploads; it must not exist")
+    validate.set_defaults(handler=run_worker_validate)
 
 
 def run_worker_prepare(args: argparse.Namespace) -> int:
@@ -98,4 +120,17 @@ def run_worker_finish(args: argparse.Namespace) -> int:
     home = ("runner home untouched by this job" if report["home_mode"] is None
             else f"runner home mode {report['home_mode']:04o} restored")
     sys.stdout.write(f"worker-finish: {accounts}; no process left; {home}\n")
+    return 0
+
+
+def run_worker_validate(args: argparse.Namespace) -> int:
+    invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
+    job = lifecycle.open_job(invocation, args.state)
+    worker = lifecycle.open_worker(job)
+    sealed = lifecycle.validate_export(job, worker, hook=args.hook, unit_id=args.unit, output=args.output,
+                                       log=sys.stdout.write)
+    reports = len(sealed["validation"]["reports"])
+    sys.stdout.write(f"worker-validate: {args.hook}{'' if args.unit is None else ' ' + args.unit} verified "
+                     f"{len(sealed['envelope']['files'])} sealed files; {reports} "
+                     f"{'report' if reports == 1 else 'reports'} sealed; upload directory written\n")
     return 0

@@ -33,11 +33,12 @@ from mod_base.build_ci.handoff import _context, _read_private_record
 from mod_base.build_ci.host import (HostBoundary, _canonical_path, _open_directory, authenticate_host_boundary,
                                     authenticate_privileged_host_boundary, privileged_runner_identity)
 from mod_base.build_ci.inputs import (VALIDATOR_INPUT_ROOT, _accounts, _inspect_inputs, _layout,
-                                      plan_source_digests, verify_validation_inputs)
+                                      plan_source_digests, read_sealed_build, verify_validation_inputs)
 from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.root_request_schema import validate_root_request
 from mod_base.build_ci.runtime_handoff import _context as _runtime_context
-from mod_base.build_ci.runtime_inputs import _inspect_inputs as _inspect_runtime_inputs, _retained
+from mod_base.build_ci.runtime_inputs import (_inspect_inputs as _inspect_runtime_inputs, _retained,
+                                              read_sealed_runtime)
 from mod_base.build_ci.source import GitSourceEntry, validate_source_inventory
 from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, authenticate_worker_account
 from mod_base.errors import single_line
@@ -241,6 +242,60 @@ def request_derived_plan(*, boundary: HostBoundary, validator: WorkerAccount) ->
     try:
         authenticate_host_boundary(boundary)
         return _publish("take-derived-plan", boundary, _job_arguments(boundary, validator))
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
+
+
+def request_build_validation_grant(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any],
+                                   envelope: dict[str, Any]) -> str:
+    """Runner-only request to hand the private ``sealed-build/`` to the validator; return the nonce.
+
+    Made once per job, before the hook that reads the Build runs, while the directory is still
+    the runner's private export. ``envelope`` is what the runner read there
+    (:func:`mod_base.build_ci.inputs.read_sealed_build`): a target's partition or the complete
+    Build of ``plan``. The directory is read again inside publication, so nothing is published
+    for another export; root grants only what equals the request.
+    """
+    try:
+        authenticate_host_boundary(boundary)
+        accounts = _job_arguments(boundary, validator)
+
+        def private() -> None:
+            check(read_sealed_build(boundary=boundary, validator=validator, plan=plan) == (envelope, False)
+                  and _job_arguments(boundary, validator) == accounts, "$.request",
+                  "sealed-build/ is not the private export this request names, or the accounts changed")
+
+        return _publish("grant-build-validation", boundary,
+                        {**accounts, "plan": copy.deepcopy(plan), "envelope": copy.deepcopy(envelope)},
+                        before_publish=private)
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
+
+
+def request_runtime_validation_grant(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any],
+                                     build: dict[str, Any], runtime: dict[str, Any], lane_id: str,
+                                     run_id: int, run_attempt: int) -> str:
+    """Runner-only request to hand the private ``sealed-runtime/`` to the validator; return the nonce.
+
+    Made once per lane job, after its owning Build in ``sealed-build/`` was granted and while
+    the lane's results are still the runner's private copy. ``build`` and ``runtime`` are what
+    the runner read (:func:`mod_base.build_ci.runtime_inputs.read_sealed_runtime`); both
+    directories are read again inside publication, where the Build must be granted already.
+    """
+    try:
+        authenticate_host_boundary(boundary)
+        accounts = _job_arguments(boundary, validator)
+        arguments = {**accounts, "plan": copy.deepcopy(plan), "build": copy.deepcopy(build),
+                     "runtime": copy.deepcopy(runtime), "lane_id": lane_id, "run_id": run_id,
+                     "run_attempt": run_attempt}
+
+        def staged() -> None:
+            check(read_sealed_runtime(boundary=boundary, validator=validator, plan=plan, lane_id=lane_id,
+                                      run_id=run_id, run_attempt=run_attempt) == (build, runtime, True)
+                  and _job_arguments(boundary, validator) == accounts, "$.request",
+                  "the sealed lane or its granted owning Build is not what this request names")
+
+        return _publish("grant-runtime-validation", boundary, arguments, before_publish=staged)
     except OSError as error:
         raise WorkerError("cannot publish private root request") from error
 

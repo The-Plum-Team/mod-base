@@ -15,8 +15,10 @@ from tests.helpers import ci_root_request
 
 
 BUILD, RUNTIME = "freeze-build-validation", "freeze-runtime-validation"
-#: The operations of ``ci worker-prepare`` and ``ci plan``: each names the accounts of the job.
-LIFECYCLE = ("grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs")
+#: The operations of ``ci worker-prepare``, ``ci plan`` and the read grants of ``ci worker-validate``:
+#: each names the accounts of the job.
+LIFECYCLE = ("grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs",
+             "grant-build-validation", "grant-runtime-validation")
 
 
 class RootRequestSchemaTests(unittest.TestCase):
@@ -156,6 +158,27 @@ class RootRequestSchemaTests(unittest.TestCase):
                 lambda d: d["arguments"]["plan"]["identity"].update(inventory_sha256="f" * 64),
                 lambda d: d["arguments"].update(plan=None),
                 lambda d: d["arguments"].update(inventory_sha256="a" * 64)),
+            "grant-build-validation": (
+                lambda d: d["arguments"]["envelope"].update(plan_sha256="f" * 64),
+                lambda d: d["arguments"]["plan"].update(plan_sha256="f" * 64),
+                lambda d: d["arguments"]["envelope"]["files"].pop(),  # Not the planned output union.
+                lambda d: d["arguments"]["envelope"].update(scope="target"),
+                lambda d: d["arguments"].update(envelope=None),
+                lambda d: d["arguments"].pop("envelope"),
+                lambda d: d["arguments"].update(run_id=42),
+                lambda d: d["arguments"].update(sources={}),
+                lambda d: d["arguments"].update(execution_nonce="a" * 64)),
+            "grant-runtime-validation": (
+                lambda d: d["arguments"].update(lane_id="lane-b"),
+                lambda d: d["arguments"].update(run_id=42), lambda d: d["arguments"].update(run_attempt=3),
+                lambda d: d["arguments"]["build"].update(scope="target", target_id="target-a"),
+                lambda d: d["arguments"]["runtime"].update(scope="complete", lane_id=None),
+                lambda d: d["arguments"]["runtime"]["owning_build"]["producer"].update(run_id=44),
+                lambda d: d["arguments"]["runtime"].update(plan_sha256="f" * 64),
+                lambda d: d["arguments"]["build"].update(plan_sha256="f" * 64),
+                lambda d: d["arguments"].pop("build"),
+                lambda d: d["arguments"].update(sources={}),
+                lambda d: d["arguments"].update(execution_nonce="a" * 64)),
         }
         self.assertEqual(tuple(cases), LIFECYCLE)
         for operation, mutations in cases.items():
@@ -168,9 +191,23 @@ class RootRequestSchemaTests(unittest.TestCase):
             validate_root_request(ci_root_request("grant-validation-inputs"))
 
     def test_runtime_request_keeps_its_cross_run_owning_build(self):
-        arguments = ci_root_request(RUNTIME)["arguments"]
-        self.assertEqual(arguments["build"]["producer"]["run_id"], 42)
-        self.assertEqual(arguments["runtime"]["producer"]["run_id"], 43)
+        for operation in (RUNTIME, "grant-runtime-validation"):
+            arguments = ci_root_request(operation)["arguments"]
+            self.assertEqual(arguments["build"]["producer"]["run_id"], 42)
+            self.assertEqual(arguments["runtime"]["producer"]["run_id"], 43)
+
+    def test_the_build_grant_takes_a_partition_or_the_complete_build_of_any_run(self):
+        from tests.helpers import ci_envelope
+
+        document = ci_root_request("grant-build-validation")
+        self.assertEqual(document["arguments"]["envelope"]["scope"], "complete")
+        partition = copy.deepcopy(document)
+        partition["arguments"]["envelope"] = ci_envelope(target_id="target-a")
+        validate_root_request(partition)
+        # The owning Build of a lane was sealed by another run: the request names no attempt.
+        self.assertEqual(sorted(document["arguments"]), ["candidate", "envelope", "plan", "validator"])
+        with patch.object(limits, "MAX_CI_ENVELOPE_BYTES", 1), self.assertRaises(MbError):
+            validate_root_request(document)
 
     def test_existing_native_and_document_caps_are_preserved(self):
         for operation, bounds in ((BUILD, ("MAX_CI_PLAN_BYTES", "MAX_CI_ENVELOPE_BYTES", "MAX_CI_ROOT_REQUEST_BYTES",

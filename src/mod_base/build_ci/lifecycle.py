@@ -12,6 +12,9 @@ module is what the ``ci worker-*`` and ``ci plan`` commands compose:
 * :func:`open_worker` gives every later command the prepared worker, checked against the host;
 * :func:`derive_plan` (``ci plan``) stages the candidate files the protected config names, runs
   ``derive_plan`` as the validator and builds the plan;
+* :func:`validate_export` (``ci worker-validate``) hands the job's sealed export to the validator,
+  runs its verification hook, has root seal the reports with the record protected code builds
+  and writes the directory the job uploads;
 * :func:`finish_worker` (``ci worker-finish``) is the sweep a job always ends with.
 
 State records are canonical JSON, written once and read strictly:
@@ -46,18 +49,26 @@ from mod_base.build_ci.config import BuildConfig, load_build_config
 from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, ControllerSources,
                                           checkout_controller_sources, execute_controller_validator,
                                           materialize_controller_sources)
-from mod_base.build_ci.handoff import _read_private_record
+from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT
+from mod_base.build_ci.handoff import _read_private_record, record_build_validation_execution
 from mod_base.build_ci.host import (HOST_RUNNER_HOME, HostBoundary, _canonical_path, authenticate_host_boundary,
                                     inspect_worker_host, protect_worker_host, restore_worker_host)
-from mod_base.build_ci.inputs import (DERIVED_PLAN_ROOT, VALIDATOR_INPUT_ROOT, _layout,
-                                      materialize_validation_inputs, replace_plan_inputs)
+from mod_base.build_ci.inputs import (DERIVED_PLAN_ROOT, VALIDATOR_INPUT_ROOT, _layout, build_input_sha256,
+                                      execute_frozen_build_validator, materialize_validation_inputs,
+                                      read_sealed_build, replace_plan_inputs)
 from mod_base.build_ci.protocol import SHA256, validate_plan
-from mod_base.build_ci.root_request import (request_controller_grant, request_derived_plan, request_host_fence,
-                                          request_plan_inputs_grant, request_validation_inputs_grant,
+from mod_base.build_ci.root_request import (request_build_validation_freeze, request_build_validation_grant,
+                                          request_controller_grant, request_derived_plan, request_host_fence,
+                                          request_plan_inputs_grant, request_runtime_validation_freeze,
+                                          request_runtime_validation_grant, request_validation_inputs_grant,
                                           run_root_operation)
 from mod_base.build_ci.root_request_schema import _ACCOUNT, _BOUNDARY
+from mod_base.build_ci.runtime_handoff import record_runtime_validation_execution
+from mod_base.build_ci.runtime_inputs import (RUNTIME_VALIDATION_ROOT, execute_frozen_runtime_validator,
+                                              read_sealed_runtime)
 from mod_base.build_ci.toolchain import (ToolTreeProof, _execution_tool_paths, authenticate_toolchains,
                                         inspect_worker_toolchains)
+from mod_base.build_ci.validation import SEALED_VALIDATION_ROOT, materialize_validated_export
 from mod_base.build_ci.worker import (WORKER_ACCOUNTS, WORKER_ROOT, WorkerAccount, WorkerExecutionError,
                                       WorkerResult, allocate_worker_account, authenticate_worker_account,
                                       lock_worker_account, prepare_worker_boundary, render_worker_log,
@@ -66,6 +77,7 @@ from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.contents import blob, exact_tree
 from mod_base.io.secure_json import loads
+from mod_base.io.tree import authenticate_tree_private_access
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.validators import Int, List, Nullable, Obj, check
@@ -588,3 +600,105 @@ def finish_worker(state: Path) -> dict[str, Any]:
     boundary = HostBoundary(**_read_record(state, HOST_NAME, _HOST, limits.MAX_CI_WORKER_RECORD_BYTES)["boundary"])
     restore_worker_host(boundary)
     return {**report, "home_mode": boundary.original_mode}
+
+
+# -- ci worker-validate ------------------------------------------------------------------------------
+
+#: ``ci worker-validate --hook``: the verification a job ends with -> the accounts that kind of job
+#: allocated. A target and a lane are verified in the job whose candidate produced them; the
+#: complete Build is verified in the assembling job, which has the validator alone.
+VALIDATION_HOOKS = {"verify_target": ROLE_SETS["candidate+validator"], "verify_build": ROLE_SETS["validator"],
+                    "verify_runtime": ROLE_SETS["candidate+validator"]}
+
+
+def validation_unit(plan: dict[str, Any], *, hook: str, unit_id: str | None,
+                    roles: tuple[str, ...]) -> dict[str, Any] | None:
+    """The target or lane of ``plan`` that ``hook`` verifies in a job that allocated ``roles``
+    (``None`` for ``verify_build``, which verifies every target).
+
+    A hook that seals nothing, a unit outside the plan and a unit for ``verify_build`` or none for
+    the other two are rejections, and so is a job that allocated other accounts than the hook's
+    kind of job does.
+    """
+
+    check(type(hook) is str and hook in VALIDATION_HOOKS, "$.hook", "must be a verification hook")
+    unit = adapter.plan_unit(plan, hook, unit_id)
+    if tuple(roles) != VALIDATION_HOOKS[hook]:
+        raise LifecycleError(f"{hook} runs in a job that allocated {' and '.join(VALIDATION_HOOKS[hook])}; "
+                             f"this job allocated {' and '.join(roles)}")
+    return unit
+
+
+def validate_export(job: Job, worker: Worker, *, hook: str, unit_id: str | None, output: Path,
+                    log: Callable[[str], object]) -> dict[str, Any]:
+    """``ci worker-validate``: verify the job's sealed export as the validator and write the
+    directory the job uploads.
+
+    ``output`` must not exist; that is checked before anything else. The sealed input must be
+    there and be the plan's: for ``verify_target`` the partition of target ``unit_id`` in
+    ``sealed-build/``, for ``verify_build`` the complete Build there, both sealed by this run
+    attempt and still private to the runner; for ``verify_runtime`` the results of lane
+    ``unit_id`` in ``sealed-runtime/`` with the complete Build its envelope names in
+    ``sealed-build/``. Root hands what is still private to the validator read-only
+    (``grant-build-validation``, ``grant-runtime-validation``; the plan inputs were granted by
+    ``ci plan``). The hook runs from the protected adapter copy with the inputs authenticated
+    before and after; its result is published for root, which copies the reports out of the
+    validator's home and seals them with the record it builds (``freeze-build-validation``,
+    ``freeze-runtime-validation``). ``output`` then becomes the export root with the envelope,
+    the validation record and the reports (``validation.materialize_validated_export``).
+
+    Returns the envelope and the validation record. Every account ends terminated and locked,
+    whatever happens; after a failure there is no ``output``.
+    """
+
+    output = Path(os.path.abspath(output))
+    if os.path.lexists(output):
+        raise LifecycleError("the upload directory exists already; `ci worker-validate` never replaces one")
+    plan = read_plan(job)
+    validation_unit(plan, hook=hook, unit_id=unit_id, roles=tuple(worker.accounts))
+    boundary, validator, sources = worker.boundary, worker.validator, job.sources
+    run = dict(run_id=job.run_id, run_attempt=job.run_attempt)
+
+    def execute() -> WorkerResult:
+        return run_protected_hook(job, worker, hook, plan=plan, unit_id=unit_id, log=log)
+
+    def root(operation: str, nonce: str) -> None:
+        _root(job, worker.python, operation, nonce)
+
+    with resting(worker.accounts):
+        if hook == "verify_runtime":
+            build, envelope, granted = read_sealed_runtime(boundary=boundary, validator=validator, plan=plan,
+                                                           lane_id=unit_id, **run)
+            if not granted:  # A step that staged the Build for the lane may have handed it over already.
+                root("grant-build-validation", request_build_validation_grant(
+                    boundary=boundary, validator=validator, plan=plan, envelope=build))
+            lane = dict(boundary=boundary, validator=validator, plan=plan, build=build, runtime=envelope,
+                        lane_id=unit_id, **run)
+            root("grant-runtime-validation", request_runtime_validation_grant(**lane))
+            bound = execute_frozen_runtime_validator(**lane, execute=execute)
+            nonce = record_runtime_validation_execution(**lane, sources=sources, bound=bound)
+            root("freeze-runtime-validation",
+                 request_runtime_validation_freeze(**lane, sources=sources, execution_nonce=nonce))
+            export = RUNTIME_VALIDATION_ROOT
+        else:
+            envelope, granted = read_sealed_build(boundary=boundary, validator=validator, plan=plan)
+            if granted:
+                raise LifecycleError("sealed-build/ is not the private export this job has just sealed")
+            build_input_sha256(plan=plan, envelope=envelope, hook=hook, unit_id=unit_id, **run)
+            root("grant-build-validation", request_build_validation_grant(
+                boundary=boundary, validator=validator, plan=plan, envelope=envelope))
+            sealed = dict(boundary=boundary, plan=plan, envelope=envelope, **run)
+            bound = execute_frozen_build_validator(**sealed, validator=validator, hook=hook, unit_id=unit_id,
+                                                   execute=execute)
+            nonce = record_build_validation_execution(**sealed, sources=sources, bound=bound)
+            root("freeze-build-validation", request_build_validation_freeze(
+                **sealed, validator=validator, sources=sources, execution_nonce=nonce))
+            export = BUILD_VALIDATION_ROOT
+        authenticate_host_boundary(boundary)
+        _layout(boundary)
+        authenticate_tree_private_access(SEALED_VALIDATION_ROOT, owner_uid=boundary.uid, owner_gid=boundary.gid,
+                                         max_entries=limits.MAX_CI_EXPORT_ENTRIES)
+        record = materialize_validated_export(
+            Path(str(export)), Path(str(SEALED_VALIDATION_ROOT)), output, plan=plan, envelope=envelope, hook=hook,
+            unit_id=unit_id, **run, source_config_sha256=sources.config.sha256, input_sha256=bound.input_sha256)
+    return {"envelope": envelope, "validation": record}

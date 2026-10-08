@@ -105,6 +105,15 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                      {"ci_command": "aggregate", "state": Path("state"), "output": Path("upload")}),
     "ci seal-gate": (["ci", "seal-gate", *REPO, "--state", "state", "--gate", "packaged", "--output", "upload"],
                      {"ci_command": "seal-gate", "state": Path("state"), "gate": "packaged", "output": Path("upload")}),
+    "ci worker-validate target": (["ci", "worker-validate", *REPO, "--state", "state", "--hook", "verify_target",
+                                   "--unit", "1.20.1", "--output", "upload"],
+                                  {"ci_command": "worker-validate", "state": Path("state"), "hook": "verify_target",
+                                   "unit": "1.20.1", "output": Path("upload")}),
+    "ci worker-validate build": (["ci", "worker-validate", *REPO, "--state", "state", "--hook", "verify_build",
+                                  "--output", "upload"], {"hook": "verify_build", "unit": None}),
+    "ci worker-validate lane": (["ci", "worker-validate", *REPO, "--state", "state", "--hook", "verify_runtime",
+                                 "--unit", "fabric-1.20.1", "--output", "upload"],
+                                {"hook": "verify_runtime", "unit": "fabric-1.20.1"}),
     "ci batch-prepare": (["ci", "batch-prepare", *REPO, "--state", "state", "--name", "run-1", "--allowed-paths",
                           "allowed.json", "--dry-run", "--github-output", "out", "12", "7"],
                          {"ci_command": "batch-prepare", "state": Path("state"), "name": "run-1",
@@ -226,6 +235,16 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "seal-gate", *REPO, "--state", "s", "--output", "o"],
             ["ci", "seal-gate", *REPO, "--state", "s", "--gate", "reuse", "--output", "o"],
             ["ci", "seal-gate", *REPO, "--state", "s", "--gate", "build", "--output", "o", "--mode", "full"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_build"],
+            ["ci", "worker-validate", *REPO, "--hook", "verify_build", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "derive_plan", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "Target", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "a--b", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_build", "--output", ""],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_build", "--output", "o",
+             "--github-output", "out"],
             ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "run-1", "--allowed-paths", "a.json"],
             ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "Run/1", "--allowed-paths", "a.json", "7"],
             ["ci", "batch-prepare", *REPO, "--name", "run-1", "--allowed-paths", "a.json", "7"],
@@ -301,7 +320,7 @@ class CiVerbsTest(unittest.TestCase):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
         self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-finish", "batch-prepare",
-                              "batch-settle", "select-build", "fetch-build", "gate-status"}, set(verbs))
+                              "batch-settle", "select-build", "fetch-build", "gate-status", "worker-validate"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):
