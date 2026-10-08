@@ -7,10 +7,10 @@ and names), ``CI_JOB_VERBS`` (the ``ci`` verb of every step, in order), ``CI_JOB
 sealing jobs and what they upload) and ``CI_JOB_PERMISSIONS``. A callee is policed from the moment
 its file exists: a workflow file without rows in those tables fails, and so do rows without a file.
 
-The module also holds what the per-workflow modules (``tests/test_workflow_build.py``) import
-(functions and tables only, so no test runs twice): the loader, the closed tables below and
-:class:`CiStepRunner`, which executes a step's ``run:`` body under the Pages tests' ``ShellHarness``
-and returns the ``ci`` command lines it issued.
+The module also holds what the per-workflow modules (``tests/test_workflow_build.py`` and
+``tests/test_workflow_select_build.py``) import (functions and tables only, so no test runs twice):
+the loader, the closed tables below and :class:`CiStepRunner`, which executes a step's ``run:``
+body under the Pages tests' ``ShellHarness`` and returns the ``ci`` command lines it issued.
 """
 
 from __future__ import annotations
@@ -48,18 +48,26 @@ CI_CALLEE_PATHS = {name: ROOT / path for name, path in workflow.CI_CALLEE_WORKFL
 CI_CALLEES = tuple(workflow.CI_JOB_VERBS)
 
 #: The inputs of each callee, in order; ``kit-sha`` is the only required one.
-CI_INPUTS = {"build": ("kit-sha", "pr-number")}
+CI_INPUTS = {"build": ("kit-sha", "pr-number"), "select-build": ("kit-sha",)}
+#: What each callee returns to its caller, in order: output -> the job that has an output of that name.
+CI_OUTPUTS = {"build": {}, "select-build": {"mode": "select", "found": "select", "build-run-id": "select"}}
 #: The producer each callee's jobs authenticate as (``ci subject --producer``, ``ci seal-gate --gate``).
-CI_PRODUCER = {"build": "build"}
-#: Where a callee reads its mode and the tested commit from (the callee's own spelling).
+CI_PRODUCER = {"build": "build", "select-build": "packaged"}
+#: Where a callee reads its mode and the tested commit from (the callee's own spelling): the callees
+#: whose gate seals one of two records, and the callees with a job that stages candidate code.
 MODE_EXPRESSION = {"build": "needs.plan.outputs.mode"}
 CANDIDATE_REF = {"build": "${{ needs.plan.outputs.tested-sha }}"}
+#: Where the environment of a callee's steps differs from a Build step of pull request 17: the
+#: managed caller that reaches the callee and, for the one no pull request reaches, the event.
+PACKAGED_CALLER_REF = "example/mod/" + workflow.CI_CALLER_WORKFLOWS["packaged"] + "@refs/heads/master"
+CI_ENVIRONMENT = {"build": {},
+                  "select-build": {"GITHUB_EVENT_NAME": "push", "GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF}}
 
 #: The third checkout, present exactly in the jobs that stage and run candidate code.
 CANDIDATE_CHECKOUT = "Check out the tested candidate"
 CANDIDATE_VERBS = frozenset({"worker-stage", "worker-run"})
 #: The verbs that call the API: exactly the steps that run one hold the step-scoped token.
-API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate"})
+API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate", "select-build"})
 #: The verbs that must also run after a failure or a cancellation, and the step each depends on.
 #: A bare ``always()`` would run kit Python in a job whose prologue failed, that is from a kit tree
 #: nobody verified; a step that follows the prologue can only have succeeded when the prologue did.
@@ -69,8 +77,13 @@ ALWAYS_VERBS = {"worker-seal": "${{ always() && steps.prepare.outcome == 'succes
                 "worker-finish": "${{ always() && steps.subject.outcome == 'success' }}"}
 #: The step ids those conditions name, by the verb of the step that carries each.
 GATING_IDS = {"subject": "subject", "worker-prepare": "prepare"}
-#: The only other condition a step may carry, by verb.
-CONDITIONAL_VERBS = {"reuse-admit": "github.event_name == 'push'"}
+#: The only other condition a step may carry, by callee, job and verb. Reuse is admitted for a push
+#: alone, and a job that also runs in reuse mode selects no Build then.
+CONDITIONAL_STEPS = {
+    ("build", "plan", "reuse-admit"): "github.event_name == 'push'",
+    ("select-build", "select", "reuse-admit"): "github.event_name == 'push'",
+    ("select-build", "select", "select-build"): "steps.reuse.outputs.mode != 'reuse'",
+}
 #: The verbs of a job's one ``workflow.CI_SEAL_STEP``.
 SEAL_VERBS = frozenset({"worker-validate", "seal-gate"})
 #: The third-party actions a Build/E2E callee may use, at the reviewed pins of the Pages callees.
@@ -82,7 +95,7 @@ RUN_EXPRESSION, ATTEMPT_EXPRESSION = "${{ github.run_id }}", "${{ github.run_att
 #: The ``ci`` verbs the workflows already issue but no work package has registered yet. Each one
 #: leaves this set in the change that registers it; from then on its command lines must parse.
 PENDING_VERBS = frozenset({"worker-prepare", "plan", "reuse-admit", "worker-stage", "worker-run", "worker-seal",
-                           "assemble", "worker-validate", "seal-gate", "worker-finish"})
+                           "assemble", "worker-validate", "seal-gate", "worker-finish", "select-build"})
 
 #: The one fixed first line of every kit command of a Build/E2E job.
 CI_COMMAND = re.compile(r"^  python3 -P -m mod_base ci ([a-z][a-z-]*) --repo mod --config mod/site/mod-base\.json "
@@ -91,6 +104,8 @@ CI_COMMAND = re.compile(r"^  python3 -P -m mod_base ci ([a-z][a-z-]*) --repo mod
 #: the step-scoped token. Never an event payload field and never a secret.
 ENV_VALUE = re.compile(r"^\$\{\{ (?:inputs\.[a-z][a-z0-9-]*|needs\.[a-z][a-z-]*\.outputs\.[a-z][a-z0-9-]*|matrix\.id"
                        r"|github\.token) \}\}$")
+#: What a job may return: one output of one of its own steps, or a choice between two literals by it.
+JOB_OUTPUT = re.compile(r"^\$\{\{ steps\.[a-z]+\.outputs\.[a-z0-9_]+(?: == '[a-z]+' && '[a-z]+' \|\| '[a-z]+')? \}\}$")
 DOCUMENT_KEYS = {"name", "on", "permissions", "env", "jobs"}
 JOB_KEYS = {"name", "needs", "if", "runs-on", "timeout-minutes", "permissions", "outputs", "strategy", "steps"}
 RUN_STEP_KEYS = {"name", "id", "if", "shell", "env", "run"}
@@ -201,10 +216,11 @@ class CiStepRunner:
 
     ``kit/`` is a small kit tree whose kit-digest-v1 is the workflow literal, ``mod/site/mod-base.json``
     names the canonical branch ``master`` and the environment is the one a step of pull request 17
-    gets, plus every credential a runner could leak. ``git`` answers ``rev-parse HEAD`` from
-    ``STUB_<CHECKOUT>_HEAD`` and ``python3`` records its command line and environment."""
+    gets in the callee ``name`` (``CI_ENVIRONMENT``), plus every credential a runner could leak.
+    ``git`` answers ``rev-parse HEAD`` from ``STUB_<CHECKOUT>_HEAD`` and ``python3`` records its
+    command line and environment."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, name: str = "build") -> None:
         self.harness = ShellHarness(root / "harness", stubs=("git", "python3"))
         self.workspace = root / "work space"
         make_kit(self.workspace / "kit")
@@ -223,6 +239,7 @@ class CiStepRunner:
             "MB_KIT_TREE_DIGEST": reference_digest(self.workspace / "kit"), **JDKS,
             "STUB_GIT_SCRIPT": GIT_STUB, "STUB_MOD_HEAD": "a" * 40, "STUB_KIT_HEAD": "b" * 40,
             "STUB_CANDIDATE_HEAD": SAMPLES["TESTED_SHA"], **dict.fromkeys(AMBIENT, "leaked"),
+            **CI_ENVIRONMENT[name],
         }
 
     def run(self, item: Mapping[str, Any], **overrides: str | None) -> StepOutcome:
@@ -250,28 +267,47 @@ class CiStepRunner:
 
 class CiRegistryTests(unittest.TestCase):
     def test_job_tables_spelled_out(self) -> None:
-        self.assertEqual(workflow.CI_JOB_VERBS, {"build": {
-            "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
-            "policy": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
-                       "worker-finish"),
-            "target": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
-                       "worker-validate", "worker-finish"),
-            "assemble": ("subject", "worker-prepare", "plan", "assemble", "worker-validate", "worker-finish"),
-            "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
-        }})
-        self.assertEqual(workflow.CI_JOB_ARTIFACTS, {"build": {
-            "target": {"full": "target"}, "assemble": {"full": "build"},
-            "gate": {"full": "tested", "reuse": "reuse"}}})
+        self.assertEqual(workflow.CI_JOB_VERBS, {
+            "build": {
+                "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
+                "policy": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+                           "worker-finish"),
+                "target": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+                           "worker-validate", "worker-finish"),
+                "assemble": ("subject", "worker-prepare", "plan", "assemble", "worker-validate", "worker-finish"),
+                "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
+            },
+            "select-build": {
+                "select": ("subject", "worker-prepare", "plan", "reuse-admit", "select-build", "worker-finish"),
+            },
+        })
+        self.assertEqual(list(workflow.CI_JOB_VERBS),
+                         [name for name in workflow.CI_CALLEE_WORKFLOWS if name in workflow.CI_JOB_VERBS],
+                         "the tables keep the registry's order")
+        self.assertEqual(workflow.CI_JOB_ARTIFACTS, {
+            "build": {"target": {"full": "target"}, "assemble": {"full": "build"},
+                      "gate": {"full": "tested", "reuse": "reuse"}}})
         read = {"actions": "read", "contents": "read", "pull-requests": "read"}
-        self.assertEqual(workflow.CI_JOB_PERMISSIONS, {"build": {
-            "plan": read, "policy": read, "target": read, "assemble": read, "gate": read}})
+        self.assertEqual(workflow.CI_JOB_PERMISSIONS, {
+            "build": {"plan": read, "policy": read, "target": read, "assemble": read, "gate": read},
+            "select-build": {"select": read}})
 
     def test_every_table_describes_exactly_the_jobs_of_its_callee(self) -> None:
         self.assertEqual(set(workflow.CI_JOB_PERMISSIONS), set(CI_CALLEES))
         self.assertLessEqual(set(workflow.CI_JOB_ARTIFACTS), set(CI_CALLEES))
         self.assertLessEqual(set(CI_CALLEES), set(workflow.CI_CALLEE_WORKFLOWS))
-        for table in (CI_INPUTS, CI_PRODUCER, MODE_EXPRESSION, CANDIDATE_REF):
+        for table in (CI_INPUTS, CI_OUTPUTS, CI_PRODUCER, CI_ENVIRONMENT):
             self.assertEqual(set(table), set(CI_CALLEES))
+        # A mode is spelled where a gate seals one of two records, a tested commit where a job
+        # stages candidate code; a callee without either has no row to go stale.
+        self.assertEqual(set(MODE_EXPRESSION), {name for name, jobs in workflow.CI_JOB_ARTIFACTS.items()
+                                                if any(len(kinds) > 1 for kinds in jobs.values())})
+        self.assertEqual(set(CANDIDATE_REF), {name for name in CI_CALLEES if any(
+            CANDIDATE_VERBS & set(verbs) for verbs in workflow.CI_JOB_VERBS[name].values())})
+        for (name, job_id, verb), condition in CONDITIONAL_STEPS.items():
+            self.assertIn(verb, workflow.CI_JOB_VERBS[name][job_id], "a condition is tabled for a step that exists")
+            self.assertNotIn(verb, ALWAYS_VERBS)
+            self.assertNotRegex(condition, r"always\(\)|failure\(\)|cancelled\(\)|success\(\)")
         for name in CI_CALLEES:
             jobs = list(workflow.CI_CALLEE_JOBS[name])
             with self.subTest(callee=name):
@@ -337,7 +373,8 @@ class CiCalleePolicyTests(unittest.TestCase):
                 self.assertEqual(set(document), DOCUMENT_KEYS)
                 self.assertEqual(document["name"], f"mod-base {name}")
                 self.assertEqual(list(document["on"]), ["workflow_call"])
-                self.assertNotIn("secrets", document["on"]["workflow_call"])
+                self.assertEqual(list(document["on"]["workflow_call"]),
+                                 ["inputs", "outputs"] if CI_OUTPUTS[name] else ["inputs"], "no secrets")
                 self.assertEqual(document["permissions"], {})
                 self.assertEqual(list(document["env"]), ["MB_KIT_TREE_DIGEST"])
                 self.assertRegex(document["env"]["MB_KIT_TREE_DIGEST"], r"^sha256:[0-9a-f]{64}$")
@@ -362,6 +399,21 @@ class CiCalleePolicyTests(unittest.TestCase):
                         self.assertNotIn("default", spec)
                     else:
                         self.assertEqual((spec["required"], spec["default"]), ("false", ""), input_name)
+
+    def test_outputs_are_the_same_named_outputs_of_one_job(self) -> None:
+        for name in CI_CALLEES:
+            document = ci_callee(name)
+            declared = document["on"]["workflow_call"].get("outputs", {})
+            with self.subTest(callee=name):
+                self.assertEqual(list(declared), list(CI_OUTPUTS[name]))
+                for output, job_id in CI_OUTPUTS[name].items():
+                    self.assertEqual(set(declared[output]), {"description", "value"}, output)
+                    self.assertEqual(declared[output]["value"], "${{ jobs." + job_id + ".outputs." + output + " }}")
+                    self.assertIn(output, document["jobs"][job_id]["outputs"])
+                # A job output is a value its own steps wrote: nothing of the event, no input and no token.
+                for job_id, job in document["jobs"].items():
+                    for output, value in job.get("outputs", {}).items():
+                        self.assertRegex(value, JOB_OUTPUT, f"{job_id}.{output}")
 
     def test_jobs_are_the_registry_jobs_with_their_names_and_permissions(self) -> None:
         for name in CI_CALLEES:
@@ -496,7 +548,7 @@ class CiCalleePolicyTests(unittest.TestCase):
             text = CI_CALLEE_PATHS[name].read_text(encoding="utf-8")
             self.assertEqual(text.count("github.token"), holders, f"{name}: the token appears nowhere else")
         tabled = {verb for jobs in workflow.CI_JOB_VERBS.values() for verbs in jobs.values() for verb in verbs}
-        for verbs in (API_VERBS, ALWAYS_VERBS, GATING_IDS, SEAL_VERBS, CANDIDATE_VERBS, CONDITIONAL_VERBS):
+        for verbs in (API_VERBS, ALWAYS_VERBS, GATING_IDS, SEAL_VERBS, CANDIDATE_VERBS):
             self.assertLessEqual(set(verbs), tabled, "a closed verb table names a verb no job runs")
 
     def test_steps_run_unconditionally_except_the_tabled_verbs(self) -> None:
@@ -504,7 +556,8 @@ class CiCalleePolicyTests(unittest.TestCase):
             for item in job["steps"]:
                 verb = step_verb(item)
                 with self.subTest(callee=name, job=job_id, step=item["name"]):
-                    self.assertEqual(item.get("if"), ALWAYS_VERBS.get(verb, CONDITIONAL_VERBS.get(verb)))
+                    self.assertEqual(item.get("if"),
+                                     ALWAYS_VERBS.get(verb, CONDITIONAL_STEPS.get((name, job_id, verb))))
                     if verb in GATING_IDS:
                         self.assertEqual(item.get("id"), GATING_IDS[verb])
                     else:
@@ -638,7 +691,7 @@ class CiCommandLineTests(unittest.TestCase):
             for item in job["steps"]:
                 if "run" not in item:
                     continue
-                outcome = self.runner.run(item)
+                outcome = self.runner.run(item, **CI_ENVIRONMENT[name])
                 label = f"{name} {job_id} / {item['name']}"
                 self.assertEqual(outcome.result.returncode, 0, f"{label}: {outcome.result.stderr}")
                 self.assertEqual([command[:2] for command in outcome.commands],

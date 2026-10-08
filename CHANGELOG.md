@@ -47,6 +47,12 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   only the managed Build and packaged E2E callers of the canonical branch, and its own policy
   tests. The Pages callees, their registry and their prologue are unchanged.
   `tools/update_tree_digest.py` maintains its `MB_KIT_TREE_DIGEST` literal with the other three.
+- Add the Build/E2E callee workflow `.github/workflows/select-build.yml`: one job, `select`, input
+  `kit-sha`, outputs `mode` (`full`, or `reuse` when a push reuses the result its pull request was
+  tested with), `found` and `build-run-id` (the exact existing Build of a protected push or
+  dispatch; both empty in reuse mode). A pull request never reaches it. It has its rows in the
+  `CI_JOB_*` tables, the prologue and the policy tests of `build.yml`, and a literal the digest
+  tool maintains.
 - `mod-base.ci.activation` v1 (still unreleased) gains the required `rollback_from` field, which
   names the mode a `reviewed-rollback` leaves and is `null` otherwise. `template check|sync|init`
   accept every mode, manage exactly the callers of the mod's mode, report a caller outside its mode
