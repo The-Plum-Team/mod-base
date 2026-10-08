@@ -10,16 +10,23 @@ read once (:class:`~mod_base.build_ci.reads.CommandReads`); the source, each pro
 latest attempt and each artifact's availability are read when first needed and once more
 immediately before anything is published or returned (:class:`~mod_base.build_ci.reads.Watch`).
 A caller's plan and descriptors are copied on entry and only the copies are used.
+
+A selected artifact that its run no longer lists, or that has expired, is rejected like every other
+inconsistency (:class:`ArtifactUnavailable`, still a document error). The readers of a merged pull
+request's original gates say more: evidence that is gone is an ordinary reason to test again, so
+they report it as :class:`OriginalUnavailable`, and only what is still there can be corrupt.
 """
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import hashlib
 import itertools
 import os
+import re
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -38,8 +45,8 @@ from mod_base.build_ci.runtime_exports import (_materialize_runtime_export, mate
                                                verify_runtime_export)
 from mod_base.build_ci.runtime_schema import bind_runtime_envelope
 from mod_base.build_ci.validation import verify_validation_export
-from mod_base.errors import MbError
-from mod_base.github.api import GitHubApi
+from mod_base.errors import MbError, Unavailable
+from mod_base.github.api import ApiError, GitHubApi
 from mod_base.github.artifacts import Artifact
 from mod_base.github.runs import referenced_workflows
 from mod_base.io.atomic_directory import atomic_directory
@@ -48,10 +55,28 @@ from mod_base.io.tree import read_child_file, validate_tree_entries
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256, strict_loads
 from mod_base.model.documents import load_document
-from mod_base.model.validators import Int, List, check
+from mod_base.model.validators import DocumentError, Int, List, check
 from mod_base.workflow import ci_producer, find_job
 
 _RUN_FIELDS = ("id", "run_attempt", "status", "conclusion", "path", "event", "head_sha", "head_branch", "created_at")
+#: The two reads of one artifact by its numeric id: its metadata and its archive.
+_ARTIFACT_PATH = re.compile(r"^/repos/[^/]+/[^/]+/actions/artifacts/[0-9]+(?:/zip)?$")
+
+
+class ArtifactUnavailable(DocumentError):
+    """A selected artifact is no longer listed for its producer run, or has expired.
+
+    For a route that needs the artifact this is a rejection like every other document error. It
+    has a class of its own because nothing about the artifact is wrong: it is gone."""
+
+
+class OriginalUnavailable(Unavailable):
+    """An artifact of a merged pull request's original gates is gone or has expired (exit 3).
+
+    The original evidence can no longer be authenticated. That is not corruption: whoever meant to
+    reuse the evidence tests again. Every other failure of the merged readers stays a rejection."""
+
+    default_reason = "ci-original-unavailable"
 
 
 def _plan(plan: dict[str, Any]) -> dict[str, Any]:
@@ -168,7 +193,8 @@ def _artifact_states(reads: CommandReads, run_id: int, ids: tuple[int, ...]) -> 
         rows = reads.paginate(f"/repos/{reads.repository}/actions/runs/{run_id}/artifacts", field="artifacts",
                               max_items=limits.MAX_CI_ARTIFACTS_PER_GATE)
     states = {raw["id"]: _artifact_state(raw) for raw in rows if type(raw) is dict and raw.get("id") in ids}
-    check(sorted(states) == list(ids), "$.artifact", "selected artifact is no longer listed for its producer run")
+    if sorted(states) != list(ids):
+        raise ArtifactUnavailable("$.artifact", "selected artifact is no longer listed for its producer run")
     return states
 
 
@@ -189,9 +215,10 @@ def _authenticate_artifacts(reads: CommandReads, watch: Watch, descriptors: list
             selected, state = descriptor["artifact"], states[descriptor["artifact"]["id"]]
             for key in ("id", "name", "size", "digest", "created_at", "expires_at"):
                 check(state[key] == selected[key], f"$.artifact.{key}", "immutable selected metadata differs")
-            check(not state["expired"] and state["run_id"] == run_id
-                  and state["head_sha"] == head_sha and state["head_branch"] == head_branch,
+            check(state["run_id"] == run_id and state["head_sha"] == head_sha and state["head_branch"] == head_branch,
                   "$.artifact", "expired artifact or wrong protected producer")
+            if state["expired"]:
+                raise ArtifactUnavailable("$.artifact", "expired artifact or wrong protected producer")
 
 
 def _download(reads: CommandReads, descriptor: dict[str, Any]) -> bytes:
@@ -572,6 +599,25 @@ def download_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: d
     return document
 
 
+@contextlib.contextmanager
+def _original_evidence() -> Iterator[None]:
+    """Report an original artifact that is gone as :class:`OriginalUnavailable`.
+
+    GitHub says so in three ways: it lists the artifact as expired, the run no longer lists it, or
+    a read of its numeric id answers 404 or 410. The artifact's immutable metadata and its owner
+    are compared first, and every other failure passes unchanged: an API error is never absence."""
+
+    try:
+        yield
+    except ArtifactUnavailable as error:
+        raise OriginalUnavailable(f"original evidence is gone: {error}") from error
+    except ApiError as error:
+        if error.status not in (404, 410) or error.method != "GET" or _ARTIFACT_PATH.fullmatch(error.path) is None:
+            raise
+        raise OriginalUnavailable(f"original evidence is gone: GitHub answers {error.status} for "
+                                  f"{error.path}") from error
+
+
 def _merged(plan: dict[str, Any], controller_sha: str, merged_sha: str) -> tuple[str, str]:
     grammar.require_sha1(controller_sha, "current protected controller SHA")
     grammar.require_sha1(merged_sha, "final merged SHA")
@@ -588,7 +634,9 @@ def download_merged_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], 
     and a private temporary parent. The original runs stay recorded under the pull request's head.
     Original/current native policy and pin equivalence, both coherent gates, source payload bytes,
     newest-run selection and owner/writer authority remain mandatory. This reads one original
-    tested seal, never a reuse chain, and authorizes no effects or reuse.
+    tested seal, never a reuse chain, and authorizes no effects or reuse. A record or source
+    artifact that is gone raises :class:`OriginalUnavailable`; one that disappears while the
+    receipt is read is a rejection like every other change.
     """
 
     plan, descriptor = _plan(plan), _descriptor(descriptor)
@@ -596,7 +644,8 @@ def download_merged_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], 
     reads, watch = CommandReads.of(api), Watch()
     _gate_mode(descriptor, plan, gate)
     _admit_source(reads, watch, plan["identity"], merged)
-    document = _read_gate(reads, watch, descriptor, plan, gate, temporary_root)
+    with _original_evidence():
+        document = _read_gate(reads, watch, descriptor, plan, gate, temporary_root)
     watch.recheck()
     return document
 
@@ -604,7 +653,11 @@ def download_merged_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], 
 def _merged_pair(reads: CommandReads, watch: Watch, *, build_descriptor: dict[str, Any],
                  packaged_descriptor: dict[str, Any], plan: dict[str, Any], merged: tuple[str, str],
                  temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Both original receipts of one merged pull request; the caller rechecks the watch."""
+    """Both original receipts of one merged pull request; the caller rechecks the watch.
+
+    ``watch`` must not already hold the source of another subject: a route that also admits the
+    live subject covering this pull request gives the pair a watch of its own. A seal or source
+    artifact that is gone raises :class:`OriginalUnavailable`."""
 
     _gate_mode(build_descriptor, plan, "build")
     _gate_mode(packaged_descriptor, plan, "packaged")
@@ -612,8 +665,9 @@ def _merged_pair(reads: CommandReads, watch: Watch, *, build_descriptor: dict[st
           and build_descriptor["producer"]["run_id"] != packaged_descriptor["producer"]["run_id"],
           "$.pair", "original Build and packaged seals require independent artifacts and runs")
     _admit_source(reads, watch, plan["identity"], merged)
-    build = _read_gate(reads, watch, build_descriptor, plan, "build", temporary_root)
-    packaged = _read_gate(reads, watch, packaged_descriptor, plan, "packaged", temporary_root)
+    with _original_evidence():
+        build = _read_gate(reads, watch, build_descriptor, plan, "build", temporary_root)
+        packaged = _read_gate(reads, watch, packaged_descriptor, plan, "packaged", temporary_root)
     check(packaged["owning_build"] == build["artifacts"][0],
           "$.pair.build", "packaged gate consumed a different complete Build bundle")
     return build, packaged
@@ -637,7 +691,9 @@ def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any
     admission. Each seal is read once; the historical source, both runs' latest attempts and every
     source artifact's availability are observed again before the pair is returned. Native payload
     bytes and semantics, newest eligible run selection, original/current policy and pin and
-    authority remain required. Missing, corrupt or moved evidence never produces a partial pair.
+    authority remain required. Missing, corrupt or moved evidence never produces a partial pair:
+    an artifact that is gone raises :class:`OriginalUnavailable`, corruption and a change while the
+    pair is read are rejections.
     """
 
     plan, build_descriptor, packaged_descriptor, merged = _pair_inputs(

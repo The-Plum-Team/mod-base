@@ -129,6 +129,8 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_GATE_REQUESTS": (60, "API requests one `ci seal-gate` may spend: 15 for a Build gate and 20 for the "
                                  "packaged gate of a pull request, whatever the plan's size, and room for retries "
                                  "and further listing pages"),
+    "MAX_CI_COMMIT_PULLS": (100, "pull requests GitHub associates with one pushed commit: the one page "
+                                 "post-merge reuse reads to find the merge"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),
     "MAX_CI_WORKER_RECORD_BYTES": (256 * KIB, "the private worker record of one job"),
     "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation without a candidate checkout may spend"),

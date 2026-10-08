@@ -325,6 +325,7 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
 | MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
 | MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
+| MB11 | `mod_base.build_ci.reuse` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -703,6 +704,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_PLAN_INPUTS`: 8 extra candidate files a protected Build config may name under `plan_inputs` and a plan may bind.
 * `MAX_CI_IDENTITY_BYTES`: 16 KiB for the private `identity.json` state record.
 * `MAX_CI_GATE_REQUESTS`: the 60-request budget of one `ci seal-gate` (a Build gate costs 15, the packaged gate of a pull request 20, whatever the number of targets and lanes).
+* `MAX_CI_COMMIT_PULLS`: 100, the pull requests GitHub associates with one pushed commit: the one page post-merge reuse reads to find the merge.
 * `MAX_CI_SUBJECT_REQUESTS`: the 16-request budget of one `ci subject` (a pull request costs 4, a protected subject 5).
 * `MAX_CI_STATUS_CONTEXT_CHARS`: 100 characters for one status context of the protected Build config.
 * `CI_BUILD_POLL_SECONDS`, `MAX_CI_BUILD_POLLS`: Protected 60-second polling cadence and independent 91-observation ceiling within the existing 5400-second admission budget.
@@ -1935,8 +1937,9 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 * `def validate_results_index(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.results` v1, the complete packaged results of one attempt as an index of its lanes: the sealing attempt (always the packaged caller), the owning Build (the one the run rebuilt, or one of a separate Build run) with its envelope's SHA-256, and for every lane its runtime artifact of the same attempt, the SHA-256 of the runtime envelope and of the validation record inside it and of the lane's verification report. With a plan the lanes are exactly the planned ones with their native contracts, in plan order.
 * `def results_index(*, plan: dict[str, Any], producer: dict[str, Any], owning_build: dict[str, Any], build_envelope_sha256: str, lanes: list[dict[str, Any]]) -> dict[str, Any]`: The results index the aggregating job of `producer` seals for `plan`: a new `mod-base.ci.results` document, valid for the plan and independent of its arguments. `lanes` holds `descriptor`, `envelope_sha256`, `validation_sha256` and `report_sha256` of every planned lane in plan order; ids and native contracts are the plan's. The job authenticates each lane first (`gate.seal_results`).
 * `def bind_results_index(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Bind a results index to the results artifact it was read from: same sealing attempt, the artifact kind `results`, no id shared with a lane or the owning Build, and every one of them uploaded before the index.
-* `def validate_reuse_reference(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
-* `def bind_reuse_reference(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]`: Bind direct reuse identity to its selected reuse-record upload, retaining source-before-record chronology and ID separation. K6 must additionally prove actual source completion before protected verifier start, full original graphs, coherent tree/policy equality and source availability.
+* `def original_plan(plan: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]`: `plan` under another subject's `identity`: the same profile, plan inputs, targets and lanes, bound by a hash of its own. The gates of a merged pull request were sealed for the work a push plans exactly when the plan hash of their records is the hash of the push's plan under the pull request's identity.
+* `def validate_reuse_reference(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.reuse` v1: the covered merge (a non-PR subject on the default branch), the reuse run that sealed the reference (always a push) and `source`, the original pull-request identity, plan hash and profile with the descriptors of both original tested records. Covered and original agree in repository, protected caller, kit pin, complete tested tree, policy digest, inventory, scenario contract, runtime selection, graph version and profile; a seal is always a direct tested record, never another reference; the two seals come from different runs. With the covered `plan` the original plan hash must be that of `original_plan`. Structure only.
+* `def bind_reuse_reference(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]`: Bind a reuse reference to the reuse artifact it was read from: the same run sealed both, no id is shared with an original seal and both seals were uploaded before the reference. That the original runs had finished before the reuse gate started, their graphs, the merged tree and every artifact's availability are proven by whoever reads the reference (`mod_base.build_ci.reuse`).
 
 ## `mod_base.build_ci.config`
 
@@ -2380,13 +2383,20 @@ protected push or dispatch under the commit it runs from); its controller commit
 from `referenced_workflows`. The producers are the managed callers of `workflow.CI_CALLER_WORKFLOWS`,
 so no route takes a workflow path. Each route reads commits and completed job lists once and the
 source, each run's latest attempt and each artifact's availability at its start and again
-immediately before it publishes or returns. Plans and descriptors are copied on entry.
+immediately before it publishes or returns. Plans and descriptors are copied on entry. The readers
+of a merged pull request's original gates tell evidence that is gone from evidence that is corrupt:
+an artifact that has expired, that its run no longer lists or whose numeric id answers 404 or 410
+raises `OriginalUnavailable`, after its immutable metadata and its owner were compared; every
+other failure is a rejection, and so is an artifact that goes between a reader's first observation
+and its last.
 
+* `class ArtifactUnavailable(DocumentError)`: A selected artifact is no longer listed for its producer run, or has expired. For a route that needs the artifact it is a rejection like every other document error (same message, reason `invalid-document`, exit 2).
+* `class OriginalUnavailable(Unavailable)`: An artifact of a merged pull request's original gates is gone or has expired: reason `ci-original-unavailable`, exit 3. Nothing is corrupt; whoever meant to reuse the evidence tests again.
 * `def download_completed_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], output: Path) -> dict[str, Any]`: Authenticate the live subject, the exact completed latest attempt of a full Build-caller run, its controller and kit pin, exact graph and the assembling job's upload window; bind artifact metadata, expiry, owner and head and the ZIP digest; verify the canonical envelope and inventory and atomically publish a private copy. Newest-run selection, native validity and final authorization remain required.
 * `def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], plan: dict[str, Any], run_id: int, run_attempt: int, output: Path, source_config_sha256: str | None = None) -> list[dict[str, Any]]`: With `source_config_sha256` (the digest of the protected Build config the reader loaded) every artifact is what a target job uploads, the partition with its `verify_target` validation record beside the envelope, which is verified against the partition and kept out of the published inputs; without it every artifact is the bare partition. For the assembling job of a still-running full Build run (or of a standalone packaged run that rebuilds): require the exact ordered complete same-attempt target descriptors and the extra compressed-set budget, finished plan, policy and target jobs with their sealed upload windows, download each checked ZIP into fixed target-ordinal children of one private atomic stage, verify the whole logical export and publish all or nothing. Returns descriptor/envelope pairs.
 * `def download_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, temporary_root: Path) -> dict[str, Any]`: Read one tested record of the live subject by numeric ID: the mode of its run is settled from the descriptor's graph digest, the run, exact graph, gate seal and upload and artifact metadata are authenticated, only the fixed canonical root JSON record is extracted, the execution timeline and every source artifact's metadata and availability are bound, and a Build consumed from a separate run is authenticated as its own completed full run.
 * `def download_merged_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, controller_sha: str, merged_sha: str, temporary_root: Path) -> dict[str, Any]`: The same for one original PR seal after merge, under historical admission of the merged pull request; original producer identities are preserved. No reuse or settlement effect is approved.
-* `def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Read both original tested seals once and require the packaged gate's owning Build to be the Build gate's bundle. Never a partial result or reuse authority.
+* `def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Read both original tested seals once and require the packaged gate's owning Build to be the Build gate's bundle. Never a partial result or reuse authority; a seal or source artifact that is gone raises `OriginalUnavailable`.
 * `def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: Privately materialize the exact original complete Build bundle of a coherent historical seal pair, observing the pair's mutable state again inside the atomic publication.
 * `def download_merged_runtime(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]`: The same for the pair's complete results aggregate, bound to the original owning Build. The extracted source is verified against the bound envelope once more inside the atomic copy, so a source replaced after binding is never published.
 * `def download_merged_inputs(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Publish both under fixed private build/runtime children after one final admission. Each child must carry the very envelope that was bound when its archive was extracted; either failure publishes neither.
@@ -2447,6 +2457,37 @@ is written last, as the one file of a directory the command creates.
 * `def run_assemble(args: argparse.Namespace) -> int`: The `assemble` handler, a step of a Build job in a full run of the Build caller or in a packaged run that rebuilds: describes the partition of every planned target of this attempt, downloads them with the validation record each target job uploaded (`transport.download_target_set` with the digest of the protected Build config) and assembles their exact union into `exports.BUILD_VALIDATION_ROOT`, which must not exist. Budget `MAX_CI_ASSEMBLE_REQUESTS`.
 * `def run_aggregate(args: argparse.Namespace) -> int`: The `aggregate` handler, the sealing step of the aggregating job of a packaged run: reads the canonical selection record `grammar.CI_SELECTION_NAME` of the state and writes the index of `gate.seal_results` as `ci-results.json`, the one file of the new directory `--output`. Budget `MAX_CI_AGGREGATE_REQUESTS`.
 * `def run_seal_gate(args: argparse.Namespace) -> int`: The `seal-gate` handler: `gate.authenticate_attempt`, then `gate.seal_gate` (or `gate.seal_reuse` in a reuse run) with the digest of the protected Build config of the mod checkout, and the record written last as the one file of the new directory `--output`. Budget `MAX_CI_GATE_REQUESTS`.
+
+## `mod_base.build_ci.reuse`
+
+Owner: MB11. Post-merge reuse: whether the two gates of a merged pull request cover the push that
+landed it. The decision has three outcomes that are never blurred: `ReuseAdmitted`,
+`FullRunRequired` with one of `FULL_RUN_REASONS`, or an error that stops the job (an API failure,
+malformed or ambiguous metadata, a digest or graph that differs from an authenticated record, an
+original run that has not finished).
+
+Admission requires, in this order: the pushed commit is the final commit of exactly one merged
+pull request of this repository into the default branch, found from the commit; the newest Build
+run and the newest packaged run of that pull request's last head, chosen before any result is
+read, completed successfully as their latest attempts under the executing kit pin, neither a draft
+deferral nor a reuse run nor a run that lists a reuse reference; the Build record's claim of what
+it was sealed for holds field by field against the push (complete tree, policy digest, kit pin,
+inventory, scenario contract, runtime selection) and its plan hash is the hash of the push's own
+plan under the original identity (`records.original_plan`); both runs show exactly the full graph
+of their caller for that plan and both tested records read and pair coherently
+(`transport.download_merged_gate_pair`'s proof: merged history, ordered parents of the original
+test merge, equal trees, runs, seals, upload windows, timelines, and the packaged gate's Build
+being the Build gate's bundle); every artifact both records name is still available.
+
+* `FULL_RUN_REASONS`: reason token -> one line of words, for the seventeen ordinary reasons to test again: `not-a-push`, `no-merged-pull-request`, `several-merged-pull-requests`, `foreign-pull-request`, `no-original-run`, `original-run-failed`, `original-run-deferred`, `original-run-reused`, `original-run-of-another-pull-request`, `kit-pin-differs`, `merged-tree-differs`, `policy-differs`, `inventory-differs`, `scenario-contract-differs`, `runtime-selection-differs`, `plan-differs`, `original-evidence-unavailable`.
+* `ADMITTED_REASON = 'identical-tested-tree'`: the `reason` output of an admitted reuse.
+* `class OriginalPending(MbError)`: An original run of the merged pull request has not finished: reason `ci-original-pending`, exit 2. Neither a reuse nor a full run, which would race evidence whose result is unknown.
+* `class FullRunRequired`: The push builds and runs in full. `reason` is a key of `FULL_RUN_REASONS`, `detail` one line of words.
+  * fields: `reason: str, detail: str`
+* `class ReuseAdmitted`: The push is covered by both original gates of pull request `pr_number`. `source` is the `source` of the reuse reference (original identity, plan hash, profile, both seal descriptors); `watch` holds everything mutable the admission read.
+  * fields: `pr_number: int, source: dict[str, Any], watch: Watch`
+  * `recheck(self) -> None`
+* `def admit_post_merge_reuse(api: GitHubApi | CommandReads, *, plan: dict[str, Any], event: str, temporary_root: Path) -> ReuseAdmitted | FullRunRequired`: Decide for the subject of `plan` (the job's protected plan) in a run of `event`. Any event but a push answers `FullRunRequired('not-a-push')` without a request. One observation that writes nothing: whoever acts on an admission calls its `recheck` immediately before. The Build record is downloaded twice (as the claim that names the test merge, then as evidence) and the packaged record once, into `temporary_root`, and removed; no bundle and no lane result is read.
 
 ## `mod_base.build_ci.handoff`
 

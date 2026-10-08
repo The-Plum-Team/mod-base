@@ -11,7 +11,7 @@ from typing import Any
 
 from mod_base import SCHEMA_VERSIONS, readable_schema_versions
 from mod_base.build_ci.protocol import (OUTPUT_ROLES, PROFILES, check_output_paths, check_output_scope,
-                                        validate_identity, validate_plan)
+                                        plan_sha256, validate_identity, validate_plan)
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_sha256
@@ -422,25 +422,59 @@ def validate_results_index(document: Any, *, plan: dict[str, Any] | None = None,
 
 _REUSE_SOURCE = Obj({**_binding(), "build_seal": validate_descriptor, "packaged_seal": validate_descriptor})
 _REUSE = Obj({**_header("mod-base.ci.reuse"), **_binding(), "producer": _PRODUCER_IDENTITY, "source": _REUSE_SOURCE})
+#: What a covered push and the pull request it reuses have in common: the repository and its
+#: protected caller, the kit pin, the complete tested tree and everything a plan binds to the
+#: protected policy and to the candidate bytes. The commits, their parents and the controller differ.
+_REUSE_SEMANTICS = ("repository", "source_repository", "base_branch", "controller_workflow", "controller_ref",
+                    "kit", "tested_tree", "policy_sha256", "inventory_blob", "inventory_sha256", "scenario_sha256",
+                    "runtime_selection_sha256", "graph_version")
+
+
+def original_plan(plan: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+    """``plan`` under another subject's ``identity``: the same profile, plan inputs, targets and
+    lanes, bound by a hash of its own.
+
+    Post-merge reuse plans the merged commit and asks whether the gates of its pull request were
+    sealed for the same work. They were exactly when the plan hash their records carry is the hash
+    of this plan under the pull request's identity: one comparison covers everything a plan holds."""
+
+    validate_plan(plan)
+    original = copy.deepcopy(plan)
+    original["identity"] = copy.deepcopy(validate_identity(identity, "$.source.identity"))
+    original["plan_sha256"] = plan_sha256(original)
+    return validate_plan(original)
 
 
 def validate_reuse_reference(document: Any, *, plan: dict[str, Any] | None = None,
                              path: str = "$") -> dict[str, Any]:
-    """Direct original PR seals only; full API/tree/artifact reuse admission is separate K6 work."""
+    """``mod-base.ci.reuse`` v1: a push to the default branch covered by both original gates of the
+    merged pull request it came from.
+
+    ``identity``, ``plan_sha256`` and ``producer`` are the covered merge and the reuse run that
+    sealed the reference; ``source`` holds the original identity and plan hash and the descriptors
+    of both original tested records, each with its run, attempt and artifact. Covered and original
+    agree in every field of ``_REUSE_SEMANTICS`` and in the profile. A seal is always a direct
+    tested record, never another reference, so references cannot chain. With the covered ``plan``
+    the original plan hash must be the hash of that plan under the original identity
+    (:func:`original_plan`). Structure only: whoever admits or reads a reference authenticates
+    the runs, the merged pull request, the tree and every artifact (``mod_base.build_ci.reuse``)."""
 
     _REUSE(document, path)
     _plan_binding(document, plan, path)
     _producer_binding(document["producer"], document["identity"], f"{path}.producer")
+    check(document["producer"]["event"] == "push", f"{path}.producer.event",
+          "only a push to the default branch reuses the gates of its pull request")
     covered, source = document["identity"], document["source"]
     check(covered["pr_number"] == 0 and source["identity"]["pr_number"] > 0, path,
           "reuse covers a protected non-PR subject from an original PR")
     check(covered["head_branch"] == covered["base_branch"], f"{path}.identity.head_branch",
           "ordinary post-merge reuse covers only the protected default branch")
-    for key in ("repository", "source_repository", "base_branch", "controller_workflow", "controller_ref",
-                "kit", "tested_tree", "policy_sha256", "inventory_blob",
-                "inventory_sha256", "scenario_sha256", "runtime_selection_sha256", "graph_version"):
+    for key in _REUSE_SEMANTICS:
         check(covered[key] == source["identity"][key], f"{path}.source.identity.{key}", "reuse semantics differ")
     check(document["profile"] == source["profile"], f"{path}.source.profile", "reuse profile differs")
+    if plan is not None:
+        check(source["plan_sha256"] == original_plan(plan, source["identity"])["plan_sha256"],
+              f"{path}.source.plan_sha256", "the original gates were sealed for another plan than the covered one")
     # A final merge can be the exact synthetic commit originally tested. Distinct PR/current
     # bindings retain their provenance even then; SHA inequality is not a reuse requirement.
     for key, producer_kind in (("build_seal", "build"), ("packaged_seal", "packaged")):
@@ -520,12 +554,12 @@ def bind_results_index(document: dict[str, Any], *, descriptor: dict[str, Any],
 
 def bind_reuse_reference(document: dict[str, Any], *, descriptor: dict[str, Any],
                          plan: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Bind a direct reuse record and source chronology to its actual selected upload.
+    """Bind a reuse reference to the reuse artifact it was read from: the same run sealed both,
+    and both original seals were uploaded before the reference was.
 
-    This does not prove when the protected verifier executed: actual source completion before
-    verifier start, original API graphs, tree/policy equality and artifact availability must be
-    independently authenticated in K6. No self-reported future timestamp supplies that proof.
-    """
+    Upload times are what the records say. That the original runs had finished before the reuse
+    gate started, their graphs, the merged tree, the policy and every artifact's availability are
+    proven by whoever reads the reference (``mod_base.build_ci.reuse``)."""
 
     validate_reuse_reference(document, plan=plan)
     _bind_record_producer(document, descriptor, kind="reuse", unit=None,
