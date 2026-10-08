@@ -43,15 +43,14 @@ class SelectBuildWaitBudgetTests(unittest.TestCase):
                 self.wait(world, Path(directory))
             self.assertLess(world.api.request_count, limits.MAX_CI_SELECT_BUILD_REQUESTS)
 
-    # A finished deferral is read again on every poll (the listing and the run): 185 requests for
-    # the 90 polls of the wait, and the command's budget is 155.
-    @unittest.expectedFailure
     def test_a_whole_wait_on_a_draft_deferral_ends_at_the_deadline_inside_the_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             world = JobWorld(Path(directory), max_requests=limits.MAX_CI_SELECT_BUILD_REQUESTS)
             world.add_run("build", "build-deferred")
             with self.assertRaisesRegex(MbError, "exhausted the 5400-second"):
                 self.wait(world, Path(directory))
+            # Source admission (4), 90 listings, and the completed deferral's run and jobs once.
+            self.assertEqual(world.api.request_count, 96)
 
 
 if __name__ == "__main__":

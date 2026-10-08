@@ -7,7 +7,6 @@ import copy
 import json
 import unittest
 
-from mod_base.build_ci import identity
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.model.documents import load_document
@@ -23,7 +22,7 @@ BUILD_ENVELOPE = h("the selected Build's envelope")
 class AggregateCase(GateCase):
     def world(self, *, mode: str = "pull-request", change=None, select: bool = True, upload=None, **options):
         """A packaged run whose aggregating job is sealing: every lane has uploaded its sealed
-        results with their validation record, and the state holds the selection record.
+        results with their validation record, and the job has received the selection record.
 
         ``change(lane_id, document, files, envelope)`` edits a lane's validation record before it
         is sealed; ``upload(lane_id)`` names the lane whose results are uploaded in its place."""
@@ -60,7 +59,8 @@ class AggregateCase(GateCase):
         """Run ``ci aggregate``; return ``(code, stdout or stderr, index bytes or None)``."""
 
         output = attempt.directory / "index"
-        code, stdout, stderr = attempt.command("aggregate", "--output", str(output))
+        code, stdout, stderr = attempt.command("aggregate", "--selection", str(attempt.selection),
+                                               "--output", str(output))
         if code:
             self.assertEqual(stdout, "")
             self.assertFalse(output.exists())
@@ -178,34 +178,36 @@ class AggregateCommandTests(AggregateCase):
 
     def test_the_selection_record_must_be_this_attempts_own(self) -> None:
         attempt = self.world(select=False)
-        self.assert_refused(attempt, "cannot read the state record ci-selection.json", "ci-state")
+        self.assert_refused(attempt, "cannot stat selection record", "invalid-json")
         attempt = self.world(select=False)
         attempt.select("pull-request", attempt.owning, BUILD_ENVELOPE, plan_sha256="0" * 64)
         self.assert_refused(attempt, "does not equal the complete admitted binding")
+        another = "selection was requested by another run, attempt or workflow; rerun all jobs"
         cases = {
             "another attempt": (lambda document: canonical_json({**document, "request": {**document["request"],
-                                                                                          "run_attempt": 1}}),
-                                "the selection record belongs to another run or attempt"),
+                                                                                          "run_attempt": 1}}), another),
             "another run": (lambda document: canonical_json({**document, "request": {**document["request"],
-                                                                                      "run_id": 77}}),
-                            "the selection record belongs to another run or attempt"),
+                                                                                      "run_id": 77}}), another),
             "not canonical": (lambda document: json.dumps(document, indent=1).encode(),
-                              "ci-selection.json is not canonical JSON"),
+                              "the selection record is not canonical JSON"),
+            "two records": (lambda document: canonical_json(document) * 2, "selection record"),
             "a target partition": (lambda document: canonical_json({**document, "build": partition}),
                                    "runtime input must be a complete Build bundle"),
+            "the Build of this very run": (lambda document: canonical_json({**document, "build": own}),
+                                           "a Build caller's bundle comes from a separate run"),
         }
         for label, (encode, message) in cases.items():
             with self.subTest(case=label):
                 attempt = self.world(select=False)
                 document = attempt.select("pull-request", attempt.owning, BUILD_ENVELOPE)
-                partition = copy.deepcopy(attempt.owning)
+                partition, own = copy.deepcopy(attempt.owning), copy.deepcopy(attempt.owning)
                 partition["artifact"]["name"] = "mb-ci-target--42--a2--target-a"
-                state = attempt.directory / "other-state"
-                identity.write_subject(state, attempt.record)
-                identity.write_state_record(state, grammar.CI_PLAN_NAME, canonical_json(attempt.plan))
-                identity.write_state_record(state, grammar.CI_SELECTION_NAME, encode(document))
-                attempt.state = state
-                self.assert_refused(attempt, message)
+                own["producer"]["run_id"], own["artifact"]["name"] = 43, "mb-ci-build--43--a2"
+                attempt.selection.write_bytes(encode(document))
+                code, stderr, _ = self.aggregate(attempt)
+                self.assertEqual(code, 2)
+                self.assertIn(message, stderr)
+                # Nothing is asked of GitHub for a Build this job was not given.
                 self.assertEqual(attempt.api.request_count, 0)
 
     def test_only_the_aggregating_job_of_a_packaged_run_that_ran_its_lanes(self) -> None:
@@ -218,7 +220,8 @@ class AggregateCommandTests(AggregateCase):
         self.assert_refused(attempt, "this attempt lists the jobs of no single mode of selected, rebuilt")
         attempt = self.world()
         (attempt.directory / "index").mkdir()
-        code, _, stderr = attempt.command("aggregate", "--output", str(attempt.directory / "index"))
+        code, _, stderr = attempt.command("aggregate", "--selection", str(attempt.selection),
+                                          "--output", str(attempt.directory / "index"))
         self.assertEqual(code, 2)
         self.assertIn("the upload directory already exists", stderr)
         self.assertEqual(attempt.api.request_count, 0)

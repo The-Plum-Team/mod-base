@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mod_base.io import bounded_zip
-from mod_base.model import limits
+from mod_base.model import grammar, limits
 from tests import test_io_bounded_zip as fixtures
 
 
@@ -86,18 +86,22 @@ class RuntimeZipTest(unittest.TestCase):
 
     def test_central_directory_bound_precedes_zipfile_allocation(self):
         data = fixtures.archive({'file': b'x'})
-        oversized = fixtures.patch_eocd(data, size=limits.MAX_CI_RUNTIME_ENTRIES*bounded_zip._MAX_CENTRAL_ENTRY_BYTES+1)
+        added = len((grammar.CI_VALIDATION_NAME,)) + limits.MAX_CI_LANES
+        oversized = fixtures.patch_eocd(
+            data, size=(limits.MAX_CI_RUNTIME_ENTRIES + added) * bounded_zip._MAX_CENTRAL_ENTRY_BYTES + 1)
         with patch.object(bounded_zip.zipfile, 'ZipFile') as parser, self.assertRaises(bounded_zip.ZipRejected):
             self.extract(oversized, scope='complete')
         parser.assert_not_called()
         with patch.object(limits, 'MAX_CI_RUNTIME_ENTRIES', 2), patch.object(bounded_zip.zipfile, 'ZipFile') as parser:
             with self.assertRaises(bounded_zip.ZipRejected):
-                self.extract(fixtures.patch_eocd(data, count=3), scope='complete')
+                self.extract(fixtures.patch_eocd(data, count=3 + added), scope='complete')
             parser.assert_not_called()
 
     def test_file_count_is_separate_from_legal_directory_entries(self):
         for scope, cap in (('lane', limits.MAX_CI_RUNTIME_FILES), ('complete', limits.MAX_CI_RUNTIME_AGGREGATE_FILES)):
-            data = fixtures.archive({f'{index:04d}.log': b'' for index in range(cap+2)})
+            records = len((grammar.CI_RUNTIME_ENVELOPE_NAME, grammar.CI_VALIDATION_NAME))
+            reports = 1 if scope == 'lane' else limits.MAX_CI_LANES
+            data = fixtures.archive({f'{index:04d}.log': b'' for index in range(cap + records + reports + 1)})
             with patch.object(bounded_zip, '_extract_entry') as inflate, self.assertRaisesRegex(bounded_zip.ZipRejected, 'file-count'):
                 self.extract(data, scope=scope)
             inflate.assert_not_called()

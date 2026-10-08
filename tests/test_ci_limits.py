@@ -128,7 +128,7 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
     "MAX_CI_DERIVED_SUBJECT_REQUESTS": (4, "API requests one subject derivation in a job that holds the candidate "
                                            "checkout may spend: its one request and the retries of that request"),
-    "MAX_CI_GATE_REQUESTS": (96, "API requests one `ci seal-gate` may spend: 15 for a Build gate, 20 for the "
+    "MAX_CI_GATE_REQUESTS": (96, "API requests one `ci seal-gate` may spend: 15 for a Build gate, 23 for the "
                                  "packaged gate of a pull request and 47 for the gate of a reuse run, whatever the "
                                  "plan's size, and room for retries and further listing pages"),
     "MAX_CI_COMMIT_PULLS": (100, "pull requests GitHub associates with one pushed commit: the one page "
@@ -143,8 +143,10 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_GIT_ANSWER_BYTES": (4 * KIB, "one object id or tree entry read from a checkout of the job"),
     "MAX_CI_GIT_COMMIT_BYTES": (1 * MIB, "one commit object read whole from a checkout of the job: header, "
                                          "signature and message"),
-    "MAX_CI_FETCH_BUILD_REQUESTS": (48, "API requests one `ci fetch-build` may spend: 21 for a pull request, the "
-                                        "rest for retries and further listing pages"),
+    "MAX_CI_FETCH_BUILD_REQUESTS": (8, "requests one `ci fetch-build` may spend: one REST redirect and one "
+                                       "credential-free storage GET, plus retries"),
+    "MAX_CI_GENERATION_REQUESTS": (440, "D14 regression cap for one complete generation of either native profile; "
+                                       "test_ci_generation_budget enforces it, without adding runtime admission"),
     "MAX_CI_GATE_STATUS_REQUESTS": (96, "API requests one `ci gate-status` may spend: 45 with both runs complete, "
                                         "the rest for retries and further listing pages"),
     "MAX_CI_PRIVATE_RECORD_ENTRIES": (2, "a private record directory and its one file"),
@@ -286,7 +288,8 @@ def live_bounds() -> set[str]:
     """The bounds some kit module or tool names, and the bounds that only define one of those."""
 
     used, read = users(), definitions()
-    live = {name for name, modules in used.items() if modules} | WORKFLOW_LITERALS
+    # The generation cap is deliberately a regression test, not a new runtime admission rule.
+    live = {name for name, modules in used.items() if modules} | WORKFLOW_LITERALS | {"MAX_CI_GENERATION_REQUESTS"}
     while True:
         more = ({source for name in live for source in read.get(name, ())} & set(used)) - live
         if not more:

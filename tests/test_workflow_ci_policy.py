@@ -6,6 +6,8 @@ The Pages callees keep their registry (``workflow.CALLEE_WORKFLOWS``) and their 
 and names), ``CI_JOB_VERBS`` (the ``ci`` verb of every step, in order), ``CI_JOB_ARTIFACTS`` (the
 sealing jobs and what they upload) and ``CI_JOB_PERMISSIONS``. A callee is policed from the moment
 its file exists: a workflow file without rows in those tables fails, and so do rows without a file.
+``CiOutputTests`` holds the names that cross steps and jobs: an output a workflow reads must be one
+the command of that step writes, and a job output must be declared where it is read.
 
 The module also holds what the per-workflow modules (``tests/test_workflow_build.py``,
 ``tests/test_workflow_select_build.py``, ``tests/test_workflow_packaged_e2e.py`` and
@@ -18,9 +20,12 @@ and returns the ``ci`` command lines it issued.
 from __future__ import annotations
 
 import argparse
+import ast
+import inspect
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from collections.abc import Iterator, Mapping
@@ -30,11 +35,12 @@ from typing import Any
 
 from mod_base import cli, workflow
 from mod_base.adapter import protocol
-from mod_base.build_ci import graph
+from mod_base.build_ci import graph, planning
 from mod_base.errors import MbError
 from mod_base.model import grammar
 from mod_base.model import limits as lim
-from tests.helpers import ci_plan
+from mod_base.model.canonical import canonical_json
+from tests.helpers import ci_plan, ci_selection
 from tests.test_tree_digest_literal import (GIT_STUB, SHELL, digest_block, make_kit, reference_digest,
                                             update_tree_digest)
 from tests.test_workflow_pins import uses_values
@@ -96,15 +102,19 @@ SETTLE_VERBS = {("gate-status", "evaluate"): ("gate-status",)}
 #: Only when that first call could not settle does the status job authenticate, prepare, plan and
 #: evaluate again; ``'false'`` is what the call wrote, never an output that is merely missing.
 UNSETTLED = "steps.settle.outputs.settled == 'false'"
-#: The only other condition a step may carry, by callee, job and verb. Reuse is admitted for a push
-#: alone, and a job that also runs in reuse mode selects no Build then. (The packaged ``input``,
-#: ``lane`` and ``aggregate`` jobs are skipped as a whole in that mode.) In the status job the
-#: rows are the steps after its settling call (``SETTLE_VERBS``).
+#: The step of a packaged job that writes the selection record of its ``input`` job to a file. It
+#: runs no kit command and holds no token.
+RECEIVE_STEP = "Receive the selected Build"
+#: The only other condition a step may carry, by callee, job and verb (or, for a step that runs
+#: no kit command, its name). Reuse is admitted for a push alone, and a job that also runs in
+#: reuse mode has no Build then: its ``input`` job, which would have selected one, was skipped
+#: like its ``lane`` and ``aggregate`` jobs. In the status job the rows are the steps after its
+#: settling call (``SETTLE_VERBS``).
 CONDITIONAL_STEPS = {
     ("build", "plan", "reuse-admit"): "github.event_name == 'push'",
     ("select-build", "select", "reuse-admit"): "github.event_name == 'push'",
     ("select-build", "select", "select-build"): "steps.reuse.outputs.mode != 'reuse'",
-    ("packaged-e2e", "gate", "select-build"): "inputs.mode != 'reuse'",
+    ("packaged-e2e", "gate", RECEIVE_STEP): "inputs.mode != 'reuse'",
     ("gate-status", "evaluate", "subject"): UNSETTLED,
     ("gate-status", "evaluate", "worker-prepare"): UNSETTLED,
     ("gate-status", "evaluate", "plan"): UNSETTLED,
@@ -134,6 +144,21 @@ ENV_VALUE = re.compile(r"^\$\{\{ (?:inputs\.[a-z][a-z0-9-]*|needs\.[a-z][a-z-]*\
 #: or the first written of two such outputs (the settling call's or the planned evaluation's).
 JOB_OUTPUT = re.compile(r"^\$\{\{ steps\.[a-z]+\.outputs\.[a-z0-9_]+(?: == '[a-z]+' && '[a-z]+' \|\| '[a-z]+'"
                         r"| \|\| steps\.[a-z]+\.outputs\.[a-z0-9_]+)? \}\}$")
+#: How an expression names an output of a step of its own job and of a job it needs, and how a
+#: callee returns one to its caller.
+STEP_OUTPUT = re.compile(r"\bsteps\.([a-z][a-z0-9_-]*)\.outputs\.([A-Za-z0-9_-]+)")
+NEEDED_OUTPUT = re.compile(r"\bneeds\.([a-z][a-z0-9_-]*)\.outputs\.([A-Za-z0-9_-]+)")
+RETURNED_OUTPUT = re.compile(r"\bjobs\.([a-z][a-z0-9_-]*)\.outputs\.([A-Za-z0-9_-]+)")
+#: What each ``ci`` verb of a callee job writes to ``$GITHUB_OUTPUT``; a verb without a row writes
+#: nothing. A workflow reads these by name and a name nobody wrote is silently the empty string,
+#: so they are spelled out here and :func:`ci_verb_outputs` reads the same from the commands.
+CI_VERB_OUTPUTS = {
+    "subject": frozenset({"tested_sha", "pr_number"}),
+    "plan": frozenset({"plan_sha256", "targets", "lanes"}),
+    "reuse-admit": frozenset({"mode", "reason"}),
+    "select-build": frozenset({"found", "run_id", "selection"}),
+    "gate-status": frozenset({"settled", "intents"}),
+}
 DOCUMENT_KEYS = {"name", "on", "permissions", "env", "jobs"}
 JOB_KEYS = {"name", "needs", "if", "runs-on", "timeout-minutes", "permissions", "outputs", "strategy", "steps"}
 RUN_STEP_KEYS = {"name", "id", "if", "shell", "env", "run"}
@@ -227,14 +252,67 @@ def registered_ci_verbs() -> frozenset[str]:
     return frozenset(_verbs_action(_verbs_action(cli.build_parser("ci")).choices["ci"]).choices)
 
 
+def ci_verb_outputs() -> dict[str, frozenset[str]]:
+    """Registered ``ci`` verb of a callee job -> the output names its command writes, read from
+    the command itself: the mapping of every ``cli.write_github_output`` call its handler makes,
+    directly or through a function of its own module. A mapping whose names this reader cannot
+    tell fails, so a command cannot start writing an output unseen."""
+
+    def names(mapping: ast.expr, verb: str) -> set[str]:
+        if isinstance(mapping, ast.Dict):
+            keys = [key.value for key in mapping.keys if isinstance(key, ast.Constant) and type(key.value) is str]
+            if len(keys) == len(mapping.keys):
+                return set(keys)
+        if isinstance(mapping, ast.Call) and ast.unparse(mapping.func) == "planning.plan_outputs":
+            return set(planning.plan_outputs(ci_plan()))
+        raise AssertionError(f"ci {verb}: cannot tell the output names of `{ast.unparse(mapping)}`")
+
+    tabled = {verb for jobs in workflow.CI_JOB_VERBS.values() for verbs in jobs.values() for verb in verbs}
+    registered = _verbs_action(_verbs_action(cli.build_parser("ci")).choices["ci"]).choices
+    written = {}
+    for verb in sorted(tabled & set(registered)):
+        handler = registered[verb].get_default("handler")
+        module = ast.parse(inspect.getsource(sys.modules[handler.__module__]))
+        functions = {node.name: node for node in module.body if isinstance(node, ast.FunctionDef)}
+        reached: set[str] = set()
+        found: set[str] = set()
+        pending = [handler.__name__]
+        while pending:
+            name = pending.pop()
+            if name in reached:
+                continue
+            reached.add(name)
+            for call in (node for node in ast.walk(functions[name]) if isinstance(node, ast.Call)):
+                if isinstance(call.func, ast.Name) and call.func.id in functions:
+                    pending.append(call.func.id)
+                elif isinstance(call.func, ast.Attribute) and call.func.attr == "write_github_output":
+                    found |= names(call.args[1], verb)
+        written[verb] = frozenset(found)
+    return written
+
+
+def strings(value: Any) -> Iterator[str]:
+    """Every string a parsed YAML value holds, at any depth."""
+
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+
+
 # -- Executing a step's shell ------------------------------------------------------------------------
 
 #: One value for every name a step's ``env:`` may define; an unknown name fails the run. ``MODE``
-#: and ``BUILD_RUN_ID`` are the packaged call inputs of a pull request (both empty); the run the
-#: ``input`` job then authenticated reaches the later jobs as ``SELECTED_RUN_ID``.
+#: and ``BUILD_RUN_ID`` are the packaged call inputs of a pull request (both empty); the record
+#: of the Build the ``input`` job then selected reaches the later jobs as ``SELECTION``, the one
+#: line ``ci select-build`` writes as its ``selection`` output.
 SAMPLES = {"KIT_SHA": "b" * 40, "PR_NUMBER": "17", "GH_TOKEN": "step-token", "PLAN_SHA256": "c" * 64,
            "TESTED_SHA": "d" * 40, "TARGET": "target-a", "LANE": "lane-a", "MODE": "", "BUILD_RUN_ID": "",
-           "SELECTED_RUN_ID": "36042781699"}
+           "SELECTION": canonical_json(ci_selection()).decode("utf-8").rstrip("\n")}
 #: What the runner could leak into a step: every script scrubs these before it runs anything.
 AMBIENT = ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
            "ACTIONS_ID_TOKEN_REQUEST_URL", "GITHUB_TOKEN", "GH_TOKEN")
@@ -292,6 +370,8 @@ class CiStepRunner:
             path.unlink(missing_ok=True)
         shutil.rmtree(self.runner_temp, ignore_errors=True)
         self.runner_temp.mkdir()
+        # What `ci subject` left earlier in the job; the recording python3 creates nothing.
+        (self.runner_temp / "mb-state").mkdir(mode=0o700)
         unknown = sorted(set(item.get("env", {})) - set(SAMPLES))
         if unknown:
             raise AssertionError(f"step {item.get('name')!r} defines {unknown}: give each a value in SAMPLES")
@@ -325,10 +405,10 @@ class CiRegistryTests(unittest.TestCase):
             },
             "packaged-e2e": {
                 "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
-                "lane": ("subject", "worker-prepare", "plan", "select-build", "fetch-build", "worker-stage",
-                         "worker-run", "worker-seal", "worker-validate", "worker-finish"),
-                "aggregate": ("subject", "worker-prepare", "plan", "select-build", "aggregate", "worker-finish"),
-                "gate": ("subject", "worker-prepare", "plan", "select-build", "seal-gate", "worker-finish"),
+                "lane": ("subject", "worker-prepare", "plan", "fetch-build", "worker-stage", "worker-run",
+                         "worker-seal", "worker-validate", "worker-finish"),
+                "aggregate": ("subject", "worker-prepare", "plan", "aggregate", "worker-finish"),
+                "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
             },
             "gate-status": {
                 "evaluate": ("gate-status", "subject", "worker-prepare", "plan", "gate-status", "worker-finish"),
@@ -368,7 +448,9 @@ class CiRegistryTests(unittest.TestCase):
         self.assertEqual(set(CANDIDATE_REF), {name for name in CI_CALLEES if any(
             CANDIDATE_VERBS & set(verbs) for verbs in workflow.CI_JOB_VERBS[name].values())})
         for (name, job_id, verb), condition in CONDITIONAL_STEPS.items():
-            self.assertIn(verb, workflow.CI_JOB_VERBS[name][job_id], "a condition is tabled for a step that exists")
+            named = [item["name"] for item in ci_callee(name)["jobs"][job_id]["steps"] if step_verb(item) is None]
+            self.assertIn(verb, (*workflow.CI_JOB_VERBS[name][job_id], *named),
+                          "a condition is tabled for a step that exists")
             self.assertNotIn(verb, ALWAYS_VERBS)
             self.assertNotRegex(condition, r"always\(\)|failure\(\)|cancelled\(\)|success\(\)")
         for name in CI_CALLEES:
@@ -426,6 +508,61 @@ class CiRegistryTests(unittest.TestCase):
                                          workflow.ci_api_job_name(producer, call, job_id, **fields))
 
 
+class CiOutputTests(unittest.TestCase):
+    """The names that cross steps and jobs. GitHub answers an output nobody wrote, and a job
+    output nobody declared, with the empty string: neither the runner nor ``actionlint`` objects."""
+
+    def test_the_outputs_table_is_what_the_commands_write(self) -> None:
+        written = ci_verb_outputs()
+        tabled = {verb for jobs in workflow.CI_JOB_VERBS.values() for verbs in jobs.values() for verb in verbs}
+        self.assertEqual(set(written), tabled - PENDING_VERBS)
+        self.assertEqual({verb: names for verb, names in written.items() if names}, CI_VERB_OUTPUTS)
+
+    def test_every_step_output_a_callee_reads_is_one_the_command_of_that_step_writes(self) -> None:
+        read = set()
+        for name, job_id, job in iter_ci_jobs():
+            steps = job["steps"]
+            verbs = {item["id"]: step_verb(item) for item in steps if "id" in item}
+            position = {item["id"]: index for index, item in enumerate(steps) if "id" in item}
+            self.assertEqual(len(verbs), sum("id" in item for item in steps), f"{name}/{job_id}: a step id repeats")
+            # A job output may read every step; a step reads the steps before it.
+            places = [(f"output {output}", value, len(steps)) for output, value in job.get("outputs", {}).items()]
+            places += [(item["name"], text, index) for index, item in enumerate(steps)
+                       for key, value in item.items() if key != "run" for text in strings(value)]
+            for place, text, limit in places:
+                for step_id, output in STEP_OUTPUT.findall(text):
+                    with self.subTest(callee=name, job=job_id, place=place, read=f"{step_id}.{output}"):
+                        self.assertIn(step_id, verbs, "no step of this job has that id")
+                        self.assertLess(position[step_id], limit, "only an earlier step has written")
+                        self.assertIn(output, CI_VERB_OUTPUTS.get(verbs[step_id], frozenset()),
+                                      f"`ci {verbs[step_id]}` writes no output of that name")
+                        read.add((verbs[step_id], output))
+        # Everything that leaves a job or decides a later step is among them.
+        self.assertLessEqual({("subject", "tested_sha"), ("plan", "plan_sha256"), ("plan", "targets"),
+                              ("plan", "lanes"), ("reuse-admit", "mode"), ("select-build", "found"),
+                              ("select-build", "run_id"), ("select-build", "selection"),
+                              ("gate-status", "settled"), ("gate-status", "intents")}, read)
+
+    def test_every_job_output_is_declared_where_it_is_read_and_read_where_it_is_declared(self) -> None:
+        for name in CI_CALLEES:
+            document = ci_callee(name)
+            jobs = document["jobs"]
+            returned = set(RETURNED_OUTPUT.findall(" ".join(strings(document["on"]))))
+            read = set()
+            for job_id, job in jobs.items():
+                needed = job.get("needs", [])
+                needed = [needed] if isinstance(needed, str) else needed
+                for text in strings(job):
+                    for needed_job, output in NEEDED_OUTPUT.findall(text):
+                        with self.subTest(callee=name, job=job_id, read=f"{needed_job}.{output}"):
+                            self.assertIn(needed_job, needed, "a job reads only the jobs it needs")
+                            self.assertIn(output, jobs[needed_job].get("outputs", {}))
+                        read.add((needed_job, output))
+            declared = {(job_id, output) for job_id, job in jobs.items() for output in job.get("outputs", {})}
+            with self.subTest(callee=name):
+                self.assertEqual(declared, read | returned, "a job output is declared exactly where one is read")
+
+
 # -- The policy --------------------------------------------------------------------------------------
 
 
@@ -481,12 +618,11 @@ class CiCalleePolicyTests(unittest.TestCase):
                         self.assertRegex(value, JOB_OUTPUT, f"{job_id}.{output}")
 
     def test_a_job_that_waits_for_a_build_outlives_the_wait(self) -> None:
-        # The first selection of a run may poll for the whole bounded wait. A job that ends sooner would
-        # cancel a selection that is still entitled to an answer, and the run would fail for no reason of
-        # its own. A later job names the run that was selected and waits for nothing.
+        # A selection may poll for the whole bounded wait. A job that ends sooner would cancel a
+        # selection that is still entitled to an answer, and the run would fail for no reason of its
+        # own. No other job selects: a later job is handed the record and waits for nothing.
         waiting = [(name, job_id, job) for name, job_id, job in iter_ci_jobs()
-                   if any(step_verb(item) == "select-build" and "$SELECTED_RUN_ID" not in item["run"]
-                          for item in job["steps"])]
+                   if any(step_verb(item) == "select-build" for item in job["steps"])]
         self.assertEqual({(name, job_id) for name, job_id, _ in waiting},
                          {("select-build", "select"), ("packaged-e2e", "input")})
         for name, job_id, job in waiting:
@@ -648,7 +784,8 @@ class CiCalleePolicyTests(unittest.TestCase):
                 with self.subTest(callee=name, job=job_id, step=item["name"]):
                     # A settling call decides whether the rest of the job runs: it has no condition.
                     expected = (None if verb is not None and issued <= settling
-                                else ALWAYS_VERBS.get(verb, CONDITIONAL_STEPS.get((name, job_id, verb))))
+                                else ALWAYS_VERBS.get(verb, CONDITIONAL_STEPS.get((name, job_id,
+                                                                                    verb or item["name"]))))
                     self.assertEqual(item.get("if"), expected)
                     if verb in GATING_IDS:
                         self.assertEqual(item.get("id"), GATING_IDS[verb])

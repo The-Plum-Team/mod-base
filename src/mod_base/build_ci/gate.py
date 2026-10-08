@@ -26,9 +26,13 @@ Then the content. A Build gate downloads the complete Build of its attempt and v
 export against the plan and its validation record against the export; the receipt names that
 bundle and the verifier's report of every target. A packaged gate downloads the results index,
 requires it to list exactly the lane artifacts this attempt uploaded, and authenticates the
-owning Build the index names: the Build this run rebuilt, or the completed full run of the Build
-caller; the receipt names every lane, the index and that Build. Everything mutable is observed
-once more immediately before the receipt is returned.
+owning Build the index names. That Build must be the one the ``input`` job of this very run
+attempt selected (the gate job is given that selection record): the Build this run rebuilt, or
+the complete bundle of the newest run of the Build caller for the live subject, observed here
+once more. A lane reads the selected bytes without asking whether they are still the newest; the
+gate is where that question is asked last. The receipt names every lane, the index and that
+Build. Everything mutable, that newest-run listing included, is observed once more immediately
+before the receipt is returned.
 
 A run in ``reuse`` mode has no export to verify. Its gate decides the reuse again, exactly as
 the plan job of the run did, and seals a reuse reference instead (:func:`seal_reuse`): the
@@ -37,8 +41,9 @@ covered merge and, separately, both original tested records of its pull request.
 The results index. A packaged run's complete results are an index of its lane artifacts, not a
 union of their bytes. The aggregating job authenticates its attempt like a gate, with the lanes
 as the artifacts, then reads every lane by numeric id, one at a time: the export against the
-plan, the lane's validation record against that export, and both against the Build the job's
-selection record names. The Build bundle itself is not read here; the gate authenticates it.
+plan, the lane's validation record against that export, and both against the Build of the
+selection record its ``input`` job handed to it, bound to this run attempt. The Build bundle
+itself is not read here; the gate authenticates it.
 """
 
 from __future__ import annotations
@@ -52,9 +57,10 @@ from mod_base.build_ci import describe
 from mod_base.build_ci.graph import run_graph
 from mod_base.build_ci.identity import validate_subject_record
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.records import (GATE_MODES, gate_receipt, results_index, reuse_reference,
-                                       validate_source_selection)
+from mod_base.build_ci.records import (GATE_MODES, bind_source_selection, gate_receipt, results_index,
+                                       reuse_reference)
 from mod_base.build_ci.reuse import FullRunRequired, ReuseRefused, admit_post_merge_reuse
+from mod_base.build_ci.selection import revalidate_latest_pr_build, revalidate_protected_build
 from mod_base.build_ci.transport import (_admit_source, _authenticate_build, _authenticate_run, _bound, _plan,
                                          _read_results, _read_sealed_build, _read_sealed_lane)
 from mod_base.github.api import GitHubApi
@@ -153,13 +159,19 @@ def _build_gate(attempt: Attempt, config_sha256: str, temporary_root: Path) -> d
                         artifacts=[build], owning_build=None, native_receipts=receipts)
 
 
-def _packaged_gate(attempt: Attempt, temporary_root: Path) -> dict[str, Any]:
-    plan, results = attempt.plan, attempt.descriptor("results")
+def _packaged_gate(attempt: Attempt, selection: dict[str, Any] | None, temporary_root: Path) -> dict[str, Any]:
+    plan, producer = attempt.plan, attempt.producer
+    check(selection is not None, "$.selection", "a packaged gate judges the Build its input job selected")
+    selection = bind_source_selection(selection, plan=plan, run_id=producer["run_id"],
+                                      run_attempt=producer["run_attempt"], workflow_path=producer["workflow_path"])
+    results = attempt.descriptor("results")
     lanes = [attempt.descriptor("runtime", lane["id"]) for lane in plan["lanes"]]
     index = _read_results(attempt.reads, results, plan, temporary_root)
     check([lane["descriptor"] for lane in index["lanes"]] == lanes, "$.results.lanes",
           "the results index lists other lane artifacts than this attempt uploaded")
     owning = index["owning_build"]
+    check((owning, index["build_envelope_sha256"]) == (selection["build"], selection["envelope_sha256"]),
+          "$.results.owning_build", "the results index owns another Build than this run attempt selected")
     if attempt.mode == "rebuilt":
         check(owning == attempt.descriptor("build"), "$.results.owning_build",
               "the results index does not own the Build this run rebuilt")
@@ -167,6 +179,10 @@ def _packaged_gate(attempt: Attempt, temporary_root: Path) -> dict[str, Any]:
         _bound(owning, plan, "build", None)
         check(ci_producer(owning["producer"]["workflow_path"]) == "build", "$.results.owning_build",
               "this mode consumes the Build of a separate run of the Build caller")
+        # No lane asked whether a newer Build exists. The gate asks, and the listing it reads joins
+        # what is observed again before the receipt is returned.
+        revalidate = revalidate_latest_pr_build if plan["identity"]["pr_number"] else revalidate_protected_build
+        revalidate(attempt.reads, descriptor=owning, plan=plan, watch=attempt.watch)
         _authenticate_build(attempt.reads, attempt.watch, owning, plan)
     receipts = [{"unit_id": lane["id"], "native_contract_sha256": lane["native_contract_sha256"],
                  "report_sha256": lane["report_sha256"]} for lane in index["lanes"]]
@@ -174,17 +190,23 @@ def _packaged_gate(attempt: Attempt, temporary_root: Path) -> dict[str, Any]:
                         artifacts=[*lanes, results], owning_build=owning, native_receipts=receipts)
 
 
-def seal_gate(attempt: Attempt, *, config_sha256: str, temporary_root: Path) -> tuple[str, dict[str, Any]]:
+def seal_gate(attempt: Attempt, *, config_sha256: str, temporary_root: Path,
+              selection: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
     """Verify what the gate of an authenticated attempt judges and return its receipt as
     ``(file name, document)``, ready to be written as the one file of the tested record.
 
     ``config_sha256`` is the digest of the protected Build config this job loaded: the validation
-    record of a Build must have been frozen under it. ``temporary_root`` is a private directory
-    for the downloads, which are removed again. The attempt's watch is rechecked before return."""
+    record of a Build must have been frozen under it. ``selection`` is the selection record the
+    ``input`` job of this run attempt handed to a packaged gate job, and None for a Build gate.
+    The results index must own exactly the Build of that record and, unless this run rebuilt it,
+    that Build must still be the newest exact Build of the live subject. ``temporary_root`` is a
+    private directory for the downloads, which are removed again. The attempt's watch is
+    rechecked before return."""
 
     check(attempt.mode != "reuse", "$.mode", "a reuse run seals a reuse reference, not a tested record")
+    check(attempt.gate == "packaged" or selection is None, "$.selection", "a Build gate judges no selected Build")
     document = (_build_gate(attempt, config_sha256, temporary_root) if attempt.gate == "build"
-                else _packaged_gate(attempt, temporary_root))
+                else _packaged_gate(attempt, selection, temporary_root))
     attempt.watch.recheck()
     return grammar.CI_GATE_NAME, document
 
@@ -222,20 +244,19 @@ def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan:
     results artifact.
 
     ``record`` is the job's identity record, ``plan`` the plan of that subject and ``selection``
-    the selection record of this job's state: the Build every lane ran, selected by this very
-    attempt. Every planned lane must have uploaded exactly one artifact in this attempt and no
-    other lane may have. ``config_sha256`` is the digest of the protected Build config this job
-    loaded; ``temporary_root`` a private directory for one lane's download at a time. Everything
-    mutable is observed once more before return."""
+    the selection record its ``input`` job handed to this job: the Build every lane ran, selected
+    by this very attempt (``records.bind_source_selection``). Every planned lane must have
+    uploaded exactly one artifact in this attempt and no other lane may have. ``config_sha256`` is
+    the digest of the protected Build config this job loaded; ``temporary_root`` a private
+    directory for one lane's download at a time. Everything mutable is observed once more before
+    return."""
 
     plan = _plan(plan)
     reads, watch = CommandReads.of(api), Watch()
     modes = tuple(mode for mode in admissible_modes(record, "packaged") if mode != "reuse")
-    validate_source_selection(selection, plan=plan)
-    request, owning = selection["request"], selection["build"]
-    check((request["run_id"], request["run_attempt"], request["workflow_path"])
-          == (run_id, run_attempt, record["workflow_path"]), "$.selection.request",
-          "the selection record belongs to another run or attempt")
+    selection = bind_source_selection(selection, plan=plan, run_id=run_id, run_attempt=run_attempt,
+                                      workflow_path=record["workflow_path"])
+    owning = selection["build"]
     _admit_source(reads, watch, plan["identity"])
     mode = _shown_mode(reads, record, plan, modes, run_id, run_attempt)
     producer = describe.attempt_producer(record, plan, mode=mode, run_id=run_id, run_attempt=run_attempt)

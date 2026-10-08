@@ -62,10 +62,6 @@ class SealedLaneCapTests(AggregateCase):
         code, stdout, _ = self.aggregate(self.lane_of(limits.MAX_CI_RUNTIME_FILES - 2))
         self.assertEqual(code, 0, stdout)
 
-    # ``bounded_zip.extract_runtime`` admits the lane's files and one more, the envelope; the
-    # artifact also holds the validation record and its report, so the two largest lanes a plan
-    # may have (511 and 512 files) cannot be read back.
-    @unittest.expectedFailure
     def test_a_lane_with_every_file_a_lane_may_hold_is_indexed(self) -> None:
         code, stdout, _ = self.aggregate(self.lane_of(limits.MAX_CI_RUNTIME_FILES))
         self.assertEqual(code, 0, stdout)

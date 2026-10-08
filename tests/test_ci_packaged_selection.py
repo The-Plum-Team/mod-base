@@ -893,7 +893,7 @@ class SelectBuildTests(unittest.TestCase):
 
 
 class FetchBuildTests(unittest.TestCase):
-    """``fetch_build``: the selected Build is checked again immediately before it is used."""
+    """``fetch_build`` trusts the protected handover and verifies the exact selected bytes."""
 
     def selected(self, world, **changes):
         arguments = {"plan": world.plan, "run_id": 43, "run_attempt": 2, "workflow_path": PACKAGED,
@@ -918,11 +918,9 @@ class FetchBuildTests(unittest.TestCase):
             self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_each_route_publishes_the_selected_bundle_within_budget(self):
-        # A Build of another run: the newest-run observation again (9 for a pull request, 8 for a
-        # protected subject), then the download with its own admission (12 and 10); the commit and
-        # the job list are read once. A rebuilt Build is authenticated inside its own run.
-        cases = {"pull request": (build_world, {}, 21), "selected": (lambda: build_world(push=True), {}, 18),
-                 "rebuilt": (rebuilt_world, {"build_run_id": selection.SAME_RUN}, 15)}
+        # One REST request returns the archive URL; one credential-free storage GET reads it.
+        cases = {"pull request": (build_world, {}, 2), "selected": (lambda: build_world(push=True), {}, 2),
+                 "rebuilt": (rebuilt_world, {"build_run_id": selection.SAME_RUN}, 2)}
         for name, (build, changes, requests) in cases.items():
             world = build()
             record = self.selected(world, **changes)
@@ -934,44 +932,28 @@ class FetchBuildTests(unittest.TestCase):
                 self.assertEqual(world.api.request_count - self.spent, requests)
                 self.assertEqual(world.api.mutations, [])
 
-    def test_artifacts_that_disappear_after_selection_reject_before_use(self):
+    def test_an_expired_download_rejects_without_publication(self):
         for build, changes in ((build_world, {}), (lambda: build_world(push=True), {}),
                                (rebuilt_world, {"build_run_id": selection.SAME_RUN})):
-            for mutation in ("expired", "deleted"):
-                world = build()
-                record = self.selected(world, **changes)
-                if mutation == "expired":
-                    world.set_artifact(100, expired=True)
-                else:
-                    world.set_artifact(100, name=grammar.ci_artifact_name("target", 42, 2, "target-a"))
-                with self.subTest(route=build.__name__, mutation=mutation):
-                    self.refused(world, record)
+            world = build()
+            record = self.selected(world, **changes)
+            world.set_artifact(100, expired=True)
+            with self.subTest(route=build.__name__), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(ApiError, "expired"):
+                    self.fetch(world, record, Path(directory) / "sealed-build")
+                self.assertEqual(list(Path(directory).iterdir()), [])
 
-    def test_a_newer_generation_after_selection_rejects_before_use(self):
-        for push in (False, True):
-            for newer in ({"status": "queued", "conclusion": None}, {"conclusion": "failure"},
-                          {"conclusion": "success", "listing": "build-reuse" if push else "build-deferred"}):
-                world = build_world(push=push)
-                record = self.selected(world)
-                later_run(world, **newer)
-                with self.subTest(push=push, newer=newer):
-                    self.refused(world, record)
-        world = build_world()
-        record = self.selected(world)
-        world.set_run(42, run_attempt=3, status="queued", conclusion=None)  # the selected run was rerun
-        self.refused(world, record, "no longer the newest")
-
-    def test_a_moved_source_after_selection_rejects_before_use(self):
+    def test_freshness_is_left_to_the_gate_after_selection(self):
+        # The packaged gate tests require newest Build and live source again before sealing.
+        # Every matrix lane reads only the immutable bytes named by its protected input job.
         for push in (False, True):
             world = build_world(push=push)
             record = self.selected(world)
+            later_run(world, status="queued", conclusion=None)
             world.api.set_branch("master", "f" * 40, "e" * 40)
-            with self.subTest(push=push):
-                self.refused(world, record)
-        world = build_world()
-        record = self.selected(world)
-        world.api.add_response("/repos/example/mod/pulls/7", {**world.pr, "draft": True})
-        self.refused(world, record, "ready")
+            with self.subTest(push=push), tempfile.TemporaryDirectory() as directory:
+                self.assertEqual(self.fetch(world, record, Path(directory) / "sealed-build"), world.envelope)
+                self.assertEqual(world.api.request_count - self.spent, 2)
 
     def test_only_the_run_attempt_that_selected_may_consume_the_selection(self):
         world = build_world()
@@ -1016,7 +998,8 @@ class FetchBuildTests(unittest.TestCase):
         record = self.selected(world)
         changed = copy.deepcopy(record)
         changed["build"]["artifact"]["id"] += 1
-        self.refused(world, changed, "no longer the newest")
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(MbError):
+            self.fetch(world, changed, Path(directory) / "sealed-build")
         changed = {**record, "envelope_sha256": "f" * 64}
         with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(MbError, "envelope differs"):
             self.fetch(world, changed, Path(directory) / "sealed-build")
@@ -1037,7 +1020,7 @@ class FetchBuildTests(unittest.TestCase):
         world = build_world()
         record = self.selected(world)
         failure = ApiError("GitHub API GET failed: HTTP 502", status=502, method="GET", path="/")
-        with tempfile.TemporaryDirectory() as directory, patch.object(world.api, "get_json", side_effect=failure), \
+        with tempfile.TemporaryDirectory() as directory, patch.object(world.api, "download", side_effect=failure), \
                 self.assertRaisesRegex(ApiError, "HTTP 502"):
             self.fetch(world, record, Path(directory) / "sealed-build")
 

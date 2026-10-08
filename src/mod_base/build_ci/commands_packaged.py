@@ -15,15 +15,21 @@ The subject ``ci subject`` authenticated and ``--build-run-id`` choose the route
 
 A selection writes the canonical ``mod-base.ci.selection`` record to ``--output`` (a new file) and
 to ``ci-selection.json`` in the state directory, and outputs ``found=true``, ``run_id`` (the run
-of that Build, which the callee workflows hand to every later job) and ``selection`` (the record
-on one line). Nothing to select writes no record and outputs ``found=false`` with an empty
-``run_id``.
+of that Build, which ``select-build.yml`` returns to its caller) and ``selection`` (the record on
+one line, which the packaged ``input`` job hands to every later job of its run). Nothing to
+select writes no record and outputs ``found=false`` with an empty ``run_id``.
 
-``fetch-build`` runs in every lane job and in the aggregate job, immediately before the Build is
-used. It takes the record of this run attempt's ``input`` job as ``--selection``, re-validates
-the selected Build and publishes its complete bundle at the fixed
+The later jobs of a packaged run never select again. Each receives that one line, writes it to a
+file and names the file as ``--selection`` of the command that needs the Build: ``fetch-build``
+here, ``aggregate`` and the packaged ``seal-gate`` in ``commands_build``. All three read it with
+:func:`received_selection`, which admits only the canonical record of the job's own plan that
+this very run attempt requested.
+
+``fetch-build`` runs in every lane job, immediately before the Build is used. It verifies
+the selected artifact bytes and publishes its complete bundle at the fixed
 ``exports.BUILD_VALIDATION_ROOT`` (:func:`mod_base.build_ci.selection.fetch_build`); the bound
-record is kept as ``ci-selection.json`` in the state directory.
+record is kept as ``ci-selection.json`` in the state directory, where the worker steps of the
+lane find the Build they run against.
 
 Both read the job's subject and plan from the state directory and write nothing to GitHub.
 """
@@ -38,10 +44,13 @@ from typing import Any
 from mod_base import cli, runtime
 from mod_base.build_ci import commands, exports, identity, planning, selection
 from mod_base.build_ci.protocol import validate_plan
+from mod_base.build_ci.records import bind_source_selection
 from mod_base.errors import MbError
 from mod_base.io.secure_json import loads
 from mod_base.model import grammar, limits
-from mod_base.model.canonical import canonical_json, read_json_file
+from mod_base.model.canonical import canonical_json, read_regular_file
+from mod_base.model.documents import load_document
+from mod_base.model.validators import check
 
 
 def _build_run(value: str) -> int | str | None:
@@ -78,11 +87,17 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     select.add_argument("--github-output", type=cli.PATH, required=True, metavar="FILE")
     select.set_defaults(handler=run_select_build)
 
-    fetch = verbs.add_parser("fetch-build", help="re-validate the selected Build and materialise its bundle")
+    fetch = verbs.add_parser("fetch-build", help="download and verify the selected Build bundle")
     commands.add_job_arguments(fetch)
-    fetch.add_argument("--selection", type=cli.PATH, required=True, metavar="FILE",
-                       help="the selection record this run attempt's input job wrote")
+    add_selection_argument(fetch, required=True)
     fetch.set_defaults(handler=run_fetch_build)
+
+
+def add_selection_argument(parser: argparse.ArgumentParser, *, required: bool) -> None:
+    """Add ``--selection FILE``: where the job wrote the record it received from its ``input`` job."""
+
+    parser.add_argument("--selection", type=cli.PATH, required=required, default=None, metavar="FILE",
+                        help="the selection record this run attempt's input job handed to this job")
 
 
 def job_plan(state: Path) -> dict[str, Any]:
@@ -90,6 +105,23 @@ def job_plan(state: Path) -> dict[str, Any]:
 
     raw = identity.read_state_record(state, grammar.CI_PLAN_NAME, max_bytes=limits.MAX_CI_PLAN_BYTES)
     return validate_plan(loads(raw, label=grammar.CI_PLAN_NAME, max_bytes=limits.MAX_CI_PLAN_BYTES))
+
+
+def received_selection(path: Path, *, plan: dict[str, Any], run_id: int, run_attempt: int,
+                       workflow_path: str) -> dict[str, Any]:
+    """The selection record a job received from the ``input`` job of its run (``--selection FILE``).
+
+    The file holds what ``select-build`` wrote as its ``selection`` output. Whatever carried it
+    here is not trusted: the bytes are decoded strictly, must be the canonical JSON of a
+    ``mod-base.ci.selection`` record for ``plan``, and the record must have been requested by
+    this very run attempt of the packaged caller (``records.bind_source_selection``). Everything
+    else is a rejection, before any request is sent for the Build it names."""
+
+    raw = read_regular_file(path, label="selection record", max_bytes=limits.MAX_CI_RECORD_BYTES)
+    document = load_document(raw, kind="mod-base.ci.selection", label="selection record", plan=plan)
+    check(raw == canonical_json(document), "$.selection", "the selection record is not canonical JSON")
+    return bind_source_selection(document, plan=plan, run_id=run_id, run_attempt=run_attempt,
+                                 workflow_path=workflow_path)
 
 
 def _job(args: argparse.Namespace) -> tuple[runtime.Invocation, dict[str, Any], dict[str, Any], int, int]:
@@ -145,7 +177,8 @@ def run_select_build(args: argparse.Namespace) -> int:
 
 def run_fetch_build(args: argparse.Namespace) -> int:
     invocation, record, plan, run_id, run_attempt = _job(args)
-    document, _ = read_json_file(args.selection, label="selection record", max_bytes=limits.MAX_CI_RECORD_BYTES)
+    document = received_selection(args.selection, plan=plan, run_id=run_id, run_attempt=run_attempt,
+                                  workflow_path=record["workflow_path"])
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_FETCH_BUILD_REQUESTS)
     selection.fetch_build(api, record=document, plan=plan, run_id=run_id, run_attempt=run_attempt,
                           workflow_path=record["workflow_path"], event=record["event"],

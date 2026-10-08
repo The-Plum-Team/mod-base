@@ -3,11 +3,16 @@ name: mod-base packaged-e2e
 # Reusable packaged E2E callee (docs/BUILD-E2E-DESIGN.md, "Build bundle handoff"). A mod's managed
 # mod-base-packaged-e2e.yml calls it for a pull request (pull_request_target), for a push to the
 # canonical branch and for a manual dispatch there. It never compiles: the input job authenticates
-# the one exact Build this run consumes, and every later job selects that same run again by its
-# id, so nothing but sealed artifacts travels between jobs. For a pull request the caller names no
-# run and the input job waits, for at most 5400 seconds, for the separate Build run of the same
-# head; a standalone caller names the run its select job found (select-build.yml) or `same-run`
-# after its rebuild job built in this run (build.yml). Every job starts with the Build controller
+# the one exact Build this run consumes and hands its selection record to every later job as a job
+# output: one line that names the Build's artifact by numeric id and digest, the hash of its
+# envelope and this run attempt as the requester. A later job writes that line into its private
+# state and gives the file to the command that needs it, which binds the record to this run
+# attempt before it uses it: a lane downloads exactly those bytes, the aggregate job indexes the
+# lanes against that Build and the gate requires it to be the newest Build of the live head
+# still. No later job selects again. For a pull request the caller names no run and the input job
+# waits, for at most 5400 seconds, for the separate Build run of the same head; a standalone
+# caller names the run its select job found (select-build.yml) or `same-run` after its rebuild
+# job built in this run (build.yml). Every job starts with the Build controller
 # prologue and then runs one `ci` command per step, with its private state in
 # $RUNNER_TEMP/mb-state. Candidate code runs only inside `ci worker-run`, as a separate account
 # and without any token: the candidate tree is a third checkout that no step of the runner user
@@ -42,7 +47,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:360622132772f3662398e8c91ff19710c5e52ad2513e55b89dc04c5070dcab87"
+  MB_KIT_TREE_DIGEST: "sha256:b5626f00e82522eb6da28b99cb13a80816abafd5a5a0032fbf585622a0545923"
 
 jobs:
   input:
@@ -58,7 +63,7 @@ jobs:
       tested-sha: ${{ steps.subject.outputs.tested_sha }}
       plan-sha256: ${{ steps.plan.outputs.plan_sha256 }}
       lanes: ${{ steps.plan.outputs.lanes }}
-      build-run-id: ${{ steps.select.outputs.run_id }}
+      selection: ${{ steps.select.outputs.selection }}
     steps:
       - name: Validate call inputs before any checkout
         shell: bash
@@ -391,20 +396,21 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
-      - name: Reselect the exact Build
+      - name: Receive the selected Build
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          SELECTED_RUN_ID: ${{ needs.input.outputs.build-run-id }}
+          SELECTION: ${{ needs.input.outputs.selection }}
         run: |
           set -euo pipefail
-          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
           fail() { printf 'Build selection: %s\n' "$1" >&2; exit 1; }
-          [[ "$SELECTED_RUN_ID" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed Build run"
-          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
-            python3 -P -m mod_base ci select-build --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --build-run-id "$SELECTED_RUN_ID" --output "$RUNNER_TEMP/mb-state/build-selection.json" \
-            --github-output "$GITHUB_OUTPUT"
+          # One line of the kit's canonical JSON, at most what one output of a kit command holds.
+          canonical='^\{[][{}",:A-Za-z0-9._/@-]+\}$'
+          [[ "${#SELECTION}" -le 65536 && "$SELECTION" =~ $canonical &&
+             "$SELECTION" == *'"kind":"mod-base.ci.selection"'* ]] || fail "malformed selection record"
+          umask 077
+          set -o noclobber
+          printf '%s\n' "$SELECTION" > "$RUNNER_TEMP/mb-state/build-selection.json"
       - name: Fetch the sealed Build bundle
         shell: bash
         env:
@@ -627,20 +633,21 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
-      - name: Reselect the exact Build
+      - name: Receive the selected Build
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          SELECTED_RUN_ID: ${{ needs.input.outputs.build-run-id }}
+          SELECTION: ${{ needs.input.outputs.selection }}
         run: |
           set -euo pipefail
-          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
           fail() { printf 'Build selection: %s\n' "$1" >&2; exit 1; }
-          [[ "$SELECTED_RUN_ID" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed Build run"
-          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
-            python3 -P -m mod_base ci select-build --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --build-run-id "$SELECTED_RUN_ID" --output "$RUNNER_TEMP/mb-state/build-selection.json" \
-            --github-output "$GITHUB_OUTPUT"
+          # One line of the kit's canonical JSON, at most what one output of a kit command holds.
+          canonical='^\{[][{}",:A-Za-z0-9._/@-]+\}$'
+          [[ "${#SELECTION}" -le 65536 && "$SELECTION" =~ $canonical &&
+             "$SELECTION" == *'"kind":"mod-base.ci.selection"'* ]] || fail "malformed selection record"
+          umask 077
+          set -o noclobber
+          printf '%s\n' "$SELECTION" > "$RUNNER_TEMP/mb-state/build-selection.json"
       - name: Validate frozen native exports
         shell: bash
         env:
@@ -650,7 +657,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci aggregate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --output "$RUNNER_TEMP/mb-upload"
+            --selection "$RUNNER_TEMP/mb-state/build-selection.json" --output "$RUNNER_TEMP/mb-upload"
       - name: Upload sealed outputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -830,31 +837,37 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --github-output "$GITHUB_OUTPUT" "${expected[@]}"
-      - name: Reselect the exact Build
+      - name: Receive the selected Build
         if: inputs.mode != 'reuse'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          SELECTED_RUN_ID: ${{ needs.input.outputs.build-run-id }}
+          SELECTION: ${{ needs.input.outputs.selection }}
         run: |
           set -euo pipefail
-          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
           fail() { printf 'Build selection: %s\n' "$1" >&2; exit 1; }
-          [[ "$SELECTED_RUN_ID" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed Build run"
-          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
-            python3 -P -m mod_base ci select-build --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --build-run-id "$SELECTED_RUN_ID" --output "$RUNNER_TEMP/mb-state/build-selection.json" \
-            --github-output "$GITHUB_OUTPUT"
+          # One line of the kit's canonical JSON, at most what one output of a kit command holds.
+          canonical='^\{[][{}",:A-Za-z0-9._/@-]+\}$'
+          [[ "${#SELECTION}" -le 65536 && "$SELECTION" =~ $canonical &&
+             "$SELECTION" == *'"kind":"mod-base.ci.selection"'* ]] || fail "malformed selection record"
+          umask 077
+          set -o noclobber
+          printf '%s\n' "$SELECTION" > "$RUNNER_TEMP/mb-state/build-selection.json"
       - name: Validate frozen native exports
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          selection=()
+          if [[ "$MODE" != reuse ]]; then
+            selection=(--selection "$RUNNER_TEMP/mb-state/build-selection.json")
+          fi
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci seal-gate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --gate packaged --output "$RUNNER_TEMP/mb-upload"
+            --gate packaged "${selection[@]}" --output "$RUNNER_TEMP/mb-upload"
       - name: Upload sealed outputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

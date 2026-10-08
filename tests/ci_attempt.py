@@ -201,6 +201,8 @@ class Attempt:
         self.plan = plan_of(self.record["subject"], targets=targets, lanes=lanes)
         self.api, self.pull = h.github(max_requests=max_requests)
         self.state = directory / "state"
+        #: Where a job of this attempt writes the selection record its ``input`` job handed to it.
+        self.selection = directory / "selection.json"
         identity.write_subject(self.state, self.record)
         identity.write_state_record(self.state, grammar.CI_PLAN_NAME, canonical_json(self.plan))
         self.run = ci_api_run(self.plan, caller, status="in_progress", conclusion=None)
@@ -265,8 +267,8 @@ class Attempt:
                              "expires_at": record["expires_at"]}}
 
     def select(self, mode: str, owning_build: dict[str, Any], envelope_sha256: str, **changes: Any) -> dict[str, Any]:
-        """Write the selection record ``ci select-build`` leaves in this job's state: the Build
-        this attempt selected and the SHA-256 of its envelope."""
+        """Write the selection record this job received from its ``input`` job (``selection``):
+        the Build this attempt selected and the SHA-256 of its envelope."""
 
         producer = self.producer(mode)
         document = {"kind": "mod-base.ci.selection", "schema_version": 1,
@@ -276,7 +278,7 @@ class Attempt:
                                 "workflow_path": producer["workflow_path"], "workflow_ref": producer["workflow_ref"]},
                     "build": owning_build, "envelope_sha256": envelope_sha256}
         document.update(changes)
-        identity.write_state_record(self.state, grammar.CI_SELECTION_NAME, canonical_json(document))
+        self.selection.write_bytes(canonical_json(document))
         return document
 
     def add_build_run(self, data: bytes, *, artifact_id: int = 100, **run: Any) -> dict[str, Any]:

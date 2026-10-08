@@ -128,9 +128,12 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 - Add the Build/E2E callee workflow `.github/workflows/packaged-e2e.yml`: jobs `input`, `lane` (one
   per planned lane), `aggregate` and `gate`, inputs `kit-sha`, `pr-number`, `mode` and
   `build-run-id` (empty for a pull request, whose `input` job waits up to 5400 seconds for the
-  separate Build run; a run id; or `same-run` after a rebuild in the same run). Every job after
-  `input` selects that run again by its id, the `aggregate` job's sealing step is `ci aggregate`,
-  and in reuse mode only the gate runs. It is tabled, policed and digested like the other two.
+  separate Build run; a run id; or `same-run` after a rebuild in the same run). Only `input`
+  selects: it returns its selection record as the job output `selection`, every later job writes
+  that line to a file and gives it to `ci fetch-build`, `ci aggregate` or `ci seal-gate` as
+  `--selection`, and each binds the record to the run attempt before it uses it. The `aggregate`
+  job's sealing step is `ci aggregate`, and in reuse mode only the gate runs. It is tabled,
+  policed and digested like the other two.
 - Add the Build/E2E callee workflow `.github/workflows/gate-status.yml`: one job, `evaluate`,
   inputs `kit-sha` and `pr-number`, output `intents` (the canonical document of `ci gate-status`).
   Its prologue admits the managed gate status caller of the canonical branch alone

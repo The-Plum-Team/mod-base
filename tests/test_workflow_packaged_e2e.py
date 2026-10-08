@@ -2,9 +2,10 @@
 
 The rules every Build/E2E callee shares are in ``tests/test_workflow_ci_policy.py``. This module
 spells out what is particular to packaged E2E: the four jobs and how they depend on each other,
-how the one exact Build reaches every job (the ``input`` job authenticates it and each later job
-selects that run again), what reuse skips, the command line of every step (the contract the ``ci``
-verbs are written against) and what each script refuses before the kit runs.
+how the one exact Build reaches every job (the ``input`` job authenticates it and hands its
+selection record to each later job, which writes it to the file its command is given), what reuse
+skips, the command line of every step (the contract the ``ci`` verbs are written against) and what
+each script refuses before the kit runs.
 """
 
 from __future__ import annotations
@@ -15,14 +16,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mod_base import workflow
+from mod_base import cli, workflow
 from mod_base.build_ci import adapter, graph, planning
 from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.build_ci.records import GATE_MODES
 from mod_base.model import grammar
 from mod_base.model import limits as lim
-from tests.helpers import ci_graph_jobs, ci_plan, ci_push_plan
-from tests.test_workflow_ci_policy import CANDIDATE_CHECKOUT, JDKS, SAMPLES, CiStepRunner, ci_callee
+from mod_base.model.canonical import canonical_json
+from tests.helpers import ci_graph_jobs, ci_plan, ci_push_plan, ci_selection
+from tests.test_workflow_ci_policy import (CANDIDATE_CHECKOUT, JDKS, RECEIVE_STEP, SAMPLES, CiStepRunner, ci_callee,
+                                           step_verb)
 from tests.test_workflow_policy import PROLOGUE, UPLOAD, parse_kit_argv, require_tools, step
 
 NAME = "packaged-e2e"
@@ -31,7 +34,7 @@ PREPARE = "Fence the host and prepare the worker accounts"
 PLAN = "Derive the protected plan"
 REPLAN = "Rederive the protected plan"
 SELECT = "Select the exact Build"
-RESELECT = "Reselect the exact Build"
+RECEIVE = RECEIVE_STEP
 FETCH = "Fetch the sealed Build bundle"
 STAGE = "Stage the candidate and the sealed Build bundle"
 RUN = "Run the lane as the candidate"
@@ -42,10 +45,10 @@ SEAL, SEND = workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP
 #: job's sealing step is ``ci aggregate`` itself: the kit indexes the lane results, no hook runs.
 STEPS = {
     "input": [*PROLOGUE, SUBJECT, PREPARE, PLAN, SELECT, FINISH],
-    "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, RESELECT, FETCH, STAGE, RUN, LOCK, SEAL, SEND,
+    "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, RECEIVE, FETCH, STAGE, RUN, LOCK, SEAL, SEND,
              FINISH],
-    "aggregate": [*PROLOGUE, SUBJECT, PREPARE, REPLAN, RESELECT, SEAL, SEND, FINISH],
-    "gate": [*PROLOGUE, SUBJECT, PREPARE, REPLAN, RESELECT, SEAL, SEND, FINISH],
+    "aggregate": [*PROLOGUE, SUBJECT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
+    "gate": [*PROLOGUE, SUBJECT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
 }
 NOT_REUSE = "inputs.mode != 'reuse'"
 PREFIX = workflow.CI_PACKAGED_CALL + " / "
@@ -60,7 +63,9 @@ STALE_LISTED_STEPS = {"aggregate": ["Assemble the exact lane union"]}
 #: What a caller passes for a protected push that selected run 36042781699, and for admitted reuse.
 PUSH = {"GITHUB_EVENT_NAME": "push", "PR_NUMBER": ""}
 SELECTED = {**PUSH, "MODE": "full", "BUILD_RUN_ID": "36042781699"}
-REUSED = {**PUSH, "MODE": "reuse", "PLAN_SHA256": "", "SELECTED_RUN_ID": ""}
+REUSED = {**PUSH, "MODE": "reuse", "PLAN_SHA256": "", "SELECTION": ""}
+#: Where a later job writes the record it is handed, below ``$RUNNER_TEMP``.
+RECEIVED = "mb-state/build-selection.json"
 
 
 class PackagedStructureTests(unittest.TestCase):
@@ -76,8 +81,8 @@ class PackagedStructureTests(unittest.TestCase):
             "input": {"tested-sha": "${{ steps.subject.outputs.tested_sha }}",
                       "plan-sha256": "${{ steps.plan.outputs.plan_sha256 }}",
                       "lanes": "${{ steps.plan.outputs.lanes }}",
-                      # The run the command authenticated, also when the caller named none or `same-run`.
-                      "build-run-id": "${{ steps.select.outputs.run_id }}"},
+                      # The record of the Build the command selected: one line, for every later job.
+                      "selection": "${{ steps.select.outputs.selection }}"},
             "lane": None, "aggregate": None, "gate": None})
         steps = self.jobs["input"]["steps"]
         self.assertEqual({item["id"]: item["name"] for item in steps if "id" in item},
@@ -105,14 +110,14 @@ class PackagedStructureTests(unittest.TestCase):
         self.assertEqual({job_id: [item["name"] for item in job["steps"]] for job_id, job in self.jobs.items()}, STEPS)
         # The candidate is locked whenever its account exists and the accounts are swept whenever
         # the job got past its subject, whatever failed or was cancelled in between. The gate is the
-        # one job that also runs in reuse mode, and then it has no Build to select again.
+        # one job that also runs in reuse mode, and then no input job has handed it a selection.
         always = {LOCK: "${{ always() && steps.prepare.outcome == 'success' }}",
                   FINISH: "${{ always() && steps.subject.outcome == 'success' }}"}
         for job_id, job in self.jobs.items():
             conditions = {item["name"]: item["if"] for item in job["steps"] if "if" in item}
             expected = {name: condition for name, condition in always.items() if name in STEPS[job_id]}
             with self.subTest(job=job_id):
-                self.assertEqual(conditions, {**expected, **({RESELECT: NOT_REUSE} if job_id == "gate" else {})})
+                self.assertEqual(conditions, {**expected, **({RECEIVE: NOT_REUSE} if job_id == "gate" else {})})
 
     def test_job_names_equal_the_registry_and_the_literal_job_listings(self) -> None:
         lane = ci_plan()["lanes"][0]["id"]
@@ -195,7 +200,7 @@ class PackagedStructureTests(unittest.TestCase):
                     "name": SEND, "uses": UPLOAD, "with": {"name": name, **common, "retention-days": days}})
         self.assertEqual([lim.CI_RETENTION_DAYS[kind] for kind in ("runtime", "results", "tested", "reuse")],
                          [7, 7, 90, 90])
-        self.assertNotIn(SEND, STEPS["input"], "the selection record never leaves the job that wrote it")
+        self.assertNotIn(SEND, STEPS["input"], "the selection record leaves its job as an output, not an artifact")
 
 
 class PackagedShellTests(unittest.TestCase):
@@ -209,7 +214,7 @@ class PackagedShellTests(unittest.TestCase):
         self.job = ["--repo", "mod", "--config", "mod/site/mod-base.json", "--state", f"{temp}/mb-state"]
         self.out = ["--github-output", str(self.runner.output)]
         self.upload = ["--output", f"{temp}/mb-upload"]
-        self.selection = f"{temp}/mb-state/build-selection.json"
+        self.selection = f"{temp}/{RECEIVED}"
 
     def run_step(self, job_id: str, name: str, **overrides: str | None):
         return self.runner.run(step(self.jobs[job_id]["steps"], name), **overrides)
@@ -296,9 +301,8 @@ class PackagedShellTests(unittest.TestCase):
         # A job that holds the candidate checkout derives its subject from it and from one request.
         derived = ["ci", "subject", *job, "--producer", "packaged", "--pr", "17", "--candidate", "candidate", *out]
         expected = ["--expect-sha256", SAMPLES["PLAN_SHA256"]]
-        # Every later job writes the selection record of the same run into its own state.
-        reselect = ["ci", "select-build", *job, "--build-run-id", SAMPLES["SELECTED_RUN_ID"],
-                    "--output", self.selection, *out]
+        # Every later job gives the record it was handed to the one command that needs the Build.
+        selection = ["--selection", self.selection]
         finish = ["ci", "worker-finish", *job]
         self.assertEqual({job_id: self.commands(job_id) for job_id in self.jobs}, {
             # A pull request names no run: the kit finds its separate Build run and waits for it.
@@ -306,18 +310,18 @@ class PackagedShellTests(unittest.TestCase):
                       ["ci", "select-build", *job, "--build-run-id", "", "--wait-seconds", "5400",
                        "--output", self.selection, *out], finish],
             "lane": [derived, self.prepare("candidate+validator"),
-                     ["ci", "plan", *job, "--candidate", "candidate", *expected, *out], reselect,
-                     ["ci", "fetch-build", *job, "--selection", self.selection],
+                     ["ci", "plan", *job, "--candidate", "candidate", *expected, *out],
+                     ["ci", "fetch-build", *job, *selection],
                      ["ci", "worker-stage", *job, "--candidate", "candidate", "--bundle"],
                      ["ci", "worker-run", *job, "--hook", "run_lane", "--unit", "lane-a"],
                      ["ci", "worker-seal", *job],
                      ["ci", "worker-validate", *job, "--hook", "verify_runtime", "--unit", "lane-a", *upload],
                      finish],
             # The kit indexes the lane results itself: no validator hook and no Build bundle here.
-            "aggregate": [subject, self.prepare("validator"), ["ci", "plan", *job, *expected, *out], reselect,
-                          ["ci", "aggregate", *job, *upload], finish],
-            "gate": [subject, self.prepare("validator"), ["ci", "plan", *job, *out, *expected], reselect,
-                     ["ci", "seal-gate", *job, "--gate", "packaged", *upload], finish],
+            "aggregate": [subject, self.prepare("validator"), ["ci", "plan", *job, *expected, *out],
+                          ["ci", "aggregate", *job, *selection, *upload], finish],
+            "gate": [subject, self.prepare("validator"), ["ci", "plan", *job, *out, *expected],
+                     ["ci", "seal-gate", *job, "--gate", "packaged", *selection, *upload], finish],
         })
         self.assertEqual(list(JDKS), ["JAVA_HOME_17_X64", "JAVA_HOME_21_X64", "JAVA_HOME_25_X64"])
 
@@ -329,29 +333,32 @@ class PackagedShellTests(unittest.TestCase):
                 self.assertEqual(flags["--build-run-id"], overrides.get("BUILD_RUN_ID", ""))
                 self.assertEqual(int(flags["--wait-seconds"]), lim.CI_BUILD_WAIT_SECONDS)
                 self.assertEqual(flags["--output"], self.selection)
-        # The later jobs never wait: the run they name was authenticated as complete.
+        # No later job selects, so none waits: each is handed the record of this one selection.
         for job_id in ("lane", "aggregate", "gate"):
-            self.assertNotIn("--wait-seconds", self.run_step(job_id, RESELECT).commands[0], job_id)
+            self.assertNotIn("select-build", workflow.CI_JOB_VERBS[NAME][job_id], job_id)
+            self.assertEqual(step(self.jobs[job_id]["steps"], RECEIVE)["env"],
+                             {"SELECTION": "${{ needs.input.outputs.selection }}"}, job_id)
 
     def test_in_reuse_mode_the_gate_plans_alone_and_selects_no_build(self) -> None:
         job, out = self.job, self.out
         self.assertEqual(self.commands("gate", **REUSED), [
             ["ci", "subject", *job, "--producer", "packaged", "--pr", "", *out], self.prepare("validator"),
-            # The input job was skipped: there is no planned digest to expect and no run to select.
+            # The input job was skipped: there is no planned digest to expect and no selection to judge.
             ["ci", "plan", *job, *out],
             ["ci", "seal-gate", *job, "--gate", "packaged", *self.upload], ["ci", "worker-finish", *job]])
         self.assertEqual([command[1] for command in self.commands("gate", **REUSED)],
-                         [verb for verb in workflow.CI_JOB_VERBS[NAME]["gate"] if verb != "select-build"])
+                         list(workflow.CI_JOB_VERBS[NAME]["gate"]))
         for overrides in ({**REUSED, "PLAN_SHA256": SAMPLES["PLAN_SHA256"]}, {**REUSED, "PLAN_SHA256": "0"},
                           {**REUSED, "MODE": "full"}, {**REUSED, "MODE": ""}):
             with self.subTest(overrides=overrides):
                 outcome = self.run_step("gate", REPLAN, **overrides)
                 self.assertNotEqual(outcome.result.returncode, 0)
                 self.assertEqual(outcome.commands, [])
-        # A step that reuse skips would refuse the run it is not given.
-        outcome = self.run_step("gate", RESELECT, **REUSED)
+        # The step that reuse skips would refuse the record it is not given.
+        outcome = self.run_step("gate", RECEIVE, **REUSED)
         self.assertNotEqual(outcome.result.returncode, 0)
-        self.assertEqual(outcome.commands, [])
+        self.assertIn("malformed selection record", outcome.result.stderr)
+        self.assertFalse((self.runner.runner_temp / RECEIVED).exists())
 
     def test_hooks_roles_and_producer_are_those_of_the_adapter_contract(self) -> None:
         for job_id in self.jobs:
@@ -391,11 +398,6 @@ class PackagedShellTests(unittest.TestCase):
                               {"STUB_CANDIDATE_HEAD": "e" * 40}, {"STUB_CANDIDATE_HEAD": None},
                               {"TESTED_SHA": "e" * 40})
         ] + [
-            # The run comes from the kit's own output: always a run id, never what a caller may name.
-            (job_id, RESELECT, {"SELECTED_RUN_ID": value})
-            for job_id in ("lane", "aggregate", "gate")
-            for value in ("", "0", "017", "-1", "1e3", "1" * 19, "17 ", "17\n", "17;id", "same-run", "$(id)")
-        ] + [
             ("lane", name, {"LANE": value})
             for name in (RUN, SEAL)
             for value in ("", "a--b", "../x", "A", "a b", "-a", "a" * 81, "a;id", "$(id)")
@@ -405,9 +407,76 @@ class PackagedShellTests(unittest.TestCase):
                 outcome = self.run_step(job_id, name, **overrides)
                 self.assertNotEqual(outcome.result.returncode, 0)
                 self.assertEqual(outcome.commands, [])
-        for value in ("1", "9" * 18):
-            self.assertEqual(self.run_step("lane", RESELECT, SELECTED_RUN_ID=value).result.returncode, 0, value)
-        self.assertLess(int("9" * 18), lim.MAX_RUN_ID)
+
+    def test_a_later_job_writes_exactly_the_record_it_is_handed(self) -> None:
+        written = self.runner.runner_temp / RECEIVED
+        steps = {job_id: step(self.jobs[job_id]["steps"], RECEIVE) for job_id in ("lane", "aggregate", "gate")}
+        for job_id, item in steps.items():
+            for locale in ("C", "C.UTF-8"):
+                outcome = self.runner.run(item, LC_ALL=locale)
+                with self.subTest(job=job_id, locale=locale):
+                    self.assertEqual((outcome.result.returncode, outcome.commands), (0, []), outcome.result.stderr)
+                    # The canonical bytes `ci select-build` wrote for its own job, for this user alone.
+                    self.assertEqual(written.read_bytes(), canonical_json(ci_selection()))
+                    self.assertEqual(written.stat().st_mode & 0o777, 0o600)
+        # One step in three jobs; only the gate, which also runs in reuse mode, may skip it.
+        self.assertEqual(steps["lane"], steps["aggregate"])
+        self.assertEqual(steps["gate"], {**steps["lane"], "if": NOT_REUSE})
+        self.assertEqual(step_verb(steps["lane"]), None, "the record is written by the shell, without a token")
+        # The step admits what one output of a kit command can hold, and the kit decodes the rest.
+        self.assertIn(f'"${{#SELECTION}}" -le {cli.MAX_OUTPUT_VALUE_CHARS} ', steps["lane"]["run"])
+        self.assertLess(len(SAMPLES["SELECTION"]), cli.MAX_OUTPUT_VALUE_CHARS)
+
+    def test_a_later_job_refuses_what_is_not_one_line_of_a_selection_record(self) -> None:
+        record = SAMPLES["SELECTION"]
+        kind = '"kind":"mod-base.ci.selection"'
+        longest = '{' + kind + ',"pad":"' + "a" * (cli.MAX_OUTPUT_VALUE_CHARS - len(kind) - 11) + '"}'
+        self.assertEqual(len(longest), cli.MAX_OUTPUT_VALUE_CHARS)
+        rejected = {
+            "empty": "", "not an object": record[1:-1], "an array": "[" + record + "]", "another kind":
+            record.replace("mod-base.ci.selection", "mod-base.ci.gate"), "two lines": record + "\n" + record,
+            "a trailing newline": record + "\n", "a carriage return": record + "\r", "a space": record.replace(":", ": ", 1),
+            "a tab": record.replace(",", ",\t", 1), "a control character": record.replace(",", ",\x01", 1),
+            "a backslash": record.replace("mb-ci-build", "mb\\u002dci-build"), "a command": record.replace(
+                "master", "$(id)"), "a quote": record.replace("master", "ma'ster"), "a glob": record.replace(
+                "master", "*"), "not ASCII": record.replace("master", "m\u00e4ster"), "too long": longest[:-2] + 'a"}',
+        }
+        for label, value in rejected.items():
+            for locale in ("C", "C.UTF-8"):
+                outcome = self.run_step("lane", RECEIVE, SELECTION=value, LC_ALL=locale)
+                with self.subTest(value=label, locale=locale):
+                    self.assertNotEqual(outcome.result.returncode, 0)
+                    self.assertEqual(outcome.result.stderr, "Build selection: malformed selection record\n")
+                    self.assertFalse((self.runner.runner_temp / RECEIVED).exists())
+        # The longest line a kit command can write as one output is still received.
+        self.assertEqual(self.run_step("lane", RECEIVE, SELECTION=longest).result.returncode, 0)
+        self.assertEqual((self.runner.runner_temp / RECEIVED).stat().st_size, cli.MAX_OUTPUT_VALUE_CHARS + 1)
+
+    def test_a_later_job_never_replaces_or_follows_what_is_already_there(self) -> None:
+        item = step(self.jobs["lane"]["steps"], RECEIVE)
+        temp = Path(tempfile.mkdtemp(dir=self.runner.runner_temp.parent))
+        environment = {**self.runner.base, "SELECTION": SAMPLES["SELECTION"], "RUNNER_TEMP": str(temp)}
+        # Without the state directory of `ci subject` there is nowhere to write.
+        result = self.runner.harness.run(item["run"], environment, cwd=self.runner.workspace)
+        self.assertNotEqual(result.returncode, 0)
+        (temp / "mb-state").mkdir(mode=0o700)
+        for existing in (b"kept", b""):
+            (temp / RECEIVED).write_bytes(existing)
+            result = self.runner.harness.run(item["run"], environment, cwd=self.runner.workspace)
+            with self.subTest(existing=existing):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual((temp / RECEIVED).read_bytes(), existing)
+            (temp / RECEIVED).unlink()
+        (temp / RECEIVED).symlink_to(temp / "elsewhere")
+        result = self.runner.harness.run(item["run"], environment, cwd=self.runner.workspace)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((temp / "elsewhere").exists(), "the record is never written through a link")
+        (temp / RECEIVED).unlink()
+        result = self.runner.harness.run(item["run"], environment, cwd=self.runner.workspace)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((result.stdout, result.stderr), ("", ""))
+        self.assertEqual(sorted(path.name for path in (temp / "mb-state").iterdir()), ["build-selection.json"])
+        self.assertEqual((temp / RECEIVED).read_bytes(), canonical_json(ci_selection()))
 
     def test_the_unit_check_is_the_unit_grammar(self) -> None:
         # The matrix unit becomes part of an artifact name, so the shell admits exactly the kit's ids.
@@ -440,7 +509,7 @@ class PackagedShellTests(unittest.TestCase):
             self.assertEqual(outcome.commands, [], "an image without one of the JDKs prepares no worker")
         for job_id, job in self.jobs.items():
             for item in job["steps"][len(PROLOGUE):]:
-                if "run" in item:
+                if "run" in item and step_verb(item) is not None:
                     with self.subTest(job=job_id, step=item["name"]):
                         outcome = self.runner.run(item, STUB_PYTHON3_SCRIPT="raise SystemExit(3)")
                         self.assertEqual(outcome.result.returncode, 3, "the step's status is the kit's")

@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import json
 import unittest
+from unittest import mock
 
 from mod_base.build_ci import gate, graph, identity, transport
 from mod_base.build_ci.exports import verify_build_export
@@ -23,6 +24,24 @@ AGGREGATE = "Shared Packaged E2E / Seal complete packaged results"
 LANE = "Shared Packaged E2E / Run packaged lane lane-a"
 LISTINGS = {"full": "build-full", "pull-request": "packaged-pull-request", "selected": "packaged-selected",
             "rebuilt": "packaged-rebuilt"}
+#: `ci seal-gate` of a packaged run that consumed the Build of another run: the source (4), this
+#: run with its jobs and artifacts (3), the results index (2), the newest Build run of the
+#: subject with its jobs and its bundle by name and by id (5), and once more before the receipt
+#: the source (3), this run with its jobs and artifacts (3) and that listing, run and bundle (3).
+PACKAGED_GATE_REQUESTS = 23
+STALE = "selected Build is no longer the newest exact available producer"
+
+
+def newer_build(attempt, *, listing: str | None = None, **changes) -> None:
+    """A Build run of the same subject that started after the one this attempt consumed; by
+    default it has failed."""
+
+    run = ci_api_run(attempt.plan, "build", **{"id": 44, "created_at": "2026-10-07T11:00:00Z",
+                                               "conclusion": "failure", **changes})
+    attempt.api.add_run(run)
+    if listing is not None:
+        attempt.api.add_jobs(44, run["run_attempt"], [{**job, "run_id": 44}
+                                                      for job in expand(ci_graph_jobs(listing), attempt.plan)])
 
 
 def seed_build(attempt, mode: str, *, change=None) -> None:
@@ -67,7 +86,8 @@ class GateCase(AttemptCase):
 
     def packaged_world(self, *, mode: str = "pull-request", edit=None, **options):
         """A packaged run whose gate job is sealing, with the results index its aggregate job
-        sealed over the lane artifacts of this attempt. ``edit`` changes the index first."""
+        sealed over the lane artifacts of this attempt and the selection record the job received
+        from its ``input`` job. ``edit`` changes the index first."""
 
         attempt = self.attempt(listing=LISTINGS[mode], caller="packaged", push=mode != "pull-request", **options)
         attempt.sealing(PACKAGED_GATE)
@@ -82,6 +102,7 @@ class GateCase(AttemptCase):
             attempt.publish("runtime", lane["id"], b"results of " + lane["id"].encode(), artifact_id=300 + index)
             attempt.lanes.append(attempt.descriptor(mode, 300 + index))
         attempt.index = results_index(attempt, mode, attempt.owning, attempt.lanes)
+        attempt.select(mode, attempt.owning, attempt.index["build_envelope_sha256"])
         if edit is not None:
             edit(attempt.index)
         self.publish_index(attempt)
@@ -93,10 +114,12 @@ class GateCase(AttemptCase):
                         artifact_id=400)
 
     def seal(self, attempt, gate_: str):
-        """Run ``ci seal-gate``; return ``(code, stderr, receipt bytes or None)``."""
+        """Run ``ci seal-gate``, with the selection record when the job received one; return
+        ``(code, stderr, receipt bytes or None)``."""
 
         output = attempt.directory / "upload"
-        code, stdout, stderr = attempt.command("seal-gate", "--gate", gate_, "--output", str(output))
+        selection = ("--selection", str(attempt.selection)) if attempt.selection.exists() else ()
+        code, stdout, stderr = attempt.command("seal-gate", "--gate", gate_, *selection, "--output", str(output))
         if code:
             self.assertEqual(stdout, "")
             self.assertFalse(output.exists())
@@ -337,7 +360,7 @@ class PackagedGateTests(GateCase):
         code, stdout, raw = self.seal(attempt, "packaged")
         self.assertEqual((code, stdout), (0, "seal-gate: packaged gate of run 43 attempt 2 sealed in mode "
                                              "pull-request as ci-gate.json\n"))
-        self.assertEqual(attempt.api.request_count, 20)
+        self.assertEqual(attempt.api.request_count, PACKAGED_GATE_REQUESTS)
         document = self.assert_readers_accept(attempt, "packaged", "pull-request", raw, artifact_id=201)
         self.assertEqual((document["gate"], document["mode"]), ("packaged", "pull-request"))
         self.assertEqual(document["artifacts"], [*attempt.lanes, attempt.descriptor("pull-request", 400)])
@@ -347,10 +370,10 @@ class PackagedGateTests(GateCase):
              "report_sha256": h(lane["id"] + "-report")} for lane in attempt.plan["lanes"]])
         self.assertEqual(len(document["native_receipts"]), 4)
 
-    def test_thirty_four_lanes_cost_the_same_twenty_requests(self) -> None:
+    def test_thirty_four_lanes_cost_the_same_twenty_three_requests(self) -> None:
         attempt = self.packaged_world(targets=17, lanes=2)
         self.assertEqual(self.seal(attempt, "packaged")[0], 0)
-        self.assertEqual(attempt.api.request_count, 20)
+        self.assertEqual(attempt.api.request_count, PACKAGED_GATE_REQUESTS)
         self.assertLess(attempt.api.request_count, 60)
 
     def test_a_standalone_run_seals_in_the_mode_its_jobs_show(self) -> None:
@@ -402,7 +425,7 @@ class PackagedGateTests(GateCase):
     def test_the_owning_build_must_be_the_authenticated_build_of_its_mode(self) -> None:
         attempt = self.packaged_world()
         attempt.api.add_run(ci_api_run(attempt.plan, "build", conclusion="failure"))
-        self.assert_rejected(attempt, "packaged", "producer run did not complete successfully")
+        self.assert_rejected(attempt, "packaged", "newest exact Build failed or was cancelled")
         attempt = self.packaged_world()
         attempt.set_artifact(100, expired=True)
         self.assert_rejected(attempt, "packaged", "expired artifact or wrong protected producer")
@@ -411,10 +434,90 @@ class PackagedGateTests(GateCase):
         other = attempt.add_build_run(b"a Build of another run", artifact_id=101)
         attempt.index["owning_build"] = other
         self.publish_index(attempt)
+        self.assert_rejected(attempt, "packaged", "owns another Build than this run attempt selected")
+        attempt.select("rebuilt", other, attempt.index["build_envelope_sha256"])
         self.assert_rejected(attempt, "packaged", "does not own the Build this run rebuilt")
         attempt = self.packaged_world(mode="selected")
         with after_download(attempt.api, lambda: attempt.set_artifact(300, expired=True)):
             self.assert_rejected(attempt, "packaged", "artifact 'mb-ci-runtime--43--a2--lane-a' has expired")
+
+    def test_the_index_must_own_the_build_this_run_attempt_selected(self) -> None:
+        # The lanes and the index agree with each other; the gate also holds them to the record
+        # of the input job, which no lane or aggregate job can rewrite.
+        attempt = self.packaged_world()
+        attempt.select("pull-request", attempt.owning, h("another envelope"))
+        self.assert_rejected(attempt, "packaged", "owns another Build than this run attempt selected")
+        attempt = self.packaged_world()
+        other = copy.deepcopy(attempt.owning)
+        other["artifact"]["digest"] = "sha256:" + "0" * 64
+        attempt.select("pull-request", other, attempt.index["build_envelope_sha256"])
+        self.assert_rejected(attempt, "packaged", "owns another Build than this run attempt selected")
+        # Both are refused once the attempt is authenticated and the index is read, not before.
+        self.assertEqual(attempt.api.request_count, 9)
+
+    def test_a_packaged_gate_needs_the_record_of_its_own_attempt_and_no_other_gate_takes_one(self) -> None:
+        attempt = self.packaged_world()
+        attempt.selection.unlink()
+        self.assert_rejected(attempt, "packaged", "a packaged gate judges the Build its input job selected")
+        another = "selection was requested by another run, attempt or workflow; rerun all jobs"
+        for label, request in (("another attempt", {"run_attempt": 1}), ("another run", {"run_id": 77})):
+            with self.subTest(record=label):
+                attempt = self.packaged_world()
+                document = attempt.select("pull-request", attempt.owning, attempt.index["build_envelope_sha256"])
+                attempt.selection.write_bytes(canonical_json({**document, "request": {**document["request"],
+                                                                                      **request}}))
+                self.assert_rejected(attempt, "packaged", another)
+                self.assertEqual(attempt.api.request_count, 0)
+        attempt = self.packaged_world()
+        attempt.selection.write_bytes(json.dumps(json.loads(attempt.selection.read_bytes()), indent=1).encode())
+        self.assert_rejected(attempt, "packaged", "the selection record is not canonical JSON")
+        self.assertEqual(attempt.api.request_count, 0)
+        # A Build gate judges the Build of its own attempt.
+        attempt = self.build_world()
+        attempt.select("full", attempt.descriptor("full", 100), h("build-envelope"))
+        self.assert_rejected(attempt, "build", "only a packaged gate judges a selected Build")
+        self.assertEqual(attempt.api.request_count, 0)
+        # And a reuse run selected nothing: its input job never ran.
+        attempt = self.attempt(listing="packaged-reuse", caller="packaged", push=True)
+        attempt.sealing(PACKAGED_GATE)
+        attempt.select("selected", attempt.add_build_run(b"x"), h("build-envelope"))
+        self.assert_rejected(attempt, "packaged", "a reuse run selected no Build")
+
+    def test_a_build_that_is_no_longer_the_newest_forbids_the_receipt(self) -> None:
+        # No lane asks whether a newer Build exists; the gate is where a superseded generation ends.
+        for mode in ("pull-request", "selected"):
+            for newer in ({"status": "queued", "conclusion": None}, {"conclusion": "failure"},
+                          {"conclusion": "success", "listing": "build-deferred" if mode == "pull-request"
+                           else "build-reuse"}):
+                with self.subTest(mode=mode, newer=newer):
+                    attempt = self.packaged_world(mode=mode)
+                    newer_build(attempt, **newer)
+                    code, stderr, _ = self.seal(attempt, "packaged")
+                    self.assertEqual(code, 2)
+                    self.assertRegex(stderr, f"{STALE}|newest exact Build (failed or was cancelled|of this commit "
+                                             "has not completed)")
+            with self.subTest(mode=mode, newer="after the gate looked"):
+                attempt = self.packaged_world(mode=mode)
+                bundle = f"/repos/{attempt.api.repository}/actions/artifacts/100"
+                read, seen = attempt.api.get_json, []
+
+                def get_json(path, **arguments):
+                    answer = read(path, **arguments)
+                    if path == bundle and not seen:  # the last read of the gate's own observation
+                        seen.append(path)
+                        newer_build(attempt, status="queued", conclusion=None)
+                    return answer
+
+                with mock.patch.object(attempt.api, "get_json", side_effect=get_json):
+                    self.assert_rejected(attempt, "packaged", "newest Build run changed between the start")
+        # The Build run was started again: the attempt the lanes ran is no longer its latest.
+        attempt = self.packaged_world()
+        attempt.api.add_run(ci_api_run(attempt.plan, "build", run_attempt=3, status="in_progress", conclusion=None))
+        self.assert_rejected(attempt, "packaged", STALE)
+        # A Build this run built for itself has no newer sibling to lose to.
+        attempt = self.packaged_world(mode="rebuilt")
+        newer_build(attempt, status="queued", conclusion=None)
+        self.assertEqual(self.seal(attempt, "packaged")[0], 0)
 
 
 class ModeTests(GateCase):

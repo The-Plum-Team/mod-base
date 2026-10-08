@@ -88,9 +88,10 @@ CI_SEAL_STEP = "Validate frozen native exports"
 CI_UPLOAD_STEP = "Upload sealed outputs"
 #: Build/E2E callee id -> job key -> the ``ci`` verbs its steps issue after the Build controller
 #: prologue, one verb per step and in step order. A callee enters this table and the two below
-#: with its workflow file; all four are written. Every packaged job after ``input`` issues
-#: ``select-build`` again, with the run ``input`` authenticated: a selection record never leaves
-#: the job that wrote it. The ``aggregate`` job's sealing step is ``ci aggregate`` itself. The
+#: with its workflow file; all four are written. Only the ``input`` job of a packaged run selects
+#: a Build: its selection record reaches every later job as a job output, which a step without
+#: a kit command writes to the file the job's ``fetch-build``, ``aggregate`` or ``seal-gate``
+#: is given. The ``aggregate`` job's sealing step is ``ci aggregate`` itself. The
 #: status job issues ``gate-status`` twice: first with ``--settle``, before any subject, and
 #: again with the plan when that first call could not settle (the four steps between and the
 #: second call are skipped when it could).
@@ -109,10 +110,10 @@ CI_JOB_VERBS = {
     },
     "packaged-e2e": {
         "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
-        "lane": ("subject", "worker-prepare", "plan", "select-build", "fetch-build", "worker-stage", "worker-run",
-                 "worker-seal", "worker-validate", "worker-finish"),
-        "aggregate": ("subject", "worker-prepare", "plan", "select-build", "aggregate", "worker-finish"),
-        "gate": ("subject", "worker-prepare", "plan", "select-build", "seal-gate", "worker-finish"),
+        "lane": ("subject", "worker-prepare", "plan", "fetch-build", "worker-stage", "worker-run", "worker-seal",
+                 "worker-validate", "worker-finish"),
+        "aggregate": ("subject", "worker-prepare", "plan", "aggregate", "worker-finish"),
+        "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
     },
     "gate-status": {
         "evaluate": ("gate-status", "subject", "worker-prepare", "plan", "gate-status", "worker-finish"),

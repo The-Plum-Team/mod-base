@@ -38,7 +38,7 @@ from typing import BinaryIO
 from mod_base.errors import MbError
 from mod_base.io import atomic_directory as atomic
 from mod_base.io.tree import BUNDLE_PATHS, EXPORT_PATHS, PathRule
-from mod_base.model import limits
+from mod_base.model import grammar, limits
 
 OWNER = "MB1"
 
@@ -396,10 +396,15 @@ def extract_build(archive: Path | bytes, destination: Path) -> list[str]:
 
     Entry names are export paths (``tree.EXPORT_PATHS``): the names the mod staged its files under."""
 
-    bounds = ExtractionLimits(limits.MAX_CI_EXPORT_ENTRIES,
-                              limits.MAX_CI_EXPORT_TREE_BYTES + limits.MAX_CI_ENVELOPE_BYTES,
+    # The export entry cap already includes its envelope and root; the validation record and
+    # its reports are beside that export in the uploaded artifact.
+    records = (grammar.CI_VALIDATION_NAME,)
+    entries = limits.MAX_CI_EXPORT_ENTRIES + len(records) + limits.MAX_CI_TARGETS
+    bounds = ExtractionLimits(entries,
+                              limits.MAX_CI_EXPORT_TREE_BYTES + limits.MAX_CI_ENVELOPE_BYTES
+                              + limits.MAX_CI_RECORD_BYTES + limits.MAX_CI_TARGETS * limits.MAX_CI_REPORT_BYTES,
                               limits.MAX_CI_EXPORT_FILE_BYTES)
-    return _extract(archive, destination, bounds, limits.MAX_CI_EXPORT_ENTRIES, rule=EXPORT_PATHS)
+    return _extract(archive, destination, bounds, entries, rule=EXPORT_PATHS)
 
 
 def extract_runtime(archive: Path | bytes, destination: Path, *, scope: str) -> list[str]:
@@ -414,11 +419,16 @@ def extract_runtime(archive: Path | bytes, destination: Path, *, scope: str) -> 
     lane = scope == 'lane'
     files = limits.MAX_CI_RUNTIME_FILES if lane else limits.MAX_CI_RUNTIME_AGGREGATE_FILES
     total = limits.MAX_CI_RUNTIME_BYTES if lane else limits.MAX_CI_RUNTIME_AGGREGATE_BYTES
-    bounds = ExtractionLimits(limits.MAX_CI_RUNTIME_ENTRIES,
-                              total + limits.MAX_CI_RUNTIME_ENVELOPE_BYTES,
+    records = (grammar.CI_RUNTIME_ENVELOPE_NAME, grammar.CI_VALIDATION_NAME)
+    reports = 1 if lane else limits.MAX_CI_LANES
+    # MAX_CI_RUNTIME_ENTRIES already counts the runtime envelope and the tree's root.
+    entries = limits.MAX_CI_RUNTIME_ENTRIES + len((grammar.CI_VALIDATION_NAME,)) + reports
+    bounds = ExtractionLimits(entries,
+                              total + limits.MAX_CI_RUNTIME_ENVELOPE_BYTES + limits.MAX_CI_RECORD_BYTES
+                              + reports * limits.MAX_CI_REPORT_BYTES,
                               max(limits.MAX_CI_PNG_BYTES, limits.MAX_CI_RUNTIME_ENVELOPE_BYTES))
-    return _extract(archive, destination, bounds, limits.MAX_CI_RUNTIME_ENTRIES, rule=EXPORT_PATHS,
-                    allow_empty=True, max_files=files + 1,
+    return _extract(archive, destination, bounds, entries, rule=EXPORT_PATHS,
+                    allow_empty=True, max_files=files + len(records) + reports,
                     max_archive_bytes=limits.MAX_CI_BUNDLE_COMPRESSED_BYTES)
 
 

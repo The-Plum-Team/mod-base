@@ -359,9 +359,9 @@ class FetchBuildCommandTests(CommandTestCase):
         self.assertEqual(world.api.mutations, [])
 
     def test_each_route_materialises_the_selected_bundle_in_the_fixed_root(self) -> None:
-        cases = {"pull request": (lambda: JobWorld(self.directory).build(), (), 21),
-                 "selected": (lambda: JobWorld(self.directory, push=True).build(), ("--build-run-id", "42"), 18),
-                 "rebuilt": (lambda: rebuild(JobWorld(self.directory, push=True)), ("--build-run-id", "same-run"), 15)}
+        cases = {"pull request": (lambda: JobWorld(self.directory).build(), (), 2),
+                 "selected": (lambda: JobWorld(self.directory, push=True).build(), ("--build-run-id", "42"), 2),
+                 "rebuilt": (lambda: rebuild(JobWorld(self.directory, push=True)), ("--build-run-id", "same-run"), 2)}
         for name, (build, argv, requests) in cases.items():
             with self.subTest(route=name):
                 self.fresh()
@@ -386,15 +386,15 @@ class FetchBuildCommandTests(CommandTestCase):
                 self.selected(world)
                 world.set_artifact(100, expired=True)
                 state = world.state("lane")
-                self.assert_refused(world, state, *self.fetch(world, state), "expired artifact")
+                self.assert_refused(world, state, *self.fetch(world, state), "artifact has expired")
 
-    def test_a_newer_generation_after_selection_is_refused_before_use(self) -> None:
+    def test_a_lane_consumes_the_selected_bytes_while_the_gate_decides_freshness(self) -> None:
         world = JobWorld(self.directory).build()
         self.selected(world)
         later_run(world, status="queued", conclusion=None)
         state = world.state("lane")
-        self.assert_refused(world, state, *self.fetch(world, state),
-                            "no longer the newest exact available producer; rerun complete Build and E2E")
+        self.assertEqual(self.fetch(world, state), (0, ""))
+        self.assertEqual(world.api.request_count - self.spent, 2)
 
     def test_another_attempt_of_the_run_never_inherits_the_selection(self) -> None:
         world = JobWorld(self.directory).build()

@@ -32,7 +32,8 @@ which the consumer compares with its own admitted plan.
 
 :func:`select_build` finds the exact Build of a packaged run and writes its
 ``mod-base.ci.selection`` record.
-:func:`fetch_build` re-validates that Build immediately before a job of the run consumes it.
+:func:`fetch_build` downloads the exact bytes the protected input job selected; the gate repeats
+the freshness observation before authorizing the generation.
 """
 
 from __future__ import annotations
@@ -54,8 +55,7 @@ from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.build_ci.reads import CommandReads, Watch
 from mod_base.build_ci.records import bind_source_selection, build_source_selection
 from mod_base.build_ci.transport import (_admit_source, _artifact_state, _authenticate_artifacts, _authenticate_run,
-                                         _descriptor, _download_build, _materialize_build, _merged, _plan, _run,
-                                         download_completed_build)
+                                         _descriptor, _download_build, _materialize_build, _merged, _plan, _run)
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.jobs import job_graph
@@ -171,7 +171,8 @@ def describe_artifact(api: GitHubApi, *, plan: dict[str, Any], producer: dict[st
     return _descriptor(descriptor)
 
 
-def _observe(reads: CommandReads, watch: Watch, plan: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+def _observe(reads: CommandReads, watch: Watch, plan: dict[str, Any],
+             deferred: set[tuple[int, int]] | None = None) -> tuple[str, dict[str, Any] | None]:
     """One observation of the newest Build run of the plan's subject.
 
     ``("bundle", descriptor)`` describes its complete bundle. Otherwise there is nothing to
@@ -186,6 +187,9 @@ def _observe(reads: CommandReads, watch: Watch, plan: dict[str, Any]) -> tuple[s
     if newest["status"] != "completed":
         pending_run(newest)
         return "pending", None
+    if deferred is not None and (newest["id"], newest["run_attempt"]) in deferred:
+        check(newest["conclusion"] == "success", "$.run.conclusion", "completed deferral changed conclusion")
+        return "deferred", None
     run = _run(reads, watch, newest["id"])
     check(run["created_at"] == newest["created_at"] and type(run["run_attempt"]) is int
           and run["run_attempt"] >= newest["run_attempt"], "$.run", "run listing and run disagree")
@@ -197,6 +201,8 @@ def _observe(reads: CommandReads, watch: Watch, plan: dict[str, Any]) -> tuple[s
     jobs = reads.attempt_jobs(newest["id"], attempt)
     idle = "deferred" if identity["pr_number"] else "reuse"
     if job_graph(jobs) == run_graph("build", idle).jobs(plan):
+        if idle == "deferred" and deferred is not None:
+            deferred.add((newest["id"], attempt))
         return idle, None
     digest = require_graph(jobs, plan=plan, producer="build", mode="full", run_attempt=attempt)
     producer = producer_record(plan, caller="build", run_id=newest["id"], run_attempt=attempt, event=newest["event"],
@@ -214,18 +220,22 @@ def _select(reads: CommandReads, watch: Watch, plan: dict[str, Any]) -> dict[str
     return _observe(reads, watch, plan)[1]
 
 
-def select_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any]) -> dict[str, Any] | None:
+def select_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any],
+                           watch: Watch | None = None) -> dict[str, Any] | None:
     """Admit the live pull request, then describe the complete bundle of its newest Build run.
 
     None means absent, pending or deferred, never permission to compile or succeed. A failed or
     cancelled newest run, another graph, a missing bundle or an API failure is fatal, with no old
     fallback. This is one observation: a consumer repeats it immediately before its effect
-    (:func:`revalidate_latest_pr_build`). Native byte validity and status authority remain
-    additional required phases; a non-PR subject is not selected here.
+    (:func:`revalidate_latest_pr_build`). With ``watch``, the mutable state of a command that is
+    under way, the observation joins it: what that watch already holds is not read again, and
+    the command's own recheck before its effect repeats the listing with the rest. Native byte
+    validity and status authority remain additional required phases; a non-PR subject is not
+    selected here.
     """
 
     plan = _pr_plan(plan)
-    reads, watch = CommandReads.of(api), Watch()
+    reads, watch = CommandReads.of(api), Watch() if watch is None else watch
     _admit_source(reads, watch, plan["identity"])
     return _select(reads, watch, plan)
 
@@ -282,6 +292,7 @@ def _wait(reads: CommandReads, plan: dict[str, Any], wait_seconds: int, monotoni
 
     deadline = now() + wait_seconds
     admitted = False
+    deferred: set[tuple[int, int]] = set()
     for _ in range(limits.MAX_CI_BUILD_POLLS):
         if now() >= deadline:
             break
@@ -289,7 +300,7 @@ def _wait(reads: CommandReads, plan: dict[str, Any], wait_seconds: int, monotoni
         if not admitted:
             _admit_source(reads, watch, plan["identity"])
             admitted = True
-        state, selected = _observe(reads, watch, plan)
+        state, selected = _observe(reads, watch, plan, deferred)
         remaining = deadline - now()
         if remaining <= 0:
             break
@@ -321,16 +332,17 @@ def wait_for_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any],
     return _wait(CommandReads.of(api), _pr_plan(plan), wait_seconds, monotonic, sleep)[0]
 
 
-def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any]) -> None:
+def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any],
+                               watch: Watch | None = None) -> None:
     """Reject a superseded/unavailable selected descriptor immediately around consumption.
 
-    Call before independent byte/native verification consumes the selected Build. This repeats the
-    newest-run observation and requires the same descriptor; it checks neither downloaded bytes,
-    native validity nor status authority.
+    Call before a gate vouches for the selected Build. This repeats the newest-run observation
+    (in ``watch`` when the caller has one, :func:`select_latest_pr_build`) and requires the same
+    descriptor; it checks neither downloaded bytes, native validity nor status authority.
     """
 
     descriptor = _descriptor(descriptor)
-    latest = select_latest_pr_build(api, plan=plan)
+    latest = select_latest_pr_build(api, plan=plan, watch=watch)
     check(latest is not None and latest == descriptor, "$.descriptor",
           "selected Build is no longer the newest exact available producer; rerun complete Build and E2E")
 
@@ -367,30 +379,32 @@ def _protected(reads: CommandReads, watch: Watch, plan: dict[str, Any]) -> dict[
     return descriptor
 
 
-def select_protected_build(api: GitHubApi, *, plan: dict[str, Any]) -> dict[str, Any] | None:
+def select_protected_build(api: GitHubApi, *, plan: dict[str, Any],
+                           watch: Watch | None = None) -> dict[str, Any] | None:
     """Admit the live protected subject, then describe the complete bundle of its newest Build run.
 
     The run is one the Build caller started by a push or a dispatch on the default branch at the
     tested commit. None means that no such run exists or that the newest one is an admitted reuse,
     which builds nothing: the caller then builds for itself. A newest run that is pending, failed
     or cancelled, another graph, a missing bundle or an API failure is fatal; no older run is
-    considered. One observation, like :func:`select_latest_pr_build`: the selection that may wait
-    for a run in progress is :func:`download_protected_build`.
+    considered. One observation, like :func:`select_latest_pr_build` and with the same ``watch``:
+    the selection that may wait for a run in progress is :func:`download_protected_build`.
     """
 
     plan = _protected_plan(plan)
-    reads, watch = CommandReads.of(api), Watch()
+    reads, watch = CommandReads.of(api), Watch() if watch is None else watch
     _admit_source(reads, watch, plan["identity"])
     return _protected(reads, watch, plan)
 
 
-def revalidate_protected_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any]) -> None:
+def revalidate_protected_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any],
+                               watch: Watch | None = None) -> None:
     """Repeat the newest-run observation of a protected subject immediately around consumption
-    and require the selected descriptor: a newer run, an expired bundle or a moved default branch
-    is a rejection."""
+    (in ``watch`` when the caller has one) and require the selected descriptor: a newer run, an
+    expired bundle or a moved default branch is a rejection."""
 
     descriptor = _descriptor(descriptor)
-    latest = select_protected_build(api, plan=plan)
+    latest = select_protected_build(api, plan=plan, watch=watch)
     check(latest is not None and latest == descriptor, "$.descriptor",
           "selected Build is no longer the newest exact available producer; rerun the standalone run")
 
@@ -532,13 +546,13 @@ def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attem
 
 def fetch_build(api: GitHubApi, *, record: dict[str, Any], plan: dict[str, Any], run_id: int, run_attempt: int,
                 workflow_path: str, event: str, output: Path) -> dict[str, Any]:
-    """Re-validate the Build a selection record names and publish its complete bundle at ``output``.
+    """Download the Build the protected input job selected and publish its bundle at ``output``.
 
     ``record`` must have been requested by this very run attempt of the packaged caller
-    (``records.bind_source_selection``). Immediately before the download the newest-run
-    observation is repeated and must give the selected descriptor again
-    (:func:`revalidate_latest_pr_build`, :func:`revalidate_protected_build`); a Build this run
-    rebuilt is authenticated inside this run instead (:func:`download_rebuilt_build`). The
+    (``records.bind_source_selection``). That job authenticated the descriptor; its protected
+    job output cannot be written by candidate code. Only the archive by numeric id is fetched,
+    bounded by the selected size and checked against its digest. The gate, which repeats the
+    newest-run and live-source observations, decides whether the generation is still current. The
     published envelope must be the one whose hash the record carries: a difference is a rejection
     after publication, which leaves the authenticated bundle but fails the job. Returns the
     envelope.
@@ -549,13 +563,8 @@ def fetch_build(api: GitHubApi, *, record: dict[str, Any], plan: dict[str, Any],
                                    workflow_path=workflow_path)
     descriptor = record["build"]
     reads = CommandReads.of(api)
-    if ci_producer(descriptor["producer"]["workflow_path"]) == "packaged":
-        envelope = download_rebuilt_build(reads, plan=plan, run_id=run_id, run_attempt=run_attempt, event=event,
-                                          output=output, descriptor=descriptor)["envelope"]
-    else:
-        revalidate = revalidate_latest_pr_build if plan["identity"]["pr_number"] else revalidate_protected_build
-        revalidate(reads, descriptor=descriptor, plan=plan)
-        envelope = download_completed_build(reads, descriptor=descriptor, plan=plan, output=output)
+    check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
+    envelope = _materialize_build(reads, descriptor, plan, output, None)
     check(canonical_sha256(envelope) == record["envelope_sha256"], "$.envelope_sha256",
           "the selected Build's envelope differs from the one its selection recorded")
     return envelope

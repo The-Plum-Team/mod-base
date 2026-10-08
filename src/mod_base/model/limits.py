@@ -287,19 +287,24 @@ MAX_CI_BUILD_POLLS = CI_BUILD_WAIT_SECONDS // CI_BUILD_POLL_SECONDS + 1
 #: one more for every poll before that (91 polls at most, one a minute); a protected subject costs
 #: 15. The rest is for retried attempts and for the further pages of a run with over 100 jobs.
 MAX_CI_SELECT_BUILD_REQUESTS = MAX_CI_BUILD_POLLS + 64
-#: API requests of one ``ci fetch-build`` (21 for a pull request, 18 and 15 for a protected subject);
-#: the rest is for retries and pages.
-MAX_CI_FETCH_BUILD_REQUESTS = 48
+#: ``ci fetch-build`` sends one REST request for the selected archive and one credential-free
+#: storage request; the rest is for retries. Freshness is the input job's and the gate's decision.
+MAX_CI_FETCH_BUILD_REQUESTS = 8
+#: Regression budget for one generation of either enrolled native profile, including the
+#: credential-free artifact storage GETs and one final status evaluation, without waiting polls.
+#: Enforced by tests/test_ci_generation_budget.py, not a runtime plan-admission rule.
+MAX_CI_GENERATION_REQUESTS = 440
 #: API requests of one ``ci gate-status`` (45 with both runs complete); the rest is for retries and
 #: pages.
 MAX_CI_GATE_STATUS_REQUESTS = 96
 #: The description of a status intent: GitHub's own bound for a commit status description.
 MAX_CI_STATUS_DESCRIPTION_CHARS = 140
-#: ``ci assemble`` sends 15 requests and 2 per target, the two of a download (49 for 17 targets);
+#: ``ci assemble`` sends 15 requests and 2 per target (archive REST redirect and storage GET;
+#: metadata is already authenticated from the listing), 49 for 17 targets;
 #: the rest is for retries and for the further pages of a run that lists more than 100 jobs or
 #: artifacts.
 MAX_CI_ASSEMBLE_REQUESTS = 48 + 3 * MAX_CI_TARGETS
-#: ``ci seal-gate`` sends 15 requests for a Build gate, 20 for the packaged gate of a pull request
+#: ``ci seal-gate`` sends 15 requests for a Build gate, 23 for the packaged gate of a pull request
 #: and 47 for the gate of a reuse run, which decides the reuse again (``gate.seal_reuse``), whatever
 #: the number of targets and lanes; the rest is for retries and for the further pages of a run that
 #: lists more than 100 jobs or artifacts.
@@ -311,7 +316,8 @@ MAX_CI_COMMIT_PULLS = 100
 #: merged tree differs, whatever the number of targets and lanes; the rest is for retries and for
 #: the further pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_REUSE_ADMIT_REQUESTS = 96
-#: ``ci aggregate`` sends 13 requests and 2 per lane, the two of a download (81 for 34 lanes); the
+#: ``ci aggregate`` sends 13 requests and 2 per lane (archive REST redirect and storage GET;
+#: metadata is already authenticated from the listing), 81 for 34 lanes; the
 #: rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_AGGREGATE_REQUESTS = 48 + 3 * MAX_CI_LANES
 MAX_CI_BATCH_MEMBERS = 50
