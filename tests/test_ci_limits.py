@@ -36,7 +36,7 @@ from mod_base.build_ci import records, runtime_schema
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import strict_loads
-from tests import ci_native
+from tests import ci_native, helpers
 
 ROOT = Path(__file__).resolve().parents[1]
 LIMITS = Path(limits.__file__).resolve()
@@ -326,11 +326,11 @@ class ScopeTest(unittest.TestCase):
     """
 
     def descriptor(self, kind: str, profile: str, size: int) -> dict[str, Any]:
-        document = copy.deepcopy(fixture("ci-selection.json")["build"])
-        producer = document["producer"]
+        # Lane, results and packaged tested records come from the packaged caller; the rest from Build.
+        caller = "packaged" if kind in ("runtime", "results") else "build"
         unit = {"target": "unit", "runtime": "unit", "tested": "build"}.get(kind)
-        document["artifact"].update(
-            name=grammar.ci_artifact_name(kind, producer["run_id"], producer["run_attempt"], unit), size=size)
+        document = helpers.ci_descriptor(kind, gate=caller, unit_id=unit)
+        document["artifact"]["size"] = size
         document["profile"] = profile
         return document
 

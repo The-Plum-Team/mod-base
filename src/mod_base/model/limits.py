@@ -189,7 +189,7 @@ MAX_CI_PLAN_BYTES = 4 * MIB
 MAX_CI_PLAN_SOURCE_BYTES = 4 * MIB
 #: The private ``identity.json`` state record ``ci subject`` writes.
 MAX_CI_IDENTITY_BYTES = 16 * KIB
-#: API requests of one ``ci subject``: a pull request costs 7, a protected subject 5; the rest is
+#: API requests of one ``ci subject``: a pull request costs 4, a protected subject 5; the rest is
 #: room for retried attempts.
 MAX_CI_SUBJECT_REQUESTS = 16
 MAX_CI_PLAN_INPUT_FILES = 1

@@ -49,11 +49,11 @@ class SubjectCommandTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         return code, stderr.getvalue()
 
-    def test_a_pull_request_writes_the_record_and_outputs_in_seven_budgeted_requests(self) -> None:
+    def test_a_pull_request_writes_the_record_and_outputs_in_four_budgeted_requests(self) -> None:
         self.assertEqual(self.run_subject(), (0, ""))
         self.assertEqual(self.budgets, [limits.MAX_CI_SUBJECT_REQUESTS])
         self.assertLessEqual(limits.MAX_CI_SUBJECT_REQUESTS, 60)
-        self.assertEqual(self.api.request_count, 7)
+        self.assertEqual(self.api.request_count, 4)
         self.assertEqual(self.api.mutations, [])
         record = identity.read_subject(self.state)
         self.assertEqual((record["producer"], record["event"], record["workflow_path"]),
@@ -90,11 +90,11 @@ class SubjectCommandTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_the_request_budget_is_a_hard_bound(self) -> None:
-        self.api, _ = h.github(max_requests=6)
+        self.api, _ = h.github(max_requests=3)
         code, stderr = self.run_subject()
         self.assertEqual(code, 2)
         self.assertIn("request-budget", stderr)
-        self.assertEqual(self.api.request_count, 6)
+        self.assertEqual(self.api.request_count, 3)
         self.assertFalse(self.state.exists())
         self.assertFalse(self.output.exists())
 

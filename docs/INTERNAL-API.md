@@ -687,7 +687,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_PLAN_BYTES`, `MAX_CI_TARGETS`, `MAX_CI_BUILD_RUNS`, `MAX_CI_LANES`, `MAX_CI_OUTPUTS_PER_TARGET`
 * `MAX_CI_PLAN_SOURCE_BYTES`: 4 MiB for each candidate file a plan is derived from (the release inventory, the scenario contract).
 * `MAX_CI_IDENTITY_BYTES`: 16 KiB for the private `identity.json` state record.
-* `MAX_CI_SUBJECT_REQUESTS`: the 16-request budget of one `ci subject` (a pull request costs 7, a protected subject 5).
+* `MAX_CI_SUBJECT_REQUESTS`: the 16-request budget of one `ci subject` (a pull request costs 4, a protected subject 5).
 * `MAX_CI_STATUS_CONTEXT_CHARS`: 100 characters for one status context of the protected Build config.
 * `CI_BUILD_POLL_SECONDS`, `MAX_CI_BUILD_POLLS`: Protected 60-second polling cadence and independent 91-observation ceiling within the existing 5400-second admission budget.
 * `MAX_CI_PLAN_INPUT_FILES`, `MAX_CI_PLAN_INPUT_ENTRIES`: Exact single-file plan input tree budgets.
@@ -1961,7 +1961,7 @@ start and again before the record is written; the commit object is read once.
 * `class StateError(MbError)`: The job's private state directory or one of its records cannot be trusted (reason `ci-state`).
 * `def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The managed callers a job of `producer` may run from: its own, and for Build jobs of a protected subject also the packaged caller (its `rebuild` job).
 * `def validate_subject_record(document: Any, path: str = '$') -> dict[str, Any]`: The closed identity record `{producer, event, workflow_path, controller_tree, subject}`; `subject` is `protocol.validate_subject` and always names the Build caller as `controller_workflow`.
-* `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None) -> dict[str, Any]`: Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. The environment's claims are checked before the first request; 7 requests for a pull request, 5 otherwise; nothing is written.
+* `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None) -> dict[str, Any]`: Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. The environment's claims are checked before the first request; 4 requests for a pull request, 5 otherwise; nothing is written.
 * `def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str`: The closed protected-policy digest: canonical SHA-256 of `{format: POLICY_FORMAT, build_adapter_api, graph_versions: {build, packaged}, kit: subject.kit, config_sha256, adapter_files: [{path, sha256}]}`. It changes with the protected Build config bytes, any source of the adapter closure, the kit pin or tree digest, the adapter API or a graph version, and with nothing else.
 * `def create_state(state: Path) -> None`: Create the job's private state directory (mode 0700); an existing path is never adopted.
 * `def write_state_record(state: Path, name: str, raw: bytes) -> None`: Create `<state>/<name>` (mode 0600) in an existing private state directory; never replaces a record.

@@ -38,7 +38,7 @@ def authenticate(api, *, producer: str = "build", pr_number: int | None = 7, env
 
 
 class PullRequestSubjectTests(unittest.TestCase):
-    def test_a_ready_pull_request_yields_the_complete_subject_in_seven_requests(self) -> None:
+    def test_a_ready_pull_request_yields_the_complete_subject_in_four_requests(self) -> None:
         api, _ = h.github()
         record = authenticate(api)
         self.assertEqual(record, {"producer": "build", "event": "pull_request_target",
@@ -46,7 +46,7 @@ class PullRequestSubjectTests(unittest.TestCase):
                                   "subject": expected_subject()})
         self.assertEqual(record["subject"]["tested_parents"], [h.CONTROLLER_SHA, h.HEAD_SHA])
         self.assertEqual((record["subject"]["tested_sha"], record["subject"]["tested_tree"]), (h.TESTED_SHA, h.TESTED_TREE))
-        self.assertEqual(api.request_count, 7)
+        self.assertEqual(api.request_count, 4)
         self.assertEqual(api.mutations, [])
 
     def test_the_packaged_producer_derives_the_same_identity_as_the_build_producer(self) -> None:
@@ -79,7 +79,7 @@ class PullRequestSubjectTests(unittest.TestCase):
             with self.subTest(parents=parents), self.assertRaises(MbError) as caught:
                 authenticate(api)
             self.assertIn("parents", str(caught.exception))
-            self.assertEqual(api.request_count, 7)
+            self.assertEqual(api.request_count, 4)
 
     def test_a_malformed_or_foreign_commit_object_is_a_rejection(self) -> None:
         path = f"/repos/{h.REPOSITORY}/git/commits/{h.TESTED_SHA}"
