@@ -283,6 +283,11 @@ MAX_CI_SELECT_BUILD_REQUESTS = MAX_CI_BUILD_POLLS + 64
 #: API requests of one ``ci fetch-build`` (21 for a pull request, 18 and 15 for a protected subject);
 #: the rest is for retries and pages.
 MAX_CI_FETCH_BUILD_REQUESTS = 48
+#: API requests of one ``ci gate-status`` (45 with both runs complete); the rest is for retries and
+#: pages.
+MAX_CI_GATE_STATUS_REQUESTS = 96
+#: The description of a status intent: GitHub's own bound for a commit status description.
+MAX_CI_STATUS_DESCRIPTION_CHARS = 140
 MAX_CI_BATCH_MEMBERS = 50
 #: A batch manifest travels in the body of its pull request, which GitHub bounds at 65,536; the
 #: whole body, the marker inside it and the decoded document share this bound.

@@ -101,6 +101,8 @@ PLATFORM: dict[str, tuple[Any, str]] = {
     "MAX_CI_TARGETS": (256, "GitHub: one job matrix expands to at most 256 jobs"),
     "MAX_CI_LANES": (256, "GitHub: one job matrix expands to at most 256 jobs"),
     "MAX_CI_BUILD_RUNS": (1000, "GitHub: a filtered run search lists at most 1,000 runs"),
+    "MAX_CI_STATUS_DESCRIPTION_CHARS": (140, "GitHub: the description of a commit status holds at most 140 "
+                                             "characters; a status intent carries one"),
     "MAX_CI_BATCH_DOCUMENT_BYTES": (64 * KIB, "GitHub: a pull request body holds at most 65,536 characters; a batch "
                                               "manifest travels in the body of its pull request"),
     "MAX_CI_BATCH_TITLE_CHARS": (256, "GitHub: a pull request title holds at most 256 characters; a member's title "
@@ -131,6 +133,8 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_GIT_ANSWER_BYTES": (4 * KIB, "one object id or tree entry read from the candidate checkout"),
     "MAX_CI_FETCH_BUILD_REQUESTS": (48, "API requests one `ci fetch-build` may spend: 21 for a pull request, the "
                                         "rest for retries and further listing pages"),
+    "MAX_CI_GATE_STATUS_REQUESTS": (96, "API requests one `ci gate-status` may spend: 45 with both runs complete, "
+                                        "the rest for retries and further listing pages"),
     "MAX_CI_PRIVATE_RECORD_ENTRIES": (2, "a private record directory and its one file"),
     "MAX_CI_POLICY_TESTS": (100_000, "tests one policy suite may discover"),
     "MAX_CI_POLICY_WORKERS": (256, "worker processes of the policy runner"),

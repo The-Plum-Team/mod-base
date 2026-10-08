@@ -123,6 +123,8 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                                   "--output", "s.json", "--github-output", "out"], {"build_run_id": "same-run"}),
     "ci fetch-build": (["ci", "fetch-build", *REPO, "--state", "state", "--selection", "selection.json"],
                        {"ci_command": "fetch-build", "state": Path("state"), "selection": Path("selection.json")}),
+    "ci gate-status": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--github-output", "out"],
+                       {"ci_command": "gate-status", "state": Path("state"), "pr": 7, "github_output": Path("out")}),
 }
 
 
@@ -229,6 +231,11 @@ class SurfaceTest(unittest.TestCase):
              "--github-output", "o"],
             ["ci", "fetch-build", *REPO, "--state", "s"],
             ["ci", "fetch-build", *REPO, "--selection", "f"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "0", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "7"],
+            ["ci", "gate-status", *REPO, "--pr", "7", "--github-output", "o"],
         ]
         for argv in bad:
             with self.subTest(argv=argv), self.assertRaises(MbError) as caught:
@@ -272,14 +279,15 @@ class CiVerbsTest(unittest.TestCase):
         from mod_base.build_ci import commands
 
         self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_worker",
-                              "mod_base.build_ci.commands_batch", "mod_base.build_ci.commands_packaged"}, set(commands.VERB_MODULES))
+                              "mod_base.build_ci.commands_batch", "mod_base.build_ci.commands_packaged",
+                              "mod_base.build_ci.commands_status"}, set(commands.VERB_MODULES))
         self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
         for name in commands.VERB_MODULES:
             with self.subTest(module=name):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
         self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-finish", "batch-prepare",
-                              "batch-settle", "select-build", "fetch-build"}, set(verbs))
+                              "batch-settle", "select-build", "fetch-build", "gate-status"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

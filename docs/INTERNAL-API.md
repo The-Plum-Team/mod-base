@@ -323,7 +323,7 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject`, `mod_base.build_ci.lifecycle`, `mod_base.build_ci.commands_worker` |
 | MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.root_request_operations`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff` |
 | MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
-| MB11 | `mod_base.build_ci.commands_packaged` |
+| MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -708,6 +708,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_PLAN_INPUT_FILES`, `MAX_CI_PLAN_INPUT_ENTRIES`, `MAX_CI_PLAN_INPUT_BYTES`: The validator's input tree `validation-input/`: at most the plan, the inventory, the scenario contract and `MAX_CI_PLAN_INPUTS` extra plan inputs (11 files, 12 entries with the directory, the plan cap plus ten times the candidate file cap). A check of the tree requires exactly the files of its state, not merely at most these.
 * `MAX_CI_SELECT_BUILD_REQUESTS`: 155, the request budget of `ci select-build`: a pull request whose Build is complete costs 17 and each earlier poll of its wait one more (91 polls at most); a protected subject costs 15. The rest is for retries and for the further pages of a run that lists more than 100 jobs.
 * `MAX_CI_FETCH_BUILD_REQUESTS`: 48, the request budget of `ci fetch-build` (21 for a pull request, 18 for a selected and 15 for a rebuilt Build of a protected subject).
+* `MAX_CI_GATE_STATUS_REQUESTS`: 96, the request budget of `ci gate-status` (45 with both runs complete).
 * `MAX_CI_PRIVATE_RECORD_ENTRIES`: Exact entry budget of a fixed single-leaf private record directory. MB1 entry caps count the root, so the directory plus its one leaf; an empty stage stays 1.
 * `MAX_CI_POLICY_TESTS`, `MAX_CI_POLICY_WORKERS`: Policy discovery/count and worker ceilings.
 * `MAX_CI_ENVELOPE_BYTES`, `MAX_CI_RECORD_BYTES`, `MAX_CI_ARTIFACTS_PER_GATE`
@@ -2513,6 +2514,21 @@ JSON document.
 * `def run_batch_prepare(args: argparse.Namespace) -> int`: The `batch-prepare` handler; a dry run asks for a read-only client.
 * `def run_batch_settle(args: argparse.Namespace) -> int`: The `batch-settle` handler.
 
+## `mod_base.build_ci.status`
+
+Owner: MB11. Read-only status intents for the protected gates of one pull request head. For each
+gate the newest run of its managed caller under the head is chosen before any result is read
+(`selection.newest_run`). `pending`: a draft, no run yet, a run in progress or a newest run that is
+a draft deferral. `success`: the newest run is complete, its exact graph for its mode
+authenticates, its tested record downloads and binds to the plan, the packaged gate's owning Build
+is the bundle the Build gate sealed, and the live pull request still has the plan's head, base and
+test merge and is no draft. `failure`: anything else. An API failure is never a state.
+
+* `SHADOW_SUFFIX = ' (shadow)'`: what `shadow` mode appends to both contexts.
+* `class StatusError`: The evaluation does not apply or its own inputs disagree (exit 2); no intent is produced.
+* `def gate_contexts(config: BuildConfig, activation: dict[str, Any] | None) -> dict[str, str]`: Gate -> the fixed context string of the protected Build config, for the gates the activation mode puts under the kit's status caller: both, with `SHADOW_SUFFIX` in `shadow`; the Build gate alone in `shared-build`; a rollback as the mode it leaves. A mode that manages no status caller is a `StatusError`.
+* `def evaluate_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None, controller_sha: str, plan: dict[str, Any] | None, temporary_root: Path) -> dict[str, Any]`: `{repository, pr_number, target_sha, gates}` for the current head of the pull request; `gates` maps each evaluated gate to `{context, state, description, target_url}` (the description is one line of at most `MAX_CI_STATUS_DESCRIPTION_CHARS`, the URL the canonical one of the deciding run or null). `plan` is the plan the job derived, which must be the plan of this pull request, controller and protected policy and of the pull request as it is now (`StatusError` otherwise); without one no gate can succeed. The pull request and both run listings are read again before the document is returned, and a difference raises.
+
 ## `mod_base.build_ci.commands_packaged`
 
 Owner: MB11. `ci select-build` and `ci fetch-build`, listed in `commands.VERB_MODULES`. Both take
@@ -2524,6 +2540,17 @@ through `commands.api_client` with an explicit request budget and write nothing 
 * `def job_plan(state: Path) -> dict[str, Any]`: The plan `ci plan` left in the job's state directory (`ci-plan.json`), strictly decoded and validated.
 * `def run_select_build(args: argparse.Namespace) -> int`: The `select-build` handler: `selection.select_build` for this run attempt; a selection is written to `--output` (a new file of this user) and to `ci-selection.json` in the state directory.
 * `def run_fetch_build(args: argparse.Namespace) -> int`: The `fetch-build` handler: `selection.fetch_build` into `exports.BUILD_VALIDATION_ROOT`; the bound record is kept as `ci-selection.json` in the state directory.
+
+## `mod_base.build_ci.commands_status`
+
+Owner: MB11. `ci gate-status --pr N --github-output FILE`, listed in `commands.VERB_MODULES`: the
+read-only step of the status caller's `evaluate` job. It reads the protected Build config and the
+activation manifest of `--repo`, creates `--state` when no earlier step did, takes the plan from
+`ci-plan.json` there when the job derived one, prints the canonical document of
+`status.evaluate_gates` and writes it on one line as the output `intents`.
+
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`
+* `def run_gate_status(args: argparse.Namespace) -> int`
 
 ## `mod_base.build_ci.runtime_schema`
 
