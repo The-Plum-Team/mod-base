@@ -287,14 +287,14 @@ class KitTemplateTest(unittest.TestCase):
                                  (".github/pull_request_template.md.tmpl", ".github/pull_request_template.md")):
                 write(repo, target, (TEMPLATE_ROOT / "seed" / name).read_bytes())
             write(repo, ".github/CODEOWNERS",
-                  (TEMPLATE_ROOT / "seed/.github/CODEOWNERS.tmpl").read_text().replace("{{owner}}", "AkaNebur"))
+                  (TEMPLATE_ROOT / "seed/.github/CODEOWNERS.tmpl").read_text(encoding="utf-8").replace("{{owner}}", "AkaNebur"))
             write(repo, "AGENTS.md", "@docs/ai/shared/REPOSITORY.md\n@docs/ai/shared/PUBLIC-EVIDENCE.md\n@docs/ai/PROJECT.md\n")
             write(repo, "docs/ai/PROJECT.md", "# Project\n")
             self.assertEqual(tool.check(repo, kit_root=KIT_ROOT), [])
             caller = repo / ".github/workflows/pages.yml"
-            text = caller.read_text()
+            text = caller.read_text(encoding="utf-8")
             self.assertIn(f"publish.yml@{SHA} # v1.2.3\n", text)
-            caller.write_text(text.replace("# <<< mod-local extensions\n", QS_EXTENSION + "# <<< mod-local extensions\n"))
+            caller.write_text(text.replace("# <<< mod-local extensions\n", QS_EXTENSION + "# <<< mod-local extensions\n"), encoding="utf-8", newline="\n")
             self.assertEqual(tool.check(repo, kit_root=KIT_ROOT), [])
             self.assertEqual(tool.sync(repo, kit_root=KIT_ROOT, write=False), [])
 
@@ -366,7 +366,7 @@ class KitTemplateTest(unittest.TestCase):
 
     def test_seeded_config_and_adapter_are_valid(self) -> None:
         parse_config((TEMPLATE_ROOT / "seed" / "site" / "mod-base.json.tmpl").read_bytes())
-        source = (TEMPLATE_ROOT / "seed" / "scripts" / "pages" / "mod_base_adapter.py.tmpl").read_text()
+        source = (TEMPLATE_ROOT / "seed" / "scripts" / "pages" / "mod_base_adapter.py.tmpl").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             adapter = write(Path(directory), "mod_base_adapter.py", source.replace("{{name}}", "Example"))
             spec = importlib.util.spec_from_file_location("seeded_adapter_under_test", adapter)
@@ -410,7 +410,7 @@ class CheckTest(TemplateCase):
     def test_managed_drift_is_a_unified_diff(self) -> None:
         self.make_clean_mod()
         path = self.repo / "docs/ai/shared/REPOSITORY.md"
-        path.write_text(path.read_text() + "local addition\n")
+        path.write_text(path.read_text(encoding="utf-8") + "local addition\n", encoding="utf-8", newline="\n")
         drifts = self.check()
         self.assertEqual([(drift.path, drift.kind) for drift in drifts], [("docs/ai/shared/REPOSITORY.md", "changed")])
         self.assertIn("+local addition", drifts[0].detail)
@@ -481,7 +481,7 @@ class CheckTest(TemplateCase):
     def test_caller_region_rules(self) -> None:
         self.make_clean_mod()
         caller = self.repo / ".github/workflows/pages.yml"
-        clean = caller.read_text()
+        clean = caller.read_text(encoding="utf-8")
         cases = {
             "edited managed region": clean.replace("name: Project site", "name: Something else"),
             "stale pin": caller_with("", sha=OTHER_SHA),
@@ -492,10 +492,10 @@ class CheckTest(TemplateCase):
         }
         for label, text in cases.items():
             with self.subTest(label):
-                caller.write_text(text)
+                caller.write_text(text, encoding="utf-8", newline="\n")
                 kinds = self.kinds()
                 self.assertTrue(kinds and all(path == ".github/workflows/pages.yml" for path, _ in kinds), kinds)
-        caller.write_text(clean)
+        caller.write_text(clean, encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])
 
     def test_extension_rules(self) -> None:
@@ -558,22 +558,22 @@ class CheckTest(TemplateCase):
                                           f'- "u\\x73es": "The-Plum-Team/mod-bas\\x65/.github/workflows/publish.yml@{SHA}"')
         for label, extension in bad.items():
             with self.subTest(label):
-                caller.write_text(caller_with(extension))
+                caller.write_text(caller_with(extension), encoding="utf-8", newline="\n")
                 kinds = self.kinds()
                 self.assertIn((".github/workflows/pages.yml", "extension"), kinds)
                 if label not in also_unpinned:
                     self.assertNotIn((".github/workflows/pages.yml", "changed"), kinds)
-        caller.write_text(caller_with(job.replace("- run: true", "- uses: The-Plum-Team/mod-base/actions/setup@main")))
+        caller.write_text(caller_with(job.replace("- run: true", "- uses: The-Plum-Team/mod-base/actions/setup@main")), encoding="utf-8", newline="\n")
         self.assertEqual(self.kinds(), [(".github/workflows/pages.yml", "changed"),
                                         (".github/workflows/pages.yml", "extension")])
         good = job + "    needs: [publish, finalize, request-rotation]\n    if: needs.publish.outputs.eligible == 'true'\n"
-        caller.write_text(caller_with(good + QS_EXTENSION))
+        caller.write_text(caller_with(good + QS_EXTENSION), encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])
         shell = ("  ext-shell:\n    name: Refresh the collector's baseline\n    runs-on: ubuntu-24.04\n"
                  "    permissions: {contents: read}\n    steps:\n      - name: Don't block the site\n        run: |\n"
                  "          # a shell comment with an 'apostrophe\n          printf '%s\\n' \"$A\" \\\n"
                  "            | tee out.txt\n          : \"${GH_TOKEN:?}\"\n")
-        caller.write_text(caller_with(shell))
+        caller.write_text(caller_with(shell), encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])
 
     def test_agents_grammar(self) -> None:
@@ -581,16 +581,16 @@ class CheckTest(TemplateCase):
         agents = self.repo / "AGENTS.md"
         cases = {
             "order": "@docs/ai/shared/PUBLIC-EVIDENCE.md\n@docs/ai/shared/REPOSITORY.md\n@docs/ai/PROJECT.md\n",
-            "extra line": agents.read_text() + "Read everything.\n",
-            "no trailing newline": agents.read_text()[:-1],
+            "extra line": agents.read_text(encoding="utf-8") + "Read everything.\n",
+            "no trailing newline": agents.read_text(encoding="utf-8")[:-1],
             "missing local": "@docs/ai/shared/REPOSITORY.md\n@docs/ai/shared/PUBLIC-EVIDENCE.md\n",
-            "blank line": agents.read_text().replace("\n@docs/ai/PROJECT.md", "\n\n@docs/ai/PROJECT.md"),
+            "blank line": agents.read_text(encoding="utf-8").replace("\n@docs/ai/PROJECT.md", "\n\n@docs/ai/PROJECT.md"),
         }
         for label, text in cases.items():
             with self.subTest(label):
-                agents.write_text(text)
+                agents.write_text(text, encoding="utf-8", newline="\n")
                 self.assertIn(("AGENTS.md", "agents"), self.kinds())
-        agents.write_text("@docs/ai/shared/REPOSITORY.md\n@docs/ai/shared/PUBLIC-EVIDENCE.md\n@docs/ai/PROJECT.md\n")
+        agents.write_text("@docs/ai/shared/REPOSITORY.md\n@docs/ai/shared/PUBLIC-EVIDENCE.md\n@docs/ai/PROJECT.md\n", encoding="utf-8", newline="\n")
         (self.repo / "docs/ai/PROJECT.md").unlink()
         self.assertIn(("AGENTS.md", "agents"), self.kinds())
 
@@ -615,28 +615,28 @@ class CheckTest(TemplateCase):
         for path, (_, mutate) in cases.items():
             with self.subTest(path):
                 target = self.repo / path
-                original = target.read_text()
-                target.write_text(mutate(original))
+                original = target.read_text(encoding="utf-8")
+                target.write_text(mutate(original), encoding="utf-8", newline="\n")
                 self.assertEqual(self.kinds(), [(path, "fragment")])
-                target.write_text(original)
+                target.write_text(original, encoding="utf-8", newline="\n")
         codeowners = self.repo / ".github/CODEOWNERS"
-        original = codeowners.read_text()
+        original = codeowners.read_text(encoding="utf-8")
         for label, text in {"owner-less override": original + "/scripts/ci/local.py\n",
                             "placeholder owner": original.replace("@AkaNebur", "@{{owner}}", 1),
                             "invalid owner": original.replace("@AkaNebur", "AkaNebur", 1)}.items():
             with self.subTest(label):
-                codeowners.write_text(text)
+                codeowners.write_text(text, encoding="utf-8", newline="\n")
                 self.assertIn((".github/CODEOWNERS", "fragment"), self.kinds())
-        codeowners.write_text(original + "\n# comment\n* @AkaNebur @The-Plum-Team/maintainers owner@example.com\n")
+        codeowners.write_text(original + "\n# comment\n* @AkaNebur @The-Plum-Team/maintainers owner@example.com\n", encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])
 
     def test_dependabot_must_ignore_the_kit_for_every_actions_update(self) -> None:
         self.make_clean_mod()
         dependabot = self.repo / ".github/dependabot.yml"
-        original = dependabot.read_text()
+        original = dependabot.read_text(encoding="utf-8")
         flow = original.replace('    ignore:\n      - dependency-name: "The-Plum-Team/mod-base*"\n',
                                 '    ignore: [{dependency-name: "The-Plum-Team/mod-base*"}]\n')
-        dependabot.write_text(flow)
+        dependabot.write_text(flow, encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])
         second = original + ("  - package-ecosystem: github-actions\n    directory: /.github/claude\n"
                              "    schedule:\n      interval: monthly\n")
@@ -650,7 +650,7 @@ class CheckTest(TemplateCase):
         }
         for label, text in cases.items():
             with self.subTest(label):
-                dependabot.write_text(text)
+                dependabot.write_text(text, encoding="utf-8", newline="\n")
                 self.assertIn((".github/dependabot.yml", "fragment"), self.kinds())
 
     def test_dependabot_must_ignore_every_third_party_action_the_managed_caller_pins(self) -> None:
@@ -662,7 +662,7 @@ class CheckTest(TemplateCase):
         write(self.kit, "template/managed/.github/workflows/pages.yml", managed + pinned + marker + rest)
         self.make_clean_mod()
         write(self.repo, ".github/workflows/pages.yml",
-              (self.repo / ".github/workflows/pages.yml").read_text().replace(
+              (self.repo / ".github/workflows/pages.yml").read_text(encoding="utf-8").replace(
                   "# <<< mod-local extensions\n",
                   f"  ext-lint:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@{OTHER_SHA} # v6\n"
                   "# <<< mod-local extensions\n"))
@@ -678,11 +678,11 @@ class CheckTest(TemplateCase):
         self.assertIn("must ignore github/codeql-action, which the managed region of .github/workflows/pages.yml pins",
                       drifts[0].detail)
         dependabot = self.repo / ".github/dependabot.yml"
-        original = dependabot.read_text()
+        original = dependabot.read_text(encoding="utf-8")
         complete = original.replace('      - dependency-name: "actions/deploy-pages"\n',
                                     '      - dependency-name: "actions/deploy-pages"\n'
                                     "      - dependency-name: github/codeql-action\n")
-        dependabot.write_text(complete)
+        dependabot.write_text(complete, encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])
         flow = complete.replace('    ignore:\n      - dependency-name: "The-Plum-Team/mod-base*"\n'
                                 '      - dependency-name: "actions/deploy-pages"\n'
@@ -690,7 +690,7 @@ class CheckTest(TemplateCase):
                                 '    ignore: [{dependency-name: "The-Plum-Team/mod-base*"}, '
                                 '{dependency-name: actions/deploy-pages}, {dependency-name: "github/codeql-action"}]\n')
         self.assertNotEqual(flow, complete)
-        dependabot.write_text(flow)
+        dependabot.write_text(flow, encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])
         cases = {
             "no deploy-pages": complete.replace('      - dependency-name: "actions/deploy-pages"\n', ""),
@@ -705,7 +705,7 @@ class CheckTest(TemplateCase):
         }
         for label, text in cases.items():
             with self.subTest(label):
-                dependabot.write_text(text)
+                dependabot.write_text(text, encoding="utf-8", newline="\n")
                 self.assertIn((".github/dependabot.yml", "fragment"), self.kinds())
 
     def test_link_rule(self) -> None:
@@ -774,12 +774,12 @@ class CheckTest(TemplateCase):
         for path, mutate in mutations.items():
             with self.subTest(path):
                 target = self.repo / path
-                original = target.read_text()
-                target.write_text(mutate(original))
+                original = target.read_text(encoding="utf-8")
+                target.write_text(mutate(original), encoding="utf-8", newline="\n")
                 failing, pending = tool.evaluate(self.repo, kit_root=self.kit)
                 self.assertTrue(failing and all(drift.path == path for drift in failing), failing)
                 self.assertEqual(pending, [])
-                target.write_text(original)
+                target.write_text(original, encoding="utf-8", newline="\n")
 
     def test_only_non_control_files_can_be_deferred(self) -> None:
         refused = ["CONTRIBUTING.md", "README.md", ".github/workflows/pages.yml", "scripts/ci/mod_base_kit.py",
@@ -787,8 +787,8 @@ class CheckTest(TemplateCase):
         self.make_clean_mod(config_document(deferred=refused))
         self.assertEqual(self.kinds(), [(path, "forbidden") for path in sorted(refused)])
         caller = self.repo / ".github/workflows/pages.yml"
-        caller.write_text(caller.read_text().replace("name: Project site", "name: Edited"))
-        (self.repo / ".github/CODEOWNERS").write_text("/.github/\n")
+        caller.write_text(caller.read_text(encoding="utf-8").replace("name: Project site", "name: Edited"), encoding="utf-8", newline="\n")
+        (self.repo / ".github/CODEOWNERS").write_text("/.github/\n", encoding="utf-8", newline="\n")
         (self.repo / "scripts/ci/mod_base_kit.py").unlink()
         kinds = self.kinds()
         for expected in ((".github/workflows/pages.yml", "changed"), (".github/CODEOWNERS", "fragment"),
@@ -836,23 +836,23 @@ class SyncTest(TemplateCase):
     def test_dry_run_reports_without_writing(self) -> None:
         self.make_clean_mod()
         target = self.repo / ".gitattributes"
-        target.write_text("changed\n")
+        target.write_text("changed\n", encoding="utf-8", newline="\n")
         drifts = tool.sync(self.repo, kit_root=self.kit, write=False)
         self.assertEqual([(drift.path, drift.kind) for drift in drifts], [(".gitattributes", "changed")])
-        self.assertEqual(target.read_text(), "changed\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "changed\n")
 
     def test_write_round_trip_preserves_pin_and_extensions(self) -> None:
         self.make_clean_mod()
         caller = self.repo / ".github/workflows/pages.yml"
         extension = QS_EXTENSION
-        caller.write_text(caller_with(extension).replace("name: Project site", "name: Edited"))
-        (self.repo / "docs/ai/shared/PUBLIC-EVIDENCE.md").write_text("edited\n")
+        caller.write_text(caller_with(extension).replace("name: Project site", "name: Edited"), encoding="utf-8", newline="\n")
+        (self.repo / "docs/ai/shared/PUBLIC-EVIDENCE.md").write_text("edited\n", encoding="utf-8", newline="\n")
         (self.repo / "scripts/ci/mod_base_kit.py").unlink()
         written = tool.sync(self.repo, kit_root=self.kit, write=True)
         self.assertEqual(sorted(drift.path for drift in written),
                          [".github/workflows/pages.yml", "docs/ai/shared/PUBLIC-EVIDENCE.md",
                           "scripts/ci/mod_base_kit.py"])
-        self.assertEqual(caller.read_text(), caller_with(extension))
+        self.assertEqual(caller.read_text(encoding="utf-8"), caller_with(extension))
         self.assertEqual(self.check(), [])
         self.assertEqual(tool.sync(self.repo, kit_root=self.kit, write=True), [])
         self.assertEqual(os.stat(self.repo / "scripts/ci/mod_base_kit.py").st_mode & 0o777, 0o644)
@@ -861,10 +861,10 @@ class SyncTest(TemplateCase):
         self.make_clean_mod()
         e2e = self.repo / ".github/workflows/e2e.yml"
         caller = self.repo / ".github/workflows/pages.yml"
-        e2e.write_text(e2e.read_text().replace(SHA, OTHER_SHA))
-        caller.write_text(caller.read_text().replace(SHA, OTHER_SHA))
+        e2e.write_text(e2e.read_text(encoding="utf-8").replace(SHA, OTHER_SHA), encoding="utf-8", newline="\n")
+        caller.write_text(caller.read_text(encoding="utf-8").replace(SHA, OTHER_SHA), encoding="utf-8", newline="\n")
         self.assertEqual(self.check(), [])
-        e2e.write_text(e2e.read_text().replace(OTHER_SHA, SHA))
+        e2e.write_text(e2e.read_text(encoding="utf-8").replace(OTHER_SHA, SHA), encoding="utf-8", newline="\n")
         self.assertIn((".github/workflows/pages.yml", "changed"), self.kinds())
         with self.assertRaises(MbError):
             tool.sync(self.repo, kit_root=self.kit, write=True)
@@ -877,10 +877,10 @@ class SyncTest(TemplateCase):
         target.symlink_to(self.root / "outside.md")
         with self.assertRaises(MbError):
             tool.sync(self.repo, kit_root=self.kit, write=True)
-        self.assertEqual((self.root / "outside.md").read_text(), "x\n")
+        self.assertEqual((self.root / "outside.md").read_text(encoding="utf-8"), "x\n")
         target.unlink()
         caller = self.repo / ".github/workflows/pages.yml"
-        caller.write_text(caller.read_text().replace("# <<< mod-local extensions\n", ""))
+        caller.write_text(caller.read_text(encoding="utf-8").replace("# <<< mod-local extensions\n", ""), encoding="utf-8", newline="\n")
         with self.assertRaises(MbError):
             tool.sync(self.repo, kit_root=self.kit, write=True)
         self.assertFalse(target.exists())
@@ -895,7 +895,7 @@ class SyncTest(TemplateCase):
         self.assertEqual(sorted(drift.path for drift in planned),
                          [".github/workflows/pages.yml", "docs/ai/shared/REPOSITORY.md"])
         tool.sync(self.repo, kit_root=self.kit, write=True)
-        self.assertEqual(caller.read_text(), caller_with(QS_EXTENSION))
+        self.assertEqual(caller.read_text(encoding="utf-8"), caller_with(QS_EXTENSION))
         self.assertNotIn(b"\r", document.read_bytes())
         self.assertEqual(self.check(), [])
 
@@ -912,7 +912,7 @@ class SyncTest(TemplateCase):
         self.assertEqual(sorted(bootstrap.rewrite_pin(self.repo, bootstrap.Pin(OTHER_SHA, "v1.2.4", ()))),
                          [".github/workflows/e2e.yml", ".github/workflows/pages.yml"])
         tool.sync(self.repo, kit_root=self.kit, write=True)
-        self.assertEqual(caller.read_text(), caller_with(QS_EXTENSION, sha=OTHER_SHA, version="v1.2.4"))
+        self.assertEqual(caller.read_text(encoding="utf-8"), caller_with(QS_EXTENSION, sha=OTHER_SHA, version="v1.2.4"))
         self.assertIn(f"@{OTHER_SHA} # v1.2.4\r\n".encode(), e2e.read_bytes(), "a mod workflow keeps its endings")
         self.assertEqual(self.check(), [])
 
@@ -949,19 +949,19 @@ class InitTest(TemplateCase):
                                    "scripts/pages/mod_base_adapter.py", "docs/ai/PROJECT.md",
                                    "docs/architecture/decisions/README.md"])
         self.assertEqual((self.repo / "site/mod-base.json").read_bytes(), self.config.read_bytes())
-        caller = (self.repo / ".github/workflows/pages.yml").read_text()
+        caller = (self.repo / ".github/workflows/pages.yml").read_text(encoding="utf-8")
         self.assertIn(f"publish.yml@{self.head} # v1.2.3", caller)
-        self.assertEqual((self.repo / "AGENTS.md").read_text(),
+        self.assertEqual((self.repo / "AGENTS.md").read_text(encoding="utf-8"),
                          "@docs/ai/shared/REPOSITORY.md\n@docs/ai/shared/PUBLIC-EVIDENCE.md\n@docs/ai/PROJECT.md\n")
-        license_text = (self.repo / "LICENSE").read_text()
+        license_text = (self.repo / "LICENSE").read_text(encoding="utf-8")
         self.assertTrue(license_text.startswith("Quick Skin — All Rights Reserved\n"))
         self.assertIn("https://modrinth.com/mod/quick-skin", license_text)
         self.assertEqual(tool.unresolved_placeholders(license_text.encode()), ["holder", "third_party", "years"])
-        self.assertIn("{{test_command}}", (self.repo / "CONTRIBUTING.md").read_text())
+        self.assertIn("{{test_command}}", (self.repo / "CONTRIBUTING.md").read_text(encoding="utf-8"))
         drifts = tool.check(self.repo, kit_root=self.kit)
         self.assertEqual({(drift.path, drift.kind) for drift in drifts}, {(".github/CODEOWNERS", "fragment")})
         codeowners = self.repo / ".github/CODEOWNERS"
-        codeowners.write_text(codeowners.read_text().replace("{{owner}}", "AkaNebur"))
+        codeowners.write_text(codeowners.read_text(encoding="utf-8").replace("{{owner}}", "AkaNebur"), encoding="utf-8", newline="\n")
         self.assertEqual(tool.check(self.repo, kit_root=self.kit), [])
 
     def test_init_never_overwrites(self) -> None:
@@ -970,7 +970,7 @@ class InitTest(TemplateCase):
         created = tool.init(self.repo, kit_root=self.kit, seed=True, from_config=self.config)
         self.assertNotIn("CONTRIBUTING.md", created)
         self.assertNotIn(".gitignore", created)
-        self.assertEqual((self.repo / "CONTRIBUTING.md").read_text(), "ours\n")
+        self.assertEqual((self.repo / "CONTRIBUTING.md").read_text(encoding="utf-8"), "ours\n")
         self.assertEqual(tool.init(self.repo, kit_root=self.kit, seed=True, from_config=self.config), [])
 
     def test_without_seed_only_checked_files_are_created(self) -> None:
@@ -991,12 +991,12 @@ class InitTest(TemplateCase):
                 if expected is None:
                     self.assertFalse((repo / "LICENSE").exists())
                 else:
-                    self.assertIn(expected, (repo / "LICENSE").read_text())
+                    self.assertIn(expected, (repo / "LICENSE").read_text(encoding="utf-8"))
 
     def test_an_existing_pin_is_kept_and_an_unpinned_kit_is_refused(self) -> None:
         write(self.repo, ".github/workflows/e2e.yml", f"      - uses: The-Plum-Team/mod-base/actions/setup@{SHA} # v1.2.9\n")
         tool.init(self.repo, kit_root=self.kit, seed=False, from_config=self.config)
-        self.assertIn(f"@{SHA} # v1.2.9", (self.repo / ".github/workflows/pages.yml").read_text())
+        self.assertIn(f"@{SHA} # v1.2.9", (self.repo / ".github/workflows/pages.yml").read_text(encoding="utf-8"))
         write(self.kit, "src/mod_base/__init__.py", "dirty = True\n")
         other = self.root / "other"
         other.mkdir()
@@ -1023,7 +1023,7 @@ class CommandsTest(TemplateCase):
     def test_check_and_sync_exit_codes(self) -> None:
         self.make_clean_mod()
         self.assertEqual(self.run_cli("template", "check", "--repo", str(self.repo))[0], 0)
-        (self.repo / ".gitattributes").write_text("x\n")
+        (self.repo / ".gitattributes").write_text("x\n", encoding="utf-8", newline="\n")
         code, stdout, stderr = self.run_cli("template", "check", "--repo", str(self.repo))
         self.assertEqual(code, 2)
         self.assertIn("changed: .gitattributes", stdout)

@@ -62,7 +62,7 @@ from mod_base.github.api import (
     read_consistently,
 )
 from mod_base.errors import MbError
-from mod_base.model import grammar
+from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, strict_loads
 
 OWNER = "MB1"
@@ -120,6 +120,7 @@ class FakeGitHub:
         self._attempts: dict[tuple[int, int], dict[str, Any]] = {}
         self._jobs: dict[tuple[int, int], list[dict[str, Any]]] = {}
         self._artifacts: dict[int, tuple[dict[str, Any], bytes]] = {}
+        self._release_assets: dict[tuple[str, int], bytes] = {}
         self._files: dict[tuple[str, str], bytes] = {}
         self._compares: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._commits: dict[tuple[str, str], dict[str, Any]] = {}
@@ -368,6 +369,29 @@ class FakeGitHub:
                 self._mutations.append(("DELETE", path, None))
                 return
         raise self._not_found("DELETE", path)
+
+    def add_release_asset(self, repository: str, asset_id: int, data: bytes) -> None:
+        """Seed a direct binary release download; metadata is seeded separately."""
+
+        grammar.require(grammar.REPOSITORY, repository, "repository")
+        _positive_bound(asset_id, "asset_id", limits.MAX_RUN_ID)
+        if type(data) is not bytes or len(data) > MAX_DOWNLOAD_BYTES:
+            raise MbError("release asset seed must be bounded bytes")
+        self._release_assets[repository, asset_id] = data
+
+    def download_release_asset(self, repository: str, asset_id: int, *, max_bytes: int) -> bytes:
+        grammar.require(grammar.REPOSITORY, repository, "repository")
+        _positive_bound(asset_id, "asset_id", limits.MAX_RUN_ID)
+        _positive_bound(max_bytes, "max_bytes", MAX_DOWNLOAD_BYTES)
+        path = f"/repos/{repository}/releases/assets/{asset_id}"
+        self._spend()
+        if (repository, asset_id) not in self._release_assets:
+            raise self._not_found("GET", path)
+        data = self._release_assets[repository, asset_id]
+        if len(data) > max_bytes:
+            raise ApiError(f"release download for {path} exceeds its {max_bytes}-byte bound",
+                           status=200, method="GET", path=path)
+        return data
 
     def download(self, path: str, *, max_bytes: int) -> bytes:
         _validate_path(path)

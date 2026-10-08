@@ -1,0 +1,13 @@
+{
+  "input_sha256": "5e17277355f85171653d5cdd49783abb68b9f01cd55ead35d00715468e640ead",
+  "kind": "mod-base.ci.execution",
+  "log_base64": "Zml4dHVyZSBsb2c=",
+  "nonce": "7dfa22452a962986474e30c19c663ff06932aab20b2db41b510124095c413e09",
+  "plan_sha256": "5a9992dcdc11f5b2d8c1b1696ec51871c215117e5b974818c41ef5e7c281c961",
+  "returncode": 0,
+  "run_attempt": 2,
+  "run_id": 42,
+  "schema_version": 1,
+  "source_config_sha256": "0c1d506c178e36c9c7508caf720b0c183f4f0a22ce86a3733dff3ac0770260de",
+  "truncated": false
+}

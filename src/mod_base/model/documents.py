@@ -24,6 +24,18 @@ from collections.abc import Callable, Collection, Mapping
 from typing import Any
 
 from mod_base import KIT_REPOSITORY, PIXEL_METRICS_VERSION, readable_schema_versions
+from mod_base.build_ci.protocol import validate_plan
+from mod_base.build_ci.config import validate_build_config
+from mod_base.build_ci.activation import validate_activation
+from mod_base.build_ci.batch_schema import validate_batch_manifest
+from mod_base.build_ci.runtime_schema import validate_runtime_envelope
+from mod_base.build_ci.validation import validate_validation_receipt
+from mod_base.build_ci.handoff import validate_execution_handoff
+from mod_base.build_ci.installation_schema import validate_kit_installation
+from mod_base.build_ci.root_request_schema import validate_root_request
+from mod_base.build_ci.runtime_root_request_schema import validate_runtime_root_request
+from mod_base.build_ci.records import (validate_build_envelope, validate_gate_receipt,
+                                       validate_reuse_reference, validate_source_selection)
 from mod_base.errors import MbError
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
@@ -2102,6 +2114,20 @@ def validate_kit_stamp(document: Any, *, path: str = "$") -> dict[str, Any]:
 # -- Dispatch ----------------------------------------------------------------------------------------
 
 VALIDATORS: dict[str, Callable[..., dict[str, Any]]] = {
+    "mod-base.build.plan": validate_plan,
+    "mod-base.build.config": validate_build_config,
+    "mod-base.build.envelope": validate_build_envelope,
+    "mod-base.ci.selection": validate_source_selection,
+    "mod-base.ci.gate": validate_gate_receipt,
+    "mod-base.ci.reuse": validate_reuse_reference,
+    "mod-base.ci.validation": validate_validation_receipt,
+    "mod-base.ci.execution": validate_execution_handoff,
+    "mod-base.ci.kit-installation": validate_kit_installation,
+    "mod-base.ci.root-request": validate_root_request,
+    "mod-base.ci.runtime-root-request": validate_runtime_root_request,
+    "mod-base.ci.activation": validate_activation,
+    "mod-base.ci.batch": validate_batch_manifest,
+    "mod-base.ci.runtime-envelope": validate_runtime_envelope,
     "mod-base.evidence.expectation": validate_expectation,
     "mod-base.evidence.handoff": validate_handoff,
     "mod-base.evidence.compact": validate_compact,
@@ -2119,6 +2145,20 @@ VALIDATORS: dict[str, Callable[..., dict[str, Any]]] = {
 
 #: Default size bound for each kind's file.
 MAX_DOCUMENT_BYTES: dict[str, int] = {
+    "mod-base.build.plan": lim.MAX_CI_PLAN_BYTES,
+    "mod-base.build.config": lim.MAX_CI_CONFIG_BYTES,
+    "mod-base.build.envelope": lim.MAX_CI_ENVELOPE_BYTES,
+    "mod-base.ci.selection": lim.MAX_CI_RECORD_BYTES,
+    "mod-base.ci.gate": lim.MAX_CI_RECORD_BYTES,
+    "mod-base.ci.reuse": lim.MAX_CI_RECORD_BYTES,
+    "mod-base.ci.validation": lim.MAX_CI_RECORD_BYTES,
+    "mod-base.ci.execution": lim.MAX_CI_EXECUTION_BYTES,
+    "mod-base.ci.kit-installation": lim.MAX_CI_KIT_INSTALL_RECORD_BYTES,
+    "mod-base.ci.root-request": lim.MAX_CI_ROOT_REQUEST_BYTES,
+    "mod-base.ci.runtime-root-request": lim.MAX_CI_RUNTIME_ROOT_REQUEST_BYTES,
+    "mod-base.ci.activation": lim.MAX_CI_ACTIVATION_BYTES,
+    "mod-base.ci.batch": lim.MAX_CI_BATCH_DOCUMENT_BYTES,
+    "mod-base.ci.runtime-envelope": lim.MAX_CI_RUNTIME_ENVELOPE_BYTES,
     "mod-base.evidence.expectation": lim.MAX_EXPECTATION_BYTES,
     "mod-base.evidence.handoff": lim.MAX_MANIFEST_BYTES,
     "mod-base.evidence.compact": lim.MAX_MANIFEST_BYTES,

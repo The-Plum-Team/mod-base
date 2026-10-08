@@ -1,8 +1,8 @@
 a2762dc1f34d57b2f7be02c0cc46c26518ce7a6850fe409c047769496a0ec9a3  ./template/managed/.gitattributes
 bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/managed/.github/workflows/pages.yml
-ade9b6115b6045f0ac1640a51118c117470b85d2ec315787c4ce2e6182491ff8  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
+9b3aef4f40e08a64d004e67809b55641cf323b23ccbe32623e4940903d4c60a7  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
 0b9fcb0dd4368b16aaaa5611a92e9909aa9e803ebe8440e33590cc9376a911a9  ./template/managed/docs/ai/shared/REPOSITORY.md
-ee44ff807cfa43df0f285a1ddf37963eeb0033e2dfbe05f05fb9b0234060c83e  ./template/managed/scripts/ci/mod_base_kit.py
+0d222d74bbeeeb32d62a297aaa7ac162574d75f04d813a03afbda663d84c9881  ./template/managed/scripts/ci/mod_base_kit.py
 da20b92010d9b9f083cf88d84ffad931d391336dfbfb0154d66f0be8d38c945b  ./template/manifest.json
 f52062f61bc044645c13ecbe926b672253834dfaca3c03dfb14d3682d78a88eb  ./template/seed/.github/CODEOWNERS.tmpl
 0e6bfc5a7783036fb43a585b5222f5a752b86695c255fa3ece3bc5d4e2f5d5c4  ./template/seed/.github/dependabot.yml.tmpl
@@ -17,8 +17,9 @@ b8ff67de7b7c91a95a0a5f4aeec37cb61d55649560adce8d6c648f0c20b70f32  ./template/see
 9602f92e08f99c8d8502558f0b508acf7446ffe026ebc7eba6de8a47d5a222ef  ./template/seed/scripts/pages/mod_base_adapter.py.tmpl
 78b2ef659b7e0d3f36cc18eb1d2738c8c9f1debeb2d6d6d47ac7435e608a7f83  ./template/seed/site/mod-base.json.tmpl
 04fd9e68cb94428427fa66a1c4b197a76dd4f3970de94d5aff7fae001fb10b09  ./tools/actionlint.sha256
+8313846161aeaa7ec497047beafa056c3c44fc0e219084b0d18b44269823beb3  ./tools/ci_privileged_bootstrap.py
 46be023b1463c235074b881cb9bfefea0ebdd239c0c805446eb2b834c98c5e58  ./tools/github_api_retry.sh
 e76682a038da8e09118a2bae4b9d2c7f7868ab9b05abf7d4c0f8852775395855  ./tools/kit_digest.sh
-574db48179908fefcf5d654586fa0b49c2e9561aaf382fc9a27d8acf0ac34ee8  ./tools/parallel_unittest.py
+34b63927f299d490b6a66af0e7df0dfc7137c14fa629b8bdfa460ff419283d4e  ./tools/parallel_unittest.py
 bf528de2c329cd921b13a596c1dc8f21abd99703873de6b9b1ee4c1f236b77a5  ./tools/update_tree_digest.py
 020bd17f6c52f05922d99b8e4f85b04b209bf05a5c47d91560957cdd1fc68d8f  ./tools/verify_action_tree.py

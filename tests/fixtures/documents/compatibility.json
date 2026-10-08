@@ -1,0 +1,149 @@
+{
+  "baseline": {
+    "commit": "f99ef433b66c729a869a2c1fbf038332c8b2f3e8",
+    "source_sha256": "5a1fa6b52a034de197d3ac1c15049fec010c0d2ae441b91c58b5df086462a133",
+    "tag": "v1.0.3"
+  },
+  "kinds": {
+    "mod-base.build": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.build.config": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.build.envelope": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.build.plan": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.activation": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.batch": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.execution": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.gate": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.kit-installation": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.reuse": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.root-request": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.runtime-envelope": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.runtime-root-request": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.selection": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.ci.validation": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.config": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.evidence.anchor": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.evidence.compact": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.evidence.expectation": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.evidence.handoff": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.family.envelope": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.family.paired": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.gallery": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.kit-stamp": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.promotion": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.selection": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.site": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    },
+    "mod-base.template-manifest": {
+      "current_version": 1,
+      "decision": "unchanged",
+      "previous_version": 1
+    }
+  }
+}

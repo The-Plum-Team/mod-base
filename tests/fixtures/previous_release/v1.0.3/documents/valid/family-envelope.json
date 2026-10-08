@@ -1,0 +1,50 @@
+{
+  "coverage_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+  "family": "mod-compatibility",
+  "files": [
+    {
+      "path": "images/0163f2a6305882aed13ff6b4325d062a9873a54633e4b3c8b703e47a5474c589.webp",
+      "sha256": "0163f2a6305882aed13ff6b4325d062a9873a54633e4b3c8b703e47a5474c589",
+      "size": 45678
+    },
+    {
+      "path": "images/603393001008c024ec42d762ee5c417943e0cf206aa51e973cf11cfd1ce56aef.webp",
+      "sha256": "603393001008c024ec42d762ee5c417943e0cf206aa51e973cf11cfd1ce56aef",
+      "size": 45679
+    },
+    {
+      "path": "manifest.json",
+      "sha256": "1b82ca0f68b08a77a67b4057997bdd7f6c5f3e7d36063bff74a71d9ea0ee1053",
+      "size": 34567
+    }
+  ],
+  "key": "mc1.20.1",
+  "kind": "mod-base.family.envelope",
+  "kit": {
+    "repository": "The-Plum-Team/mod-base",
+    "sha": "734f6e6bc8ba05938734384ab7835c45111af4d3",
+    "version": "0.9.0"
+  },
+  "native": {
+    "kind": "quick-skin-public-mod-compatibility",
+    "manifest_path": "manifest.json",
+    "manifest_sha256": "1b82ca0f68b08a77a67b4057997bdd7f6c5f3e7d36063bff74a71d9ea0ee1053",
+    "schema_version": 6
+  },
+  "producer": {
+    "branch": "master",
+    "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "controller_branch": "master",
+    "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "run_attempt": 1,
+    "run_id": 202,
+    "workflow_path": ".github/workflows/mod-compatibility-review.yml"
+  },
+  "repository": "The-Plum-Team/Quick-Skin-Mod",
+  "schema_version": 1,
+  "subject": {
+    "branch": "master",
+    "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "tree": "5459e70b2b7c2688978c36fedc9a4958a5b2cde0"
+  }
+}

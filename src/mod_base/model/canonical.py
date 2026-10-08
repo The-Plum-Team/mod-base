@@ -157,7 +157,10 @@ def read_regular_file(path: Path | str, *, label: str, max_bytes: int, allow_emp
         raise StrictJsonError(f"{label} must be a regular file")
     if before.st_size > max_bytes or (before.st_size == 0 and not allow_empty):
         raise StrictJsonError(f"{label} size must be between 1 and {max_bytes} bytes")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    # Windows text descriptors translate CRLF and treat 0x1A as EOF. Stable bytes and sizes
+    # require binary reads; this flag is absent (and unnecessary) on POSIX.
+    flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
         descriptor = os.open(candidate, flags)
     except OSError as exc:

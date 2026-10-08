@@ -68,6 +68,13 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=src python3 tools/parallel_unittest.py -v -t . tests
+      - name: Require real disposable-account termination on Linux
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python3 -m unittest -v tests.ci_linux_worker
 
   test-gate:
     name: Test

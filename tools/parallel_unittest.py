@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Run the kit's unittest discovery across worker processes, failing closed wherever a serial run would.
 
-Copied from Block Pops ``scripts/ci/parallel_unittest.py``; only this docstring differs. It is run
+Based on Block Pops ``scripts/ci/parallel_unittest.py``. Its default count/import semantics remain
+strict; explicit ``--policy-profile quick-skin`` preserves Quick Skin's start-root imports and
+whole-class setUpClass skips. Both profiles reject zero executed tests and unsuccessful units.
+It is run
 from the kit root as ``PYTHONPATH=src python3 tools/parallel_unittest.py -v -t . tests``: the
 ``mod_base`` package is importable through ``PYTHONPATH`` (which every spawned worker inherits) and
 the ``tests`` package through ``-t``.
@@ -22,7 +25,6 @@ TMPDIR, another worker creating a directory next to theirs would trip them.
 from __future__ import annotations
 
 import argparse
-import io
 import multiprocessing
 import os
 import shutil
@@ -38,6 +40,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mod_base.build_ci.policy import (POLICY_PROFILES, BoundedPolicyStream, PolicyCounts,
+                                       PolicyError, admit_policy_unit)
+from mod_base.model.limits import MAX_CI_POLICY_TESTS, MAX_CI_POLICY_WORKERS
+
 SEPARATOR = "-" * 70
 
 
@@ -48,6 +54,10 @@ class Unit:
     tests: int
     repeat: int
     weight: tuple[int, int]
+
+    @property
+    def fixture(self) -> bool:
+        return bool(self.weight[0])
 
 
 def _tests(suite: unittest.TestSuite) -> Iterator[unittest.TestCase]:
@@ -71,13 +81,19 @@ def discover(starts: list[str], *, pattern: str, top_level: Path) -> tuple[list[
     loader = unittest.TestLoader()
     units: list[Unit] = []
     errors: list[str] = []
+    discovered = 0
     for start in starts:
         suite = loader.discover(
             str(Path(start).resolve()), pattern=pattern, top_level_dir=str(top_level)
         )
         errors.extend(loader.errors)
         loader.errors = []
-        tests = list(_tests(suite))
+        tests = []
+        for test in _tests(suite):
+            discovered += 1
+            if discovered > MAX_CI_POLICY_TESTS:
+                return [], ["policy discovery exceeds its test cap"]
+            tests.append(test)
         occurrences: Counter[type] = Counter(type(test) for test in tests)
         for case, count in occurrences.items():
             if case.__module__ == "unittest.loader":
@@ -99,37 +115,48 @@ def discover(starts: list[str], *, pattern: str, top_level: Path) -> tuple[list[
     return units, errors
 
 
-def _start_worker(directories: Any, top_level: str) -> None:
+def _start_worker(directories: Any, top_level: str, path: list[str] | None = None) -> None:
     directory = directories.get()
     os.environ["TMPDIR"] = directory
     tempfile.tempdir = directory
-    if top_level not in sys.path:
+    if path is not None:
+        sys.path[:] = path
+    elif top_level not in sys.path:
         sys.path.insert(0, top_level)
 
 
 def _run_unit(name: str, repeat: int, verbosity: int) -> dict[str, Any]:
-    stream = io.StringIO()
-    result = unittest.TextTestResult(
-        unittest.runner._WritelnDecorator(stream), descriptions=True, verbosity=verbosity
-    )
+    stream = BoundedPolicyStream()
     started = time.perf_counter()
-    result.startTestRun()
-    with redirect_stdout(stream), redirect_stderr(stream):
-        for _ in range(repeat):
+    counts: Counter[str] = Counter()
+    successful = True
+    for _ in range(repeat):
+        # A completed suite leaves _previousTestClass on TestResult after tearing that class
+        # down. A fresh result gives each reexport occurrence its full class/module lifecycle.
+        result = unittest.TextTestResult(
+            unittest.runner._WritelnDecorator(stream), descriptions=True, verbosity=verbosity
+        )
+        result.startTestRun()
+        with redirect_stdout(stream), redirect_stderr(stream):
             unittest.TestLoader().loadTestsFromName(name).run(result)
-    result.stopTestRun()
-    result.printErrors()
+        result.stopTestRun()
+        result.printErrors()
+        successful = successful and result.wasSuccessful()
+        counts.update({
+            "tests_run": result.testsRun, "failures": len(result.failures), "errors": len(result.errors),
+            "skipped": len(result.skipped), "expected_failures": len(result.expectedFailures),
+            "unexpected_successes": len(result.unexpectedSuccesses),
+            "class_skips": sum(isinstance(test, unittest.suite._ErrorHolder)
+                               and test.description.startswith("setUpClass ")
+                               for test, _reason in result.skipped),
+        })
     return {
         "name": name,
-        "tests_run": result.testsRun,
-        "successful": result.wasSuccessful(),
-        "failures": len(result.failures),
-        "errors": len(result.errors),
-        "skipped": len(result.skipped),
-        "expected_failures": len(result.expectedFailures),
-        "unexpected_successes": len(result.unexpectedSuccesses),
+        **counts,
+        "successful": successful,
         "seconds": time.perf_counter() - started,
         "output": stream.getvalue(),
+        "truncated": stream.truncated,
     }
 
 
@@ -144,14 +171,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("starts", nargs="+", metavar="START_DIRECTORY")
     parser.add_argument("-p", "--pattern", default="test_*.py")
-    parser.add_argument("-t", "--top-level-directory", type=Path, default=Path("."))
+    parser.add_argument("-t", "--top-level-directory", type=Path)
+    parser.add_argument("--policy-profile", choices=POLICY_PROFILES, default="block-pops")
     parser.add_argument("-j", "--jobs", type=int, default=_default_jobs())
     parser.add_argument("-v", "--verbose", action="store_const", const=2, default=1)
     parser.add_argument("--slowest", type=int, default=10, help="units listed in the timing table")
     args = parser.parse_args(argv)
-    if args.jobs < 1:
-        parser.error("--jobs must be positive")
-    top_level = args.top_level_directory.resolve()
+    if not 1 <= args.jobs <= MAX_CI_POLICY_WORKERS:
+        parser.error("--jobs exceeds the supported positive worker bound")
+    if args.policy_profile == "quick-skin":
+        if len(args.starts) != 1:
+            parser.error("Quick Skin policy discovery requires one start directory")
+        top_level = Path(args.starts[0]).resolve()
+        if args.top_level_directory is not None and args.top_level_directory.resolve() != top_level:
+            parser.error("Quick Skin policy discovery uses its start directory as import root")
+        sys.path[0] = os.getcwd()
+    else:
+        top_level = (args.top_level_directory or Path(".")).resolve()
     sys.path.insert(0, str(top_level))
 
     started = time.perf_counter()
@@ -180,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         max_workers=args.jobs,
         mp_context=context,
         initializer=_start_worker,
-        initargs=(directories, str(top_level)),
+        initargs=(directories, str(top_level), list(sys.path) if args.policy_profile == "quick-skin" else None),
     ) as pool:
         futures = {
             pool.submit(_run_unit, unit.name, unit.repeat, args.verbose): unit for unit in units
@@ -193,13 +229,17 @@ def main(argv: list[str] | None = None) -> int:
                 problems.append(f"{unit.name}: worker failed: {exc!r}")
                 continue
             sys.stdout.write(outcome["output"])
+            if outcome["truncated"]:
+                sys.stdout.write("\n[policy unit diagnostic output truncated]\n")
             sys.stdout.flush()
-            if outcome["tests_run"] != unit.tests:
-                problems.append(
-                    f"{unit.name}: ran {outcome['tests_run']} tests, discovered {unit.tests}"
-                )
-            if not outcome["successful"]:
-                problems.append(f"{unit.name}: unsuccessful")
+            counts = PolicyCounts(**{key: outcome[key] for key in
+                                  ("tests_run", "failures", "errors", "skipped", "class_skips",
+                                   "expected_failures", "unexpected_successes", "successful")})
+            try:
+                totals["skipped_tests"] += admit_policy_unit(profile=args.policy_profile,
+                    discovered=unit.tests, repeat=unit.repeat, fixture=unit.fixture, counts=counts)
+            except PolicyError as error:
+                problems.append(f"{unit.name}: {error}")
             for key in ("failures", "errors", "skipped", "expected_failures", "unexpected_successes"):
                 totals[key] += outcome[key]
             totals["run"] += outcome["tests_run"]
@@ -208,11 +248,16 @@ def main(argv: list[str] | None = None) -> int:
     shutil.rmtree(scratch, ignore_errors=True)
     elapsed = time.perf_counter() - started
 
-    if totals["run"] != expected:
+    if totals["run"] + totals["skipped_tests"] != expected:
         problems.append(f"ran {totals['run']} tests, discovered {expected}")
+    if totals["run"] == 0:
+        problems.append("no test ran")
     print(SEPARATOR)
     for start in args.starts:
-        print(f"{start}: {per_start[start]} tests")
+        if args.policy_profile == "quick-skin":
+            print(f"{start}: {per_start[start]} of {expected} discovered tests ran")
+        else:
+            print(f"{start}: {per_start[start]} tests")
     print(f"{args.jobs} workers, {len(units)} scheduling units; slowest:")
     for seconds, name in sorted(timings, reverse=True)[: max(0, args.slowest)]:
         print(f"  {seconds:8.1f}s  {name}")

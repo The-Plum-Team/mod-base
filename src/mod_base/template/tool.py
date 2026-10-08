@@ -76,6 +76,8 @@ from pathlib import Path
 from typing import Any
 
 import mod_base
+from mod_base.build_ci.activation import ACTIVATION_PATH, validate_activation
+from mod_base.build_ci.config import BUILD_CONFIG_PATH, validate_build_config
 from mod_base.config import DEFAULT_CONFIG_PATH, Config, load_config, parse_config
 from mod_base.errors import MbError, single_line
 from mod_base.model import limits as lim
@@ -89,6 +91,9 @@ OWNER = "MB9"
 MANIFEST_PATH = "template/manifest.json"
 
 CALLER_PATH = ".github/workflows/pages.yml"
+# Protected-code registry: profile/manifest data cannot choose a renderer or extension policy.
+RENDERED_CALLERS = ((CALLER_PATH, "managed/.github/workflows/pages.yml", "pages-extension"),)
+
 AGENTS_PATH = "AGENTS.md"
 CODEOWNERS_PATH = ".github/CODEOWNERS"
 DEPENDABOT_PATH = ".github/dependabot.yml"
@@ -281,6 +286,44 @@ def _diff(path: str, expected: bytes, actual: bytes) -> str:
 # -- Manifest --------------------------------------------------------------------------------------
 
 
+def _rendered_caller_kind(entry: dict[str, Any]) -> str | None:
+    for path, source, kind in RENDERED_CALLERS:
+        if entry["path"].casefold() == path.casefold() or entry["source"].casefold() == source.casefold():
+            if entry["path"] != path or entry["source"] != source or entry["class"] != "managed":
+                raise MbError("rendered caller path/source/class differs from the closed registry", reason="template")
+            return kind
+    return None
+
+
+def load_template_activation(repo: Path) -> dict[str, Any] | None:
+    """Preflight optional legacy/disabled activation data before any template write.
+
+    Current registry has no Build/E2E caller enrollment. Other modes reject until their
+    fixed templates and native transition admission are implemented; this is not activation
+    authority or complete missing-marker/rollback protection. Legacy absence remains valid.
+    """
+    state = _state(repo, ACTIVATION_PATH)
+    if state == 'absent':
+        return None
+    if state != 'file':
+        raise MbError('activation must be a regular file reached without symlinks', reason='template')
+    data = read_regular_file(repo / ACTIVATION_PATH, label='template activation',
+                             max_bytes=lim.MAX_CI_ACTIVATION_BYTES)
+    document = validate_activation(strict_loads(data, label='template activation',
+                                                max_bytes=lim.MAX_CI_ACTIVATION_BYTES))
+    if _state(repo, BUILD_CONFIG_PATH) != 'file':
+        raise MbError('activation requires the regular native Build configuration', reason='template')
+    data = read_regular_file(repo / BUILD_CONFIG_PATH, label='native Build configuration',
+                             max_bytes=lim.MAX_CI_CONFIG_BYTES)
+    config = validate_build_config(strict_loads(data, label='native Build configuration',
+                                                max_bytes=lim.MAX_CI_CONFIG_BYTES))
+    if (document['repository'], document['profile']) != (config['repository'], config['profile']):
+        raise MbError('activation differs from native repository/profile configuration', reason='template')
+    if document['mode'] != 'disabled':
+        raise MbError('activation mode has no admitted Build/E2E caller templates yet', reason='template')
+    return document
+
+
 def load_manifest(kit_root: Path) -> dict[str, Any]:
     """Read and validate ``template/manifest.json`` (``mod-base.template-manifest`` v1)."""
 
@@ -292,8 +335,13 @@ def load_manifest(kit_root: Path) -> dict[str, Any]:
     except DocumentError as exc:
         raise MbError(f"{MANIFEST_PATH}: {exc}", reason="template") from None
     for entry in document["files"]:
+        kind = _rendered_caller_kind(entry)
         if _state(kit_root / "template", entry["source"]) != "file":
             raise MbError(f"{MANIFEST_PATH}: template/{entry['source']} is not a regular file", reason="template")
+        if kind is None and entry["path"].casefold().startswith(".github/workflows/"):
+            data = _template_bytes(kit_root, entry["source"])
+            if any(token in data for token in (b"{{PIN}}", b"{{VERSION}}")):
+                raise MbError("unregistered workflow contains rendered caller placeholders", reason="template")
     return document
 
 
@@ -896,6 +944,7 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
     required lines are pending; every other drift fails."""
 
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
+    load_template_activation(repo)
     manifest = load_manifest(kit_root)
     config = load_config(repo, check_repository_facts=False)
     deferred = set(config.template["deferred"])
@@ -918,7 +967,7 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
             continue
         actual = _read(repo, path, klass)
         if klass == "managed":
-            if path == CALLER_PATH:
+            if _rendered_caller_kind(entry) == "pages-extension":
                 drifts.extend(_check_caller(repo, entry, kit_root, actual))
             else:
                 drifts.extend(_managed_drifts(path, _template_bytes(kit_root, entry["source"]), actual))
@@ -950,6 +999,7 @@ def pending(repo: Path, *, kit_root: Path) -> list[Drift]:
 
 def sync(repo: Path, *, kit_root: Path, write: bool) -> list[Drift]:
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
+    load_template_activation(repo)
     manifest = load_manifest(kit_root)
     config = load_config(repo, check_repository_facts=False)
     staged = set(config.template["deferred"]) & DEFERRABLE
@@ -961,7 +1011,7 @@ def sync(repo: Path, *, kit_root: Path, write: bool) -> list[Drift]:
             continue
         if state == "invalid":
             raise MbError(f"cannot sync {path}: it is not a regular file reached without symlinks", reason="template")
-        if path == CALLER_PATH:
+        if _rendered_caller_kind(entry) == "pages-extension":
             expected = _render_caller(repo, _caller_template(kit_root, entry["source"]), parse_pin(repo))
         else:
             expected = _template_bytes(kit_root, entry["source"])
@@ -1042,6 +1092,7 @@ def init(repo: Path, *, kit_root: Path, seed: bool, from_config: Path | None) ->
     """Seed missing files; return the created paths; refuse to overwrite anything."""
 
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
+    load_template_activation(repo)
     manifest = load_manifest(kit_root)
     config, config_bytes = _load_seed_config(repo, from_config)
     values = seed_values(config)
@@ -1051,7 +1102,7 @@ def init(repo: Path, *, kit_root: Path, seed: bool, from_config: Path | None) ->
         path, klass, source = entry["path"], entry["class"], entry["source"]
         if (klass == "seeded" and not seed) or path in deferred or _state(repo, path) != "absent":
             continue
-        if path == CALLER_PATH:
+        if _rendered_caller_kind(entry) == "pages-extension":
             data = _render_caller(repo, _caller_template(kit_root, source), _initial_pin(repo, kit_root))
         elif klass == "managed":
             data = _template_bytes(kit_root, source)

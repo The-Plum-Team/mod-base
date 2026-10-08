@@ -1,0 +1,14 @@
+{
+  "device": 1,
+  "files": 3,
+  "inode": 11,
+  "kind": "mod-base.ci.kit-installation",
+  "kit": {
+    "repository": "The-Plum-Team/mod-base",
+    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "version": "1.0.3"
+  },
+  "schema_version": 1,
+  "total_bytes": 3,
+  "tree_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

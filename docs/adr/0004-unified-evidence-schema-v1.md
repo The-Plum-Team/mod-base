@@ -44,6 +44,10 @@ rolling-cache compatibility rules that kept old readers alive until every cache 
 - `tests/test_schema_evolution.py` checks the current writer's fixtures against the previous
   release's validator once a previous release exists.
 
+The Build protocol amendment in ADR 0007 scopes this check per kind and schema version. Every
+unchanged common format still passes the predecessor reader; genuinely new kinds explicitly
+fail there. Optional fields do not override strict unknown-key rejection.
+
 ## Alternatives considered
 
 - Converters from the old formats: privileged code parsing two untrusted legacy formats for a

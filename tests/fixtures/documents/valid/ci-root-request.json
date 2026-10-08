@@ -1,0 +1,210 @@
+{
+  "boundary": {
+    "device": 1,
+    "gid": 121,
+    "home": "/home/runner",
+    "inode": 10,
+    "original_mode": 493,
+    "uid": 1001
+  },
+  "envelope": {
+    "files": [
+      {
+        "lane_id": "lane-a",
+        "path": "staged/lane-a/harness.jar",
+        "role": "harness",
+        "sha256": "4e932154adc4fdd0c1634cd451d4c4cc6db85aaeb68337740f127e721d9e3c81",
+        "size": 128
+      },
+      {
+        "lane_id": "lane-a",
+        "path": "staged/lane-a/native-report.json",
+        "role": "native-report",
+        "sha256": "3fcaffc7a74ac2a8a925968979d1831f5526cc8504493b433219c282c0a50c18",
+        "size": 128
+      },
+      {
+        "lane_id": "lane-a",
+        "path": "staged/lane-a/production.jar",
+        "role": "production",
+        "sha256": "ed5eca333f2c68739b199083d336d3d584dcb23cc749791381151af2518063a0",
+        "size": 128
+      },
+      {
+        "lane_id": "lane-a",
+        "path": "staged/lane-a/sbom.json",
+        "role": "sbom",
+        "sha256": "9b18c0ecb123778fa4e9016aff4237d79db37ad8d354f9afc0ca0f1fabdabd4c",
+        "size": 128
+      }
+    ],
+    "identity": {
+      "base_branch": "master",
+      "base_sha": "2222222222222222222222222222222222222222",
+      "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+      "controller_sha": "2222222222222222222222222222222222222222",
+      "controller_workflow": ".github/workflows/build-gate.yml",
+      "graph_version": 1,
+      "head_branch": "feature/example",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "inventory_blob": "7777777777777777777777777777777777777777",
+      "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+      "kit": {
+        "repository": "The-Plum-Team/mod-base",
+        "sha": "3333333333333333333333333333333333333333",
+        "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "version": "1.1.0"
+      },
+      "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+      "pr_number": 7,
+      "repository": "example/mod",
+      "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+      "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+      "source_repository": "example/mod",
+      "tested_parents": [
+        "2222222222222222222222222222222222222222",
+        "1111111111111111111111111111111111111111"
+      ],
+      "tested_sha": "5555555555555555555555555555555555555555",
+      "tested_tree": "6666666666666666666666666666666666666666"
+    },
+    "kind": "mod-base.build.envelope",
+    "native_reports": [
+      "staged/lane-a/native-report.json"
+    ],
+    "plan_sha256": "5a9992dcdc11f5b2d8c1b1696ec51871c215117e5b974818c41ef5e7c281c961",
+    "producer": {
+      "api_head_sha": "2222222222222222222222222222222222222222",
+      "event": "pull_request_target",
+      "graph_sha256": "b92966b81c7c242d4a1eb98817852d40fe825bac364335b7c761fe22cab80148",
+      "run_attempt": 2,
+      "run_id": 42,
+      "workflow_path": ".github/workflows/build-gate.yml",
+      "workflow_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master"
+    },
+    "profile": "block-pops",
+    "schema_version": 1,
+    "scope": "complete",
+    "target_id": null
+  },
+  "execution_nonce": "7dfa22452a962986474e30c19c663ff06932aab20b2db41b510124095c413e09",
+  "kind": "mod-base.ci.root-request",
+  "nonce": "cbf55746cd4ae99b18e5a4d05de18382711a3ea8cafed2ed24db61905e94bcbe",
+  "plan": {
+    "build_adapter_api": 1,
+    "identity": {
+      "base_branch": "master",
+      "base_sha": "2222222222222222222222222222222222222222",
+      "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+      "controller_sha": "2222222222222222222222222222222222222222",
+      "controller_workflow": ".github/workflows/build-gate.yml",
+      "graph_version": 1,
+      "head_branch": "feature/example",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "inventory_blob": "7777777777777777777777777777777777777777",
+      "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+      "kit": {
+        "repository": "The-Plum-Team/mod-base",
+        "sha": "3333333333333333333333333333333333333333",
+        "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "version": "1.1.0"
+      },
+      "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+      "pr_number": 7,
+      "repository": "example/mod",
+      "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+      "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+      "source_repository": "example/mod",
+      "tested_parents": [
+        "2222222222222222222222222222222222222222",
+        "1111111111111111111111111111111111111111"
+      ],
+      "tested_sha": "5555555555555555555555555555555555555555",
+      "tested_tree": "6666666666666666666666666666666666666666"
+    },
+    "kind": "mod-base.build.plan",
+    "lanes": [
+      {
+        "id": "lane-a",
+        "native_contract_sha256": "d34a25fc38216ea602efe8e4c797d68c7265b56b3c809b2583cd24cf8d028c82",
+        "obligations": [
+          "scenario/example/server/probe"
+        ],
+        "target_id": "target-a"
+      }
+    ],
+    "plan_sha256": "5a9992dcdc11f5b2d8c1b1696ec51871c215117e5b974818c41ef5e7c281c961",
+    "profile": "block-pops",
+    "schema_version": 1,
+    "targets": [
+      {
+        "id": "target-a",
+        "java": 21,
+        "native_contract_sha256": "b3a80b236c6a489ddc9df5dd7549eccac288a41d726f81399a071bd00659c10d",
+        "outputs": [
+          {
+            "lane_id": "lane-a",
+            "path": "staged/lane-a/production.jar",
+            "role": "production"
+          },
+          {
+            "lane_id": "lane-a",
+            "path": "staged/lane-a/harness.jar",
+            "role": "harness"
+          },
+          {
+            "lane_id": "lane-a",
+            "path": "staged/lane-a/sbom.json",
+            "role": "sbom"
+          },
+          {
+            "lane_id": "lane-a",
+            "path": "staged/lane-a/native-report.json",
+            "role": "native-report"
+          }
+        ]
+      }
+    ]
+  },
+  "run_attempt": 2,
+  "run_id": 42,
+  "schema_version": 1,
+  "sources": {
+    "config": {
+      "git_blob": "cccccccccccccccccccccccccccccccccccccccc",
+      "mode": "100644",
+      "path": "scripts/ci/mod-base-build.json",
+      "sha256": "0c1d506c178e36c9c7508caf720b0c183f4f0a22ce86a3733dff3ac0770260de",
+      "size": 1000
+    },
+    "controller_sha": "2222222222222222222222222222222222222222",
+    "controller_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "files": [
+      {
+        "git_blob": "dddddddddddddddddddddddddddddddddddddddd",
+        "mode": "100644",
+        "path": "scripts/ci/mod_base_build_adapter.py",
+        "sha256": "a02dd763eea24639eba81db7bc25dcebf8880ce63b1f0744e3ce8f0e0a1b5a8b",
+        "size": 1
+      },
+      {
+        "git_blob": "dddddddddddddddddddddddddddddddddddddddd",
+        "mode": "100644",
+        "path": "scripts/ci/mod_base_build_dispatch.py",
+        "sha256": "b44cd9dae33e89f05d2a7fe75f26e2cfd7ce9e5b25b316aeea2e9e09226248d5",
+        "size": 1
+      },
+      {
+        "git_blob": "dddddddddddddddddddddddddddddddddddddddd",
+        "mode": "100644",
+        "path": "scripts/ci/pr_gate.py",
+        "sha256": "ba0a64a2c0e1d5bfbf2e2886dd399dd2bb02652f4cddd1c0b7d92aeb6245a32b",
+        "size": 1
+      }
+    ]
+  },
+  "validator": {
+    "gid": 2001,
+    "uid": 2001
+  }
+}

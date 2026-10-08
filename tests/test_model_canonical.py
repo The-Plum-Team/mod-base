@@ -117,6 +117,17 @@ class ReadRegularFileTest(unittest.TestCase):
         self.assertEqual(read_regular_file(path, label="doc", max_bytes=100), b'{"a":1}')
         self.assertEqual(read_json_file(path, label="doc", max_bytes=100), ({"a": 1}, b'{"a":1}'))
 
+    def test_binary_bytes_and_crlf_json_are_preserved_exactly(self) -> None:
+        path = self.root / "payload.bin"
+        for payload in (b"header\r\nbody\x1afooter\r\n", bytes(range(256)),
+                        b"x" * ((1 << 16) - 1) + b"\r\n\x1a\x00tail"):
+            path.write_bytes(payload)
+            with self.subTest(size=len(payload)):
+                self.assertEqual(read_regular_file(path, label="binary", max_bytes=len(payload)), payload)
+        raw = b'{\r\n"a":1\r\n}\r\n'
+        path.write_bytes(raw)
+        self.assertEqual(read_json_file(path, label="doc", max_bytes=len(raw)), ({"a": 1}, raw))
+
     def test_refuses_symlink_directory_empty_and_oversize(self) -> None:
         target = self.root / "target.json"
         target.write_bytes(b"{}")

@@ -1,0 +1,99 @@
+{
+  "build": {
+    "artifact": {
+      "created_at": "2026-10-07T10:01:30Z",
+      "digest": "sha256:04cf5fdb4a2f808c5d68ff45b8805933058badd80891547edf9a6f3f204c6172",
+      "expires_at": "2026-10-14T10:01:30Z",
+      "id": 100,
+      "name": "mb-ci-build--42--a2",
+      "size": 512
+    },
+    "identity": {
+      "base_branch": "master",
+      "base_sha": "2222222222222222222222222222222222222222",
+      "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+      "controller_sha": "2222222222222222222222222222222222222222",
+      "controller_workflow": ".github/workflows/build-gate.yml",
+      "graph_version": 1,
+      "head_branch": "feature/example",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "inventory_blob": "7777777777777777777777777777777777777777",
+      "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+      "kit": {
+        "repository": "The-Plum-Team/mod-base",
+        "sha": "3333333333333333333333333333333333333333",
+        "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "version": "1.1.0"
+      },
+      "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+      "pr_number": 7,
+      "repository": "example/mod",
+      "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+      "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+      "source_repository": "example/mod",
+      "tested_parents": [
+        "2222222222222222222222222222222222222222",
+        "1111111111111111111111111111111111111111"
+      ],
+      "tested_sha": "5555555555555555555555555555555555555555",
+      "tested_tree": "6666666666666666666666666666666666666666"
+    },
+    "plan_sha256": "5a9992dcdc11f5b2d8c1b1696ec51871c215117e5b974818c41ef5e7c281c961",
+    "producer": {
+      "api_head_sha": "2222222222222222222222222222222222222222",
+      "event": "pull_request_target",
+      "graph_sha256": "b92966b81c7c242d4a1eb98817852d40fe825bac364335b7c761fe22cab80148",
+      "run_attempt": 2,
+      "run_id": 42,
+      "upload_window": {
+        "completed_at": "2026-10-07T10:02:00Z",
+        "started_at": "2026-10-07T10:01:00Z"
+      },
+      "workflow_path": ".github/workflows/build-gate.yml",
+      "workflow_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master"
+    },
+    "profile": "block-pops"
+  },
+  "envelope_sha256": "5e17277355f85171653d5cdd49783abb68b9f01cd55ead35d00715468e640ead",
+  "identity": {
+    "base_branch": "master",
+    "base_sha": "2222222222222222222222222222222222222222",
+    "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+    "controller_sha": "2222222222222222222222222222222222222222",
+    "controller_workflow": ".github/workflows/build-gate.yml",
+    "graph_version": 1,
+    "head_branch": "feature/example",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "inventory_blob": "7777777777777777777777777777777777777777",
+    "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+    "kit": {
+      "repository": "The-Plum-Team/mod-base",
+      "sha": "3333333333333333333333333333333333333333",
+      "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "version": "1.1.0"
+    },
+    "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "pr_number": 7,
+    "repository": "example/mod",
+    "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+    "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+    "source_repository": "example/mod",
+    "tested_parents": [
+      "2222222222222222222222222222222222222222",
+      "1111111111111111111111111111111111111111"
+    ],
+    "tested_sha": "5555555555555555555555555555555555555555",
+    "tested_tree": "6666666666666666666666666666666666666666"
+  },
+  "kind": "mod-base.ci.selection",
+  "plan_sha256": "5a9992dcdc11f5b2d8c1b1696ec51871c215117e5b974818c41ef5e7c281c961",
+  "profile": "block-pops",
+  "request": {
+    "nonce": "727e77cae7f89d57cb097b3ddcf620b00abc397d1984003bf453f08324342110",
+    "run_attempt": 2,
+    "run_id": 43,
+    "workflow_path": ".github/workflows/on-demand-e2e.yml",
+    "workflow_ref": "example/mod/.github/workflows/on-demand-e2e.yml@refs/heads/master"
+  },
+  "schema_version": 1
+}

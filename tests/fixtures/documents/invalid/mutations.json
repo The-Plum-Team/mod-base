@@ -475,7 +475,7 @@
       "set": [
         [
           "/frames/0/runtime_evidence",
-          "PASS "
+          "PASS \u007f"
         ]
       ]
     },
@@ -510,7 +510,7 @@
       "set": [
         [
           "/frames/0/runtime_evidence",
-          "PASS: cape frame 2 → réf ✓ ○"
+          "PASS: cape frame 2 \u00e2\u2020\u2019 r\u00c3\u00a9f \u00e2\u0153\u201c \u00e2\u2014\u2039"
         ]
       ]
     },
@@ -521,7 +521,7 @@
       "set": [
         [
           "/frames/0/runtime_evidence",
-          "PASS  next"
+          "PASS \u00c2\u2026 next"
         ]
       ]
     },
@@ -533,7 +533,7 @@
       "set": [
         [
           "/lanes/0/pairs/0/runtime_evidence",
-          "x"
+          "x\u007f"
         ]
       ]
     },
@@ -2855,6 +2855,161 @@
           }
         ]
       ]
-    }
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-unknown-command",
+      "set": [
+        [
+          "/targets/0/command",
+          "arbitrary"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-selection",
+      "name": "ci-selection-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-gate-build",
+      "name": "ci-gate-build-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-gate-packaged",
+      "name": "ci-gate-packaged-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-reuse",
+      "name": "ci-reuse-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-validation",
+      "name": "ci-validation-self-reported-success-is-not-a-field",
+      "set": [
+        [
+          "/passed",
+          true
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-execution",
+      "name": "ci-execution-programs-are-not-data-fields",
+      "set": [
+        [
+          "/command",
+          "candidate command"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-kit-installation",
+      "name": "ci-kit-installation-has-no-program-path",
+      "set": [
+        [
+          "/program",
+          "candidate program"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-root-request",
+      "name": "ci-root-request-no-program",
+      "set": [
+        [
+          "/program",
+          "unsafe"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-cannot-select-jobs",
+      "set": [
+        [
+          "/jobs",
+          {}
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-batch",
+      "name": "batch-cannot-approve-publication",
+      "set": [["/approval", true]]
+    },
+    {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-runtime-envelope",
+     "name":"runtime-cannot-approve-native-result", "set":[["/approval",true]]},
+    {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-runtime-root-request",
+     "name":"runtime-root-request-cannot-select-program", "set":[["/program","unsafe"]]}
   ]
 }

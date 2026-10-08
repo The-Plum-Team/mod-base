@@ -5,6 +5,319 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased (planned v1.1.0)
+
+- Add inactive historical PR Build selection/revalidation preserving original controller,
+  newest run/attempt, complete graph and immutable bundle metadata after actual merged-source
+  admission. Retain original plan bytes in live/historical selection and descriptor bytes during
+  historical revalidation; both gates/native/policy/consumer admission remain mandatory.
+
+- Make template caller/extension test fixtures use explicit UTF-8 and authored LF bytes across
+  platforms. Keep malformed UTF-8, CRLF, hostile extensions, managed drift and POSIX ownership
+  assertions intact so locale conversion cannot prevent the intended checks from executing.
+
+- Preserve exact binary file bytes on Windows in the shared bounded reader. Explicit binary
+  descriptors prevent CRLF translation and 0x1A truncation without changing identity, size,
+  type or symlink checks; JSON readers retain the original input bytes too.
+
+- Correct inactive initial reuse-v1 admission for a final merge whose SHA equals the original
+  synthetic tested commit. Keep separate original PR/current subject and producer bindings,
+  direct coherent source seals and all independent K6 admission requirements.
+
+- Bind inactive byte-fenced native lane verification to retained frozen plan, exact complete
+  owning Build and runtime bytes, with pre/post metadata/inventory/directory checks and original
+  caller drift rejection. Execution/context data confer no receipt or native success authority;
+  Add Root-only receipt binding to genuinely retained successful execution and that exact
+  three-input context, using the existing independent validation export freeze with pre/post
+  byte/identity/caller checks. Add Root-only runtime read grants preserving empty regular data
+  through original bounds/ACL/root-last transfer and complete three-input closing checks.
+  Genuine candidate reclamation/privilege handoff and real hosted lifecycle remain required.
+
+- Add inactive Root-only runtime export reclamation through independent copying with original
+  execution, full tracked-source and exact selected owning Build/plan/lane bindings. Retain
+  admission inside publication and after private ownership transfer, including named-root checks.
+  Preserve empty data through bounded private transfer; native second-account verification,
+  genuine provenance and actual hosted/workflow/upload admission remain required.
+
+- Add inactive runtime runner-to-Root execution handoff through existing closed execution-v1
+  data and fixed private publication. Retain exact nonce/source/attempt/three-input context and
+  recheck original private record, inputs and caller snapshots around receipt freezing. Shared
+  writer also rereads staged bytes after closing admission. Fixed runtime Root process/request
+  enrollment, genuine provenance and real hosted/native/workflow authority remain required.
+
+- Add separate initial runtime Root request v1 data with closed original plan/complete owning
+  Build/runtime lane binding, cross-run producer identity and original native caps. Preserve
+  Build root-request v1 compatibility. Add exclusive private publication and Root protected
+  source/input reconstruction plus original request re-admission around runtime sealing.
+  Process/bootstrap enrollment and actual hosted/native authority remain pending.
+
+- Add explicit runtime-validation-v1 bootstrap process routing while preserving legacy Build
+  argument pairs. Admit the fixed target before account lookup, after original kit byte admission.
+  Runtime parent launch retains original context and rechecks program/tools/SDK/request around
+  two independent receipt reads. Original complete runtime/caller enrollment and real hosted
+  native/workflow authority remain required; no status or consumer is activated.
+
+- Add required hosted Linux runtime candidate-copy/read-grant cases with actual source/private
+  ownership, empty data, independent inodes, validator-only reads and hardlink rejection before
+  copying. These are unexecuted on Windows; full byte-fenced/runtime process/native proof remains
+  required and existing hosted prerequisites are unchanged.
+
+- Add inactive closed mod-base.ci.runtime-envelope v1 inventory data with original Build/plan
+  bindings, ordered lane contracts and role/path validation. Preserve per-lane limits inside
+  the complete aggregate and original BP aggregate bounds; previous readers reject the new kind.
+  Bind the exact original runtime/Build selections and verify complete frozen file bytes,
+  preserving empty logs. Copy independently through private atomic publication with source/stage
+  rechecks. Native output mapping, API runtime transport and activation remain required.
+
+- Add inactive ordered batch source authentication with the preserved 50-member cap and exact
+  live draft/head/tree rechecks, and complete-tree patch identities under admitted native path
+  policy, with API merge-base/exact-tree binding and repeated complete source-byte inspection.
+  Enforce existing source entry caps during prefix
+  accumulation and before directory inference. It introduces no batch
+  writer or consumer route. Add separate closed mod-base.ci.batch v1 data for ordered source,
+  patch, parent/commit/result and policy/byte fingerprint bindings; the predecessor rejects it.
+  Bind manifest claims to repeated live API/source bytes and actual squash parent/tree
+  observations, with bounded streamed result-inventory comparison. Local Git application,
+  fixed bot construction, branch leases and settlement remain separate required admission.
+  Add bracketed exact batch branch absence/member observations and fresh rechecks, plus the
+  fixed explicit empty-expect Git lease argument. Reads grant no atomic lock or writer authority.
+  Require bounded exact new-branch Git porcelain observations; identical-SHA up-to-date exit 0
+  cannot prove that this writer created the branch. Actual protected writer integration remains open.
+  Authenticate the exact published ref/final tree around complete source/byte/graph inspection,
+  with original branch/commit binding and closing live member checks. No PR or settlement route
+  is activated by this read-only observation.
+  Bind a distinct ready batch PR's exact base/head synthetic merge and tested tree to the
+  manifest/publication/current sources. This adds no gate success or PR/merge/closure authority.
+  Add separate historical merged PR observations retaining exact original synthetic parents,
+  equal complete final tree and original/current protected history across merge/squash/rebase.
+  Live PR admission stays unchanged; full historical gates, reuse and settlement remain open.
+  Read original full tested seals after merge with retained historical identity and unchanged
+  run/attempt/kit/graph/upload/artifact/canonical record/owning Build checks. Complete coherent
+  native sources and reuse/settlement integration remain separately required.
+  Bind both original full seals as one pair, requiring packaged's whole owning Build descriptor
+  to equal the Build seal's actual bundle, with repeated records/source and caller snapshots.
+  Independently valid mixed generations reject; native payload and reuse admission stay required.
+  Materialize only that pair's exact original complete Build bytes, retaining original identities
+  and shared ZIP/envelope/inventory checks. Recheck both seals/source/caller inside atomic copy
+  before publication and reverify staged bytes; runtime/native/reuse authority remains separate.
+
+- Managed bootstrap bumps now plan template synchronization using the verified target kit before
+  rewriting pins. Ordinary template drift is accepted; planning rejection leaves pins unchanged.
+  Write failures after planning still reject and are not transactional rollback.
+
+- Add inactive mod-base.ci.activation v1 profile data with five closed modes and an 8 KiB reader
+  cap; new-kind compatibility explicitly rejects the predecessor reader. It introduces no
+  consumer activation, owner approval, arbitrary execution selectors or optional Pages fields.
+
+The protected Build/packaged E2E foundation is under implementation and is not enabled in any
+consumer. This is not a published release; the existing runtime version remains v1.0.3 until
+the release change. Pages formats, `ADAPTER_API` and `pixel_metrics_version` remain unchanged.
+
+- Bind selected worker Python/JDK destinations to explicitly enrolled tool roots before
+  dispatch, rejecting external aliases and unusable executable/home types without launch.
+  Protected installer provenance and complete import enrollment remain required.
+- Add separate complete selected-tool byte admission against an independently approved digest,
+  with root/path/mode/link binding, stable bounded single-link streaming and bracketed metadata
+  reinspection. Installer provenance and complete actual runtime closure remain prerequisites.
+- Add an inactive fixed privileged sealing launcher that reauthenticates installed program,
+  selected tool bytes, executable destination and physical context before execution; rechecks
+  them afterward and independently reads the sealed receipt. Keep the 20-second process bound
+  separate from native hooks; installer/runtime provenance and real Linux lifecycle remain open.
+- Add an inactive independent stdlib pre-import guard for the fixed private kit record and
+  copied bytes. It binds explicit approved identity/digest, private metadata, bounded hashes
+  and retained root identity; program/interpreter enrollment and production entry remain pending.
+- Install/reinspect that fixed guard as private root-owned bytes bound to the admitted kit's
+  staged tools lock, with source/stage/hash/original-root checks and exclusive publication.
+  Executing program provenance, interpreter/stdlib enrollment and production dispatch stay open.
+- Add local-only `mod-base.ci.root-request` v1 closed metadata for fixed Build receipt sealing,
+  with separate entry/execution nonces and existing source/plan/envelope bounds. Its physical
+  channel now has exclusive private publication, fixed-copy root reconstruction and a fixed
+  sealing library operation. Add a closed installed-program entry with explicit identity/fence
+  observations and nonce, a fenced configuration-data composition root and no command passthrough.
+  Interpreter/stdlib enrollment, workflow integration and real Linux evidence remain pending.
+- Add an inactive root-only, fixed private kit copy for privileged imports, bound to the
+  separately approved kit digest, independent bytes, whole-tree bounds and root identity.
+  It does not install tools, authorize a pin or provide the privileged runtime entry.
+- Add a local-only kit-installation record v1 with fixed root-owned private publication and
+  strict canonical reading bound to the actual copy's digest/counts/root identity. This is
+  protected-caller data, not a pre-import bootstrap or pin authorization.
+- Add a local-only execution handoff v1 kind and private runner-to-root Build result data
+  channel, with strict binary-log/context/nonce binding and independent receipt freeze.
+  Genuine execution/native validity and enrolled root-program/import provenance remain required.
+- Add inactive pre-plan PR generation/readiness reads bound to the protected executing
+  controller, with independent PR/default rechecks. Draft observations and unavailable merges
+  remain ineligible execution evidence; deferred workflow/status integration stays pending.
+  Complete ready-PR merge authentication now brackets Git object reads with the same retained
+  generation and default/controller checks, rejecting readiness/source drift before returning.
+- Preserve Block Pops' original 8 MiB compiler-report payload limit in the inactive Build
+  envelope, separately from 4 MiB validator outputs and Quick Skin's initial transport cap.
+  Whole-export/JAR/log/archive limits are unchanged; native conformance remains required.
+- Add inactive root-side Build execution/receipt binding: require the retained successful exact
+  input digest and producer attempt, derive hook/unit from the canonical envelope, and inspect
+  read-only input bytes/ownership/inodes before and after independent receipt freeze. Native
+  domain validity, authenticated privilege bridging and final workflow/API authority stay pending.
+- Add inactive local sealed-export ZIP encoding with streamed no-follow reads, fixed stored
+  entries, the original compressed admission cap including ZIP metadata, strict independent
+  extraction/byte verification and atomic private publication. Add bounded child streaming;
+  existing whole-file APIs remain unchanged. This is not a nested GitHub artifact format or
+  proof of actual service ZIP metadata; upload/native/workflow/Linux gates remain pending.
+
+- Add strict `mod-base.build.plan` v1, separate Build adapter API 1, full-execution graph
+  contracts and inert live PR identity checks. These are validation primitives, not a working
+  Build runner or authority to publish successful statuses.
+- Add inactive complete Build numeric-ID transport with latest-attempt/full-graph/upload-window
+  admission, immutable metadata and ZIP digest checks, canonical inventory verification and
+  independent private publication. Add a fixed CI ZIP extraction entry point without widening
+  Pages limits. Newest-run selection, native validity, running target fan-in and workflow
+  integration remain incomplete; required real Linux transport fixtures remain unexecuted.
+- Add inactive same-run/attempt target partition transport for fan-in during Build execution.
+  Require protected target enrollment, a closed partial graph and successful seal/upload job;
+  retain full-graph success requirements for complete bundles and forbid target run mixing.
+  Whole-union/native policy integration and Linux execution evidence remain pending.
+- Add inactive complete ordered target-input preparation with one private atomic publication,
+  successful protected plan/policy, shared source/producer/job authentication and complete-union
+  checks. Enforce original logical entry limits across partitions and additional 4 GiB total
+  compressed-download/derived physical-input bounds. Native/runtime fan-in limits remain
+  unchanged; native aggregate/bundle integration and real Linux results are still pending.
+- Finalize the new inactive Build envelope schema 1 before first release: keep pre-upload
+  producer identity in the envelope and actual API upload window/immutable transport metadata
+  in the selected descriptor. Strict binding checks every producer field and artifact scope.
+  Reject the unreleased draft self-reported window shape; no released schema or Pages format
+  changes, and the predecessor still rejects this new kind. Gate/reuse timing audit is pending.
+- Finalize the new inactive gate/reuse schema 1 record producers before first release with
+  pre-upload identity only. Selected-descriptor binding retains exact writer/kind/unit,
+  distinct source IDs and actual source-before-record upload chronology. Reuse verification
+  start-time authentication, original graph/tree/source proof and final record transport remain
+  required and incomplete. Old local draft future-window shapes reject; released schemas stay unchanged.
+- Add inactive full-gate API chronology binding: every prerequisite finishes before protected
+  gate validation, actual selected/source upload windows match exact successful steps, and all
+  step windows lie within completed jobs. Packaged checks its owning Build's independent full
+  graph and sealing. Final transport/native/status authority and historical reuse remain pending.
+- Add inactive full tested-record numeric-ID transport with exact protected latest attempt,
+  graph/upload/metadata/digest binding, one fixed canonical root JSON file, bracketed source
+  metadata/availability and API chronology, and independent packaged owning-Build enrollment.
+  Preserve existing record/ZIP limits. Source payload/native/status authority, historical reuse
+  and real Linux execution evidence remain pending.
+- Add inactive newest exact PR Build selection using an explicit initial v1 protected generation
+  marker and status-unfiltered listing. Reject a failed newest producer, preserve pending/absent
+  as no bundle, and authenticate the successful attempt/kit/whole graph and immutable bundle.
+  Relist/recheck before return; never use older success or compile for a PR. Native payload proof,
+  and managed caller/canary wiring remain pending.
+- Add inactive 5400-second monotonic PR Build waiting with bounded observations, clipped sleeps,
+  repeated source/newest authentication and rejection of late success. API/corruption/failed-run
+  errors never become absence. Add exact-descriptor newest revalidation around consumption;
+  payload/native proof, production workflow integration and hosted canary remain required.
+- Add inactive latest-PR-Build download composition: bounded waiting, exact newest selection,
+  immutable-ID complete byte transport and newest/source revalidation inside independent atomic
+  publication. A newer producer found at final admission prevents publication; reinspect staged
+  bytes after that admission. Existing descriptor-based transport/copy signatures stay unchanged. Native sealing,
+  workflow activation and real Linux evidence remain pending.
+- Add inactive complete Build byte assembly from the exact ordered same-attempt target input
+  set. Copy declared payloads independently, verify source/stage inventories and whole-union
+  bounds, create one canonical current envelope and atomically publish the private export.
+  Preserve existing regular-file copy behavior and add a selected-file append helper. Native
+  aggregate receipts, ZIP/workflow integration and real Linux results remain pending.
+- Add bounded protected Git source inventories and descriptor-based tracked-source comparison,
+  preserving executable modes, empty files and literal tracked links. Reject undeclared paths,
+  hard links, aliases and changed bytes; generated roots do not exempt tracked leaves.
+  Add live-PR-bracketed immutable GitHub tree inventory admission with exact blob sizes and
+  directory closure, retaining both source and existing transport caps.
+  Extend source/controller reads to exact non-PR subjects in authenticated protected default
+  history, retaining distinct historical subject and live controller identities and freshness
+  checks. Request/run/nonce and full recovery authorization remain separate and unimplemented.
+  Add atomic private tracked-source materialization, with streamed bytes, exclusive output
+  publication and independent staged inventory checks; Git metadata and cache staging remain pending.
+  Isolated Python dispatchers require `-I -B`: isolated mode ignores bytecode environment settings.
+- Add fresh fixed worker-account allocation with account/home reuse rejection, primary-group and
+  sudo-policy checks, and verified private home/tmp/cache directory ownership. Host-boundary
+  lifecycle and complete worker sealing remain inactive and unfinished.
+- Add inactive protected-root candidate Build freeze: terminate the fixed UID, recheck tracked
+  source before and after independent export copying, and transfer only the private new copy
+  to runner ownership. Reject source drift, unsafe original permissions, failed execution and
+  copy identity/content changes. Required real-UID Linux cases remain unexecuted; native
+  validation, protected staging and production integration are still pending.
+- Add inactive fixed read-only plan/Build input binding for protected aggregate verification.
+  Atomically materialize the existing plan kind without new schema fields, grant fixed second-UID
+  reads and recheck exact input metadata/bytes/identity before and after execution. Retain actual
+  execution plus canonical envelope digest for verifier-output freezing. Cross-run/runtime
+  composition, native semantics and actual hosted Linux evidence remain pending.
+- Add inactive target-partition verifier composition using the same fixed read-only inputs and
+  retained execution/digest. Require exact enrolled target, partition output coverage and producer
+  attempt; complete or other-target bundles reject before launch. Align unreleased Build CI unit
+  admission with the existing artifact delimiter rule, rejecting `--` in target/lane IDs early.
+  Native witnesses, runtime/cross-run composition, workflows and hosted evidence remain pending.
+- Add explicit generic policy-runner profiles with native discovery/count parity: strict BP
+  defaults, QS start-root imports/whole-class fixture skips, complete worker results and nonzero
+  executed-suite checks. Fix repeated fixture setup after teardown for reexported classes;
+  retain native method/cleanup skip and expected-failure semantics. Bound discovery/workers and
+  per-unit UTF-8 diagnostic retention. The staged tools lock changes; no JSON schema changes.
+  Discovery/execution require the credentialless worker and verified kit imports. Full native
+  policy parity, protected integration and required real Linux UID cases remain pending.
+- Add inert protected-controller Git tree/blob source admission against native approved paths,
+  configured SHA-256 and regular Git modes, bracketed by live PR checks. Minimal import copies
+  reject changed/undeclared files and Git metadata. Additional code-source caps are 4 MiB per
+  file and 64 MiB total; complete import-root provenance and lifecycle integration remain pending.
+  Materialize retained protected source bytes into exclusive no-follow regular files in a
+  private stage, preserve Git executable modes and independently verify before atomic publication;
+  existing outputs are never replaced. Native validator execution and import enrollment remain pending.
+- Add fixed protected-controller source read handoff, with authenticated host/accounts/layout,
+  candidate termination, exact byte/mode checks before access and normalized byte/blob checks
+  afterward. Only the fixed validator group receives reads; files become 0640 and root 0750.
+  The additive source permission helper supports empty Python sources and repository paths;
+  existing export handoff keeps rejecting empty artifacts. Real Linux access evidence,
+  complete import provenance and native execution/sealing remain pending.
+- Add closed second-account verifier execution with protected dispatcher/timeout binding,
+  exact target/lane selection, source byte/permission checks before and after, existing tool
+  fencing and final UID termination. Recheck all source owner/group/modes and absent ACLs;
+  hashes alone do not prove read-only code. Execution remains inactive and requires native
+  inputs/import provenance/conformance; zero exit/logs never authorize receipts or uploads.
+- Add new inactive `mod-base.ci.validation` schema 1, explicitly rejected by the predecessor
+  reader. Bind exact protected plan/hook/unit/run/attempt/config/input context and report
+  contracts; independently verify canonical strict native JSON and exact byte inventory.
+  Add private independent verifier-output copying with staged revalidation and exclusive
+  publication. Native closed-schema semantics, UID reclamation/integration and real hosted
+  validation remain required; existing gate/envelope/Pages shapes are unchanged.
+- Add protected-root fixed verifier output freezing: terminate/lock the actual verifier,
+  admit its private 0700/0600 tree, independently copy exact context/reports and transfer only
+  the new protected copy to runner-private ownership with final metadata/content/host checks.
+  The verifier original is never chowned. Native semantics, input/import provenance, root
+  dispatch and final gate/upload integration remain pending; existing read handoffs are unchanged.
+- Add the initial hosted-Linux runner-home fence and pre-dispatch identity/mode recheck,
+  private-cwd execution and explicit host-descriptor closure. Required Linux probes cover
+  inert host files/processes, proc memory/environment, ptrace and inherited descriptors;
+  hosted execution and the complete sealing lifecycle remain unverified.
+- Add bounded host tool-tree permission/identity closure checks, including link targets and
+  ancestors, with Python/JDK path binding and full reinspection before isolated dispatch.
+  Mutable or foreign-owned installations reject. Installer provenance, complete import-root
+  enrollment, native observations and real hosted validation remain pending.
+- Add `mod-base.build.config`, `mod-base.build.envelope`, `mod-base.ci.selection`, `mod-base.ci.gate` and
+  `mod-base.ci.reuse` v1 with strict immutable descriptors, complete plan coverage and direct
+  original-source reference checks. Separate `mb-ci-*` names remain outside Pages rotation.
+  Plans retain all declared native reports and bounded logs rather than requiring one report
+  per lane. Add exact target-union and canonical frozen-byte inventory checks. Worker freezing,
+  API/domain authentication, workflow integration and reuse execution are still pending.
+  Add atomic independent Build export copying with streamed hash comparison and staged
+  inventory revalidation; ownership reclamation and second-account native sealing remain pending.
+  Add protected Linux-root-only read-group handoff for fresh private copies, removing inherited
+  ACLs and opening root traversal last; identity admission and full lifecycle wiring remain pending.
+  Bind Build read handoff to the fixed copy and actual runner/validator accounts, with candidate
+  termination, copy/envelope/host rechecks and private failure cleanup. Native validation and
+  the complete protected lifecycle remain inactive and unfinished.
+- Replace universal predecessor readability with an exhaustive per-kind ledger, bidirectional
+  unchanged-format checks and explicit unsupported-kind rejection against a digest-bound
+  v1.0.3 reader snapshot. Existing kinds remain schema 1.
+- Start the inactive disposable-account port with explicit bounded environments, dedicated
+  account binding and real/effective UID termination/locking. Add required hosted Linux account
+  integration tests to every Python CI leg. The complete worker lifecycle and Linux proof remain
+  pending; no consumer begins executing through these primitives.
+- Add inactive bounded dispatcher execution, failure/cancellation cleanup and orphan-pipe
+  termination. Preserve raw bounded diagnostics and render logs with terminal/modern/legacy
+  Actions-command escaping; a visible prefix alone does not neutralize legacy commands.
+  Account termination rechecks and kills processes after lock/expiry under the original
+  sweep deadline; pre-lock quiescence alone cannot authorize sealing.
+- Managed `docs/ai/shared/PUBLIC-EVIDENCE.md` clarifies per-kind schema evolution and strict
+  optional-field compatibility. A future kit bump synchronizes it; no consumer is changed here.
+
 ## v1.0.3
 
 A front-end release: every validated capture of the E2E gallery has its own URL. Schema versions

@@ -19,6 +19,17 @@ from mod_base.model import grammar
 PAGES_WORKFLOW_NAME = "Project site"
 PAGES_WORKFLOW_PATH = ".github/workflows/pages.yml"
 PAGES_EVENTS = frozenset({"workflow_dispatch", "schedule"})
+
+# BuildGraphV1 / PackagedGraphV1 internal names; public App contexts are caller-owned.
+CI_BUILD_CALL = "Shared Build"
+CI_PACKAGED_CALL = "Shared Packaged E2E"
+CI_BUILD_JOBS = {"plan": "Plan protected Build", "policy": "Verify protected policy",
+                 "target": "Compile target {id}", "assemble": "Seal complete Build bundle",
+                 "gate": "Verify complete Build"}
+CI_PACKAGED_JOBS = {"input": "Authenticate exact Build", "lane": "Run packaged lane {id}",
+                    "aggregate": "Seal complete packaged results", "gate": "Verify complete packaged E2E"}
+CI_SEAL_STEP = "Validate frozen native exports"
+CI_UPLOAD_STEP = "Upload sealed outputs"
 PAGES_CRON = "43 * * * *"
 OPERATIONS = ("manual", "deploy", "family", "rotate")
 #: The ``operation`` the caller passes to ``publish.yml`` (a schedule becomes ``recovery``).

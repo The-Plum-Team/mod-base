@@ -1,5 +1,10 @@
 # Schemas (v1)
 
+The inactive Build config/plan/envelope and CI selection/gate/reuse/validation/execution/kit-installation/root-request/runtime-root-request/activation/batch/runtime-envelope v1 kinds have their exact
+field/reference rules in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md). They are separate from `mod-base.build`, the Pages publication
+record. The exhaustive per-kind compatibility ledger and immutable predecessor-reader fixtures
+are described there. Existing Pages document shapes remain unchanged.
+
 Every document the kit reads or writes, its exact fields and the structural rules
 `mod_base.model.documents` (and `mod_base.config` for the config) enforce. The validators are
 the normative definition; this page explains them. A valid example of every kind lives in
@@ -652,3 +657,46 @@ Validated by `mod_base.config.validate_config` (structure) and `load_config` (re
 Repository facts (skipped only by rotation's data-only load): the adapter, fixtures module, source
 and family producer workflows exist as regular files, every `python_path` entry is a real
 directory, no checked path crosses a symlink, and the icon rules hold.
+
+## Batch manifest data v1
+
+`mod-base.ci.batch` writes/reads 1. This is a new kind (previous null); the archived v1.0.3
+reader rejects it. The strict JSON decoder cap is 64 MiB; whole-document member/file/path
+caps also apply before nested patch validation. There are 1..50 distinct ordered members.
+The closed top level has kind, schema_version, repository, profile (quick-skin/block-pops),
+base_branch, base_sha, base_tree, branch (nonempty batch/*), policy_sha256, members, result_tree.
+Every member has pr_number, source_repository (the same repository), head_branch (neither
+base nor batch/*), head_sha, head_tree, exact Boolean draft, merge_base_sha, merge_base_tree,
+merge_base_bytes_sha256, head_bytes_sha256, patch, parent_sha, squash_sha and result_tree.
+Each parent is the preceding squash SHA, starting with base_sha; squash SHAs are distinct
+and differ from the base. Each result differs from its predecessor; the final result equals
+the top-level result. These are data equalities, not verification of actual Git objects.
+
+Patches are nonempty ordered unique canonical repository paths with no .git component or
+case alias. Each entry has path, before and after; sides are null or exactly mode, size,
+git_blob. Both-null/equal sides reject. Modes are 100644/100755/120000, regular sizes may be
+zero, literal links must be 1..4096 bytes, and one blob cannot declare different sizes.
+Existing source file/tree limits and combined batch file/prefix/path limits remain in force.
+The two byte fingerprints use the complete-source algorithm in BUILD-PROTOCOL, not just
+patch bytes. No execution selector, approval, secret, permission or status is accepted.
+Native ordinary-path/policy admission, real API/byte provenance, safe Git application and
+single-parent commit verification, empty branch leases and immutable settlement are separate
+mandatory requirements. Parsing this manifest grants no writer or consumer authority.
+
+## Profile activation data v1
+
+The new inactive mod-base.ci.activation kind writes/reads 1, with no fictional predecessor.
+The exhaustive compatibility ledger marks new-kind/previous null; the v1.0.3 reader rejects it.
+The fixed prospective location is site/mod-base-build-activation.json. Exact keys are kind,
+schema_version, repository (repository grammar, at most 201 characters), profile (quick-skin or
+block-pops), and mode (disabled, shadow, shared-build, shared-build-and-e2e, reviewed-rollback).
+Unknown/missing keys, wrong types/versions and unknown profiles/modes reject. Its central
+MAX_CI_ACTIVATION_BYTES cap is 8 KiB. No pin, template, job, permission, secret, approval,
+extension/deferral, matrix or scenario selector is accepted. Generic strict document decoding
+applies, including duplicate/non-finite/oversized input rejection.
+
+This is data shape only. Mode labels confer no owner approval or execution/status authority.
+Protected admission must bind repository/profile to the original native configuration, admit the
+exact current-head protected transition and predecessors, and verify fixed managed caller bytes.
+Profile-aware template/pin/bootstrap wiring, approved transitions and reviewed rollback remain
+incomplete; existing legacy consumers do not require this manifest or become activated here.

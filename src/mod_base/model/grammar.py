@@ -35,6 +35,22 @@ VERSION = re.compile(r"^(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9]
 #: Opaque evidence identifiers: frame_id, capture_id, comparison_id, pair_id, reference ids.
 IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$")
 ARTIFACT_NODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$")
+CI_UNIT_ID = re.compile(r"^(?!.*--)[a-z0-9][a-z0-9._-]{0,79}$")
+CI_ENVELOPE_NAME = "ci-envelope.json"
+CI_ARCHIVE_NAME = "ci-export.zip"
+CI_GATE_NAME = "ci-gate.json"
+CI_PLAN_NAME = "ci-plan.json"
+CI_VALIDATION_NAME = "ci-validation.json"
+CI_EXECUTION_NAME = "ci-execution.json"
+CI_KIT_INSTALLATION_NAME = "ci-kit-installation.json"
+CI_BOOTSTRAP_PROGRAM_NAME = "ci_privileged_bootstrap.py"
+CI_ROOT_REQUEST_NAME = "ci-root-request.json"
+CI_RUNTIME_ROOT_REQUEST_NAME = "ci-runtime-root-request.json"
+CI_RUNTIME_FREEZE_OPERATION = "runtime-validation-v1"
+CI_PR_BUILD_TITLE = re.compile(
+    r"^mb-ci-build-v1 profile=(?P<profile>quick-skin|block-pops) pr=(?P<pr>[1-9][0-9]{0,18}) "
+    r"head=(?P<head>[0-9a-f]{40}) base=(?P<base>[0-9a-f]{40}) tested=(?P<tested>[0-9a-f]{40})$"
+)
 MINECRAFT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$")
 LOADER = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SCENARIO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
@@ -147,6 +163,18 @@ def is_bundle_path(value: object) -> bool:
     if len(parts) > limits.MAX_BUNDLE_PATH_DEPTH:
         return False
     return all(_PATH_COMPONENT.fullmatch(part) is not None for part in parts)
+
+
+CI_BATCH_BRANCH_PREFIX = 'batch/'
+CI_RUNTIME_ENVELOPE_NAME = 'ci-runtime-envelope.json'
+CI_RUNTIME_INPUT_FORMAT = 'mod-base.runtime-validation-input-v1'
+
+
+def is_batch_branch(value: object) -> bool:
+    """A bounded batch/* Git branch with no invalid ref components or final dot/slash."""
+    return (is_match(BRANCH, value) and value.startswith(CI_BATCH_BRANCH_PREFIX)
+            and not value.endswith(('/', '.'))
+            and all(not part.startswith('.') and not part.endswith('.lock') for part in value.split('/')))
 
 
 def is_repo_path(value: object) -> bool:
@@ -361,6 +389,90 @@ def require_artifact_name(name: object, kind: str) -> ArtifactName:
 
 
 def is_kit_artifact_name(name: object) -> bool:
-    """True only for names this kit may create, list, download or retire."""
+    """True only for names the Pages pipeline may create, list, download or retire."""
 
     return parse_artifact_name(name) is not None
+
+
+# Build artifacts have their own closed grammar. The Pages parser deliberately does not
+# recognize them: Pages rotation must not acquire authority over these retained source bytes.
+CI_ARTIFACT_PREFIXES = {
+    "target": "mb-ci-target", "build": "mb-ci-build", "runtime": "mb-ci-runtime",
+    "results": "mb-ci-results", "tested": "mb-ci-tested", "reuse": "mb-ci-reuse",
+}
+
+
+@dataclass(frozen=True)
+class CIArtifactName:
+    kind: str
+    name: str
+    run_id: int
+    run_attempt: int
+    unit_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CIPrBuildTitle:
+    profile: str
+    pr_number: int
+    head_sha: str
+    base_sha: str
+    tested_sha: str
+
+
+def ci_pr_build_title(*, profile: str, pr_number: int, head_sha: str, base_sha: str, tested_sha: str) -> str:
+    """Protected PR-generation selection marker; never evidence or an App context."""
+
+    if type(profile) is not str or profile not in ("quick-skin", "block-pops"):
+        raise MbError("invalid protected Build profile")
+    require_positive_int(pr_number, "PR number")
+    for sha in (head_sha, base_sha, tested_sha):
+        require_sha1(sha)
+    return f"mb-ci-build-v1 profile={profile} pr={pr_number} head={head_sha} base={base_sha} tested={tested_sha}"
+
+
+def parse_ci_pr_build_title(value: object) -> CIPrBuildTitle | None:
+    if not isinstance(value, str):
+        return None
+    match = CI_PR_BUILD_TITLE.fullmatch(value)
+    if match is None or int(match["pr"]) > limits.MAX_RUN_ID:
+        return None
+    return CIPrBuildTitle(match["profile"], int(match["pr"]), match["head"], match["base"], match["tested"])
+
+
+def ci_artifact_name(kind: str, run_id: int, run_attempt: int, unit_id: str | None = None) -> str:
+    """Attempt-specific CI names; a name never establishes a tested identity by itself."""
+
+    if not isinstance(kind, str) or kind not in CI_ARTIFACT_PREFIXES:
+        raise _fail("unknown CI artifact kind")
+    require_positive_int(run_id, "CI run id")
+    require_positive_int(run_attempt, "CI attempt", maximum=limits.MAX_RUN_ATTEMPT)
+    if kind in {"target", "runtime", "tested"}:
+        require(CI_UNIT_ID, unit_id, "CI unit id")
+        if kind == "tested" and unit_id not in {"build", "packaged"}:
+            raise _fail("tested CI artifact must name build or packaged")
+    elif unit_id is not None:
+        raise _fail("aggregate CI artifact has no unit id")
+    name = f"{CI_ARTIFACT_PREFIXES[kind]}--{run_id}--a{run_attempt}"
+    return _finish(name + (f"--{unit_id}" if unit_id is not None else ""))
+
+
+def parse_ci_artifact_name(name: object) -> CIArtifactName | None:
+    if (not isinstance(name, str) or not name.isascii()
+            or len(name) > limits.MAX_ARTIFACT_NAME_BYTES):
+        return None
+    parts = name.split("--")
+    if len(parts) not in {3, 4}:
+        return None
+    prefixes = {prefix: kind for kind, prefix in CI_ARTIFACT_PREFIXES.items()}
+    kind = prefixes.get(parts[0])
+    run_id, attempt = _parse_run_id(parts[1]), _parse_attempt(parts[2])
+    if kind is None or run_id is None or attempt is None:
+        return None
+    unit = parts[3] if len(parts) == 4 else None
+    try:
+        if ci_artifact_name(kind, run_id, attempt, unit) != name:
+            return None
+    except MbError:
+        return None
+    return CIArtifactName(kind, name, run_id, attempt, unit)

@@ -1,0 +1,195 @@
+"""Pre-plan readiness reads cannot promote draft observations into execution evidence."""
+
+import copy
+import dataclasses
+import unittest
+from unittest.mock import patch
+
+from mod_base.build_ci.authenticate import authenticate_pr_identity, read_pr_generation
+from mod_base.errors import MbError
+from tests.helpers import ci_plan
+from tests.test_ci_protocol import seeded_pr
+
+
+class PrGenerationTests(unittest.TestCase):
+    def seed(self, *, draft=False, merge=True):
+        plan, api, pr = seeded_pr()
+        pr["draft"] = draft
+        if not merge:
+            pr["merge_commit_sha"] = None
+        path = f"/repos/{api.repository}/pulls/7"
+        api.add_response(path, pr)
+        return api, pr, path, plan["identity"]["controller_sha"]
+
+    def test_ready_and_draft_reads_need_no_merge_object_or_worker(self):
+        for draft in (False, True):
+            for merge in (False, True):
+                api, pr, path, controller = self.seed(draft=draft, merge=merge)
+                with patch.object(api, "get_json", wraps=api.get_json) as reads:
+                    observed = read_pr_generation(api, pr_number=7, controller_sha=controller)
+                with self.subTest(draft=draft, merge=merge):
+                    self.assertEqual(observed.draft, draft)
+                    self.assertEqual(observed.merge_sha, pr["merge_commit_sha"])
+                    self.assertEqual(observed.base_sha, controller)
+                    self.assertEqual(observed.head_sha, pr["head"]["sha"])
+                    self.assertEqual(observed.base_branch, "master")
+                    self.assertEqual(observed.controller_tree, "8" * 40)
+                    self.assertEqual(observed.repository, api.repository)
+                    self.assertEqual(observed.pr_number, 7)
+                    self.assertEqual(observed.head_branch, pr["head"]["ref"])
+                    self.assertEqual(sum(call.args[0] == path for call in reads.call_args_list), 2)
+                    self.assertFalse(any("/git/" in call.args[0] for call in reads.call_args_list))
+                    self.assertEqual(api.mutations, [])
+                    with self.assertRaises(dataclasses.FrozenInstanceError):
+                        observed.draft = not draft
+
+    def test_malformed_inputs_reject_before_any_api_read(self):
+        api, _, _, controller = self.seed()
+        for number, sha in ((True, controller), (0, controller), (-1, controller),
+                            ("7", controller), (7, "bad"), (7, None)):
+            with patch.object(api, "get_json") as reads, self.subTest(number=number, sha=sha):
+                with self.assertRaises(MbError):
+                    read_pr_generation(api, pr_number=number, controller_sha=sha)
+                reads.assert_not_called()
+
+    def test_closed_or_foreign_or_malformed_generation_refuses(self):
+        changes = [lambda p: p.update(number=True), lambda p: p.update(number=8),
+                   lambda p: p.update(state="closed"), lambda p: p.update(draft=1),
+                   lambda p: p.pop("draft"), lambda p: p.pop("merge_commit_sha"),
+                   lambda p: p.update(merge_commit_sha="bad"), lambda p: p.update(head=None),
+                   lambda p: p["head"].update(repo=None),
+                   lambda p: p["head"]["repo"].update(full_name="fork/mod"),
+                   lambda p: p["base"]["repo"].update(full_name="foreign/mod"),
+                   lambda p: p["base"].update(ref="other"), lambda p: p["base"].update(sha="f" * 40),
+                   lambda p: p["head"].update(sha=True), lambda p: p["head"].update(ref="../unsafe")]
+        for index, change in enumerate(changes):
+            api, pr, path, controller = self.seed(draft=True, merge=False)
+            change(pr)
+            api.add_response(path, pr)
+            with self.subTest(index=index), self.assertRaises(MbError):
+                read_pr_generation(api, pr_number=7, controller_sha=controller)
+
+    def test_readiness_and_source_changes_on_same_head_are_not_reused(self):
+        changes = [lambda p: p.update(draft=False), lambda p: p.update(state="closed"),
+                   lambda p: p["head"].update(sha="e" * 40),
+                   lambda p: p["head"].update(ref="renamed"),
+                   lambda p: p.update(merge_commit_sha="e" * 40),
+                   lambda p: p["base"].update(sha="e" * 40)]
+        for index, change in enumerate(changes):
+            api, pr, path, controller = self.seed(draft=True)
+            original = api.get_json
+            seen = 0
+            def read(endpoint, **kwargs):
+                nonlocal seen
+                if endpoint == path:
+                    seen += 1
+                    if seen == 2:
+                        change(pr)
+                        api.add_response(path, pr)
+                return original(endpoint, **kwargs)
+            with patch.object(api, "get_json", side_effect=read), self.subTest(index=index):
+                with self.assertRaises(MbError):
+                    read_pr_generation(api, pr_number=7, controller_sha=controller)
+
+    def test_stale_controller_and_late_default_tree_movement_refuse(self):
+        api, _, _, controller = self.seed()
+        with self.assertRaises(MbError):
+            read_pr_generation(api, pr_number=7, controller_sha="e" * 40)
+        for tree in ("8" * 40, "e" * 40):
+            api, _, _, controller = self.seed()
+            original = api.get_json
+            seen = 0
+            def read(endpoint, **kwargs):
+                nonlocal seen
+                response = original(endpoint, **kwargs)
+                if "/branches/" in endpoint:
+                    seen += 1
+                    if seen == 2:
+                        response["commit"]["sha"] = "e" * 40 if tree == "8" * 40 else controller
+                        response["commit"]["commit"]["tree"]["sha"] = tree
+                return response
+            with patch.object(api, "get_json", side_effect=read), self.subTest(tree=tree):
+                with self.assertRaises(MbError):
+                    read_pr_generation(api, pr_number=7, controller_sha=controller)
+
+    def test_api_error_on_either_read_is_not_absence_or_deferral(self):
+        for failing_read in (1, 2):
+            api, _, path, controller = self.seed(draft=True)
+            original = api.get_json
+            seen = 0
+            failure = MbError("unavailable API")
+            def read(endpoint, **kwargs):
+                nonlocal seen
+                if endpoint == path:
+                    seen += 1
+                    if seen == failing_read:
+                        raise failure
+                return original(endpoint, **kwargs)
+            with patch.object(api, "get_json", side_effect=read), self.subTest(read=failing_read):
+                with self.assertRaises(MbError) as caught:
+                    read_pr_generation(api, pr_number=7, controller_sha=controller)
+                self.assertIs(caught.exception, failure)
+
+    def test_retained_generation_does_not_alias_returned_api_dict(self):
+        api, pr, path, controller = self.seed()
+        original = api.get_json
+        shared = copy.deepcopy(pr)
+        def read(endpoint, **kwargs):
+            return shared if endpoint == path else original(endpoint, **kwargs)
+        with patch.object(api, "get_json", side_effect=read):
+            observed = read_pr_generation(api, pr_number=7, controller_sha=controller)
+        shared["head"].clear()
+        shared["draft"] = True
+        self.assertEqual(observed.head_sha, pr["head"]["sha"])
+        self.assertFalse(observed.draft)
+
+    def test_default_branch_change_rejects_without_following_new_branch(self):
+        api, _, _, controller = self.seed()
+        original = api.get_json
+        seen = 0
+        paths = []
+        def read(endpoint, **kwargs):
+            nonlocal seen
+            paths.append(endpoint)
+            response = original(endpoint, **kwargs)
+            if endpoint == f"/repos/{api.repository}":
+                seen += 1
+                if seen == 2:
+                    response["default_branch"] = "renamed"
+            return response
+        with patch.object(api, "get_json", side_effect=read), self.assertRaises(MbError):
+            read_pr_generation(api, pr_number=7, controller_sha=controller)
+        self.assertFalse(any(endpoint.endswith("/branches/renamed") for endpoint in paths))
+
+    def test_observation_does_not_replace_full_ready_merge_admission(self):
+        for draft, merge in ((True, True), (True, False), (False, False)):
+            api, _, _, controller = self.seed(draft=draft, merge=merge)
+            read_pr_generation(api, pr_number=7, controller_sha=controller)
+            with self.subTest(draft=draft, merge=merge), self.assertRaises(MbError):
+                authenticate_pr_identity(api, ci_plan()["identity"])
+
+    def test_full_merge_authentication_rechecks_generation_after_git_read(self):
+        changes = [lambda a, p, path: p.update(draft=True),
+                   lambda a, p, path: p["head"].update(sha="e" * 40),
+                   lambda a, p, path: p.update(merge_commit_sha="e" * 40),
+                   lambda a, p, path: p.update(state="closed"),
+                   lambda a, p, path: p["base"].update(sha="e" * 40),
+                   lambda a, p, path: a.set_branch("master", "e" * 40, "e" * 40),
+                   lambda a, p, path: a.add_response(f"/repos/{a.repository}",
+                       {"full_name": a.repository, "default_branch": "renamed"})]
+        for index, change in enumerate(changes):
+            api, pr, path, _ = self.seed()
+            original = api.get_json
+            def read(endpoint, **kwargs):
+                response = original(endpoint, **kwargs)
+                if "/git/commits/" in endpoint:
+                    change(api, pr, path)
+                    api.add_response(path, pr)
+                return response
+            with patch.object(api, "get_json", side_effect=read), self.subTest(index=index):
+                with self.assertRaises(MbError):
+                    authenticate_pr_identity(api, ci_plan()["identity"])
+
+
+if __name__ == "__main__":
+    unittest.main()

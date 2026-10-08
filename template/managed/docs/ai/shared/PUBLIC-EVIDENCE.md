@@ -75,9 +75,16 @@ https://github.com/The-Plum-Team/mod-base/tree/main/docs
 
 - Every document is strict UTF-8 JSON of a `mod-base.*` kind with a `schema_version`: no duplicate
   keys, no NaN or Infinity, no unknown keys, exact types. Written documents are canonical JSON.
-- A kit release N reads schema versions N and N-1 and writes N. Within one schema version only
-  optional fields may be added; a new field is validated whenever it is present. `ADAPTER_API`
-  follows the same N/N-1 rule.
+- Each document kind reads its current schema version N and N-1 and writes N; schema versions
+  are independent of kit release versions. New kinds start at 1 and advertise their required
+  capability; older readers reject unsupported kinds. A per-kind compatibility ledger tests
+  every current writer of an unchanged common kind/version with the predecessor reader, and
+  every supported predecessor fixture with the current reader. A version change needs an
+  explicit compatibility decision and rejection tests for unsupported formats.
+- Within one schema version only optional fields may be added, validated whenever present.
+  Strict unknown-key rejection still applies: optionality alone does not make an old reader
+  accept a new key. Writers omit it until all supported readers understand it, or make an
+  explicit schema/capability version decision. Adapter protocols independently follow N/N-1.
 - Generations use only `mb-*` artifact names built by the kit's grammar. There are no converters:
   legacy artifacts are never read and never deleted, and they expire under their own retention.
 - `pixel_metrics_version` must equal the kit's current version. A metric algorithm change bumps it

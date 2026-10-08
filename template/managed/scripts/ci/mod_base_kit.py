@@ -1113,7 +1113,8 @@ def bump(repo: Path, version: str, environ: Mapping[str, str], get_json: Callabl
     """Pin ``repo`` to the released kit ``version`` and resynchronize its managed files.
 
     Before any file changes, the tag is resolved and verified like ``verify --network`` and the
-    new kit is fetched into the verified user cache; every pin line is then rewritten and the
+    new kit is fetched into the verified user cache and its sync plan is checked without writing;
+    every pin line is then rewritten and the
     managed files are resynchronized by ``template sync --write`` of the newly pinned kit.
     """
 
@@ -1123,12 +1124,30 @@ def bump(repo: Path, version: str, environ: Mapping[str, str], get_json: Callabl
     target = Pin(resolve_tag(version, get_json), version, ())
     require_reachable(target.sha, get_json)
     resolution = cached_kit(target, environ, repo)
+    # Planning drift is expected across releases; a rejected plan must leave the old pin intact.
+    # Invoke the verified target's library rather than its CLI, whose exit 2 conflates drift and
+    # rejection. Both library interfaces are present in predecessor kits; no new CLI flag is used.
+    planning = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from mod_base.errors import run_main\n"
+        "from mod_base.template.tool import sync\n"
+        "def main():\n"
+        "    sync(Path(sys.argv[1]), kit_root=Path(sys.argv[2]), write=False)\n"
+        "    return 0\n"
+        "raise SystemExit(run_main(main))\n"
+    )
+    environment = kit_environment(resolution)
+    result = subprocess.run([sys.executable, "-P", "-c", planning, str(repo), str(resolution.root)],
+                            env=environment, stdin=subprocess.DEVNULL, check=False)
+    if result.returncode != 0:
+        raise KitError(f"template sync planning failed with exit {result.returncode}; pin unchanged")
     rewrite_pin(repo, target)
     pin = parse_pin(repo)
     if (pin.sha, pin.version) != (target.sha, target.version):
         raise KitError("the rewritten pin is inconsistent")
     command = [sys.executable, "-P", "-m", "mod_base", "template", "sync", "--repo", str(repo), "--write"]
-    result = subprocess.run(command, env=kit_environment(resolution), stdin=subprocess.DEVNULL, check=False)
+    result = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL, check=False)
     if result.returncode != 0:
         raise KitError(f"template sync --write failed with exit {result.returncode}")
     return pin

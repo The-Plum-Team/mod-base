@@ -731,10 +731,237 @@ def kit_stamp() -> dict[str, Any]:
             "tree_digest": f"sha256:{h('kit-tree')}"}
 
 
+def ci_plan() -> dict[str, Any]:
+    """Synthetic protocol fixture; native mod parity has its own immutable fixtures."""
+
+    from mod_base.build_ci.protocol import plan_sha256
+
+    repository = "example/mod"
+    document = {
+        "kind": "mod-base.build.plan", "schema_version": 1, "build_adapter_api": 1,
+        "profile": "block-pops",
+        "identity": {
+            "repository": repository, "source_repository": repository, "pr_number": 7,
+            "head_sha": "1" * 40, "head_branch": "feature/example",
+            "base_sha": "2" * 40, "base_branch": "master",
+            "controller_sha": "2" * 40, "controller_workflow": ".github/workflows/build-gate.yml",
+            "controller_ref": f"{repository}/.github/workflows/build-gate.yml@refs/heads/master",
+            "kit": {"repository": "The-Plum-Team/mod-base", "sha": "3" * 40,
+                    "version": "1.1.0", "tree_digest": "sha256:" + "4" * 64},
+            "tested_sha": "5" * 40, "tested_tree": "6" * 40, "tested_parents": ["2" * 40, "1" * 40],
+            "policy_sha256": h("policy"), "inventory_blob": "7" * 40, "inventory_sha256": h("inventory"),
+            "scenario_sha256": h("scenarios"), "runtime_selection_sha256": h("full"), "graph_version": 1,
+        },
+        "targets": [{"id": "target-a", "java": 21, "native_contract_sha256": h("target-contract"),
+                     "outputs": [{"path": f"staged/lane-a/{role}.{'jar' if role in ('production', 'harness') else 'json'}",
+                                  "lane_id": "lane-a", "role": role}
+                                 for role in ("production", "harness", "sbom", "native-report")]}],
+        "lanes": [{"id": "lane-a", "target_id": "target-a", "native_contract_sha256": h("lane-contract"),
+                   "obligations": ["scenario/example/server/probe"]}],
+    }
+    document["plan_sha256"] = plan_sha256(document)
+    return document
+
+
+def ci_producer(gate: str = "build") -> dict[str, Any]:
+    workflow = ".github/workflows/build-gate.yml" if gate == "build" else ".github/workflows/on-demand-e2e.yml"
+    return {"run_id": 42 if gate == "build" else 43, "run_attempt": 2,
+            "workflow_path": workflow, "workflow_ref": f"example/mod/{workflow}@refs/heads/master",
+            "api_head_sha": "2" * 40, "event": "pull_request_target", "graph_sha256": h(gate + "-graph"),
+            "upload_window": {"started_at": "2026-10-07T10:01:00Z", "completed_at": "2026-10-07T10:02:00Z"}}
+
+
+def ci_config() -> dict[str, Any]:
+    files = ["scripts/ci/mod_base_build_adapter.py", "scripts/ci/mod_base_build_dispatch.py", "scripts/ci/pr_gate.py"]
+    return {"kind": "mod-base.build.config", "schema_version": 1, "repository": "example/mod",
+            "profile": "block-pops", "build_adapter_api": 1,
+            "adapter": {"path": files[0], "dispatcher": files[1], "policy": files[2],
+                        "files": [{"path": name, "sha256": h(name)} for name in sorted(files)]},
+            "timeouts": {"policy_seconds": 3600, "target_seconds": 7200,
+                         "runtime_seconds": 1800, "validator_seconds": 600}}
+
+
+def ci_validation(hook: str = "verify_build", unit_id: str | None = None) -> dict[str, Any]:
+    """Inert verifier-output fixture; actual native semantics are separate conformance evidence."""
+    plan = ci_plan()
+    from mod_base.model.canonical import canonical_json
+    units = plan["lanes"] if hook == "verify_runtime" else plan["targets"]
+    if hook != "verify_build":
+        units = [unit for unit in units if unit["id"] == unit_id]
+    return {"kind": "mod-base.ci.validation", "schema_version": 1,
+            "identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "hook": hook, "unit_id": unit_id, "run_id": 42, "run_attempt": 2,
+            "source_config_sha256": h("configbytes"), "input_sha256": h("inputs"),
+            "reports": [{"unit_id": unit["id"], "native_contract_sha256": unit["native_contract_sha256"],
+                         "path": f"reports/{unit['id']}.json",
+                         "size": len(canonical_json({"fixture_unit": unit["id"]})),
+                         "sha256": h(canonical_json({"fixture_unit": unit["id"]}).decode())} for unit in units]}
+
+
+def ci_descriptor(kind: str = "build", *, gate: str = "build", unit_id: str | None = None,
+                  artifact_id: int = 100) -> dict[str, Any]:
+    plan = ci_plan()
+    producer = ci_producer(gate)
+    return {"identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "producer": producer,
+            "artifact": {"id": artifact_id, "name": grammar.ci_artifact_name(kind, producer["run_id"], 2, unit_id),
+                         "digest": "sha256:" + h(kind + "-zip"), "size": 512,
+                         "created_at": "2026-10-07T10:01:30Z", "expires_at": "2026-10-14T10:01:30Z"}}
+
+
+def ci_envelope() -> dict[str, Any]:
+    plan = ci_plan()
+    files = sorted(({**output, "sha256": h(output["path"]), "size": 128}
+                    for target in plan["targets"] for output in target["outputs"]), key=lambda item: item["path"])
+    return {"kind": "mod-base.build.envelope", "schema_version": 1, "identity": plan["identity"],
+              "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+              "producer": {key: value for key, value in ci_producer().items() if key != "upload_window"},
+            "scope": "complete", "target_id": None, "files": files,
+            "native_reports": [item["path"] for item in files if item["role"] == "native-report"]}
+
+
+def ci_selection() -> dict[str, Any]:
+    plan = ci_plan()
+    request = ci_producer("packaged")
+    return {"kind": "mod-base.ci.selection", "schema_version": 1, "identity": plan["identity"],
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "request": {key: request[key] for key in ("run_id", "run_attempt", "workflow_path", "workflow_ref")}
+                       | {"nonce": h("request-nonce")},
+            "build": ci_descriptor(), "envelope_sha256": canonical_sha256(ci_envelope())}
+
+
+def ci_gate(gate: str = "build") -> dict[str, Any]:
+    plan = ci_plan()
+    units = plan["targets"] if gate == "build" else plan["lanes"]
+    artifacts = [ci_descriptor()] if gate == "build" else [
+        ci_descriptor("runtime", gate="packaged", unit_id="lane-a", artifact_id=101),
+        ci_descriptor("results", gate="packaged", artifact_id=102)]
+    return {"kind": "mod-base.ci.gate", "schema_version": 1, "identity": plan["identity"],
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "producer": {key: value for key, value in ci_producer(gate).items() if key != "upload_window"},
+            "gate": gate, "mode": "full", "artifacts": artifacts,
+            "owning_build": None if gate == "build" else ci_descriptor(),
+            "native_receipts": [{"unit_id": unit["id"], "native_contract_sha256": unit["native_contract_sha256"],
+                                 "report_sha256": h(unit["id"] + "-native")} for unit in units]}
+
+
+def ci_reuse() -> dict[str, Any]:
+    plan = ci_plan()
+    identity = copy.deepcopy(plan["identity"])
+    identity.update(pr_number=0, head_sha="8" * 40, head_branch="master", tested_sha="8" * 40,
+                    controller_sha="8" * 40, base_sha="8" * 40, tested_parents=["2" * 40])
+    producer = ci_producer()
+    producer.update(run_id=44, event="push", api_head_sha="8" * 40, graph_sha256=h("reuse-graph"),
+                    upload_window={"started_at": "2026-10-07T10:05:00Z", "completed_at": "2026-10-07T10:06:00Z"})
+    producer.pop("upload_window")
+    return {"kind": "mod-base.ci.reuse", "schema_version": 1, "identity": identity,
+            "plan_sha256": h("covered-plan"), "profile": plan["profile"], "producer": producer,
+            "source": {"identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+                       "build_seal": ci_descriptor("tested", unit_id="build"),
+                       "packaged_seal": ci_descriptor("tested", gate="packaged", unit_id="packaged", artifact_id=103)}}
+
+
+def ci_execution() -> dict[str, Any]:
+    """Inert local execution handoff fixture; metadata does not establish physical origin."""
+
+    import base64
+    from mod_base.model.canonical import canonical_json
+    import hashlib
+    return {"kind": "mod-base.ci.execution", "schema_version": 1, "run_id": 42, "run_attempt": 2,
+            "nonce": h("execution-nonce"), "plan_sha256": ci_plan()["plan_sha256"],
+            "source_config_sha256": h("configbytes"),
+            "input_sha256": hashlib.sha256(canonical_json(ci_envelope())).hexdigest(),
+            "returncode": 0, "truncated": False, "log_base64": base64.b64encode(b"fixture log").decode("ascii")}
+
+
+def ci_kit_installation() -> dict[str, Any]:
+    """Inert local root-record data, never physical installation or pin provenance."""
+    return {"kind": "mod-base.ci.kit-installation", "schema_version": 1,
+            "kit": {"repository": "The-Plum-Team/mod-base", "sha": "a" * 40, "version": "1.0.3"},
+            "tree_digest": "sha256:" + "b" * 64, "files": 3, "total_bytes": 3, "device": 1, "inode": 11}
+
+
+def ci_root_request() -> dict[str, Any]:
+    """Inert local root-freeze metadata; no physical source, UID or execution authority."""
+    plan = ci_plan()
+    return {"kind": "mod-base.ci.root-request", "schema_version": 1,
+            "nonce": h("root-request-nonce"), "execution_nonce": h("execution-nonce"),
+            "boundary": {"home": "/home/runner", "uid": 1001, "gid": 121,
+                         "device": 1, "inode": 10, "original_mode": 0o755},
+            "validator": {"uid": 2001, "gid": 2001},
+            "sources": {"controller_sha": plan["identity"]["controller_sha"], "controller_tree": "b" * 40,
+                        "config": {"path": "scripts/ci/mod-base-build.json", "mode": "100644",
+                                   "git_blob": "c" * 40, "sha256": h("configbytes"), "size": 1000},
+                        "files": [{"path": file["path"], "mode": "100644", "git_blob": "d" * 40,
+                                   "sha256": file["sha256"], "size": 1} for file in ci_config()["adapter"]["files"]]},
+            "plan": plan, "envelope": ci_envelope(), "run_id": 42, "run_attempt": 2}
+
+
+def ci_activation() -> dict[str, Any]:
+    return {"kind": "mod-base.ci.activation", "schema_version": 1,
+            "repository": ci_config()["repository"], "profile": ci_config()["profile"], "mode": "disabled"}
+
+
+def ci_batch() -> dict[str, Any]:
+    """Synthetic structural fixture; hashes are data, not Git or byte provenance."""
+    repository = ci_config()['repository']
+    return {'kind': 'mod-base.ci.batch', 'schema_version': 1,
+            'repository': repository, 'profile': ci_config()['profile'],
+            'base_branch': 'master', 'base_sha': '1'*40, 'base_tree': '2'*40,
+            'branch': 'batch/fixture', 'policy_sha256': '1'*64, 'result_tree': '8'*40,
+            'members': [{'pr_number': 1, 'source_repository': repository,
+                         'head_branch': 'feature/one', 'head_sha': '3'*40, 'head_tree': '4'*40,
+                         'draft': False, 'merge_base_sha': '1'*40, 'merge_base_tree': '2'*40,
+                         'merge_base_bytes_sha256': '7'*64, 'head_bytes_sha256': '8'*64,
+                         'patch': [{'path': 'src/main.java',
+                                    'before': {'mode': '100644', 'size': 3, 'git_blob': '5'*40},
+                                    'after': {'mode': '100644', 'size': 3, 'git_blob': '6'*40}}],
+                         'parent_sha': '1'*40, 'squash_sha': '7'*40, 'result_tree': '8'*40}]}
+
+
+def ci_runtime_envelope() -> dict[str, Any]:
+    """Inert runtime inventory; native output mapping and bytes need independent proof."""
+    plan = ci_plan()
+    return {'kind': 'mod-base.ci.runtime-envelope', 'schema_version': 1,
+            'identity': plan['identity'], 'plan_sha256': plan['plan_sha256'], 'profile': plan['profile'],
+            'producer': {key: value for key, value in ci_producer('packaged').items() if key != 'upload_window'},
+            'scope': 'complete', 'lane_id': None, 'owning_build': ci_descriptor(),
+            'lanes': [{'id': lane['id'], 'native_contract_sha256': lane['native_contract_sha256']}
+                      for lane in plan['lanes']],
+            'files': [{'path': 'lanes/lane-a/result.json', 'lane_id': 'lane-a',
+                       'role': 'native-report', 'size': 128, 'sha256': h('runtime-report')}]}
+
+
+def ci_runtime_root_request() -> dict[str, Any]:
+    """Inert cross-run runtime Root context; no physical or execution authority."""
+    document = ci_root_request()
+    document['kind'] = 'mod-base.ci.runtime-root-request'
+    document['build'] = document.pop('envelope')
+    document['runtime'] = ci_runtime_envelope()
+    document['runtime'].update(scope='lane', lane_id='lane-a')
+    document.update(lane_id='lane-a', run_id=43)
+    return document
+
+
 def sample_documents() -> dict[str, dict[str, Any]]:
     """Fixture name -> a coherent, valid document (see ``VALID_FIXTURE_KINDS``)."""
 
     return {
+        "ci-plan": ci_plan(),
+        "ci-config": ci_config(),
+        "ci-activation": ci_activation(),
+        "ci-batch": ci_batch(),
+        "ci-runtime-envelope": ci_runtime_envelope(),
+        "ci-envelope": ci_envelope(),
+        "ci-selection": ci_selection(),
+        "ci-gate-build": ci_gate(),
+        "ci-gate-packaged": ci_gate("packaged"),
+        "ci-reuse": ci_reuse(),
+        "ci-validation": ci_validation(),
+        "ci-execution": ci_execution(),
+        "ci-kit-installation": ci_kit_installation(),
+        "ci-root-request": ci_root_request(),
+        "ci-runtime-root-request": ci_runtime_root_request(),
         "expectation": expectation(),
         "handoff": handoff(),
         "compact": compact(),
@@ -754,6 +981,21 @@ def sample_documents() -> dict[str, dict[str, Any]]:
 
 #: Fixture name -> the document kind it holds.
 VALID_FIXTURE_KINDS = {
+    "ci-plan": "mod-base.build.plan",
+    "ci-config": "mod-base.build.config",
+    "ci-activation": "mod-base.ci.activation",
+    "ci-batch": "mod-base.ci.batch",
+    "ci-runtime-envelope": "mod-base.ci.runtime-envelope",
+    "ci-envelope": "mod-base.build.envelope",
+    "ci-selection": "mod-base.ci.selection",
+    "ci-gate-build": "mod-base.ci.gate",
+    "ci-gate-packaged": "mod-base.ci.gate",
+    "ci-reuse": "mod-base.ci.reuse",
+    "ci-validation": "mod-base.ci.validation",
+    "ci-execution": "mod-base.ci.execution",
+    "ci-kit-installation": "mod-base.ci.kit-installation",
+    "ci-root-request": "mod-base.ci.root-request",
+    "ci-runtime-root-request": "mod-base.ci.runtime-root-request",
     "expectation": "mod-base.evidence.expectation",
     "handoff": "mod-base.evidence.handoff",
     "compact": "mod-base.evidence.compact",
