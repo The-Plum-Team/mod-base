@@ -131,9 +131,33 @@ class PipelineTests(unittest.TestCase):
         paths = [output["path"] for target in self.plan["targets"] for output in target["outputs"]]
         self.assertIn("files/Synthetic Mod - Fabric - 1.20.1-1.0.0.jar", paths)
         self.assertIn("harness/Synthetic Mod E2E - Forge - 1.20.1-0.0.0.jar", paths)
-        self.assertEqual(len(paths), 15)
+        self.assertEqual(len(paths), 12)
         self.assertEqual({output["role"] for target in self.plan["targets"] for output in target["outputs"]},
                          {"production", "harness", "sbom", "native-report", "build-log"})
+
+    def test_each_target_stages_its_own_manifest_and_only_one_of_them_an_sbom(self) -> None:
+        # The shape of the real mods: two lanes share the manifest and the SBOM of their target
+        # (as in Quick Skin), and the other target stages no SBOM at all (as in Block Pops).
+        whole = {target["id"]: [(output["path"], output["role"]) for output in target["outputs"]
+                                if output["lane_id"] is None] for target in self.plan["targets"]}
+        self.assertEqual(whole, {
+            "1.20.1": [("targets/1.20.1/artifacts.json", "native-report"),
+                       ("targets/1.20.1/sbom/synthetic-mod.cdx.json", "sbom")],
+            "1.21.1": [("targets/1.21.1/artifacts.json", "native-report")]})
+        for lane in self.plan["lanes"]:
+            target = next(item for item in self.plan["targets"] if item["id"] == lane["target_id"])
+            self.assertEqual(sorted(output["role"] for output in target["outputs"] if output["lane_id"] == lane["id"]),
+                             ["build-log", "harness", "production"])
+        for target in h.TARGETS:
+            files = self.exports[target]["files"]
+            manifest = json.loads(files[f"targets/{target}/artifacts.json"])
+            with self.subTest(target=target):
+                self.assertEqual(manifest["target"], target)
+                self.assertEqual([entry["path"] for entry in manifest["files"]],
+                                 sorted(set(files) - {f"targets/{target}/artifacts.json"}))
+        self.assertEqual(json.loads(self.exports["1.20.1"]["files"]["targets/1.20.1/sbom/synthetic-mod.cdx.json"])["bomFormat"],
+                         "CycloneDX")
+        self.assertFalse(any("sbom" in name for name in self.exports["1.21.1"]["files"]))
 
     def test_policy_passes_and_writes_nothing(self) -> None:
         self.assertEqual(self.policy.returncode, 0, self.policy.stdout)
@@ -259,9 +283,32 @@ class TamperTests(unittest.TestCase):
         self.rejected("verify_build", None)
         self.box.build("1.20.1")
         self.accepted("verify_build", None)
-        flip(self.box.sealed_build / "sbom" / "forge-1.20.1.cdx.json", 5)
+        flip(self.box.sealed_build / "targets" / "1.20.1" / "sbom" / "synthetic-mod.cdx.json", 5)
         self.rejected("verify_build", None)
         self.accepted("verify_target", "1.21.1")
+
+    def test_a_target_needs_its_own_manifest_and_sbom_and_no_other_targets(self) -> None:
+        self.box.build("1.20.1")
+        targets = self.box.sealed_build / "targets"
+        sbom = targets / "1.20.1" / "sbom" / "synthetic-mod.cdx.json"
+        kept = sbom.read_bytes()
+        sbom.unlink()
+        self.rejected("verify_target", "1.20.1")
+        self.accepted("verify_target", "1.21.1")  # The target that plans no SBOM does not miss one.
+        (targets / "1.21.1" / "sbom").mkdir()
+        (targets / "1.21.1" / "sbom" / "synthetic-mod.cdx.json").write_bytes(kept)
+        self.rejected("verify_target", "1.21.1")  # The same bytes there are an unplanned file.
+        shutil.rmtree(targets / "1.21.1" / "sbom")
+        sbom.write_bytes(kept)
+        self.accepted("verify_build", None)
+        manifests = [targets / name / "artifacts.json" for name in h.TARGETS]
+        first, second = (path.read_bytes() for path in manifests)
+        manifests[0].write_bytes(second)
+        manifests[1].write_bytes(first)
+        for target in h.TARGETS:
+            with self.subTest(swapped=target):
+                self.rejected("verify_target", target)
+        self.rejected("verify_build", None)
 
     def test_one_changed_byte_in_any_runtime_file_is_rejected(self) -> None:
         lane = "fabric-1.21.1"
@@ -378,7 +425,7 @@ class DeterminismTests(unittest.TestCase):
                 observed.append((plan, {name: (box.sealed_build / name).read_bytes()
                                         for name in sorted(h.files(box.sealed_build))}))
         self.assertEqual(observed[0], observed[1])
-        self.assertEqual(len(observed[0][1]), 10)
+        self.assertEqual(len(observed[0][1]), 8)
 
 
 class FaultTests(unittest.TestCase):

@@ -4,11 +4,11 @@
     "files": [
       {
         "path": "scripts/ci/mod_base_build_adapter.py",
-        "sha256": "6a828a41facd335893b0a9b5430108d649c40d303b9064c8dcc0a262cdcf80c2"
+        "sha256": "3316be461e6c19f6c6d402203679293a424221c946592b30cde05172dfa0f7ee"
       },
       {
         "path": "scripts/ci/mod_base_build_dispatch.py",
-        "sha256": "bffeb7d2908188f6bf296edf785796832d6339badf58f44009b799e87df7b328"
+        "sha256": "fd1981acd8d655379d29f3770cb84458f93bbee5caf00f8eb948c307a874be94"
       },
       {
         "path": "scripts/ci/policy_suite.py",

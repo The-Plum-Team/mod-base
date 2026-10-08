@@ -109,12 +109,12 @@ def _verify_targets(root: Path, output: Output, hook: str, unit: str | None) -> 
         raise adapter.AdapterError("the sealed Build does not hold exactly the planned outputs")
     for entry in plan["targets"] if unit is None else [_unit(plan, "targets", unit)]:
         target = adapter.target_of(inventory, entry["id"])
-        staged = [item for loader in target["loaders"] for item in adapter.lane_outputs(inventory, target, loader)]
-        if entry["native_contract_sha256"] != adapter.target_contract(inventory, target) or entry["outputs"] != staged:
+        if (entry["native_contract_sha256"] != adapter.target_contract(inventory, target)
+                or entry["outputs"] != adapter.target_outputs(inventory, target)):
             raise adapter.AdapterError(f"target {entry['id']} of the plan is not this inventory's target")
-        files = [record for loader in target["loaders"] for record in adapter.verify_lane(
-            inventory, target, loader, tested_sha=plan["identity"]["tested_sha"],
-            tested_tree=plan["identity"]["tested_tree"], read=lambda path: _read(sealed, path))]
+        files = adapter.verify_target(inventory, target, tested_sha=plan["identity"]["tested_sha"],
+                                      tested_tree=plan["identity"]["tested_tree"],
+                                      read=lambda path: _read(sealed, path))
         output.write(f"{entry['id']}.json", adapter.encode({
             "schema_version": 1, "hook": hook, "unit": entry["id"],
             "native_contract_sha256": entry["native_contract_sha256"],
@@ -181,11 +181,10 @@ def _hook(hook: str, unit: str | None, root: Path, output: Output) -> None:
     elif hook == "build_target":
         _, inventory, _ = _candidate_inputs(Path.cwd())
         target = adapter.target_of(inventory, unit)
-        for loader in target["loaders"]:
-            for path, data in adapter.build_lane(inventory, target, loader, tested_sha=os.environ["MB_TESTED_SHA"],
-                                                 tested_tree=os.environ["MB_TESTED_TREE"],
-                                                 source=_read(Path.cwd(), policy_suite.SOURCE)).items():
-                output.write(path, data)
+        for path, data in adapter.build_target(inventory, target, tested_sha=os.environ["MB_TESTED_SHA"],
+                                               tested_tree=os.environ["MB_TESTED_TREE"],
+                                               source=_read(Path.cwd(), policy_suite.SOURCE)).items():
+            output.write(path, data)
     else:
         _run_lane(Path.cwd(), output, unit)
 

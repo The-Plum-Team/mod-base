@@ -43,6 +43,10 @@ LOADERS = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge"}
 MAX_INPUT_BYTES = 1 << 20
 #: The name the Build config stages ``gradle.properties`` under for the protected hooks.
 PROPERTIES_INPUT = "gradle-properties"
+#: What a target stages for itself, below ``targets/<minecraft>/``: the manifest of everything
+#: else it stages and, for a target with ``"sbom": true``, one SBOM for all its lanes.
+MANIFEST_NAME = "artifacts.json"
+SBOM_NAME = "sbom/synthetic-mod.cdx.json"
 BUILD_IDENTITY = "META-INF/synthetic-build.json"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 SCREENSHOT_SIZE = (16, 9)
@@ -150,10 +154,12 @@ def parse_inventory(data: bytes, properties: dict[str, str]) -> dict[str, Any]:
     if type(targets) is not list or not 1 <= len(targets) <= 16:
         raise AdapterError("targets must list 1..16 targets")
     for target in targets:
-        _object(target, ("minecraft", "java", "loaders"), "target")
+        _object(target, ("minecraft", "java", "loaders", "sbom"), "target")
         _text(target["minecraft"], "target.minecraft", _DIGITS + ".")
         if type(target["java"]) is not int or not 8 <= target["java"] <= 99:
             raise AdapterError("target.java must be a Java feature version")
+        if type(target["sbom"]) is not bool:
+            raise AdapterError("target.sbom says whether the target stages an SBOM")
         if any(loader not in LOADERS for loader in _strings(target["loaders"], "target.loaders", _LOWER)):
             raise AdapterError("target.loaders names an unknown loader")
     if len({target["minecraft"] for target in targets}) != len(targets):
@@ -224,17 +230,35 @@ def lane_of(inventory: dict[str, Any], lane: str) -> tuple[dict[str, Any], str]:
 
 
 def lane_outputs(inventory: dict[str, Any], target: dict[str, Any], loader: str) -> list[dict[str, str]]:
-    """The files one lane's Build must stage, named like the real mods' staged release."""
+    """The files of one lane: its two JARs, named like the real mods' staged release, and its log."""
 
     mod, minecraft, lane = inventory["mod"], target["minecraft"], lane_id(loader, target["minecraft"])
     names = {
         "production": f"files/{mod['name']} - {LOADERS[loader]} - {minecraft}-{mod['version']}.jar",
         "harness": f"harness/{mod['name']} E2E - {LOADERS[loader]} - {minecraft}-{mod['harness_version']}.jar",
-        "sbom": f"sbom/{lane}.cdx.json",
-        "native-report": f"reports/{lane}.json",
         "build-log": f"logs/{lane}.log",
     }
     return [{"path": path, "lane_id": lane, "role": role} for role, path in names.items()]
+
+
+def target_path(target: dict[str, Any], name: str) -> str:
+    """Where a file of a whole target is staged. Every target writes ``artifacts.json``, and a path
+    is unique in the whole plan, so the target's own files live below its own directory."""
+
+    return f"targets/{target['minecraft']}/{name}"
+
+
+def target_outputs(inventory: dict[str, Any], target: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every file the Build of one target must stage: the files of each lane, then the files of
+    the target as a whole (``lane_id`` null), which are its manifest and, for a target the
+    inventory gives one, its SBOM."""
+
+    outputs: list[dict[str, Any]] = [item for loader in target["loaders"]
+                                     for item in lane_outputs(inventory, target, loader)]
+    outputs.append({"path": target_path(target, MANIFEST_NAME), "lane_id": None, "role": "native-report"})
+    if target["sbom"]:
+        outputs.append({"path": target_path(target, SBOM_NAME), "lane_id": None, "role": "sbom"})
+    return outputs
 
 
 def scenarios_of(contract: dict[str, Any], loader: str) -> list[dict[str, Any]]:
@@ -260,18 +284,17 @@ def derive_plan(inventory: dict[str, Any], contract: dict[str, Any]) -> dict[str
 
     targets, lanes = [], []
     for target in inventory["targets"]:
-        outputs = []
         for loader in target["loaders"]:
             scenarios = scenarios_of(contract, loader)
             if not scenarios:
                 raise AdapterError(f"no scenario covers loader {loader!r}")
-            outputs.extend(lane_outputs(inventory, target, loader))
             lanes.append({"id": lane_id(loader, target["minecraft"]), "target_id": target["minecraft"],
                           "native_contract_sha256": lane_contract(contract, target, loader),
                           "obligations": [obligation(scenario["id"], checkpoint) for scenario in scenarios
                                           for checkpoint in scenario["checkpoints"]]})
         targets.append({"id": target["minecraft"], "java": target["java"],
-                        "native_contract_sha256": target_contract(inventory, target), "outputs": outputs})
+                        "native_contract_sha256": target_contract(inventory, target),
+                        "outputs": target_outputs(inventory, target)})
     return {"targets": targets, "lanes": lanes}
 
 
@@ -329,55 +352,63 @@ def jar_versions(inventory: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     return (("production", inventory["mod"]["version"]), ("harness", inventory["mod"]["harness_version"]))
 
 
-def build_lane(inventory: dict[str, Any], target: dict[str, Any], loader: str, *, tested_sha: str,
-               tested_tree: str, source: bytes) -> dict[str, bytes]:
-    """Every staged file of one lane, by export path."""
+def build_target(inventory: dict[str, Any], target: dict[str, Any], *, tested_sha: str, tested_tree: str,
+                 source: bytes) -> dict[str, bytes]:
+    """Every staged file of one target, by export path: the two JARs and the log of each lane, the
+    SBOM of a target that has one, and the manifest of all of them."""
 
-    lane = lane_id(loader, target["minecraft"])
-    outputs = {output["role"]: output["path"] for output in lane_outputs(inventory, target, loader)}
     files: dict[str, bytes] = {}
-    for role, version in jar_versions(inventory):
-        identity = {"mod": inventory["mod"]["name"], "version": version, "role": role, "lane": lane,
-                    "tested_sha": tested_sha, "tested_tree": tested_tree}
-        files[outputs[role]] = jar(identity, source + f"{role} for {lane}\n".encode("utf-8"))
-    files[outputs["sbom"]] = encode({"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
-        {"type": "library", "name": inventory["mod"]["name"], "version": inventory["mod"]["version"]}]})
-    files[outputs["build-log"]] = f"synthetic build of {lane} with Java {target['java']}\n".encode("utf-8")
+    for loader in target["loaders"]:
+        lane = lane_id(loader, target["minecraft"])
+        outputs = {output["role"]: output["path"] for output in lane_outputs(inventory, target, loader)}
+        for role, version in jar_versions(inventory):
+            identity = {"mod": inventory["mod"]["name"], "version": version, "role": role, "lane": lane,
+                        "tested_sha": tested_sha, "tested_tree": tested_tree}
+            files[outputs[role]] = jar(identity, source + f"{role} for {lane}\n".encode("utf-8"))
+        files[outputs["build-log"]] = f"synthetic build of {lane} with Java {target['java']}\n".encode("utf-8")
+    if target["sbom"]:
+        files[target_path(target, SBOM_NAME)] = encode({"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
+            {"type": "library", "name": inventory["mod"]["name"], "version": inventory["mod"]["version"]}]})
     staged = [{"path": path, "sha256": sha256(data), "size": len(data)} for path, data in sorted(files.items())]
-    files[outputs["native-report"]] = encode({"schema_version": 1, "lane": lane, "tested_sha": tested_sha,
-                                             "tested_tree": tested_tree, "files": staged})
+    files[target_path(target, MANIFEST_NAME)] = encode({
+        "schema_version": 1, "target": target["minecraft"], "tested_sha": tested_sha, "tested_tree": tested_tree,
+        "files": staged})
     return files
 
 
-def verify_lane(inventory: dict[str, Any], target: dict[str, Any], loader: str, *, tested_sha: str,
-                tested_tree: str, read: Callable[[str], bytes]) -> list[dict[str, Any]]:
-    """Check one lane's staged files (``read(path) -> bytes``) and return their inventory."""
+def verify_target(inventory: dict[str, Any], target: dict[str, Any], *, tested_sha: str, tested_tree: str,
+                  read: Callable[[str], bytes]) -> list[dict[str, Any]]:
+    """Check the staged files of one target (``read(path) -> bytes``) against its manifest and
+    return the inventory of all of them, the manifest included."""
 
-    lane = lane_id(loader, target["minecraft"])
-    outputs = {output["role"]: output["path"] for output in lane_outputs(inventory, target, loader)}
-    raw = read(outputs["native-report"])
-    report = _object(decode(raw, "native report"), ("schema_version", "lane", "tested_sha", "tested_tree", "files"),
-                     "native report")
-    if encode(report) != raw or (report["schema_version"], report["lane"], report["tested_sha"],
-                                 report["tested_tree"]) != (1, lane, tested_sha, tested_tree):
-        raise AdapterError(f"the native report of {lane} is not canonical or names another build")
-    expected = sorted(path for role, path in outputs.items() if role != "native-report")
-    if type(report["files"]) is not list or [entry.get("path") if type(entry) is dict else None
-                                              for entry in report["files"]] != expected:
-        raise AdapterError(f"the native report of {lane} does not list exactly its staged files")
-    for entry in report["files"]:
-        data = read(_object(entry, ("path", "sha256", "size"), "native report file")["path"])
+    name, path = target["minecraft"], target_path(target, MANIFEST_NAME)
+    raw = read(path)
+    manifest = _object(decode(raw, "manifest"), ("schema_version", "target", "tested_sha", "tested_tree", "files"),
+                       "manifest")
+    if encode(manifest) != raw or (manifest["schema_version"], manifest["target"], manifest["tested_sha"],
+                                   manifest["tested_tree"]) != (1, name, tested_sha, tested_tree):
+        raise AdapterError(f"the manifest of {name} is not canonical or names another build")
+    expected = sorted(output["path"] for output in target_outputs(inventory, target) if output["path"] != path)
+    if type(manifest["files"]) is not list or [entry.get("path") if type(entry) is dict else None
+                                                for entry in manifest["files"]] != expected:
+        raise AdapterError(f"the manifest of {name} does not list exactly its staged files")
+    for entry in manifest["files"]:
+        data = read(_object(entry, ("path", "sha256", "size"), "manifest file")["path"])
         if (sha256(data), len(data)) != (entry["sha256"], entry["size"]):
-            raise AdapterError(f"{entry['path']} differs from the native report of {lane}")
-    for role, version in jar_versions(inventory):
-        identity = jar_identity(read(outputs[role]), outputs[role])
-        if identity != {"mod": inventory["mod"]["name"], "version": version, "role": role, "lane": lane,
-                        "tested_sha": tested_sha, "tested_tree": tested_tree}:
-            raise AdapterError(f"{outputs[role]} embeds another build identity")
-    sbom = decode(read(outputs["sbom"]), "SBOM")
-    if type(sbom) is not dict or sbom.get("bomFormat") != "CycloneDX":
-        raise AdapterError(f"the SBOM of {lane} is not a CycloneDX document")
-    return report["files"] + [{"path": outputs["native-report"], "sha256": sha256(raw), "size": len(raw)}]
+            raise AdapterError(f"{entry['path']} differs from the manifest of {name}")
+    for loader in target["loaders"]:
+        lane = lane_id(loader, name)
+        outputs = {output["role"]: output["path"] for output in lane_outputs(inventory, target, loader)}
+        for role, version in jar_versions(inventory):
+            identity = jar_identity(read(outputs[role]), outputs[role])
+            if identity != {"mod": inventory["mod"]["name"], "version": version, "role": role, "lane": lane,
+                            "tested_sha": tested_sha, "tested_tree": tested_tree}:
+                raise AdapterError(f"{outputs[role]} embeds another build identity")
+    if target["sbom"]:
+        sbom = decode(read(target_path(target, SBOM_NAME)), "SBOM")
+        if type(sbom) is not dict or sbom.get("bomFormat") != "CycloneDX":
+            raise AdapterError(f"the SBOM of {name} is not a CycloneDX document")
+    return manifest["files"] + [{"path": path, "sha256": sha256(raw), "size": len(raw)}]
 
 
 # -- Runtime results -----------------------------------------------------------------------------------

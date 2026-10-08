@@ -3,7 +3,9 @@
 What a mod provides so that the shared Build and Packaged E2E workflows can plan, build, run and
 verify it. This contract is separate from the Pages adapter in [ADAPTER.md](ADAPTER.md). The
 normative definition is `mod_base.build_ci.adapter`; a complete working example is the synthetic
-mod in `tests/fixtures/ci_mod/`, which `tests/test_ci_mod.py` runs hook by hook.
+mod in `tests/fixtures/ci_mod/`, which `tests/test_ci_mod.py` runs hook by hook. It has the shape
+of the real mods: one target whose two lanes share a manifest and an SBOM, one target without an
+SBOM, and a `gradle.properties` that holds the mod version as an extra plan input.
 
 A mod writes only its own native files at the paths below. It never writes a kit document: the
 plan, the envelopes and the validation record are built by protected kit code from what the hooks
