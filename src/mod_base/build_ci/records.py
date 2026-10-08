@@ -9,7 +9,8 @@ from __future__ import annotations
 from typing import Any
 
 from mod_base import readable_schema_versions
-from mod_base.build_ci.protocol import OUTPUT_ROLES, check_output_paths, validate_identity, validate_plan
+from mod_base.build_ci.protocol import (OUTPUT_ROLES, check_output_paths, check_output_scope, validate_identity,
+                                        validate_plan)
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check, fail
@@ -138,14 +139,24 @@ def _plan_binding(document: dict[str, Any], plan: dict[str, Any] | None, path: s
         _same_binding(document, plan, path)
 
 
+#: A planned output with the size and hash of its frozen bytes; ``lane_id`` is null for a file of
+#: the target as a whole, exactly as in the plan.
 _FILE = Obj({"path": _file_path, "size": Int(1, lim.MAX_CI_EXPORT_FILE_BYTES), "sha256": SHA256,
-             "lane_id": UNIT, "role": Str(choices=OUTPUT_ROLES)})
+             "lane_id": Nullable(UNIT), "role": Str(choices=OUTPUT_ROLES)})
 _ENVELOPE = Obj({
     **_header("mod-base.build.envelope"), **_binding(), "producer": _PRODUCER_IDENTITY,
     "scope": Str(choices=("target", "complete")), "target_id": Nullable(UNIT),
     "files": List(_FILE, min_items=1, max_items=lim.MAX_CI_EXPORT_FILES, unique_by=lambda item: item["path"]),
     "native_reports": List(_file_path, min_items=1, max_items=lim.MAX_CI_EXPORT_FILES, sorted_values=True),
 })
+
+
+def _role_bounds(profile: str) -> dict[str, int]:
+    """The largest file of each output role in a Build export of ``profile``. Every role has a
+    bound of its own, so no file is held only to the whole-export per-file ceiling."""
+
+    return {"production": lim.MAX_CI_JAR_BYTES, "harness": lim.MAX_CI_JAR_BYTES, "sbom": lim.MAX_CI_SBOM_BYTES,
+            "native-report": lim.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE[profile], "build-log": lim.MAX_CI_LOG_BYTES}
 
 
 def validate_build_envelope(document: Any, *, plan: dict[str, Any] | None = None,
@@ -163,12 +174,11 @@ def validate_build_envelope(document: Any, *, plan: dict[str, Any] | None = None
           "complete logical export exceeds the whole-tree budget")
     check(document["native_reports"] == [file["path"] for file in files if file["role"] == "native-report"],
           f"{path}.native_reports", "must name exactly the inventoried native reports")
+    bounds = _role_bounds(document["profile"])
     for index, file in enumerate(files):
-        bound = {"production": lim.MAX_CI_JAR_BYTES, "harness": lim.MAX_CI_JAR_BYTES,
-                 "native-report": lim.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE[document["profile"]],
-                 "build-log": lim.MAX_CI_LOG_BYTES}.get(
-                     file["role"], lim.MAX_CI_EXPORT_FILE_BYTES)
-        check(file["size"] <= bound, f"{path}.files[{index}].size", "native file exceeds its role budget")
+        check_output_scope(file, f"{path}.files[{index}]")
+        check(file["size"] <= bounds[file["role"]], f"{path}.files[{index}].size",
+              "native file exceeds its role budget")
     if plan is not None:
         targets = [target for target in plan["targets"] if document["scope"] == "complete"
                    or target["id"] == document["target_id"]]

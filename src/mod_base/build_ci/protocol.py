@@ -12,7 +12,7 @@ from mod_base import KIT_REPOSITORY, readable_schema_versions
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_sha256
-from mod_base.model.validators import Const, Int, List, Obj, Str, check, fail
+from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check, fail
 
 BUILD_ADAPTER_API = 1
 BUILD_GRAPH_VERSION = 1
@@ -24,6 +24,10 @@ PRODUCERS = ("build", "packaged")
 CALLER_WORKFLOWS = {"build": ".github/workflows/mod-base-build.yml",
                     "packaged": ".github/workflows/mod-base-packaged-e2e.yml"}
 OUTPUT_ROLES = ("production", "harness", "sbom", "native-report", "build-log")
+#: The two JARs every lane has exactly once. Neither can stand for a target as a whole.
+LANE_OUTPUT_ROLES = ("production", "harness")
+#: Roles one lane, or one target as a whole, holds at most once.
+SINGLE_OUTPUT_ROLES = (*LANE_OUTPUT_ROLES, "sbom")
 
 SHA1 = Str(g.SHA1, max_len=40)
 SHA256 = Str(g.SHA256, max_len=64)
@@ -106,7 +110,9 @@ def subject_of(identity: dict[str, Any]) -> dict[str, Any]:
     return {key: identity[key] for key in _SUBJECT_FIELDS}
 
 
-_OUTPUT = Obj({"path": export_path, "lane_id": ID,
+#: ``lane_id`` names the lane an output belongs to, or is null for one that belongs to its target
+#: as a whole: a staged manifest, a report, a log or the SBOM of the whole target.
+_OUTPUT = Obj({"path": export_path, "lane_id": Nullable(ID),
                "role": Str(choices=OUTPUT_ROLES)})
 _TARGET = Obj({
     "id": ID, "java": Int(8, 99), "native_contract_sha256": SHA256,
@@ -167,24 +173,42 @@ def check_output_paths(paths: list[str], path: str) -> None:
               path, "a file is also an inventory directory")
 
 
+def check_output_scope(output: dict[str, Any], path: str) -> None:
+    """An output is one lane's or, with a null ``lane_id``, its target's as a whole. A production
+    or harness JAR is always one lane's; a plan and an envelope apply the same rule."""
+
+    check(output["lane_id"] is not None or output["role"] not in LANE_OUTPUT_ROLES, path,
+          "a production or harness JAR belongs to one lane")
+
+
 def _unit_rules(document: dict[str, Any], path: str) -> None:
+    """What the mods really stage: every lane has exactly one production and one harness JAR;
+    an SBOM is optional, at most one for a lane and one for a target as a whole; every target has
+    a native report (its manifest, usually target-scoped); reports and logs may repeat. Paths are
+    unique across the whole plan, so files a mod writes once per target carry the target in their
+    path."""
+
     check_output_paths([output["path"] for target in document["targets"] for output in target["outputs"]],
                        f"{path}.targets")
     targets = {item["id"] for item in document["targets"]}
     lanes = {item["id"]: item["target_id"] for item in document["lanes"]}
     check(set(lanes.values()) == targets, f"{path}.lanes", "must cover every target exactly through declared lanes")
-    for target in document["targets"]:
-        roles: dict[str, set[str]] = {}
-        for output in target["outputs"]:
-            check(lanes.get(output["lane_id"]) == target["id"], f"{path}.targets", "output names another target's lane")
-            lane_roles = roles.setdefault(output["lane_id"], set())
-            check(output["role"] in {"native-report", "build-log"} or output["role"] not in lane_roles,
-                  f"{path}.targets", "lane repeats a production, harness or SBOM output role")
-            lane_roles.add(output["role"])
+    for index, target in enumerate(document["targets"]):
+        here = f"{path}.targets[{index}].outputs"
+        held: set[tuple[str | None, str]] = set()
+        for position, output in enumerate(target["outputs"]):
+            lane, role = output["lane_id"], output["role"]
+            check(lane is None or lanes.get(lane) == target["id"], f"{here}[{position}].lane_id",
+                  "names another target's lane")
+            check_output_scope(output, f"{here}[{position}]")
+            check(role not in SINGLE_OUTPUT_ROLES or (lane, role) not in held, f"{here}[{position}]",
+                  "repeats the production JAR, the harness JAR or the SBOM of one lane or of the target")
+            held.add((lane, role))
+        check(any(role == "native-report" for _, role in held), here, "every target requires a native report")
         for lane, owner in lanes.items():
             if owner == target["id"]:
-                check({"production", "harness", "sbom", "native-report"} <= roles.get(lane, set()),
-                      f"{path}.targets", "every lane requires separate production, harness, SBOM and native reports")
+                check({(lane, role) for role in LANE_OUTPUT_ROLES} <= held, here,
+                      f"lane {lane} requires one production and one harness JAR")
 
 
 def validate_plan_units(value: Any, path: str = "$") -> dict[str, Any]:

@@ -66,8 +66,11 @@ NATIVE: dict[str, tuple[Any, str]] = {
     "MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE": (
         {"quick-skin": 4 * MIB, "block-pops": 8 * MIB},
         "block-pops: BP:scripts/release/build_evidence.py:21 MAX_REPORT_BYTES. quick-skin: no native bound of "
-        "this value exists; its manifest and SBOM readers allow 16 MiB (QS:scripts/release/artifact_manifest.py:15, "
-        "QS:scripts/release/generate_sbom.py:31), so 4 MiB is the kit's tighter choice"),
+        "this value exists; its manifest reader allows 16 MiB (QS:scripts/release/artifact_manifest.py:15), so "
+        "4 MiB is the kit's tighter choice. Measured: a 30.1 KiB manifest; Block Pops a 28.7 KiB manifest and a "
+        "1.28 MiB build report"),
+    "MAX_CI_SBOM_BYTES": (16 * MIB, "QS:scripts/release/generate_sbom.py:31 (measured: 46.5 KiB). Block Pops stages "
+                                    "no SBOM, so the bound is one constant and not a value per profile"),
     # Runtime evidence. Both mods apply the first two to each evidence profile (one scenario of a
     # lane, BP:e2e/packaged_runtime.py:2068 export_profile_evidence); the kit to a whole lane.
     "MAX_CI_RUNTIME_FILES": (512, "BP:e2e/packaged_runtime.py:180 MAX_EVIDENCE_FILES; QS:e2e/packaged_runtime.py:201"),
@@ -385,10 +388,39 @@ class MeasuredTest(unittest.TestCase):
                 self.assertLessEqual(bundle["files"], limits.MAX_CI_EXPORT_FILES)
                 self.assertLessEqual(bundle["expanded_bytes"], limits.MAX_CI_EXPORT_TREE_BYTES)
                 self.assertLessEqual(bundle["largest_jar_bytes"], limits.MAX_CI_JAR_BYTES)
-                # Every native file beside the JARs: the manifest, Quick Skin's SBOM and Block Pops'
-                # build report (1.3 MiB of its 8 MiB).
-                beside = [*bundle["other_files"].values(), *([build["report"]["bytes"]] if "report" in build else [])]
-                self.assertLessEqual(max(beside), limits.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE[profile])
+                # Every native file beside the JARs, by the role a plan gives it: the manifest and
+                # Block Pops' build report are native reports, Quick Skin's SBOM is an ``sbom``.
+                sboms = {name: size for name, size in bundle["other_files"].items() if name.startswith("sbom/")}
+                reports = [size for name, size in bundle["other_files"].items() if name not in sboms]
+                reports += [build["report"]["bytes"]] if "report" in build else []
+                self.assertLessEqual(max(reports), limits.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE[profile])
+                self.assertEqual(sorted(sboms), ["sbom/quick-skin.cdx.json"] if profile == "quick-skin" else [])
+                self.assertLessEqual(max(sboms.values(), default=0), limits.MAX_CI_SBOM_BYTES)
+
+    def test_the_role_bounds_of_native_reports_and_the_sbom_rest_on_these_sizes(self) -> None:
+        """The evidence behind the two role bounds, so that a change of either needs new evidence.
+
+        Block Pops' build report is the largest native report either mod writes: 16 % of its own
+        8 MiB reader cap, which the kit keeps. Both manifests are below 1 % of their bound, and one
+        is written per target partition, so a planned manifest is smaller still. Quick Skin's 4 MiB
+        is the kit's choice below the 16 MiB its manifest reader admits; nothing measured asks for
+        more. Its SBOM is 0.3 % of the 16 MiB its own SBOM reader admits, the bound of the role.
+        """
+
+        build = {profile: ci_native.load(profile, "measured.json")["build"] for profile in ci_native.profiles()}
+        self.assertEqual(build["block-pops"]["bundle"]["other_files"], {"artifacts.json": 29_390})
+        self.assertEqual(build["block-pops"]["report"], {"bytes": 1_341_326, "name": "build-matrix-report.json"})
+        self.assertEqual(build["quick-skin"]["bundle"]["other_files"],
+                         {"artifacts.json": 30_848, "sbom/quick-skin.cdx.json": 47_632})
+        self.assertNotIn("report", build["quick-skin"])
+        reports = limits.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE
+        self.assertLess(6 * 1_341_326, reports["block-pops"])
+        self.assertLess(100 * 29_390, reports["block-pops"])
+        self.assertLess(100 * 30_848, reports["quick-skin"])
+        self.assertLess(reports["quick-skin"], 16 * MIB)  # QS:scripts/release/artifact_manifest.py:15
+        self.assertLess(100 * 47_632, limits.MAX_CI_SBOM_BYTES)
+        # A report of the protected verifier is another contract with its own bound.
+        self.assertLessEqual(limits.MAX_CI_REPORT_BYTES, min(reports.values()))
 
     def test_real_lanes_fit_the_lane_caps_with_every_scenario_counted_together(self) -> None:
         for profile in ci_native.profiles():

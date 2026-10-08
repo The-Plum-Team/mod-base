@@ -731,6 +731,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_EXECUTION_LOG_CHARS`, `MAX_CI_EXECUTION_BYTES`: bounded canonical base64 log and whole local execution-handoff JSON; independent of artifact/receipt transport limits.
 * `MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE`: closed original Build input report byte caps by profile;
   Block Pops 8 MiB, Quick Skin 4 MiB; independent of validator-output `MAX_CI_REPORT_BYTES`.
+* `MAX_CI_SBOM_BYTES`: 16 MiB for one `sbom` output of a Build export (Quick Skin's own SBOM reader cap; an SBOM is optional and Block Pops stages none).
 * `MAX_CI_PNG_BYTES`, `MAX_CI_JAR_BYTES`
 
 ## `mod_base.model.canonical`
@@ -1786,6 +1787,8 @@ BUILD-PROTOCOL.md. The hook contract itself is `mod_base.build_ci.adapter`.
 * `PRODUCERS = ('build', 'packaged')`
 * `CALLER_WORKFLOWS = {'build': '.github/workflows/mod-base-build.yml', 'packaged': '.github/workflows/mod-base-packaged-e2e.yml'}`
 * `OUTPUT_ROLES`: production, harness, SBOM, native reports and retained build logs.
+* `LANE_OUTPUT_ROLES = ('production', 'harness')`: the two JARs every lane has exactly once; never target-scoped.
+* `SINGLE_OUTPUT_ROLES = ('production', 'harness', 'sbom')`: roles one lane, or one target as a whole, holds at most once.
 * `SHA1`, `SHA256`, `REPO`, `BRANCH`, `ID`, `WORKFLOW`: the field validators of an identity and a plan (commit, digest, repository, branch, unit id, workflow path).
 * `def repo_path(value: Any, path: str) -> str`: a canonical repository-relative path (`grammar.is_repo_path`).
 * `def export_path(value: Any, path: str) -> str`: a canonical export path (`grammar.is_export_path`); every planned output is one.
@@ -1794,7 +1797,8 @@ BUILD-PROTOCOL.md. The hook contract itself is `mod_base.build_ci.adapter`.
 * `def subject_of(identity: dict[str, Any]) -> dict[str, Any]`: The subject part of a complete identity.
 * `def plan_sha256(document: dict[str, Any]) -> str`
 * `def check_output_paths(paths: list[str], path: str) -> None`
-* `def validate_plan_units(value: Any, path: str = '$') -> dict[str, Any]`: Exactly `{targets, lanes}` in the plan's shape with every plan rule that needs no identity: what a protected adapter derives.
+* `def check_output_scope(output: dict[str, Any], path: str) -> None`: An output (`{lane_id, role, ...}`, of a plan or of a Build envelope) is one lane's or, with a null `lane_id`, its target's as a whole; a production or harness JAR is always one lane's.
+* `def validate_plan_units(value: Any, path: str = '$') -> dict[str, Any]`: Exactly `{targets, lanes}` in the plan's shape with every plan rule that needs no identity: what a protected adapter derives. Every lane has exactly one production and one harness output; an SBOM is optional (at most one per lane and one per target as a whole); every target has a native report; an output's `lane_id` is a lane of its own target or null for the target as a whole; paths are unique across all targets.
 * `def validate_plan(document: Any, *, path: str = '$') -> dict[str, Any]`
 
 ## `mod_base.build_ci.graph`
@@ -1888,7 +1892,7 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
   in that gate's receipt: `build` from a `full` Build run or a `rebuilt` packaged run; `packaged`
   from a `pull-request`, `selected` or `rebuilt` packaged run. Deferred and reuse runs seal none.
 * `def validate_descriptor(value: Any, path: str = '$') -> dict[str, Any]`: A producer is a run of a managed caller, recorded under the pull request's head commit or, for a protected push or dispatch, the commit it both runs from and tests. Runtime, results and packaged-gate artifacts come from the packaged caller; a pull request's Build artifacts from its Build caller. Times are whole-second UTC.
-* `def validate_build_envelope(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
+* `def validate_build_envelope(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: Files are export paths with `lane_id` null for a file of the target as a whole (`protocol.check_output_scope`); every output role has its own size bound (JAR, `MAX_CI_SBOM_BYTES`, the profile's native-report bound, `MAX_CI_LOG_BYTES`). With a plan the files equal the exact planned outputs of the target or of the whole Build, scope included.
 * `def bind_build_envelope(envelope: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Strictly bind pre-upload producer identity, full plan/profile and artifact scope/target to a selected descriptor retaining actual API window and immutable artifact metadata. Pure structural binding; API authentication and native validity remain independently required.
 * `def validate_source_selection(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
 * `def validate_gate_receipt(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`

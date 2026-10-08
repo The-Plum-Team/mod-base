@@ -91,7 +91,8 @@ table lists the native ones. Sources are `path:line` at Block Pops `47a890ae` (B
 | `CI_TERMINATION_GRACE_SECONDS`, `CI_TERMINATION_POLL_SECONDS` | 15 s, polled every 0.25 s | BP `scripts/ci/untrusted_runner.py:42`, `:718` |
 | `MAX_CI_SOURCE_ENTRIES`, `MAX_CI_SOURCE_FILES`, `MAX_CI_SOURCE_FILE_BYTES`, `MAX_CI_SOURCE_TREE_BYTES` | 250,000 entries, 200,000 files, 2 GiB per file, 20 GiB (Gradle seed and source copies) | BP `scripts/ci/untrusted_runner.py:491-494` |
 | `MAX_CI_JAR_BYTES` | 256 MiB per JAR | BP `scripts/release/artifact_manifest.py:41` |
-| `MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE` | Block Pops 8 MiB, Quick Skin 4 MiB | BP `scripts/release/build_evidence.py:21`; Quick Skin's value is a kit choice below its native 16 MiB readers |
+| `MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE` | Block Pops 8 MiB, Quick Skin 4 MiB per native report (a staged manifest is one) | BP `scripts/release/build_evidence.py:21`; Quick Skin's value is a kit choice below its native 16 MiB manifest reader |
+| `MAX_CI_SBOM_BYTES` | 16 MiB per SBOM | QS `scripts/release/generate_sbom.py:31`; Block Pops stages none |
 | `MAX_CI_RUNTIME_FILES`, `MAX_CI_RUNTIME_BYTES` | 512 files, 256 MiB per lane | BP `e2e/packaged_runtime.py:180-181`, QS `e2e/packaged_runtime.py:201-202` (there per evidence profile) |
 | `MAX_CI_REPORT_BYTES`, `MAX_CI_PNG_BYTES` | 4 MiB report, 32 MiB screenshot | BP `e2e/packaged_runtime.py:183-184`, QS `:204-205` |
 | `MAX_CI_RUNTIME_AGGREGATE_FILES`, `MAX_CI_RUNTIME_AGGREGATE_BYTES` | 4,096 files, 512 MiB per complete runtime export | BP `scripts/ci/e2e_fanin.py:80-81` |
@@ -194,9 +195,14 @@ write native files only; the kit inventories, hashes and binds them.
   generation by today's sizes.
 - `tests/fixtures/ci_native` holds the inventories, lane lists, output names, job listings and
   measured sizes of both mods at the reviewed commits, for parity tests.
-- Neither mod's staging fits a plan as it is. Block Pops writes no SBOM and one manifest per lane;
-  Quick Skin writes one manifest and one SBOM per target, under the same names in every partition.
-  Each adapter has to map this in its own reviewed change.
+- A plan describes what the mods stage. Block Pops writes no SBOM, so an SBOM is optional; Quick
+  Skin writes one manifest and one SBOM per target, so an output may belong to its target as a
+  whole (`lane_id` null) instead of to one lane. Only the two JARs are required of every lane, and
+  a native report of every target. One thing is left to each adapter's own reviewed change: both
+  mods write `artifacts.json` (and Quick Skin its SBOM) under the same name in every partition,
+  and a path is unique in the whole plan, so the adapter stages those files under a per-target
+  path such as `targets/<target id>/artifacts.json`. `tests/test_ci_native_plan.py` builds the
+  complete plan of each mod that way from the fixtures.
 
 ## Alternatives considered
 

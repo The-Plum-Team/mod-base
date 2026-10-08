@@ -308,6 +308,9 @@ MAX_CI_ORIGINAL_INPUT_ENTRIES = MAX_CI_EXPORT_ENTRIES + MAX_CI_RUNTIME_ENTRIES +
 MAX_CI_REPORT_BYTES = 4 * MIB
 # Original Build input reports and new validator-output reports have separate contracts.
 MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE = {"quick-skin": 4 * MIB, "block-pops": 8 * MIB}
+#: One ``sbom`` output of a Build export: what Quick Skin's own SBOM reader admits. Block Pops
+#: stages none, and an SBOM is optional in a plan.
+MAX_CI_SBOM_BYTES = 16 * MIB
 MAX_CI_LOG_BYTES = 16 * MIB
 MAX_CI_EXECUTION_LOG_CHARS = 4 * ((MAX_CI_LOG_BYTES + 2) // 3)
 MAX_CI_EXECUTION_BYTES = MAX_CI_EXECUTION_LOG_CHARS + 64 * KIB

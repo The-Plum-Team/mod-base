@@ -9,14 +9,14 @@ from mod_base.build_ci.authenticate import authenticate_merged_pr_identity
 from mod_base.build_ci.records import (GATE_MODES, bind_build_envelope, bind_gate_receipt, bind_reuse_reference,
                                        validate_build_envelope, validate_descriptor,
                                        validate_gate_receipt, validate_reuse_reference, validate_source_selection)
-from mod_base.build_ci.protocol import plan_sha256, validate_plan
+from mod_base.build_ci.protocol import OUTPUT_ROLES, plan_sha256, validate_plan
 from mod_base.build_ci.config import validate_build_config
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.documents import load_document, validate_document
 from tests.helpers import (ci_config, ci_descriptor, ci_envelope, ci_gate, ci_plan, ci_push_plan, ci_reuse,
-                           ci_run_descriptor, ci_run_gate, ci_selection)
+                           ci_run_descriptor, ci_run_gate, ci_selection, ci_staged_plan)
 from tests import test_ci_protocol as protocol_fixtures
 
 
@@ -340,16 +340,70 @@ class EnvelopeTests(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(MbError):
                 validate_build_envelope(envelope, plan=ci_plan())
 
-    def test_native_file_role_caps_are_preserved(self):
-        for role, bound in (("production", limits.MAX_CI_JAR_BYTES), ("harness", limits.MAX_CI_JAR_BYTES),
-                            ("native-report", limits.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE["block-pops"])):
+    def test_every_output_role_has_a_size_bound_of_its_own(self):
+        bounds = {"production": limits.MAX_CI_JAR_BYTES, "harness": limits.MAX_CI_JAR_BYTES,
+                  "sbom": limits.MAX_CI_SBOM_BYTES,
+                  "native-report": limits.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE["block-pops"],
+                  "build-log": limits.MAX_CI_LOG_BYTES}
+        self.assertEqual(set(bounds), set(OUTPUT_ROLES))
+        for role, bound in bounds.items():
             envelope = ci_envelope()
+            if role == "build-log":  # The fixture plans none.
+                envelope["files"].append({**envelope["files"][-1], "path": "staged/lane-a/zz-compiler.log", "role": role})
             file = next(item for item in envelope["files"] if item["role"] == role)
             file["size"] = bound
-            validate_build_envelope(envelope)
-            file["size"] += 1
-            with self.assertRaises(MbError):
+            with self.subTest(role=role):
+                # No role is left to the whole-export ceiling of one file.
+                self.assertLess(bound, limits.MAX_CI_EXPORT_FILE_BYTES)
                 validate_build_envelope(envelope)
+                file["size"] += 1
+                with self.assertRaisesRegex(MbError, "role budget"):
+                    validate_build_envelope(envelope)
+
+    def test_files_of_a_whole_target_have_no_lane_exactly_as_planned(self):
+        plan = ci_staged_plan()
+        complete = ci_envelope(plan)
+        self.assertIs(validate_build_envelope(complete, plan=plan), complete)
+        self.assertEqual(load_document(canonical_json(complete), kind=complete["kind"], plan=plan), complete)
+        self.assertEqual([(file["path"], file["role"]) for file in complete["files"] if file["lane_id"] is None], [
+            ("targets/target-a/artifacts.json", "native-report"), ("targets/target-a/sbom/example.cdx.json", "sbom"),
+            ("targets/target-c/artifacts.json", "native-report")])
+        self.assertEqual(complete["native_reports"], ["targets/target-a/artifacts.json", "targets/target-c/artifacts.json"])
+        for target in plan["targets"]:
+            partition = ci_envelope(plan, target_id=target["id"])
+            with self.subTest(target=target["id"]):
+                validate_build_envelope(partition, plan=plan)
+                self.assertEqual(len(partition["files"]), len(target["outputs"]))
+        # The partition of the target without an SBOM holds none, and may not borrow the other's.
+        without = ci_envelope(plan, target_id="target-c")
+        self.assertNotIn("sbom", {file["role"] for file in without["files"]})
+        without["files"].append(next(file for file in complete["files"] if file["role"] == "sbom"))
+        without["files"].sort(key=lambda file: file["path"])
+        with self.assertRaisesRegex(MbError, "exact planned output union"):
+            validate_build_envelope(without, plan=plan)
+
+    def test_a_file_cannot_change_its_scope(self):
+        plan = ci_staged_plan()
+
+        def changed(path, lane):
+            envelope = ci_envelope(plan)
+            next(file for file in envelope["files"] if file["path"] == path)["lane_id"] = lane
+            return envelope
+
+        cases = (("targets/target-a/artifacts.json", "lane-a"), ("targets/target-a/sbom/example.cdx.json", "lane-b"),
+                 ("files/Example Mod - lane-b.jar", "lane-a"), ("files/Example Mod - lane-c.jar", None))
+        for path, lane in cases:
+            with self.subTest(path=path, lane=lane), self.assertRaises(MbError):
+                validate_build_envelope(changed(path, lane), plan=plan)
+        # Without a plan the envelope still knows that a JAR is one lane's and nothing else must be.
+        for path, lane in cases[:3]:
+            validate_build_envelope(changed(path, lane))
+        for path in ("files/Example Mod - lane-c.jar", "harness/Example Mod E2E - lane-a.jar"):
+            with self.subTest(path=path), self.assertRaisesRegex(MbError, "a production or harness JAR belongs to one lane"):
+                validate_build_envelope(changed(path, None))
+        for lane in ("", "Lane-A", "lane--a", 0, False, ["lane-a"]):
+            with self.subTest(lane=lane), self.assertRaises(MbError):
+                validate_build_envelope(changed("targets/target-a/artifacts.json", lane))
 
     def test_block_pops_original_eight_mib_report_does_not_change_quick_skin_bound(self):
         for profile, bound in (("block-pops", 8 * 1024 * 1024), ("quick-skin", 4 * 1024 * 1024)):

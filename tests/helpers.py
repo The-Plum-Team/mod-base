@@ -765,6 +765,35 @@ def ci_plan() -> dict[str, Any]:
     return document
 
 
+def ci_staged_plan() -> dict[str, Any]:
+    """The fixture plan in the shape both mods stage. ``target-a`` builds two lanes and has a
+    manifest and an SBOM of its own (``lane_id`` null); ``target-c`` builds one lane and has no SBOM.
+    A file a mod writes once per target carries the target in its path, because a path is unique
+    in the whole plan."""
+
+    from mod_base.build_ci.protocol import plan_sha256
+
+    def jars(lane: str) -> list[dict[str, Any]]:
+        return [{"path": f"files/Example Mod - {lane}.jar", "lane_id": lane, "role": "production"},
+                {"path": f"harness/Example Mod E2E - {lane}.jar", "lane_id": lane, "role": "harness"}]
+
+    def whole(target: str, name: str, role: str) -> dict[str, Any]:
+        return {"path": f"targets/{target}/{name}", "lane_id": None, "role": role}
+
+    plan = ci_plan()
+    target, lane = plan["targets"][0], plan["lanes"][0]
+    plan["targets"] = [
+        {**target, "id": "target-a", "outputs": [*jars("lane-a"), *jars("lane-b"),
+                                                 whole("target-a", "artifacts.json", "native-report"),
+                                                 whole("target-a", "sbom/example.cdx.json", "sbom")]},
+        {**target, "id": "target-c", "outputs": [*jars("lane-c"), whole("target-c", "artifacts.json", "native-report")]},
+    ]
+    plan["lanes"] = [{**copy.deepcopy(lane), "id": name, "target_id": owner}
+                     for name, owner in (("lane-a", "target-a"), ("lane-b", "target-a"), ("lane-c", "target-c"))]
+    plan["plan_sha256"] = plan_sha256(plan)
+    return plan
+
+
 #: The managed producer callers, written out: a rename in ``mod_base.workflow`` must not follow.
 CI_WORKFLOWS = {"build": ".github/workflows/mod-base-build.yml",
                 "packaged": ".github/workflows/mod-base-packaged-e2e.yml"}
@@ -927,14 +956,18 @@ def ci_descriptor(kind: str = "build", *, gate: str = "build", unit_id: str | No
     return ci_run_descriptor(ci_plan(), gate, None, kind, unit_id=unit_id, artifact_id=artifact_id)
 
 
-def ci_envelope() -> dict[str, Any]:
-    plan = ci_plan()
+def ci_envelope(plan: dict[str, Any] | None = None, *, target_id: str | None = None) -> dict[str, Any]:
+    """The Build envelope of ``plan`` (by default the fixture plan): the complete export or, with
+    ``target_id``, the partition of that one target."""
+
+    plan = ci_plan() if plan is None else plan
     files = sorted(({**output, "sha256": h(output["path"]), "size": 128}
-                    for target in plan["targets"] for output in target["outputs"]), key=lambda item: item["path"])
-    return {"kind": "mod-base.build.envelope", "schema_version": 1, "identity": plan["identity"],
-              "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
-              "producer": {key: value for key, value in ci_producer().items() if key != "upload_window"},
-            "scope": "complete", "target_id": None, "files": files,
+                    for target in plan["targets"] if target_id in (None, target["id"])
+                    for output in target["outputs"]), key=lambda item: item["path"])
+    return {"kind": "mod-base.build.envelope", "schema_version": 1, "identity": copy.deepcopy(plan["identity"]),
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "producer": {key: value for key, value in ci_run_producer(plan).items() if key != "upload_window"},
+            "scope": "complete" if target_id is None else "target", "target_id": target_id, "files": files,
             "native_reports": [item["path"] for item in files if item["role"] == "native-report"]}
 
 

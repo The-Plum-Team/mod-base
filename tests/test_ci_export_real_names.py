@@ -21,7 +21,7 @@ from mod_base.errors import MbError
 from mod_base.io import bounded_zip
 from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json
-from tests.helpers import ci_descriptor, ci_envelope, ci_plan
+from tests.helpers import ci_descriptor, ci_envelope, ci_plan, ci_run_descriptor, ci_staged_plan
 
 #: What Block Pops and Quick Skin stage today, one lane each.
 REAL_OUTPUTS = {
@@ -73,10 +73,9 @@ class RealNameExportTests(unittest.TestCase):
         (root / grammar.CI_ENVELOPE_NAME).write_bytes(canonical_json(envelope))
         return payloads
 
-    def assembled(self):
-        """The complete export of both targets, assembled from their frozen partitions."""
+    def assembled(self, plan, partitions):
+        """The complete export of every target, assembled from the frozen partitions."""
 
-        plan, partitions = real_plan_and_partitions()
         validate_plan(plan)
         payloads = {}
         for index, partition in enumerate(partitions):
@@ -84,10 +83,11 @@ class RealNameExportTests(unittest.TestCase):
             validate_build_envelope(partition["envelope"], plan=plan)
         complete = exports.assemble_build_export(self.base / "inputs", partitions=partitions, plan=plan,
                                                  run_id=42, run_attempt=2, output=self.base / "complete")
-        return plan, payloads, complete
+        return payloads, complete
 
     def test_real_names_are_planned_assembled_verified_and_sealed_unchanged(self):
-        plan, payloads, complete = self.assembled()
+        plan, partitions = real_plan_and_partitions()
+        payloads, complete = self.assembled(plan, partitions)
         self.assertEqual(sum(" " in name for name in payloads), 4)
         self.assertEqual([file["path"] for file in complete["files"]], sorted(payloads))
         self.assertEqual(exports.verify_build_export(self.base / "complete", plan=plan), complete)
@@ -98,7 +98,8 @@ class RealNameExportTests(unittest.TestCase):
             self.assertNotEqual(os.stat(self.base / "sealed" / name).st_ino, os.stat(self.base / "complete" / name).st_ino)
 
     def test_real_names_are_archived_and_extracted_unchanged(self):
-        plan, payloads, complete = self.assembled()
+        plan, partitions = real_plan_and_partitions()
+        payloads, complete = self.assembled(plan, partitions)
         metadata = archive.encode_build_export(self.base / "complete", self.base / "encoded", plan=plan)
         encoded = self.base / "encoded" / metadata["path"]
         self.assertEqual((encoded.stat().st_size, hashlib.sha256(encoded.read_bytes()).hexdigest()),
@@ -112,6 +113,35 @@ class RealNameExportTests(unittest.TestCase):
         with self.assertRaisesRegex(bounded_zip.ZipRejected, "unsafe entry name"):
             bounded_zip.extract(encoded, self.base / "pages", bounded_zip.ExtractionLimits(16, 1 << 20, 1 << 20))
         self.assertFalse((self.base / "pages").exists())
+
+    def test_a_manifest_and_an_sbom_of_a_whole_target_are_assembled_sealed_and_archived(self):
+        # What both mods stage: lanes that share one manifest (and one SBOM) of their target, and a
+        # target without an SBOM. No file of the whole target belongs to a lane at any step.
+        plan = ci_staged_plan()
+        partitions = [{"envelope": ci_envelope(plan, target_id=target["id"]),
+                       "descriptor": ci_run_descriptor(plan, "build", None, "target", unit_id=target["id"],
+                                                       artifact_id=100 + index)}
+                      for index, target in enumerate(plan["targets"])]
+        payloads, complete = self.assembled(plan, partitions)
+        whole = [file["path"] for file in complete["files"] if file["lane_id"] is None]
+        self.assertEqual(whole, ["targets/target-a/artifacts.json", "targets/target-a/sbom/example.cdx.json",
+                                 "targets/target-c/artifacts.json"])
+        self.assertEqual(complete["native_reports"], [whole[0], whole[2]])
+        self.assertEqual(len(complete["files"]), 9)
+        self.assertEqual(exports.materialize_build_export(self.base / "complete", self.base / "sealed", plan=plan), complete)
+        metadata = archive.encode_build_export(self.base / "sealed", self.base / "encoded", plan=plan)
+        bounded_zip.extract_build(self.base / "encoded" / metadata["path"], self.base / "decoded")
+        self.assertEqual(exports.verify_build_export(self.base / "decoded", plan=plan), complete)
+        for name, data in payloads.items():
+            self.assertEqual((self.base / "decoded" / name).read_bytes(), data)
+        # A partition is exactly its target's own files: the other target's manifest in it is extra.
+        stray = self.base / "inputs" / "target-1" / "targets" / "target-a"
+        stray.mkdir(parents=True)
+        (stray / "artifacts.json").write_bytes(payloads["targets/target-a/artifacts.json"])
+        with self.assertRaises(MbError):
+            exports.assemble_build_export(self.base / "inputs", partitions=partitions, plan=plan,
+                                          run_id=42, run_attempt=2, output=self.base / "again")
+        self.assertFalse((self.base / "again").exists())
 
     def test_hostile_planned_names_never_validate(self):
         for name in (" leading.jar", "trailing.jar ", ".hidden.jar", "trailing.", "double  space.jar", "tab\tname.jar",

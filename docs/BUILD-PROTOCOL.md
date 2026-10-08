@@ -163,10 +163,23 @@ Every target has `id`, `java`, `native_contract_sha256`, `outputs`; each output 
 `path`, `lane_id`, `role`. Roles are production, harness, SBOM, native report and build log. Each lane has
 `id`, `target_id`, `native_contract_sha256`, ordered unique `obligations`. IDs are opaque bounded
 ASCII tokens without the transport delimiter `--`; plan and artifact unit admission use the
-same CI_UNIT_ID grammar. Every target has a lane; every lane names a target and has all four distinct output
-roles. Exactly one production, harness and SBOM output is required per lane; multiple native
-reports and build logs retain independent compiler/JDK/task observations. Paths are canonical
-and globally unique even under case folding, including parent-directory spelling. A file cannot
+same CI_UNIT_ID grammar. The mods' runtime row ids hold `--`, so a lane is named by its artifact
+node. Every target has a lane and every lane names a target.
+
+An output's `lane_id` names a lane of its own target, or is null for an output that belongs to
+the target as a whole: a staged manifest, a report, a log or the SBOM of the whole target. The
+rules follow what the two mods stage:
+
+- every lane has exactly one production and one harness output, and neither is ever target-scoped;
+- an SBOM is optional (Block Pops stages none): at most one per lane and one per target as a whole
+  (Quick Skin stages one per target);
+- every target has at least one native report of either scope (both mods stage a manifest per
+  target partition); further native reports and build logs are optional and may repeat, retaining
+  independent compiler/JDK/task observations.
+
+Paths are canonical export paths
+and globally unique even under case folding, including parent-directory spelling, so a file a mod
+writes once per target carries the target in its path (`targets/<target id>/artifacts.json`). A file cannot
 also be a directory, and the outer `ci-envelope.json` name is reserved. The whole logical plan
 keeps the export file-count ceiling across every partition. No commands or permission fields are accepted.
 Native validators still prove actual JAR/report/task/JDK/scenario observations from frozen bytes.
@@ -383,7 +396,8 @@ rewrites the export or infers the window from its self-report.
 
 The envelope also has sorted `files` and sorted `native_reports`. Each file has `path`, `size`, `sha256`, `lane_id`,
 `role`; a path is an export path, as in the plan, and the frozen tree, the archive encoder and
-`extract_build` apply that same grammar. With an independently derived plan it must equal the exact target partition or complete
+`extract_build` apply that same grammar. `lane_id` is null for a file of the target as a whole, exactly
+as planned; a production or harness file always names its lane. With an independently derived plan it must equal the exact target partition or complete
 union. Native reports equal the report-role subset. Actual size/hash equality is separately
 verified by `verify_build_export` over canonical `ci-envelope.json` and descriptor-relative MB1
 regular-file inventory. No missing/extra files, links, duplicate names or envelope mutation
@@ -394,7 +408,14 @@ Build native-report payload limits are profile-specific: Block Pops retains the 
 compiler-report limit from `scripts/release/build_evidence.py:MAX_REPORT_BYTES` and
 `build_matrix.py:_observation_report` at reviewed commit
 `47a890ae46a2878fb08d29a932803ab91bccdcd9`; Quick Skin retains the initial inactive 4 MiB
-transport limit, whose native conformance still needs proof. This is an initial-format correction
+transport limit, a kit choice below the 16 MiB its own manifest reader admits
+(`scripts/release/artifact_manifest.py:15` at `c0cdc01ab20f1eac663c628011520c76fc7e3d7a`). The
+measured files leave both bounds as they are: Block Pops' build report is 1.28 MiB and its
+manifest 28.7 KiB, Quick Skin's manifest 30.1 KiB (`tests/fixtures/ci_native/*/measured.json`).
+An `sbom` file is limited to 16 MiB, the cap of Quick Skin's own SBOM reader
+(`scripts/release/generate_sbom.py:31`; its measured SBOM is 46.5 KiB); before, that role fell
+back to the 1 GiB ceiling of any export file. Every output role now has a bound of its own.
+This is an initial-format correction
 before release, not an increase caused by a failing pipeline. New validator-output reports and
 records remain limited independently to 4 MiB. Whole-export, JAR, log and compressed ZIP caps
 remain unchanged. Accepting an inventoried compiler report does not validate its native semantics.

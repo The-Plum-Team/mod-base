@@ -2869,6 +2869,39 @@
       ]
     },
     {
+      "error": "$.targets[0].outputs[0].lane_id: must be a string",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-output-lane-of-another-type",
+      "set": [
+        [
+          "/targets/0/outputs/0/lane_id",
+          7
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/targets/0/outputs/3/lane_id"
+      ],
+      "error": "$.targets[0].outputs[3]: is missing required keys ['lane_id']",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-output-without-a-scope"
+    },
+    {
+      "error": "$.targets[0].outputs[0].path: must be a canonical export path",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-output-path-is-no-export-path",
+      "set": [
+        [
+          "/targets/0/outputs/0/path",
+          "staged/lane-a/.production.jar"
+        ]
+      ]
+    },
+    {
       "error": "has unknown keys",
       "expect": "invalid",
       "fixture": "ci-envelope",
@@ -2877,6 +2910,130 @@
         [
           "/authority",
           "success"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-report-of-the-whole-target",
+      "set": [
+        [
+          "/files/1/lane_id",
+          null
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-sbom-of-the-whole-target",
+      "set": [
+        [
+          "/files/3/lane_id",
+          null
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/files/3"
+      ],
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-without-an-sbom"
+    },
+    {
+      "error": "$.files[2]: a production or harness JAR belongs to one lane",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-production-of-the-whole-target",
+      "set": [
+        [
+          "/files/2/lane_id",
+          null
+        ]
+      ]
+    },
+    {
+      "error": "$.files[0]: a production or harness JAR belongs to one lane",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-harness-of-the-whole-target",
+      "set": [
+        [
+          "/files/0/lane_id",
+          null
+        ]
+      ]
+    },
+    {
+      "error": "$.files[1].lane_id: must be a string",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-lane-of-another-type",
+      "set": [
+        [
+          "/files/1/lane_id",
+          false
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-real-jar-name",
+      "set": [
+        [
+          "/files/2/path",
+          "staged/lane-a/production - Fabric - 1.20.1-3.1.0+build.5.jar"
+        ]
+      ]
+    },
+    {
+      "error": "$.files[3].path: must be a canonical export path distinct from the outer envelope",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-hidden-file",
+      "set": [
+        [
+          "/files/3/path",
+          "staged/lane-a/.sbom.json"
+        ]
+      ]
+    },
+    {
+      "error": "$.files[2].path: must be a canonical export path distinct from the outer envelope",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-name-with-two-spaces",
+      "set": [
+        [
+          "/files/2/path",
+          "staged/lane-a/production  jar"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-sbom-16-mib",
+      "set": [
+        [
+          "/files/3/size",
+          16777216
+        ]
+      ]
+    },
+    {
+      "error": "$.files[3].size: native file exceeds its role budget",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-sbom-over-16-mib",
+      "set": [
+        [
+          "/files/3/size",
+          16777217
         ]
       ]
     },

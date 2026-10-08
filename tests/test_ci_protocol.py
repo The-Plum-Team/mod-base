@@ -19,7 +19,7 @@ from mod_base.model.documents import load_document
 from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json
 from mod_base.workflow import CI_SEAL_STEP, CI_UPLOAD_STEP
-from tests.helpers import CI_GRAPH_FIXTURES, ci_api_run, ci_graph_jobs, ci_plan
+from tests.helpers import CI_GRAPH_FIXTURES, ci_api_run, ci_graph_jobs, ci_plan, ci_staged_plan
 
 
 def seeded_pr():
@@ -86,6 +86,92 @@ class PlanTests(unittest.TestCase):
             plan["plan_sha256"] = plan_sha256(plan)
             with self.subTest(index=index), self.assertRaises(MbError):
                 validate_plan(plan)
+
+    def staged(self, mutate=None):
+        plan = ci_staged_plan()
+        if mutate is not None:
+            mutate({target["id"]: target["outputs"] for target in plan["targets"]}, plan)
+        plan["plan_sha256"] = plan_sha256(plan)
+        return plan
+
+    def test_a_plan_describes_what_the_mods_stage(self):
+        plan = self.staged()
+        self.assertIs(validate_plan(plan), plan)
+        self.assertEqual(load_document(canonical_json(plan), kind=plan["kind"]), plan)
+        outputs = [output for target in plan["targets"] for output in target["outputs"]]
+        # Two lanes share one manifest and one SBOM; the other target stages no SBOM at all.
+        self.assertEqual([(output["role"], output["lane_id"]) for output in outputs if output["lane_id"] is None],
+                         [("native-report", None), ("sbom", None), ("native-report", None)])
+        self.assertEqual(sum(output["role"] in ("production", "harness") for output in outputs), 6)
+
+    def test_optional_and_repeatable_outputs_of_either_scope_are_planned(self):
+        def output(path, lane, role):
+            return {"path": path, "lane_id": lane, "role": role}
+
+        accepted = {
+            "no SBOM anywhere": lambda outputs, plan: outputs["target-a"].pop(),
+            "an SBOM per lane": lambda outputs, plan: outputs["target-a"].extend(
+                output(f"sbom/{lane}.cdx.json", lane, "sbom") for lane in ("lane-a", "lane-b")),
+            "reports of a lane and of the target": lambda outputs, plan: outputs["target-a"].extend(
+                [output("reports/lane-a/jdk-probe.json", "lane-a", "native-report"),
+                 output("reports/lane-a/tasks.json", "lane-a", "native-report"),
+                 output("targets/target-a/build-matrix-report.json", None, "native-report")]),
+            "logs of a lane and of the target": lambda outputs, plan: outputs["target-c"].extend(
+                [output("logs/lane-c.log", "lane-c", "build-log"), output("logs/lane-c.2.log", "lane-c", "build-log"),
+                 output("targets/target-c/gradle.log", None, "build-log")]),
+            "a lane report instead of a manifest": lambda outputs, plan: outputs["target-c"].__setitem__(
+                -1, output("reports/lane-c.json", "lane-c", "native-report")),
+        }
+        for label, mutate in accepted.items():
+            with self.subTest(case=label):
+                validate_plan(self.staged(mutate))
+
+    def test_output_rules_that_no_staging_may_break(self):
+        def output(path, lane, role):
+            return {"path": path, "lane_id": lane, "role": role}
+
+        def scope(outputs, index, lane):
+            outputs[index]["lane_id"] = lane
+
+        rejected = {
+            "production of the whole target": (lambda outputs, plan: scope(outputs["target-a"], 0, None),
+                                               "a production or harness JAR belongs to one lane"),
+            "harness of the whole target": (lambda outputs, plan: scope(outputs["target-c"], 1, None),
+                                            "a production or harness JAR belongs to one lane"),
+            "lane without a harness": (lambda outputs, plan: outputs["target-a"].pop(3),
+                                       "lane lane-b requires one production and one harness JAR"),
+            "lane without a production": (lambda outputs, plan: outputs["target-c"].pop(0),
+                                          "lane lane-c requires one production and one harness JAR"),
+            "two productions of one lane": (lambda outputs, plan: outputs["target-a"].append(
+                output("files/Example Mod - second.jar", "lane-a", "production")), "repeats the production JAR"),
+            "two harnesses of one lane": (lambda outputs, plan: outputs["target-a"].append(
+                output("harness/Example Mod E2E - second.jar", "lane-b", "harness")), "repeats the production JAR"),
+            "two SBOMs of one target": (lambda outputs, plan: outputs["target-a"].append(
+                output("targets/target-a/sbom/second.cdx.json", None, "sbom")), "repeats the production JAR"),
+            "two SBOMs of one lane": (lambda outputs, plan: outputs["target-c"].extend(
+                output(f"sbom/lane-c.{index}.cdx.json", "lane-c", "sbom") for index in (1, 2)),
+                                      "repeats the production JAR"),
+            "target without a native report": (lambda outputs, plan: outputs["target-c"].pop(),
+                                               "$.targets[1].outputs: every target requires a native report"),
+            "report of another target's lane": (lambda outputs, plan: scope(outputs["target-c"], -1, "lane-a"),
+                                                "$.targets[1].outputs[2].lane_id: names another target's lane"),
+            "jar of another target's lane": (lambda outputs, plan: scope(outputs["target-a"], 0, "lane-c"),
+                                             "names another target's lane"),
+            "unknown lane": (lambda outputs, plan: scope(outputs["target-a"], 4, "lane-z"), "names another target's lane"),
+            "one manifest path for two targets": (lambda outputs, plan: [
+                item.update(path="artifacts.json") for item in (outputs["target-a"][4], outputs["target-c"][-1])],
+                                                  "case-insensitive alias"),
+            "one SBOM path for two targets": (lambda outputs, plan: outputs["target-c"].append(
+                output("Targets/target-a/SBOM/example.cdx.json", None, "sbom")), "case-insensitive alias"),
+            "lane id of another type": (lambda outputs, plan: scope(outputs["target-a"], 4, 0), "must be a string"),
+            "empty lane id": (lambda outputs, plan: scope(outputs["target-a"], 4, ""), "length must be between"),
+            "output without a scope": (lambda outputs, plan: outputs["target-a"][4].pop("lane_id"), "missing required keys"),
+            "unknown role": (lambda outputs, plan: outputs["target-a"][4].update(role="manifest"), "must be one of"),
+        }
+        for label, (mutate, message) in rejected.items():
+            with self.subTest(case=label), self.assertRaises(MbError) as caught:
+                validate_plan(self.staged(mutate))
+            self.assertIn(message, str(caught.exception), label)
 
     def test_duplicate_json_and_size_limits(self):
         plan = canonical_json(ci_plan())

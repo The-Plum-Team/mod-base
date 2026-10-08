@@ -22,7 +22,7 @@ from mod_base.errors import MbError
 from mod_base.io.tree import EXPORT_PATHS
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
-from tests.helpers import ci_descriptor, ci_envelope, ci_plan
+from tests.helpers import ci_descriptor, ci_envelope, ci_plan, ci_run_descriptor
 
 
 def partitions_fixture():
@@ -87,14 +87,33 @@ class TargetUnionTests(unittest.TestCase):
                 validate_target_partitions(partitions, plan=plan)
 
     def test_partitioning_does_not_multiply_whole_tree_budget(self):
-        plan, partitions = partitions_fixture()
-        # Each partition separately fits 2 GiB; their coherent union exceeds it.
-        for partition in partitions:
-            # SBOM's generic per-file cap permits a 1 GiB witness; other roles stay within their caps.
-            for file in partition["envelope"]["files"]:
-                file["size"] = limits.MAX_CI_EXPORT_FILE_BYTES if file["role"] == "sbom" else 128
+        # Every role has a bound of its own, so the witness is three lanes of full-size JARs per
+        # target (1.5 GiB): each partition separately fits 2 GiB and their coherent union exceeds it.
+        plan = ci_plan()
+        target, lane = plan["targets"][0], plan["lanes"][0]
+        plan["targets"], plan["lanes"] = [], []
+        for name in ("target-a", "target-b"):
+            lanes = [f"{name}-lane-{index}" for index in range(3)]
+            plan["lanes"] += [{**copy.deepcopy(lane), "id": item, "target_id": name} for item in lanes]
+            plan["targets"].append({**copy.deepcopy(target), "id": name, "outputs": [
+                *({"path": f"{item}/{role}.jar", "lane_id": item, "role": role}
+                  for item in lanes for role in ("production", "harness")),
+                {"path": f"{name}/artifacts.json", "lane_id": None, "role": "native-report"}]})
+        plan["plan_sha256"] = plan_sha256(plan)
+        partitions = []
+        for index, target in enumerate(plan["targets"]):
+            envelope = ci_envelope(plan, target_id=target["id"])
+            for file in envelope["files"]:
+                file["size"] = 128 if file["role"] == "native-report" else limits.MAX_CI_JAR_BYTES
+            self.assertLess(sum(file["size"] for file in envelope["files"]), limits.MAX_CI_EXPORT_TREE_BYTES)
+            partitions.append({"envelope": envelope, "descriptor": ci_run_descriptor(
+                plan, "build", None, "target", unit_id=target["id"], artifact_id=100 + index)})
         with self.assertRaisesRegex(MbError, "whole-tree"):
             validate_target_partitions(partitions, plan=plan)
+        # Within the budget the same two partitions are one complete union.
+        for file in partitions[1]["envelope"]["files"]:
+            file["size"] = 128
+        self.assertEqual(len(validate_target_partitions(partitions, plan=plan)), 14)
 
     def test_complete_logical_entry_budget_includes_inferred_directories_and_envelope(self):
         plan, partitions = partitions_fixture()

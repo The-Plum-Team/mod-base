@@ -78,12 +78,27 @@ ignored.
   `{"path", "lane_id", "role"}` with role `production`, `harness`, `sbom`, `native-report` or
   `build-log`. A lane is `{"id", "target_id", "native_contract_sha256", "obligations"}`.
 * Ids are lower-case tokens of `a-z 0-9 . _ -` (at most 80 characters, no `--`), not `plan`,
-  `runtime` or `ci-validation`. They appear in job names and artifact names.
-* Every target has at least one lane and every lane names a target. Each lane has exactly one
-  `production`, one `harness` and one `sbom` output and at least one `native-report`.
+  `runtime` or `ci-validation`. They appear in job names and artifact names. A native runtime row
+  id such as `fabric-1_20_1--pr-behavior` holds `--` and cannot be a lane id: name a lane by its
+  artifact node (`fabric-1.20.1`) and carry the row id in `E2E_ROW_JSON`.
+* Every target has at least one lane and every lane names a target.
+* `lane_id` is the lane an output belongs to, or `null` for an output of the target as a whole:
+  its staged manifest, a build report, a log, or an SBOM that covers all its lanes.
+* Each lane has exactly one `production` and one `harness` output. Neither can be target-scoped.
+* An `sbom` is optional: at most one per lane and one for the target as a whole. A mod that
+  stages no SBOM plans none.
+* Every target has at least one `native-report` (the staged manifest, for example). Further
+  native reports and any number of `build-log` outputs are allowed, for a lane or for the target.
 * A path is relative to the export: components of ASCII letters, digits, `.`, `_`, `-`, `+` and
   single inner spaces (`Quick Skin - Fabric - 1.20.1-3.1.0.jar`) that neither start nor end with
-  a dot or a space; paths are unique even when case is ignored.
+  a dot or a space.
+* Paths are unique in the whole plan, across targets and even when case is ignored. Every
+  `build_target` run writes one partition and all partitions are assembled into one Build, so a
+  file each target stages under the same name must carry the target in its path: plan
+  `targets/<target id>/artifacts.json` and `targets/<target id>/sbom/quick-skin.cdx.json`, never
+  a bare `artifacts.json`. The JARs are unique by their own names (`files/…`, `harness/…`).
+* One file is at most 256 MiB as a JAR, 16 MiB as an SBOM or a build log, and as a native report
+  8 MiB (profile `block-pops`) or 4 MiB (`quick-skin`).
 * No identity, hash of the plan, command, runner or permission: the kit adds the identity and
   rejects any other key.
 
