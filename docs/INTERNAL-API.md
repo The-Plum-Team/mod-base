@@ -322,6 +322,7 @@ Integration-round amendments:
 | MB10 | `mod_base.conformance.run`, `mod_base.conformance.commands` |
 | MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject` |
 | MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.root_request_operations`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff` |
+| MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -534,6 +535,7 @@ Constants:
 ## `mod_base.model.grammar`
 
 * `CI_BATCH_BRANCH_PREFIX`: Fixed batch/ namespace; aliases in batch preserve the released value.
+* `CI_BATCH_NAME`: The name a new batch is given (`^[a-z0-9][a-z0-9._-]{0,62}$`); its branch `batch/<name>` must also satisfy `is_batch_branch`.
 * `def is_batch_branch(value: object) -> bool`: Bounded batch/* Git branch using the existing conservative character grammar, with a nonempty suffix, no dot-started/.lock-ended components and no final dot/slash. This publication-specific check does not change existing BRANCH document grammar.
 
 Owner: MB0 (implemented).
@@ -710,9 +712,15 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_GIT_METADATA_FILES`, `MAX_CI_GIT_METADATA_ENTRIES`, `MAX_CI_GIT_METADATA_FILE_BYTES`
 * `MAX_CI_GIT_METADATA_TREE_BYTES`, `MAX_CI_GIT_REF_BYTES`, `MAX_CI_GIT_REF_LIST_BYTES`
 * `MAX_CI_OBLIGATIONS_PER_LANE`, `CI_BUILD_WAIT_SECONDS`, `MAX_CI_BATCH_MEMBERS`
-* `MAX_CI_BATCH_DOCUMENT_BYTES`: 64 MiB strict batch JSON cap; decoded member/file/path bounds remain independent.
+* `MAX_CI_BATCH_DOCUMENT_BYTES`: 64 KiB: GitHub's bound of a pull request body, in which a batch manifest travels. The whole body, the marker line inside it and the decoded document share it.
 * `MAX_CI_BATCH_PUSH_RECEIPT_BYTES`: 4 KiB closed single-ref Git porcelain observation cap; separate from worker logs and manifest transport.
-* `MAX_CI_BATCH_PATCH_FILES`, `MAX_CI_BATCH_PATCH_ENTRIES`, `MAX_CI_BATCH_PATCH_PATH_BYTES`: Combined two-source-tree bounds for native batch policy inventory; no source/API/transport cap is widened.
+* `MAX_CI_BATCH_TITLE_CHARS`: 256, GitHub's bound of a pull request title; a member's title is the subject of its squash commit.
+* `MAX_CI_BATCH_ALLOWED_PATHS`: 4096 entries of the allowed-path list a caller hands to the batch constructor.
+* `MAX_CI_BATCH_REPORTED_PATHS`: 20 paths named by one batch refusal (a conflict, a rename that was followed).
+* `CI_BATCH_GIT_TIMEOUT_SECONDS`, `CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS`: 120 seconds for one Git plumbing call of the batch store, 600 for one fetch or push.
+* `MAX_CI_BATCH_GIT_OUTPUT_BYTES`: The output of one Git call of the batch store; the source-listing bound.
+* `MAX_CI_BATCH_PREPARE_REQUESTS`: 216, the request budget of `ci batch-prepare`: it sends 10 requests and 3 per member (160 for 50 members); the rest is for retries.
+* `MAX_CI_BATCH_SETTLE_REQUESTS`: 348, the request budget of `ci batch-settle`: it sends 3 requests, the 28 of `transport.download_merged_gate_pair` for both original gates and at most 5 per member (281 for 50 members); the rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
 * `MAX_CI_BUNDLE_COMPRESSED_BYTES`: 512 MiB archive cap of one `mb-ci-*` artifact of any kind and profile (`tests/test_ci_limits.py` pins every Build/E2E bound with the native bound it preserves).
 * `MAX_CI_EXPORT_FILES`, `MAX_CI_EXPORT_ENTRIES`, `MAX_CI_EXPORT_FILE_BYTES`, `MAX_CI_EXPORT_TREE_BYTES`
 * `MAX_CI_TARGET_DOWNLOAD_BYTES`, `MAX_CI_TARGET_INPUT_ENTRIES`: Additional aggregate compressed-download and physical wrapped-input bounds; do not widen native/runtime fan-in or original logical export limits.
@@ -1012,6 +1020,7 @@ Constants:
   * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`: GET every page (``per_page=100``) until a short page (a full page reaching ``total_count`` is confirmed by the next) and return the concatenated ``field`` arrays (or the top-level arrays when ``field`` is None). More than ``max_items`` rows or a non-object row raises :class:`ApiError`; a snapshot whose ``total_count`` disagrees with the rows (or changes between pages), or whose rows repeat an ``id``, is read again from page 1 and raises :class:`InconsistentListing` only after ``limits.LISTING_READ_ATTEMPTS`` such reads.
   * `read_listing(self, read: Callable[[], _T]) -> _T`: ``read()`` (one complete listing through this client) re-run by :func:`read_consistently` with this client's ``sleep`` until it raises no :class:`InconsistentListing`.
   * `post_json(self, path: str, payload: Mapping[str, Any]) -> Any`: POST canonical JSON; requires ``writable``. Returns decoded JSON or None for 204.
+  * `patch_json(self, path: str, payload: Mapping[str, Any]) -> Any`: PATCH canonical JSON; requires ``writable``. Returns the decoded JSON of the 200 answer; any other status raises.
   * `delete(self, path: str) -> None`: DELETE ``path``; requires ``writable``. 204 is success; anything else raises.
   * `download(self, path: str, *, max_bytes: int) -> bytes`: GET a binary endpoint (artifact ZIP) that answers with one redirect: the redirect is followed exactly once to an https URL with the ``Authorization`` header stripped; the body is read to at most ``max_bytes``.
   * `rate_limit_snapshot(self) -> dict[str, int]`: ``GET /rate_limit`` projected to numeric ``core`` counters: ``limit``, ``used``, ``remaining``, ``reset`` (the ``budget`` command; never tokens or headers).
@@ -1107,6 +1116,7 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
   * `add_tree(self, sha: str, entries: Sequence[Mapping[str, Any]], *, truncated: bool = False, repository: str | None = None) -> None`: Seed ``/git/trees/{sha}`` (``contents.tree``, ``tools/verify_action_tree.py``): ``entries`` are the API's ``{path, mode, type, sha, size?}`` rows; ``truncated`` seeds a truncated listing, which consumers must refuse.
   * `add_blob(self, data: bytes, *, oid: str | None = None, repository: str | None = None) -> str`: Seed ``/git/blobs/{oid}`` (``contents.blob``) and return its oid: the Git blob id of ``data`` unless ``oid`` forces another one (a corrupt object the reader must reject).
   * `add_ref(self, ref: str, sha: str, *, annotated_tag_sha: str | None = None, repository: str | None = None) -> None`: Seed ``/git/ref/{ref}`` (``ref`` like ``tags/v1.0.0`` or ``heads/main``). With ``annotated_tag_sha`` the ref points at that tag object, which peels to ``sha`` through ``/git/tags/{annotated_tag_sha}`` (``pin.verify``'s tag peel).
+  * `add_pull(self, record: Mapping[str, Any]) -> None`: Seed (or replace) ``/repos/{own}/pulls/{number}``: one pull request as the API reports it, kept verbatim. ``POST /pulls`` creates the next number from a seeded head ref and base branch, ``PATCH /pulls/{number}`` changes ``state``, ``title`` or ``body``, ``POST /issues/{number}/comments`` answers for a seeded pull request and ``DELETE /git/refs/{ref}`` removes a seeded ref (with its branch); each needs a writable fake and is recorded in ``mutations``.
   * `add_response(self, path: str, payload: Any, *, params: Mapping[str, str | int] | None = None) -> None`: Seed the exact JSON body of one GET ``path`` (with exactly ``params``) that no typed seeder covers; a request for an unseeded path answers 404 like the API.
   * `skew_listing(self, path: str, *, responses: int, offset: int = 1) -> None`: Serve the next ``responses`` responses of the listing ``path`` (any parameters) with a ``total_count`` ``offset`` rows off the rows it lists, as GitHub's eventually consistent listing does while a sibling job uploads.
   * `during_listing(self, path: str, action: Callable[[], None], *, after_pages: int = 1) -> None`: Run ``action`` once, right after the listing ``path`` served its ``after_pages``-th response from now: an upload or deletion landing between two pages of one read.
@@ -1119,6 +1129,7 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
   * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`
   * `read_listing(self, read: Callable[[], _T]) -> _T`
   * `post_json(self, path: str, payload: Mapping[str, Any]) -> Any`
+  * `patch_json(self, path: str, payload: Mapping[str, Any]) -> Any`
   * `delete(self, path: str) -> None`
   * `download(self, path: str, *, max_bytes: int) -> bytes`
   * `rate_limit_snapshot(self) -> dict[str, int]`
@@ -1979,7 +1990,7 @@ Owner: MB11. The top-level `ci` command. Each work area lists its verb module in
 * `VERB_MODULES`: the modules whose `add_verbs(verbs)` adds verbs to `ci`, one line per work area.
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def add_job_arguments(parser: argparse.ArgumentParser) -> None`: Add what every verb takes: `--repo`, `--config` and the required `--state DIR`.
-* `def api_client(invocation: runtime.Invocation, *, max_requests: int) -> github_api.GitHubApi`: The read-only API client of one command, bounded to `max_requests` requests in all.
+* `def api_client(invocation: runtime.Invocation, *, max_requests: int, writable: bool = False) -> github_api.GitHubApi`: The API client of one command, bounded to `max_requests` requests in all; read-only unless the verb writes to GitHub and passes `writable=True`.
 
 ## `mod_base.build_ci.commands_subject`
 
@@ -2300,46 +2311,83 @@ is owner approval.
 
 ## `mod_base.build_ci.batch`
 
-Owner: MB11. Inactive ordered same-repository open batch source/readiness observations. Original
-protected-controller and native ordinary-path admission are independent caller prerequisites.
-This does not construct a manifest/tree/commit, authenticate patches, approve restricted changes,
-write refs, settle members or authorize status publication. Repeat the full collection around
-later effects; repeated API reads are not an atomic lease against future changes.
+Owner: MB11. Batches of pull requests (K5): construction, verification by rebuilding and
+settlement, reached through `ci batch-prepare` and `ci batch-settle`. A batch squashes open
+same-repository pull requests, in a given order, onto the default branch head and lands them
+through one `batch/<name>` pull request. Its commit ids depend only on the base commit and on
+each member's number, title and head commit, so the stack can be built again and compared; the
+marker in the pull request body is a hint that must equal that rebuild. The token is the
+invocation's: a pull request opened with a workflow's default `GITHUB_TOKEN` starts no workflow
+runs, so the caller supplies an App or automation token.
 
-* `class BatchMember`: Frozen API-bound member/source observation; construction conveys no authority.
-  * fields: `generation: PrGeneration, head_tree: str`
 * `BATCH_BRANCH_PREFIX = 'batch/'`
-* `class BatchBranchLease`: Frozen exact branch absence and ordered live member/controller observations; not an atomic lock, native policy or writer approval.
-  * fields: `repository: str, branch: str, controller_sha: str, members: tuple[BatchMember, ...]`
-* `def empty_batch_branch_lease(branch: str) -> str`: Return only the explicit --force-with-lease=refs/heads/<batch-branch>: argument after strict batch Git ref validation. No Git execution/ref mutation or writer authority; actual publication must use this empty expectation rather than an observed remote-tracking ref.
-* `def validate_batch_push_receipt(data: bytes, *, exit_code: int, remote: str, branch: str, commit_sha: str) -> None`: Validate bounded ASCII Git --porcelain framing and exact successful new-branch destination/source/ref status, rejecting up-to-date/no-op, nonzero/noninteger exit, extra/missing/unknown records and malformed control/encoding. Require the exact To header, single * source-SHA:refs/heads/<branch> [new branch] record and Done trailer. Caller independently binds the completed original safe Git/program/runtime, C locale/environment, exact approved destination/commit, empty-expect operation and created ref/native/live writer rechecks. Bytes and exit codes grant no execution or writer provenance; no effects.
-* `def observe_batch_branch_lease(api: GitHubApi, *, controller_sha: str, branch: str, pr_numbers: tuple[int, ...]) -> BatchBranchLease`: Bracket exact GET git/ref/heads/<branch> absence with repeated complete live ordered member/controller admission. Only matching GET/path ApiNotFound status 404 counts as absence after successful member/controller access; all other failures and any existing/malformed response reject. Caller independently admits native policy, source bytes, safe Git/runtime/application/results and writer authority. Repeat before effects and enforce actual empty-expect push; reads do not reserve a name or prevent future races.
-* `def recheck_batch_branch_lease(api: GitHubApi, lease: BatchBranchLease, *, controller_sha: str, branch: str, pr_numbers: tuple[int, ...]) -> None`: Reject malformed/substituted receipt binding before API IO; perform fresh admission using independent original caller repository/branch/controller/order and require unchanged complete observations. Constructor and recheck grant no atomic future lease or writer/native approval.
-* `class BatchPatch`: Frozen member, merge-base and changed-path API observations; construction conveys no writer/native policy authority.
-  * fields: `member: BatchMember, merge_base_sha: str, merge_base_tree: str, changes: tuple[BatchPatchEntry, ...]`
-* `class BatchPatchBytes`: Frozen complete-source byte observations, not root lifetime, Git or writer authority.
-  * fields: `patch: BatchPatch, merge_base_bytes_sha256: str, head_bytes_sha256: str`
-* `class BatchManifestSources`: Frozen canonical manifest digest and ordered complete-source observations; not safe Git application, native policy or writer approval.
-  * fields: `manifest_sha256: str, members: tuple[BatchPatchBytes, ...]`
-* `class BatchPublication`: Frozen current exact-ref/source observations; not proof of creator, completed push, PR/gates or writer/settlement approval.
-  * fields: `sources: BatchManifestSources, branch: str, commit_sha: str, result_tree: str`
-* `class BatchPr`: Frozen ready batch PR/publication/source and merge identity observations, not complete gates or creation/merge/closure/status authority.
-  * fields: `publication: BatchPublication, generation: PrGeneration, identity_sha256: str`
-* `def authenticate_batch_pr(api: GitHubApi, document: dict[str, Any], identity: dict[str, Any], *, controller_sha: str, profile: str, policy_sha256: str, permitted_paths: tuple[str, ...], source_roots: tuple[tuple[Path, Path], ...]) -> BatchPr`: Snapshot/preflight bounded manifest/native arguments and closed independent identity; reject source-member/non-PR subjects and source/base/controller/policy/tested-tree mismatch before API IO. Reuse ready PR exact synthetic-merge parent/tree admission around complete publication/source/byte/graph verification, then close current source collection and batch generation and reject bounded caller input mutation. Identity kit/workflow/inventory/scenario/graph fields require independent original native/caller/pin/plan admission; no genuine approval is inferred from shape. Actual safe Git/runtime/private-root/construction/new-branch push provenance, complete Build/runtime gates, owner/writer and settlement remain required; no effects or status/merge/closure authority.
-* `def authenticate_batch_publication(api: GitHubApi, document: dict[str, Any], *, controller_sha: str, branch: str, commit_sha: str, profile: str, policy_sha256: str, permitted_paths: tuple[str, ...], source_roots: tuple[tuple[Path, Path], ...]) -> BatchPublication`: Snapshot/preflight the closed manifest and independent original expected branch/commit/native arguments before API reads; bracket full source/byte/squash graph verification with exact current commit ref and final tree admission, close whole live membership after the final ref read, then reject bounded caller-document mutation. Require independent original private writer-excluded roots, safe Git/runtime/native policy/application, empty-name lease and actual completed new-branch push provenance. A current ref/constructor does not prove creator or authorize PR creation, statuses or settlement; no effects or atomic future lease.
-* `def verify_batch_manifest_sources(api: GitHubApi, document: dict[str, Any], *, controller_sha: str, profile: str, policy_sha256: str, permitted_paths: tuple[str, ...], source_roots: tuple[tuple[Path, Path], ...]) -> BatchManifestSources`: Snapshot the closed bounded manifest and bind its base/member/readiness/merge-base/patch/complete-byte claims to repeated genuine API/source observations under independently admitted native profile/policy. Read each actual squash commit's exact single parent/tree and complete exact result inventory; stream comparison fingerprints without accumulating all result inventories. Repeat the whole pass and close live membership, reject caller manifest mutation. Caller must independently retain original private writer-excluded roots and admit safe local graph/patch application, fixed bot construction, empty branch leases, merged full gates and settlement before effects. No Git/API/ref/account mutation or candidate execution.
-* `def verify_batch_patch_bytes(api: GitHubApi, before_root: Path, after_root: Path, *, controller_sha: str, pr_number: int, permitted_paths: tuple[str, ...]) -> BatchPatchBytes`: Verify complete quiescent source copies against the authenticated merge-base/head inventories, stream canonical source record digests with tree binding, and repeat copies/inventories/patch/live member admission. Caller must retain original private writer-excluded roots and independently admit native policy, Git graph/application/result trees and leases before later effects. No Git, candidate import, ref or account mutation.
-* `def authenticate_batch_patch(api: GitHubApi, *, controller_sha: str, pr_number: int, permitted_paths: tuple[str, ...]) -> BatchPatch`: Bind the live member to API-selected reachable merge-base and head Git objects; derive changes from complete exact trees, ignoring compare files/patches; repeat inventory/object/ancestry/member observations. Require independent protected native policy, matching safe local Git graph and patch/result bytes before writer effects.
-* `class BatchPatchEntry`: Frozen changed path identity; additions/deletions retain an absent side.
-  * fields: `path: str, before: GitSourceEntry | None, after: GitSourceEntry | None`
-* `def derive_batch_patch_inventory(*, before: tuple[GitSourceEntry, ...], after: tuple[GitSourceEntry, ...], permitted_paths: tuple[str, ...]) -> tuple[BatchPatchEntry, ...]`: Derive canonical nonempty complete-tree changes under independently admitted native exact-path policy. Validate both inventories and bounded sorted/unique/case-consistent policy before comparison; preserve every mode/blob/size change and reject inconsistent same-blob sizes. Retain genuine protected merge-base/head inventory provenance; this does not authenticate patch bytes, native mode/link/restricted-transition admission, merge results or writer authority.
-* `def authenticate_batch_members(api: GitHubApi, *, controller_sha: str, pr_numbers: tuple[int, ...]) -> tuple[BatchMember, ...]`: Validate the distinct ordered 1..50 member tuple before API reads; bind every open member to the same live protected default/controller, exclude nested batch/base branches, retain exact draft state, authenticate its head commit/tree between generation reads, then repeat the complete ordered collection. Require independent native policy and bounded caller API retry budget before later operations.
+* `BATCH_KIND = 'mod-base.ci.batch'`
+* `class BatchMember`: One member pull request as the API reports it now.
+  * fields: `number: int, title: str, head_branch: str, head_sha: str`
+* `class BatchObservation`: The live state a batch is built on: the default branch head and the ordered members.
+  * fields: `repository: str, base_branch: str, base_sha: str, base_tree: str, members: tuple[BatchMember, ...]`
+* `def observe_batch(api: GitHubApi, *, pr_numbers: tuple[int, ...]) -> BatchObservation`: Check the 1 to 50 distinct positive numbers before any read, then read the default branch, its head and each pull request once (2 requests and 1 per member). A member is open, of this repository on both sides, based on the default branch, not itself a `batch/*` or the base branch, and has a printable title of at most 256 characters. The base commit of the pull request record and its draft flag are not bound.
+* `def batch_marker(manifest: dict[str, Any]) -> str`: The one line `<!-- mod-base-batch {manifest} -->` that carries a manifest in a pull request body: its canonical JSON with every character outside printable ASCII and every `<`, `>` and `&` as a JSON escape, so no title can close the comment and the line has one spelling.
+* `def read_batch_marker(body: object) -> dict[str, Any]`: The validated manifest of the single marker line of a body of at most 64 KiB. Exactly one marker, alone on its line, in its canonical spelling; anything else is refused. The result is a hint, never proof.
+* `def prepare_batch(api: GitHubApi, store: BatchStore, *, name: str, pr_numbers: tuple[int, ...], allowed_paths: tuple[str, ...], dry_run: bool = False) -> dict[str, Any]`: Observe, require the branch `batch/<name>` to be absent, fetch (a ref that is not the commit the API reported has moved), build the stack under the caller's allowed-path list and derive manifest and body. A dry run returns here and needs only a read-only client. Otherwise read the live state again immediately before the push (which can only create the branch), again before opening the pull request, require the pushed ref, and open one ready pull request whose body holds the marker. Returns `{"dry_run", "manifest", "pr_number"}`. 10 requests and 3 per member; a dry run 3 and 1 per member. A change after the push leaves the branch for the operator to delete.
+* `def rebuild_batch(store: BatchStore, manifest: dict[str, Any]) -> None`: The verifier. Fetch the manifest's base and member heads by id, build the stack again and require the manifest to equal the result field by field: a commit that holds anything but its member's patch, another title, number, head, base or order give other ids. The repository and branch names and the choice of the last commit are not covered by any id; the caller binds them. No path policy applies.
+* `def settle_batch(api: GitHubApi, store: BatchStore, *, pr_number: int, plan: dict[str, Any], build_seal: dict[str, Any], packaged_seal: dict[str, Any], temporary_root: Path, delete_branches: bool = False) -> dict[str, list[int]]`: Needs a writable client. `plan` is the plan the batch pull request's gates ran with; the seals are the descriptors of its Build and packaged tested records, each naming the run that sealed it. Before any write: the pull request is a merged `batch/*` pull request of this repository with one marker for its own branches; the plan's identity names that pull request, its head (the marker's last squash commit), the marker's base and the marker's final tree; `rebuild_batch` holds; and `transport.download_merged_gate_pair` authenticates both original gates, whose runs GitHub records under that head, and the merged commit and its tree against the live default branch head. Then each member still open at its batched head, of this repository and to the same base, gets a comment and is closed (a head that moved between the read and the close reopens it); others are reported as `changed` or `already_closed`. With `delete_branches` a closed member's branch is deleted while its ref still is the batched head. Returns `{"closed", "changed", "already_closed", "deleted"}`. 3 requests, the 28 of the gate pair and 3 per member (5 with deletion).
 
 ## `mod_base.build_ci.batch_schema`
 
-Owner: MB11. Closed structural batch data, not source/Git/native/writer authority.
+Owner: MB11. The closed batch manifest as plain data.
 
-* `def validate_batch_manifest(document: Any, *, path: str = '$') -> dict[str, Any]`: Return the same closed mod-base.ci.batch v1 data after bounded member/patch validation, repository and namespace checks, ordered parent/commit/result linkage, canonical paths, mode/link/size and blob-size consistency. Original native policy, actual complete source bytes, safe Git graph/application, single-parent commit verification, live leases, gate provenance and settlement remain mandatory independent admission.
+* `def validate_batch_manifest(document: Any, *, path: str = '$') -> dict[str, Any]`: Return the same `mod-base.ci.batch` v1 object after exact keys, types and bounds (1 to 50 members; printable titles of at most 256 characters) and what the shape alone can contradict: `branch` is a batch branch (`grammar.is_batch_branch`) and `base_branch` is not; member numbers and heads are distinct; a member's merge base is not its head; every squash commit is distinct from the base, from every head and merge base and from the other squash commits; each member's result tree differs from the tree before it and the final result is the last member's. Whether the ids are true is `batch.rebuild_batch`'s to decide.
+
+## `mod_base.build_ci.batch_git`
+
+Owner: MB11. The protected Git writer of batch stacks: plumbing in a private bare store that
+nothing of the ambient Git state reaches (fixed search path for `git`, an environment built
+from nothing, no system or global configuration, no hooks, credential helpers, templates,
+replacement objects or attributes, one allowed transport). Requires Git 2.40.
+
+* `BOT_NAME = 'github-actions[bot]'`
+* `BOT_EMAIL = '41898282+github-actions[bot]@users.noreply.github.com'`
+* `MINIMUM_GIT_VERSION = (2, 40)`
+* `GITHUB_ORIGIN = 'https://github.com/'`
+* `EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'`
+* `TRANSPORTS = ('https', 'file')`
+* `PATCH_MODES = ('100644', '100755', '120000')`
+* `class BatchGitError(MbError)`: The Git writer refused, or Git itself failed (reason `ci-batch-git`).
+* `def empty_batch_branch_lease(branch: str) -> str`: `--force-with-lease=refs/heads/<branch>:` for a valid batch branch: the push option that lets a branch only be created.
+* `def validate_batch_push_receipt(data: bytes, *, exit_code: int, remote: str, branch: str, commit_sha: str) -> None`: Require bounded ASCII `git push --porcelain` output of exactly one new branch: the `To <remote>` header, one `*\t<commit>:refs/heads/<branch>\t[new branch]` record and `Done`, with exit status 0. An `up to date` answer for a branch that already was that commit is not a creation and is refused.
+* `def supported_git_version(output: bytes) -> tuple[int, int]`: `(major, minor)` of a `git version` line; a version before 2.40 or an unreadable line raises `BatchGitError`.
+* `class BatchRemote`: The repository as Git reaches it: one URL through one transport. `https` is `https://github.com/<owner>/<name>.git`; `file` is an absolute path of a local repository and carries no token. Invalid combinations raise `BatchGitError` on construction.
+  * fields: `url: str, transport: str, token: str | None = None`
+  * `environment(self) -> dict[str, str]`: `GIT_ALLOW_PROTOCOL` for the one transport and, for a token, an `http.https://github.com/.extraheader` authorization header passed through `GIT_CONFIG_COUNT`: never an argument, a URL or a configuration file.
+* `def github_remote(repository: str, token: str | None) -> BatchRemote`: The https remote of `repository` on github.com.
+* `def allowed_path_roots(allowed_paths: tuple[str, ...]) -> frozenset[str]`: Validate the caller's allowed-path list: a non-empty tuple of at most 4096 canonical repository paths in strictly ascending order. An entry admits itself and, as a directory, everything below it.
+* `class PatchEntry`: One path of a member's patch; a side is `(mode, blob id)` or `None` when absent.
+  * fields: `path: str, before: tuple[str, str] | None, after: tuple[str, str] | None`
+* `def patch_sha256(patch: tuple[PatchEntry, ...]) -> str`: SHA-256 of the canonical JSON `[{path, before, after}]` in path order, sides as `{mode, git_blob}` or null: the manifest's `patch_sha256`.
+* `class StackMember`: What one squash commit is made from.
+  * fields: `number: int, title: str, head_sha: str`
+* `class StackCommit`: One squash commit of a built stack and the member patch it carries.
+  * fields: `member: StackMember, head_tree: str, merge_base_sha: str, patch: tuple[PatchEntry, ...], squash_sha: str, result_tree: str`
+* `class BatchStack`: A built stack: the base and one commit per member, in order.
+  * fields: `base_sha: str, base_tree: str, commits: tuple[StackCommit, ...]`
+* `class BatchStore`: One private bare repository; create it with `open_batch_store`.
+  * `fetch(self, *, base_sha: str, heads: Mapping[int, str], base_branch: str | None = None) -> None`: Fetch the base and 1 to 50 member heads and require them to be the expected commits. With `base_branch` the live refs `refs/heads/<base_branch>` and `refs/pull/<number>/head` are fetched and a different id is a base or head that moved; without it the commits are fetched by id.
+  * `build_stack(self, *, base_sha: str, base_branch: str, members: tuple[StackMember, ...], allowed_paths: tuple[str, ...] | None) -> BatchStack`: One `git commit-tree` commit per member on the fetched base, with the bot identity, the base's committer time and the message `<title> (#<number>)` plus `Batch-Member: <number> <head sha>`; equal inputs give equal ids. A member's patch is the difference between its single merge base with the base and its head, applied with `git merge-tree --write-tree`. Refused, naming the pull request and paths: no or several merge bases, a conflict, a path both sides changed that either deleted, a member that leaves the tree unchanged, a submodule entry, a path outside the repository path grammar or (unless `allowed_paths` is `None`) outside the allowed list, and a result that is not the member's patch applied path by path.
+  * `publish(self, *, branch: str, commit_sha: str) -> None`: Push the commit as the new batch branch with the empty lease and require the receipt of exactly one new branch; an existing branch is never moved or adopted.
+* `def open_batch_store(parent: Path, remote: BatchRemote) -> Iterator[BatchStore]`: Context manager: a new store in a fresh mode-0700 directory below `parent` (a real directory only its owner can write), removed afterwards. POSIX only; refuses a Git before 2.40.
+
+## `mod_base.build_ci.commands_batch`
+
+Owner: MB11. `ci batch-prepare` and `ci batch-settle`, listed in `commands.VERB_MODULES`. Both
+take the job arguments (`commands.add_job_arguments`: `--repo`, `--config` and `--state DIR`, the
+private directory below which the Git store lives for the command's lifetime), build their API
+client through `commands.api_client` with an explicit request budget, and print one canonical
+JSON document.
+
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register both verbs on the `ci` verb group. `batch-prepare --name NAME --allowed-paths FILE [--dry-run] [--github-output FILE] PR...` (the file is a JSON array of repository paths; outputs `branch`, `head_sha`, `pr_number`). `batch-settle --pr N --plan FILE --build-seal FILE --packaged-seal FILE [--delete-branches] [--github-output FILE]` (outputs the four counts of its report; each seal names its own run, so no workflow is an argument).
+* `def run_batch_prepare(args: argparse.Namespace) -> int`: The `batch-prepare` handler; a dry run asks for a read-only client.
+* `def run_batch_settle(args: argparse.Namespace) -> int`: The `batch-settle` handler.
 
 ## `mod_base.build_ci.runtime_schema`
 

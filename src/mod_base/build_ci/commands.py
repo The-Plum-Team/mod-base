@@ -19,6 +19,7 @@ from mod_base.github import api as github_api
 #: The modules that add verbs to ``ci``, in help order. One line per work area.
 VERB_MODULES = (
     "mod_base.build_ci.commands_subject",
+    "mod_base.build_ci.commands_batch",
 )
 
 
@@ -38,7 +39,9 @@ def add_job_arguments(parser: argparse.ArgumentParser) -> None:
                         help="the job's private state directory (created by `ci subject`)")
 
 
-def api_client(invocation: runtime.Invocation, *, max_requests: int) -> github_api.GitHubApi:
-    """The read-only API client of one command, bounded to ``max_requests`` requests in all."""
+def api_client(invocation: runtime.Invocation, *, max_requests: int,
+               writable: bool = False) -> github_api.GitHubApi:
+    """The API client of one command, bounded to ``max_requests`` requests in all. It is read-only
+    unless the verb is one that writes to GitHub and says so (``writable``)."""
 
-    return github_api.from_environment(invocation.environ, max_requests=max_requests)
+    return github_api.from_environment(invocation.environ, writable=writable, max_requests=max_requests)

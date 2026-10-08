@@ -18,30 +18,16 @@ Pages building stays in `pages.build`. Structural plan/graph validation alone ne
 candidate execution, consumer activation, an App success or a merge. The Linux boundary and real
 hosted canary remain mandatory before release/adoption.
 
-`build_ci.batch_schema` owns the initial mod-base.ci.batch data format, separately from
-batch API/source-byte observations. Its structural parent/result and fingerprint checks never
-admit actual Git construction, native protected policy, writer leases or settlement. Keep
-the archived predecessor rejection and original 50-member/whole-document bounds in coverage.
-`batch.verify_batch_manifest_sources` binds that data to repeated genuine live API and complete
-source-byte observations and actual squash parent/tree/result inventory reads. It requires
-independently admitted native profile/policy and original private writer-excluded source roots.
-API-observed result equality is not safe local patch application or fixed bot construction;
-original Git/runtime enrollment, branch leases and merged-gate settlement remain required.
-Batch branch absence observations must use the exact ref endpoint and scoped 404 after successful
-controller/member reads; a general API failure is never an empty branch. Repeated observation is
-not an atomic name reservation. The final protected push must use the explicit empty-expect
-lease and independently admitted safe Git/runtime, native policy, source/result and writer proofs.
-Exit 0 with an identical-SHA up-to-date Git result is not new-branch creation. Require bounded
-exact new-branch porcelain output from the completed protected command, then recheck created
-ref/live/native writer admission; supplied receipt bytes and exit codes are not provenance.
-`batch.authenticate_batch_publication` binds the exact current commit ref/tree to the original
-expected branch/commit and complete manifest sources, with final full member admission. Ref
-existence is not proof of who created it or approval to create a PR, publish status or settle.
-Actual original safe command/new-branch receipt and native/live writer provenance stay required.
-`batch.authenticate_batch_pr` binds a distinct ready batch PR and its exact synthetic merge to
-that manifest/publication and current sources. Identity kit/workflow/inventory/scenario/graph
-shape is not original native/pin/plan approval or successful full gates. Merge/closure/status
-authority and immutable post-merge settlement require their independent complete admission.
+A batch lands several open pull requests of the same repository through one pull request, so
+that the complete gates run once for all of them. `ci batch-prepare` squashes each member, in the
+order given, onto the live head of the default branch in a private Git store (`build_ci.batch_git`),
+pushes the stack as a new `batch/<name>` branch and opens one ready pull request whose body
+carries the manifest in a marker line. Nobody believes that marker: `batch.rebuild_batch` builds
+the stack again from the base and member heads it names and requires every commit id to be the
+same. After the batch pull request has merged, `ci batch-settle` rebuilds the stack, reads both
+original gates through `transport.download_merged_gate_pair`, and only then comments on and
+closes the members that are still at their batched head.
+
 `authenticate.authenticate_merged_pr_identity` separately binds original synthetic parents/tree
 to the actual merged PR/final tree and original/current protected history. Final merge parents
 may differ for merge/squash/rebase; never replace the original tested identity with the final

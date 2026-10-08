@@ -98,6 +98,10 @@ PLATFORM: dict[str, tuple[Any, str]] = {
     "MAX_CI_TARGETS": (256, "GitHub: one job matrix expands to at most 256 jobs"),
     "MAX_CI_LANES": (256, "GitHub: one job matrix expands to at most 256 jobs"),
     "MAX_CI_BUILD_RUNS": (1000, "GitHub: a filtered run search lists at most 1,000 runs"),
+    "MAX_CI_BATCH_DOCUMENT_BYTES": (64 * KIB, "GitHub: a pull request body holds at most 65,536 characters; a batch "
+                                              "manifest travels in the body of its pull request"),
+    "MAX_CI_BATCH_TITLE_CHARS": (256, "GitHub: a pull request title holds at most 256 characters; a member's title "
+                                      "is the subject of its squash commit"),
     "MAX_CI_WORKER_TIMEOUT_SECONDS": (6 * 60 * 60, "GitHub: a hosted job runs at most 360 minutes; a mod's "
                                                    "native timeouts are its own Build configuration"),
     "MAX_CI_ENV_VALUE_BYTES": (128 * KIB, "Linux MAX_ARG_STRLEN: one environment string"),
@@ -150,6 +154,10 @@ KIT: dict[str, tuple[Any, str]] = {
     "CI_BUILD_POLL_SECONDS": (60, "pause between two reads of a pending Build; Quick Skin polls every 30 s "
                                   "(QS:scripts/ci/staged_build_bundle.py:131), the kit spends fewer API requests"),
     "MAX_CI_BATCH_PUSH_RECEIPT_BYTES": (4 * KIB, "the porcelain answer of one batch push"),
+    "MAX_CI_BATCH_ALLOWED_PATHS": (4096, "entries of the allowed-path list a batch is built with"),
+    "MAX_CI_BATCH_REPORTED_PATHS": (20, "paths one batch refusal names"),
+    "CI_BATCH_GIT_TIMEOUT_SECONDS": (120, "one Git plumbing call of the batch store"),
+    "CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS": (600, "one fetch or push of the batch store"),
     "MAX_CI_TARGET_DOWNLOAD_BYTES": (4 * GIB, "all target partition archives of one fan-in; the assembled "
                                               "tree keeps MAX_CI_EXPORT_TREE_BYTES"),
     "MAX_CI_RUNTIME_ENVELOPE_BYTES": (4 * MIB, "one runtime envelope"),
@@ -169,10 +177,15 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
     "MAX_CI_GIT_METADATA_TREE_BYTES": (20 * GIB, "the source tree bound", lambda: limits.MAX_CI_SOURCE_TREE_BYTES),
     "MAX_CI_BUILD_POLLS": (91, "one poll per interval of the wait, and the first",
                            lambda: limits.CI_BUILD_WAIT_SECONDS // limits.CI_BUILD_POLL_SECONDS + 1),
-    "MAX_CI_BATCH_DOCUMENT_BYTES": (64 * MIB, "one Git tree listing", lambda: limits.MAX_CI_SOURCE_LIST_BYTES),
-    "MAX_CI_BATCH_PATCH_FILES": (400_000, "two source trees", lambda: 2 * limits.MAX_CI_SOURCE_FILES),
-    "MAX_CI_BATCH_PATCH_ENTRIES": (500_000, "two source trees", lambda: 2 * limits.MAX_CI_SOURCE_ENTRIES),
-    "MAX_CI_BATCH_PATCH_PATH_BYTES": (128 * MIB, "two Git tree listings", lambda: 2 * limits.MAX_CI_SOURCE_LIST_BYTES),
+    "MAX_CI_BATCH_GIT_OUTPUT_BYTES": (64 * MIB, "the output of one Git call of the batch store: one Git tree listing",
+                                      lambda: limits.MAX_CI_SOURCE_LIST_BYTES),
+    "MAX_CI_BATCH_PREPARE_REQUESTS": (
+        216, "the 10 requests and 3 per member of `ci batch-prepare`, with 6 and 1 per member more for retries",
+        lambda: (10 + 6) + (3 + 1) * limits.MAX_CI_BATCH_MEMBERS),
+    "MAX_CI_BATCH_SETTLE_REQUESTS": (
+        348, "the 3 requests of `ci batch-settle`, the 28 of the merged gate pair and at most 5 per member, with 17 "
+             "and 1 per member more for retries and further listing pages",
+        lambda: (3 + 28 + 17) + (5 + 1) * limits.MAX_CI_BATCH_MEMBERS),
     "MAX_CI_TARGET_INPUT_ENTRIES": (
         174_353, "every export file and target directory with all its parent directories, and the root",
         lambda: (limits.MAX_CI_EXPORT_FILES + limits.MAX_CI_TARGETS) * (limits.MAX_BUNDLE_PATH_DEPTH + 1) + 1),

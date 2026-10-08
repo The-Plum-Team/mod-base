@@ -85,6 +85,16 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                     "github_output": Path("out")}),
     "ci subject protected": (["ci", "subject", *REPO, "--state", "state", "--producer", "packaged", "--pr", "",
                               "--github-output", "out"], {"producer": "packaged", "pr": None}),
+    "ci batch-prepare": (["ci", "batch-prepare", *REPO, "--state", "state", "--name", "run-1", "--allowed-paths",
+                          "allowed.json", "--dry-run", "--github-output", "out", "12", "7"],
+                         {"ci_command": "batch-prepare", "state": Path("state"), "name": "run-1",
+                          "allowed_paths": Path("allowed.json"), "dry_run": True, "github_output": Path("out"),
+                          "pulls": [12, 7]}),
+    "ci batch-settle": (["ci", "batch-settle", *REPO, "--state", "state", "--pr", "9", "--plan", "plan.json",
+                         "--build-seal", "build.json", "--packaged-seal", "packaged.json", "--delete-branches"],
+                        {"ci_command": "batch-settle", "state": Path("state"), "pr": 9, "plan": Path("plan.json"),
+                         "build_seal": Path("build.json"), "packaged_seal": Path("packaged.json"),
+                         "delete_branches": True, "github_output": None}),
 }
 
 
@@ -156,6 +166,12 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "subject", *REPO, "--producer", "build", "--pr", "7", "--github-output", "o"],
             ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "7"],
             ["ci", "subject", "--state", "s", "--producer", "build", "--pr", "7", "--github-output", "o"],
+            ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "run-1", "--allowed-paths", "a.json"],
+            ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "Run/1", "--allowed-paths", "a.json", "7"],
+            ["ci", "batch-prepare", *REPO, "--name", "run-1", "--allowed-paths", "a.json", "7"],
+            ["ci", "batch-settle", *REPO, "--state", "s", "--pr", "0", "--plan", "p", "--build-seal", "b",
+             "--packaged-seal", "e"],
+            ["ci", "batch-settle", *REPO, "--state", "s", "--pr", "9", "--plan", "p", "--build-seal", "b"],
         ]
         for argv in bad:
             with self.subTest(argv=argv), self.assertRaises(MbError) as caught:
@@ -198,13 +214,14 @@ class CiVerbsTest(unittest.TestCase):
     def test_every_listed_module_adds_verbs_that_take_the_job_arguments(self) -> None:
         from mod_base.build_ci import commands
 
-        self.assertIn("mod_base.build_ci.commands_subject", commands.VERB_MODULES)
+        self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_batch"},
+                             set(commands.VERB_MODULES))
         self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
         for name in commands.VERB_MODULES:
             with self.subTest(module=name):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
-        self.assertIn("subject", verbs)
+        self.assertLessEqual({"subject", "batch-prepare", "batch-settle"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

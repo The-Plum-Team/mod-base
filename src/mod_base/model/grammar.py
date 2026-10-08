@@ -175,6 +175,8 @@ def is_bundle_path(value: object) -> bool:
 
 
 CI_BATCH_BRANCH_PREFIX = 'batch/'
+#: The name a new batch is given: its branch is ``batch/<name>`` (see :func:`is_batch_branch`).
+CI_BATCH_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 CI_RUNTIME_ENVELOPE_NAME = 'ci-runtime-envelope.json'
 CI_RUNTIME_INPUT_FORMAT = 'mod-base.runtime-validation-input-v1'
 

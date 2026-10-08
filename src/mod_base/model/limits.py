@@ -259,11 +259,26 @@ CI_BUILD_WAIT_SECONDS = 5400
 CI_BUILD_POLL_SECONDS = 60
 MAX_CI_BUILD_POLLS = CI_BUILD_WAIT_SECONDS // CI_BUILD_POLL_SECONDS + 1
 MAX_CI_BATCH_MEMBERS = 50
-MAX_CI_BATCH_DOCUMENT_BYTES = MAX_CI_SOURCE_LIST_BYTES
+#: A batch manifest travels in the body of its pull request, which GitHub bounds at 65,536; the
+#: whole body, the marker inside it and the decoded document share this bound.
+MAX_CI_BATCH_DOCUMENT_BYTES = 64 * KIB
 MAX_CI_BATCH_PUSH_RECEIPT_BYTES = 4096
-MAX_CI_BATCH_PATCH_FILES = 2 * MAX_CI_SOURCE_FILES
-MAX_CI_BATCH_PATCH_ENTRIES = 2 * MAX_CI_SOURCE_ENTRIES
-MAX_CI_BATCH_PATCH_PATH_BYTES = 2 * MAX_CI_SOURCE_LIST_BYTES
+#: A member's pull-request title (GitHub's own bound); it becomes the subject of its squash commit.
+MAX_CI_BATCH_TITLE_CHARS = 256
+#: Entries of the allowed-path list a caller hands to the batch constructor.
+MAX_CI_BATCH_ALLOWED_PATHS = 4096
+#: Paths one refusal names (a conflict, a rename that was followed).
+MAX_CI_BATCH_REPORTED_PATHS = 20
+CI_BATCH_GIT_TIMEOUT_SECONDS = 120
+#: One fetch or push of the batch store.
+CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS = 600
+MAX_CI_BATCH_GIT_OUTPUT_BYTES = MAX_CI_SOURCE_LIST_BYTES
+#: ``ci batch-prepare`` sends 10 requests plus 3 per member (160 for 50); the rest is for retries.
+MAX_CI_BATCH_PREPARE_REQUESTS = 16 + 4 * MAX_CI_BATCH_MEMBERS
+#: ``ci batch-settle`` sends 3 requests, the 28 of ``transport.download_merged_gate_pair`` for both
+#: original gates and at most 5 per member (281 for 50). The rest is for retries and for the further
+#: pages of a run that lists more than 100 jobs or artifacts.
+MAX_CI_BATCH_SETTLE_REQUESTS = 48 + 6 * MAX_CI_BATCH_MEMBERS
 #: The archive of one ``mb-ci-*`` artifact of any kind and profile: Quick Skin's bundle admission
 #: cap, which is tighter than the 2 GiB Block Pops' evaluator admits (``tests/test_ci_limits.py``).
 MAX_CI_BUNDLE_COMPRESSED_BYTES = 512 * MIB

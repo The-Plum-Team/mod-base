@@ -683,27 +683,41 @@ matrix or scenario catalog. [BUILD-ADAPTER.md](BUILD-ADAPTER.md) describes what 
 ## Batch manifest data v1
 
 `mod-base.ci.batch` writes/reads 1. This is a new kind (previous null); the archived v1.0.3
-reader rejects it. The strict JSON decoder cap is 64 MiB; whole-document member/file/path
-caps also apply before nested patch validation. There are 1..50 distinct ordered members.
-The closed top level has kind, schema_version, repository, profile (quick-skin/block-pops),
-base_branch, base_sha, base_tree, branch (nonempty batch/*), policy_sha256, members, result_tree.
-Every member has pr_number, source_repository (the same repository), head_branch (neither
-base nor batch/*), head_sha, head_tree, exact Boolean draft, merge_base_sha, merge_base_tree,
-merge_base_bytes_sha256, head_bytes_sha256, patch, parent_sha, squash_sha and result_tree.
-Each parent is the preceding squash SHA, starting with base_sha; squash SHAs are distinct
-and differ from the base. Each result differs from its predecessor; the final result equals
-the top-level result. These are data equalities, not verification of actual Git objects.
+reader rejects it. A manifest describes one batch: a stack of squash commits, one per member
+pull request, on a base commit of the default branch. It travels in the body of the batch pull
+request as one marker line, `<!-- mod-base-batch {manifest} -->`, so the strict decoder cap is
+64 KiB, GitHub's bound of a pull request body. The marker is the manifest's canonical JSON with
+every character outside printable ASCII and every `<`, `>` and `&` written as a JSON escape; a
+body holds exactly one marker, alone on its line, in that one spelling.
 
-Patches are nonempty ordered unique canonical repository paths with no .git component or
-case alias. Each entry has path, before and after; sides are null or exactly mode, size,
-git_blob. Both-null/equal sides reject. Modes are 100644/100755/120000, regular sizes may be
-zero, literal links must be 1..4096 bytes, and one blob cannot declare different sizes.
-Existing source file/tree limits and combined batch file/prefix/path limits remain in force.
-The two byte fingerprints use the complete-source algorithm in BUILD-PROTOCOL, not just
-patch bytes. No execution selector, approval, secret, permission or status is accepted.
-Native ordinary-path/policy admission, real API/byte provenance, safe Git application and
-single-parent commit verification, empty branch leases and immutable settlement are separate
-mandatory requirements. Parsing this manifest grants no writer or consumer authority.
+The closed top level has kind, schema_version, repository, base_branch, base_sha, base_tree,
+branch, members and result_tree. `branch` is a batch branch (`batch/<name>`, no component that
+starts with a dot or ends in `.lock`, no final dot) and `base_branch` is not. There are 1..50
+ordered members, each with exactly:
+
+| Field | Meaning |
+| --- | --- |
+| `pr_number` | The member pull request, distinct within the batch. |
+| `title` | Its title when the batch was built: 1..256 characters of printable text. The squash commit's subject is `<title> (#<pr_number>)`. |
+| `head_sha`, `head_tree` | The member's head commit and its tree; heads are distinct. |
+| `merge_base_sha` | The single merge base of that head with `base_sha`; never the head itself. |
+| `patch_sha256` | SHA-256 of the canonical JSON of the member's patch, the difference between the merge base's tree and the head's: `[{"path", "before", "after"}]` in path order, a side being `{"mode", "git_blob"}` or null. |
+| `squash_sha`, `result_tree` | The member's squash commit and its tree. The commit's parent is the previous member's squash commit, or `base_sha` for the first member. |
+
+Every squash commit is distinct from the base, from every head and merge base and from the other
+squash commits; each member's `result_tree` differs from the tree before it (`base_tree` for the
+first member); the top-level `result_tree` is the last member's.
+
+A manifest is a hint, never authority: anyone who can edit the pull request body can edit it.
+The squash commits are written with `git commit-tree` under one fixed identity
+(`github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>`), with the base
+commit's committer time as author and committer time and the message `<title> (#<pr_number>)`,
+a blank line and `Batch-Member: <pr_number> <head_sha>`. Their ids therefore follow from the
+base, the member heads, titles, numbers and order alone. A verifier fetches the base and the
+heads, builds the stack again and requires every field of the manifest to equal the result
+(`batch.rebuild_batch`); the repository and branch names, which no commit id covers, are bound
+to the pull request that carries the marker. No execution selector, approval, secret,
+permission or status is accepted, and parsing a manifest grants no writer or consumer authority.
 
 ## Profile activation data v1
 

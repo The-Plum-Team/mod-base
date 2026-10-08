@@ -85,25 +85,22 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   preserving empty logs. Copy independently through private atomic publication with source/stage
   rechecks. Native output mapping, API runtime transport and activation remain required.
 
-- Add inactive ordered batch source authentication with the preserved 50-member cap and exact
-  live draft/head/tree rechecks, and complete-tree patch identities under admitted native path
-  policy, with API merge-base/exact-tree binding and repeated complete source-byte inspection.
-  Enforce existing source entry caps during prefix
-  accumulation and before directory inference. It introduces no batch
-  writer or consumer route. Add separate closed mod-base.ci.batch v1 data for ordered source,
-  patch, parent/commit/result and policy/byte fingerprint bindings; the predecessor rejects it.
-  Bind manifest claims to repeated live API/source bytes and actual squash parent/tree
-  observations, with bounded streamed result-inventory comparison. Local Git application,
-  fixed bot construction, branch leases and settlement remain separate required admission.
-  Add bracketed exact batch branch absence/member observations and fresh rechecks, plus the
-  fixed explicit empty-expect Git lease argument. Reads grant no atomic lock or writer authority.
-  Require bounded exact new-branch Git porcelain observations; identical-SHA up-to-date exit 0
-  cannot prove that this writer created the branch. Actual protected writer integration remains open.
-  Authenticate the exact published ref/final tree around complete source/byte/graph inspection,
-  with original branch/commit binding and closing live member checks. No PR or settlement route
-  is activated by this read-only observation.
-  Bind a distinct ready batch PR's exact base/head synthetic merge and tested tree to the
-  manifest/publication/current sources. This adds no gate success or PR/merge/closure authority.
+- Add batches of pull requests (K5), inactive in mods until a workflow calls them: `ci
+  batch-prepare` squashes up to 50 open same-repository pull requests, in the given order, onto
+  the default branch head, pushes the stack as a new `batch/<name>` branch and opens one ready
+  pull request; `ci batch-settle` closes the members after that pull request merged. The squash
+  commits are written with `git commit-tree` in a private store that no ambient Git
+  configuration reaches, under one fixed bot identity and the base commit's time, so their ids
+  follow from the base and the member heads, titles, numbers and order alone. New closed
+  `mod-base.ci.batch` v1 data (the predecessor rejects it) travels as one marker line in the
+  batch pull request's body and is only a hint: a batch is verified by building its stack again
+  and comparing ids. Conflicts, members that add nothing, forks, moved heads or bases, submodule
+  entries and paths outside the caller's protected allowed-path list stop construction; the push
+  can only create its branch. Settlement first proves the merged commit, the rebuilt stack and
+  both original gates, then closes only members still at their batched head. Both commands use
+  the invocation's token: a pull request opened with a workflow's default `GITHUB_TOKEN` starts
+  no workflows, so supply an App or automation token. Git 2.40 or later is required. The GitHub
+  client gains `patch_json`.
   Add separate historical merged PR observations retaining exact original synthetic parents,
   equal complete final tree and original/current protected history across merge/squash/rebase.
   Live PR admission stays unchanged; full historical gates, reuse and settlement remain open.

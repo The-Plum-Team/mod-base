@@ -33,8 +33,9 @@ class SubjectCommandTests(unittest.TestCase):
 
         environment = h.environment() if environment is None else environment
 
-        def client(environ, *, max_requests=None):
+        def client(environ, *, writable=False, max_requests=None):
             self.assertEqual(dict(environ), {name: value for name, value in environment.items()})
+            self.assertIs(writable, False)  # authenticating a subject writes nothing to GitHub
             self.budgets.append(max_requests)
             return self.api
 

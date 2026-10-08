@@ -7,7 +7,9 @@ Block Pops ``select_artifact.GitHubApi`` (``ProxyHandler({})``, no redirects, de
 and rate-limited 403s (``X-RateLimit-Remaining: 0``, ``Retry-After`` or a "rate limit" body),
 honouring ``Retry-After``. A client is read-only unless constructed ``writable=True``: any
 non-GET request on a read-only client raises :class:`ReadOnlyViolation` before touching the
-network. ``max_requests`` bounds every request (retries included) of one client.
+network. ``max_requests`` bounds every request (retries included) of one client. The writes are
+``post_json`` (workflow dispatches, a new pull request, an issue comment), ``patch_json`` (a pull
+request's state) and ``delete`` (an artifact, a Git ref).
 
 Honouring ``Retry-After`` (and, for an exhausted primary budget, ``X-RateLimit-Reset``) means the
 next attempt waits at least that long; a wait beyond :data:`MAX_RETRY_DELAY_SECONDS` ends the
@@ -521,6 +523,20 @@ class GitHubApi:
             return strict_loads(data, label=f"GitHub API {path}", max_bytes=MAX_RESPONSE_BYTES)
         except StrictJsonError as exc:
             raise ApiError(f"GitHub API POST {path} returned invalid JSON", status=status, method="POST",
+                           path=path) from exc
+
+    def patch_json(self, path: str, payload: Mapping[str, Any]) -> Any:
+        """PATCH canonical JSON; requires ``writable``. Returns the decoded JSON of the 200 answer."""
+
+        if not self._writable:
+            raise ReadOnlyViolation(f"refusing PATCH {path!r} on a read-only GitHub client"[:200])
+        if not isinstance(payload, Mapping):
+            raise MbError("PATCH payload must be a JSON object", reason="usage")
+        _, data = self._request("PATCH", path, body=canonical_json(dict(payload)), statuses=frozenset({200}))
+        try:
+            return strict_loads(data, label=f"GitHub API {path}", max_bytes=MAX_RESPONSE_BYTES)
+        except StrictJsonError as exc:
+            raise ApiError(f"GitHub API PATCH {path} returned invalid JSON", status=200, method="PATCH",
                            path=path) from exc
 
     def delete(self, path: str) -> None:

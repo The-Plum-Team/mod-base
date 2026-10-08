@@ -1056,20 +1056,28 @@ def ci_activation(mode: str = "disabled", rollback_from: str | None = None) -> d
 
 
 def ci_batch() -> dict[str, Any]:
-    """Synthetic structural fixture; hashes are data, not Git or byte provenance."""
-    repository = ci_config()['repository']
-    return {'kind': 'mod-base.ci.batch', 'schema_version': 1,
-            'repository': repository, 'profile': ci_config()['profile'],
-            'base_branch': 'master', 'base_sha': '1'*40, 'base_tree': '2'*40,
-            'branch': 'batch/fixture', 'policy_sha256': '1'*64, 'result_tree': '8'*40,
-            'members': [{'pr_number': 1, 'source_repository': repository,
-                         'head_branch': 'feature/one', 'head_sha': '3'*40, 'head_tree': '4'*40,
-                         'draft': False, 'merge_base_sha': '1'*40, 'merge_base_tree': '2'*40,
-                         'merge_base_bytes_sha256': '7'*64, 'head_bytes_sha256': '8'*64,
-                         'patch': [{'path': 'src/main.java',
-                                    'before': {'mode': '100644', 'size': 3, 'git_blob': '5'*40},
-                                    'after': {'mode': '100644', 'size': 3, 'git_blob': '6'*40}}],
-                         'parent_sha': '1'*40, 'squash_sha': '7'*40, 'result_tree': '8'*40}]}
+    """The batch of pull requests #1 and #2 of the repository that
+    ``tests/fixtures/ci_batch/support.py`` authors. Every id is the one Git produces for it:
+    ``tests/test_ci_batch_git.py`` builds the stack again and compares."""
+
+    return {'kind': 'mod-base.ci.batch', 'schema_version': 1, 'repository': ci_config()['repository'],
+            'base_branch': 'master', 'base_sha': '3a1ed9cc985c8b970df26e8578d426deebfcd702',
+            'base_tree': '099ff2cafe501a1acfdd2a45508f9b10c8316928', 'branch': 'batch/fixture',
+            'members': [{'pr_number': 1, 'title': 'fix: change fix/alpha',
+                         'head_sha': 'e2aabbc49cc7ed09c854403e8ba7cf909c103bc4',
+                         'head_tree': 'b872608236041c4d255da56d175c83a1c927ac16',
+                         'merge_base_sha': '3a1ed9cc985c8b970df26e8578d426deebfcd702',
+                         'patch_sha256': '05bfb323ecafab81cc6e946b3855ad8ccffac040b81758c4f115edb32875a696',
+                         'squash_sha': 'aa599fc6164e3a937fd540f1fbf7c9f971d2062d',
+                         'result_tree': 'b872608236041c4d255da56d175c83a1c927ac16'},
+                        {'pr_number': 2, 'title': 'fix: change feat/beta',
+                         'head_sha': '578135289ef824afedfa9f201319dacac5d597b8',
+                         'head_tree': 'd402a457761d5db463c12d305b72a0c6e7930037',
+                         'merge_base_sha': '3a1ed9cc985c8b970df26e8578d426deebfcd702',
+                         'patch_sha256': '3006c8f029910e55f6c37623708686d6f542d9c860951302a36f0236ffe8390a',
+                         'squash_sha': '05ac3d1c501d5712d42642d46d3f00c62e1e6e90',
+                         'result_tree': '929852cff2d0aecd767154b690ce0dd587cb4ce6'}],
+            'result_tree': '929852cff2d0aecd767154b690ce0dd587cb4ce6'}
 
 
 def ci_runtime_envelope() -> dict[str, Any]:
