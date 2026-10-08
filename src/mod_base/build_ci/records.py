@@ -6,6 +6,7 @@ independent Git/API, frozen-byte, domain-witness and complete-graph authenticati
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from mod_base import readable_schema_versions
@@ -13,6 +14,7 @@ from mod_base.build_ci.protocol import (OUTPUT_ROLES, PROFILES, check_output_pat
                                         validate_identity, validate_plan)
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
+from mod_base.model.canonical import canonical_sha256
 from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check, fail
 from mod_base.errors import MbError
 from mod_base.workflow import ci_producer
@@ -230,6 +232,53 @@ def validate_source_selection(document: Any, *, plan: dict[str, Any] | None = No
           and ref["path"] == request["workflow_path"] and ref["branch"] == document["identity"]["base_branch"],
           f"{path}.request.workflow_ref", "request must name its protected workflow/default ref")
     return document
+
+
+def bind_source_selection(document: dict[str, Any], *, plan: dict[str, Any], run_id: int, run_attempt: int,
+                          workflow_path: str) -> dict[str, Any]:
+    """Bind a selection record to the plan and to the run attempt that consumes it.
+
+    Only the attempt of the packaged caller that requested a selection may consume it, so a rerun
+    of failed jobs alone never inherits the Build an earlier attempt selected. A Build rebuilt
+    inside a packaged run serves that run attempt only; every other Build is the complete bundle
+    of a separate run of the Build caller. This is structural binding: the consumer authenticates
+    the Build through the API again before it reads a byte of it.
+    """
+
+    validate_source_selection(document, plan=plan)
+    check(ci_producer(workflow_path) == "packaged", "$.request.workflow_path",
+          "only a run of the packaged caller selects and consumes a Build")
+    request, producer = document["request"], document["build"]["producer"]
+    check((request["run_id"], request["run_attempt"], request["workflow_path"]) == (run_id, run_attempt, workflow_path),
+          "$.request", "selection was requested by another run, attempt or workflow; rerun all jobs")
+    if ci_producer(producer["workflow_path"]) == "packaged":
+        check((producer["run_id"], producer["run_attempt"], producer["workflow_path"])
+              == (run_id, run_attempt, workflow_path), "$.build.producer",
+              "a rebuilt Build serves only the run attempt that built it")
+    else:
+        check(producer["run_id"] != run_id, "$.build.producer", "a Build caller's bundle comes from a separate run")
+    return document
+
+
+def build_source_selection(*, plan: dict[str, Any], request: dict[str, Any], build: dict[str, Any],
+                           envelope: dict[str, Any]) -> dict[str, Any]:
+    """The ``mod-base.ci.selection`` record of the exact Build one packaged run attempt consumes.
+
+    ``build`` is the authenticated descriptor of the complete bundle and ``envelope`` the envelope
+    read from its verified bytes. ``request`` names the requesting run, its attempt and its managed
+    caller on the default branch, with a nonce of its own. The record is bound the way its
+    consumer binds it (:func:`bind_source_selection`) before it is returned.
+    """
+
+    _REQUEST(request, "$.request")
+    bind_build_envelope(envelope, descriptor=build, plan=plan)
+    kind = "mod-base.ci.selection"
+    document = {"kind": kind, "schema_version": max(readable_schema_versions(kind)),
+                "identity": copy.deepcopy(plan["identity"]), "plan_sha256": plan["plan_sha256"],
+                "profile": plan["profile"], "request": copy.deepcopy(request), "build": copy.deepcopy(build),
+                "envelope_sha256": canonical_sha256(envelope)}
+    return bind_source_selection(document, plan=plan, run_id=request["run_id"], run_attempt=request["run_attempt"],
+                                 workflow_path=request["workflow_path"])
 
 
 _NATIVE_RECEIPT = Obj({"unit_id": UNIT, "native_contract_sha256": SHA256, "report_sha256": SHA256})

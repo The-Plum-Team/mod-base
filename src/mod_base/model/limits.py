@@ -276,6 +276,10 @@ MAX_CI_OBLIGATIONS_PER_LANE = 1024
 CI_BUILD_WAIT_SECONDS = 5400
 CI_BUILD_POLL_SECONDS = 60
 MAX_CI_BUILD_POLLS = CI_BUILD_WAIT_SECONDS // CI_BUILD_POLL_SECONDS + 1
+#: API requests of one ``ci select-build``. A pull request whose Build is complete costs 17, and
+#: one more for every poll before that (91 polls at most, one a minute); a protected subject costs
+#: 15. The rest is for retried attempts and for the further pages of a run with over 100 jobs.
+MAX_CI_SELECT_BUILD_REQUESTS = MAX_CI_BUILD_POLLS + 64
 MAX_CI_BATCH_MEMBERS = 50
 #: A batch manifest travels in the body of its pull request, which GitHub bounds at 65,536; the
 #: whole body, the marker inside it and the decoded document share this bound.

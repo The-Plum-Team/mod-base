@@ -191,6 +191,10 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
     "MAX_CI_GIT_METADATA_TREE_BYTES": (20 * GIB, "the source tree bound", lambda: limits.MAX_CI_SOURCE_TREE_BYTES),
     "MAX_CI_BUILD_POLLS": (91, "one poll per interval of the wait, and the first",
                            lambda: limits.CI_BUILD_WAIT_SECONDS // limits.CI_BUILD_POLL_SECONDS + 1),
+    "MAX_CI_SELECT_BUILD_REQUESTS": (
+        155, "the 4 requests that admit a pull request, one run listing for each poll of a whole wait and the 15 "
+             "that describe, download and recheck the Build, with 45 more for retries and further listing pages",
+        lambda: (4 + 15 + 45) + limits.MAX_CI_BUILD_POLLS),
     "MAX_CI_BATCH_GIT_OUTPUT_BYTES": (64 * MIB, "the output of one Git call of the batch store: one Git tree listing",
                                       lambda: limits.MAX_CI_SOURCE_LIST_BYTES),
     "MAX_CI_BATCH_PREPARE_REQUESTS": (

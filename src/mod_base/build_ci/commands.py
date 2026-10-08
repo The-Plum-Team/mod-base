@@ -20,6 +20,7 @@ from mod_base.github import api as github_api
 VERB_MODULES = (
     "mod_base.build_ci.commands_subject",
     "mod_base.build_ci.commands_worker",
+    "mod_base.build_ci.commands_packaged",
     "mod_base.build_ci.commands_batch",
 )
 

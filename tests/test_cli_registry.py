@@ -110,6 +110,17 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                         {"ci_command": "batch-settle", "state": Path("state"), "pr": 9, "plan": Path("plan.json"),
                          "build_seal": Path("build.json"), "packaged_seal": Path("packaged.json"),
                          "delete_branches": True, "github_output": None}),
+    "ci select-build": (["ci", "select-build", *REPO, "--state", "state", "--output", "selection.json",
+                         "--github-output", "out"],
+                        {"ci_command": "select-build", "state": Path("state"), "wait_seconds": 5400,
+                         "build_run_id": None, "output": Path("selection.json"), "github_output": Path("out")}),
+    "ci select-build pull request": (["ci", "select-build", *REPO, "--state", "state", "--wait-seconds", "600",
+                                      "--build-run-id", "", "--output", "s.json", "--github-output", "out"],
+                                     {"wait_seconds": 600, "build_run_id": None}),
+    "ci select-build named": (["ci", "select-build", *REPO, "--state", "state", "--build-run-id", "42",
+                               "--output", "s.json", "--github-output", "out"], {"build_run_id": 42}),
+    "ci select-build same run": (["ci", "select-build", *REPO, "--state", "state", "--build-run-id", "same-run",
+                                  "--output", "s.json", "--github-output", "out"], {"build_run_id": "same-run"}),
 }
 
 
@@ -203,6 +214,17 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "batch-settle", *REPO, "--state", "s", "--pr", "0", "--plan", "p", "--build-seal", "b",
              "--packaged-seal", "e"],
             ["ci", "batch-settle", *REPO, "--state", "s", "--pr", "9", "--plan", "p", "--build-seal", "b"],
+            ["ci", "select-build", *REPO, "--state", "s", "--output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--output", "o", "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--build-run-id", "latest", "--output", "o",
+             "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--build-run-id", "0", "--output", "o",
+             "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--wait-seconds", "5401", "--output", "o",
+             "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--wait-seconds", "0", "--output", "o",
+             "--github-output", "o"],
         ]
         for argv in bad:
             with self.subTest(argv=argv), self.assertRaises(MbError) as caught:
@@ -246,14 +268,14 @@ class CiVerbsTest(unittest.TestCase):
         from mod_base.build_ci import commands
 
         self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_worker",
-                              "mod_base.build_ci.commands_batch"}, set(commands.VERB_MODULES))
+                              "mod_base.build_ci.commands_batch", "mod_base.build_ci.commands_packaged"}, set(commands.VERB_MODULES))
         self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
         for name in commands.VERB_MODULES:
             with self.subTest(module=name):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
         self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-finish", "batch-prepare",
-                              "batch-settle"}, set(verbs))
+                              "batch-settle", "select-build"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):
