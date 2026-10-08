@@ -11,7 +11,7 @@ from mod_base.build_ci.exports import verify_build_export
 from mod_base.build_ci.protocol import plan_sha256
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
-from tests.ci_attempt import AttemptCase
+from tests.ci_attempt import AttemptCase, sealed, validation
 from tests.test_ci_describe import ASSEMBLE, PLAN, RERUN, TARGET
 from tests.test_ci_transport import build_archive
 
@@ -21,8 +21,10 @@ def records(state) -> list[str]:
 
 
 class AssembleCommandTests(AttemptCase):
-    def world(self, *, targets: int = 2, mode: str = "full", **options):
-        """A Build whose assembling job runs, with the real partition of every target uploaded."""
+    def world(self, *, targets: int = 2, mode: str = "full", change=None, **options):
+        """A Build whose assembling job runs, with what every target job uploaded: the real
+        partition and the validation record of its ``verify_target`` run beside the envelope.
+        ``change(target_id, document, files)`` edits a record before it is sealed."""
 
         attempt = self.attempt(listing="build-full" if mode == "full" else "packaged-rebuilt", targets=targets,
                                **options)
@@ -30,7 +32,12 @@ class AssembleCommandTests(AttemptCase):
         self.envelopes = []
         for index, target in enumerate(attempt.plan["targets"]):
             data, envelope = build_archive(attempt.plan, attempt.producer(mode), target_id=target["id"])
-            attempt.publish("target", target["id"], data, artifact_id=110 + index)
+            document, files = validation(attempt.plan, hook="verify_target", unit_id=target["id"],
+                                         run_id=attempt.run_id, input_sha256=canonical_sha256(envelope))
+            if change is not None:
+                change(target["id"], document, files)
+            attempt.publish("target", target["id"], sealed(data, document, files) if document else data,
+                            artifact_id=110 + index)
             self.envelopes.append(envelope)
         return attempt
 
@@ -111,6 +118,32 @@ class AssembleCommandTests(AttemptCase):
         attempt = self.world()
         attempt.api.add_response(f"/repos/{attempt.api.repository}/pulls/7", {**attempt.pull, "draft": True})
         self.assert_rejected(attempt, "invalid-document", "PR must be open and ready")
+
+    def test_a_partition_must_carry_the_validation_record_of_its_own_target_run(self) -> None:
+        def second(edit):
+            return lambda target, document, files: edit(document, files) if target == "target-02" else None
+
+        context = "validation record differs from protected execution/input context"
+        cases = {
+            "no record": (second(lambda document, files: document.clear()), "cannot read"),
+            "the Build's hook": (second(lambda document, files: document.update(hook="verify_build", unit_id=None)),
+                                 "reports do not cover the exact ordered protected native contracts"),
+            "another attempt": (second(lambda document, files: document.update(run_attempt=1)), context),
+            "another config": (second(lambda document, files: document.update(source_config_sha256="0" * 64)), context),
+            "another input": (second(lambda document, files: document.update(input_sha256="0" * 64)), context),
+            "report changed": (second(lambda document, files: files.update({"target-02.json": b'{"x":1}\n'})),
+                               "native verification reports differ from exact byte inventory"),
+            "stray file": (second(lambda document, files: files.update({"stray.json": b"{}\n"})),
+                           "frozen export differs from its exact file inventory"),
+        }
+        for label, (change, message) in cases.items():
+            with self.subTest(case=label):
+                attempt = self.world(change=change)
+                code, stdout, stderr = attempt.command("assemble")
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertIn(message, stderr)
+                self.assertFalse(attempt.sealed_build.exists())
+                self.assertEqual([path for path in attempt.state.iterdir() if path.is_dir()], [])
 
     def test_the_sealed_root_is_never_replaced(self) -> None:
         attempt = self.world()

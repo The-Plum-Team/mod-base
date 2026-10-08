@@ -301,7 +301,8 @@ def download_completed_build(api: GitHubApi, *, descriptor: dict[str, Any], plan
 
 
 def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], plan: dict[str, Any],
-                        run_id: int, run_attempt: int, output: Path) -> list[dict[str, Any]]:
+                        run_id: int, run_attempt: int, output: Path,
+                        source_config_sha256: str | None = None) -> list[dict[str, Any]]:
     """Publish all ordered same-attempt target inputs privately, or publish nothing.
 
     The reader is the assembling job of the run that built the targets: a full run of the Build
@@ -310,6 +311,11 @@ def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], pl
     target-0, target-1, etc. The returned descriptor/envelope pairs bind those positions. This
     prepares native aggregate inputs; it does not mint an aggregate envelope, a native validator
     receipt or a successful final graph.
+
+    With ``source_config_sha256``, the digest of the protected Build config the reader loaded,
+    every artifact is what a target job uploads: the partition with the validation record of its
+    ``verify_target`` run beside the envelope. The record is verified against the partition and
+    kept out of the published inputs. Without it every artifact must be the bare partition.
     """
 
     plan = _plan(plan)
@@ -356,8 +362,13 @@ def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], pl
         for index, descriptor in enumerate(descriptors):
             root = stage / f"target-{index}"
             extract_build(_download(reads, descriptor), root)
-            envelope = verify_build_export(root, plan=plan)
-            bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
+            if source_config_sha256 is None:
+                envelope = verify_build_export(root, plan=plan)
+                bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
+            else:
+                with tempfile.TemporaryDirectory(prefix="mb-ci-receipt-", dir=output.parent) as temporary:
+                    envelope, _ = _verify_sealed_build(root, Path(temporary) / "validation", descriptor, plan,
+                                                       source_config_sha256)
             partitions.append({"descriptor": descriptor, "envelope": envelope})
             files.extend(envelope["files"])
             check(len(files) <= limits.MAX_CI_EXPORT_FILES
@@ -394,33 +405,41 @@ def _detach_validation(root: Path, receipt: Path, plan: dict[str, Any]) -> None:
         os.rename(root / relative, moved)
 
 
+def _verify_sealed_build(root: Path, receipt: Path, descriptor: dict[str, Any], plan: dict[str, Any],
+                         source_config_sha256: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify an extracted sealed Build artifact, a target partition or the complete bundle:
+    ``(envelope, validation record)``. The export stays in ``root``, exactly its inventory.
+
+    The export is bound to its descriptor, whose kind fixes the scope. The validation record is
+    the one the uploading job froze for exactly these bytes: the ``verify_target`` hook of that
+    target, or ``verify_build``, in the descriptor's attempt, under the protected Build config the
+    reader itself loaded (``source_config_sha256``), over the canonical envelope."""
+
+    _detach_validation(root, receipt, plan)
+    envelope = verify_build_export(root, plan=plan)
+    bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
+    producer = descriptor["producer"]
+    validation = verify_validation_export(
+        receipt, plan=plan, hook="verify_build" if envelope["scope"] == "complete" else "verify_target",
+        unit_id=envelope["target_id"], run_id=producer["run_id"], run_attempt=producer["run_attempt"],
+        source_config_sha256=source_config_sha256,
+        input_sha256=hashlib.sha256(canonical_json(envelope)).hexdigest())
+    return envelope, validation
+
+
 def _read_sealed_build(reads: CommandReads, descriptor: dict[str, Any], plan: dict[str, Any], *,
                        source_config_sha256: str, temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     """Download the complete Build of the reader's own attempt by id and verify it in a private
-    temporary directory: ``(envelope, validation record)``.
-
-    The export is the complete planned union and is bound to its descriptor. The validation
-    record is the one the assembling job froze for exactly these bytes: the ``verify_build`` hook
-    of the descriptor's attempt, under the protected Build config the reader itself loaded, over
-    the canonical envelope. The caller authenticates the run, its jobs and the artifact."""
+    temporary directory (:func:`_verify_sealed_build`). The caller authenticates the run, its
+    jobs and the artifact."""
 
     data = _download(reads, descriptor)
-    producer = descriptor["producer"]
     try:
         with tempfile.TemporaryDirectory(prefix="mb-ci-sealed-", dir=temporary_root) as temporary:
-            root, receipt = Path(temporary) / "export", Path(temporary) / "validation"
+            root = Path(temporary) / "export"
             extract_build(data, root)
             del data
-            _detach_validation(root, receipt, plan)
-            envelope = verify_build_export(root, plan=plan)
-            check((envelope["scope"], envelope["target_id"]) == ("complete", None),
-                  "$.envelope.scope", "export is not the complete Build bundle")
-            bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
-            validation = verify_validation_export(
-                receipt, plan=plan, hook="verify_build", unit_id=None, run_id=producer["run_id"],
-                run_attempt=producer["run_attempt"], source_config_sha256=source_config_sha256,
-                input_sha256=hashlib.sha256(canonical_json(envelope)).hexdigest())
-            return envelope, validation
+            return _verify_sealed_build(root, Path(temporary) / "validation", descriptor, plan, source_config_sha256)
     except OSError as error:
         raise MbError("cannot read the sealed Build of this attempt", reason="ci-transport") from error
 

@@ -7,13 +7,14 @@ import copy
 import json
 import unittest
 
-from mod_base.build_ci import gate, graph, transport
+from mod_base.build_ci import gate, graph, identity, transport
+from mod_base.build_ci.exports import verify_build_export
 from mod_base.build_ci.records import validate_gate_receipt
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
-from tests.ci_attempt import ATTEMPT, AttemptCase, record_zip, sealed, validation
-from tests.helpers import ci_api_run, h
+from tests.ci_attempt import ATTEMPT, AttemptCase, expand, record_zip, sealed, validation, zip_tree
+from tests.helpers import ci_api_run, ci_graph_jobs, h
 from tests.test_ci_describe import ASSEMBLE, GATE, PLAN, POLICY, RERUN, TARGET
 from tests.test_ci_transport import after_download, build_archive
 
@@ -231,7 +232,7 @@ class BuildGateTests(GateCase):
             files["stray.json"] = b"{}\n"
 
         cases = {
-            "target partition": (partition, "export is not the complete Build bundle"),
+            "target partition": (partition, "selected artifact does not bind export scope/target"),
             "another plan": (other_plan, "does not equal the complete admitted binding"),
             "no validation record": (lambda document, files, data: document.clear(), "cannot read"),
             "report missing": (drop_report, "cannot read the sealed Build of this attempt"),
@@ -297,6 +298,37 @@ class BuildGateTests(GateCase):
         code, stderr, _ = self.seal(attempt, "build")
         self.assertEqual((code, attempt.api.request_count), (2, 9))
         self.assertIn("request-budget", stderr)
+
+
+class BuildFanInTests(GateCase):
+    def test_target_partitions_become_a_tested_build_that_the_readers_accept(self) -> None:
+        """The whole Build fan-in with real bytes: ``ci assemble`` in the assembling job, the
+        validator's record and the upload of the sealed root, ``ci seal-gate`` in the gate job
+        with a state of its own, and the readers of the tested record once the run has finished."""
+
+        attempt = self.attempt(listing="build-full", targets=2, lanes=2)
+        attempt.sealing(ASSEMBLE)
+        for index, target in enumerate(attempt.plan["targets"]):
+            data, partition = build_archive(attempt.plan, attempt.producer("full"), target_id=target["id"])
+            record = validation(attempt.plan, hook="verify_target", unit_id=target["id"], run_id=attempt.run_id,
+                                input_sha256=canonical_sha256(partition))
+            attempt.publish("target", target["id"], sealed(data, *record), artifact_id=110 + index)
+        self.assertEqual(attempt.command("assemble")[0], 0)
+        envelope = verify_build_export(attempt.sealed_build, plan=attempt.plan)
+        document, files = validation(attempt.plan, hook="verify_build", unit_id=None, run_id=attempt.run_id,
+                                     input_sha256=canonical_sha256(envelope))
+        attempt.jobs = expand(ci_graph_jobs("build-full"), attempt.plan)
+        attempt.sealing(GATE)
+        attempt.publish("build", None, sealed(zip_tree(attempt.sealed_build), document, files), artifact_id=100)
+        attempt.state = attempt.directory / "gate-state"
+        identity.write_subject(attempt.state, attempt.record)
+        identity.write_state_record(attempt.state, grammar.CI_PLAN_NAME, canonical_json(attempt.plan))
+        code, _, raw = self.seal(attempt, "build")
+        self.assertEqual(code, 0)
+        receipt = self.assert_readers_accept(attempt, "build", "full", raw, artifact_id=200)
+        self.assertEqual(receipt["artifacts"], [attempt.descriptor("full", 100)])
+        self.assertEqual([entry["report_sha256"] for entry in receipt["native_receipts"]],
+                         [report["sha256"] for report in document["reports"]])
 
 
 class PackagedGateTests(GateCase):

@@ -111,6 +111,17 @@ def runtime_input_sha256(plan: dict[str, Any], build_envelope_sha256: str, envel
                              "runtime_envelope_sha256": canonical_sha256(envelope)})
 
 
+def zip_tree(root: Path) -> bytes:
+    """The artifact of an upload directory: every file below ``root``, deflated."""
+
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                package.write(path, path.relative_to(root).as_posix())
+    return stream.getvalue()
+
+
 def record_zip(name: str, raw: bytes) -> bytes:
     """The artifact of an upload directory that holds one record file."""
 

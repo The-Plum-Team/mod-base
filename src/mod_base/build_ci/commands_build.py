@@ -4,8 +4,9 @@ Each runs after ``ci subject`` and ``ci plan`` of the same job, as the runner, i
 whose artifacts it reads:
 
 * ``assemble`` describes the partition of every planned target of this attempt
-  (``describe.describe_attempt``), downloads them by numeric id
-  (``transport.download_target_set``) and assembles their exact union into the fixed
+  (``describe.describe_attempt``), downloads them by numeric id and verifies each with the
+  validation record its job uploaded (``transport.download_target_set``), and assembles their
+  exact union into the fixed
   ``sealed-build/`` root (``exports.assemble_build_export``), where the next step runs the
   validator. The descriptors it read and the SHA-256 of the assembled envelope are recorded in
   the state directory as ``ci-partitions.json``.
@@ -117,6 +118,7 @@ def run_assemble(args: argparse.Namespace) -> int:
     check(not os.path.lexists(BUILD_VALIDATION_ROOT), "$.output", "the sealed Build root already exists")
     # Build jobs run in a full run of the Build caller, or in a packaged run that rebuilds.
     mode = "full" if job.caller == "build" else "rebuilt"
+    config_sha256 = _config_sha256(invocation, job)
     reads = CommandReads.of(commands.api_client(invocation, max_requests=limits.MAX_CI_ASSEMBLE_REQUESTS))
     producer = describe.attempt_producer(job.record, job.plan, mode=mode, run_id=job.run_id,
                                          run_attempt=job.run_attempt)
@@ -127,7 +129,8 @@ def run_assemble(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="mb-ci-assemble-", dir=args.state) as temporary:
         inputs = Path(temporary) / "targets"
         partitions = transport.download_target_set(reads, descriptors=descriptors, plan=job.plan, run_id=job.run_id,
-                                                   run_attempt=job.run_attempt, output=inputs)
+                                                   run_attempt=job.run_attempt, output=inputs,
+                                                   source_config_sha256=config_sha256)
         envelope = assemble_build_export(inputs, partitions=partitions, plan=job.plan, run_id=job.run_id,
                                          run_attempt=job.run_attempt, output=BUILD_VALIDATION_ROOT)
     identity.write_state_record(args.state, PARTITIONS_NAME, canonical_json(

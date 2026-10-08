@@ -539,6 +539,15 @@ artifact, one results aggregate and every lane receipt. A receipt has `unit_id`,
 descriptors retain the same attempt/graph with independent upload windows. Owning Build IDs
 cannot collide with runtime IDs. Self-reported native hashes alone never prove validity.
 
+A sealing job uploads its frozen export together with the validation record of that export:
+`ci-validation.json` and the reports it inventories lie beside the outer envelope, in the root of
+the artifact. The fan-in and gate commands read exactly that (`transport._detach_validation`):
+the record and its reports are moved aside, the export must then equal its envelope's inventory
+and the record must be the one frozen for these bytes (hook, unit, run and attempt, the protected
+Build config's digest and the input digest). `ci assemble` reads every target partition this way,
+`ci seal-gate` the complete Build and `ci aggregate` every lane. The readers of a complete Build
+from another run (`download_completed_build`, the merged routes) still expect the bare export.
+
 A gate writes its receipt from inside the run it judges (`ci seal-gate`, `build_ci.gate`). The run
 is still in progress, so the gate authenticates what exists: the live source, the run as its
 latest attempt, every job the graph finishes before the gate with its expected conclusion and
