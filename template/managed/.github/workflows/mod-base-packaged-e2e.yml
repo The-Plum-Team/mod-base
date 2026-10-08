@@ -1,0 +1,43 @@
+# mod-base managed: packaged E2E caller, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-packaged-e2e.yml
+# PROVISIONAL: a synthetic stand-in that makes activation gating, rendering, drift detection and the staged-file lock testable. It runs on manual dispatch only; the reviewed caller replaces it before any release.
+name: mod-base packaged E2E
+on: workflow_dispatch
+permissions: {}
+jobs:
+  guard:
+    name: Verify pinned mod-base
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/mod-base-guard.yml
+  select:
+    name: Select exact Build
+    needs: guard
+    permissions:
+      actions: read
+      contents: read
+    uses: The-Plum-Team/mod-base/.github/workflows/select-build.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.guard.outputs.kit-sha }}
+  rebuild:
+    name: Shared Build
+    needs: [guard, select]
+    if: needs.select.outputs.found == 'false'
+    permissions:
+      actions: read
+      contents: read
+    uses: The-Plum-Team/mod-base/.github/workflows/build.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.guard.outputs.kit-sha }}
+  shared:
+    name: Shared Packaged E2E
+    needs: [guard, select, rebuild]
+    if: always() && needs.select.result == 'success' && needs.rebuild.result != 'failure' && needs.rebuild.result != 'cancelled'
+    permissions:
+      actions: read
+      contents: read
+    uses: The-Plum-Team/mod-base/.github/workflows/packaged-e2e.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.guard.outputs.kit-sha }}
+      mode: ${{ needs.select.outputs.mode }}
+      build-run-id: ${{ needs.select.outputs.found == 'true' && needs.select.outputs.build-run-id || 'same-run' }}

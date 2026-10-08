@@ -1,0 +1,29 @@
+# mod-base managed: guard workflow, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-guard.yml
+# PROVISIONAL: a synthetic stand-in that makes activation gating, rendering, drift detection and the staged-file lock testable. It verifies nothing; the reviewed guard replaces it before any release.
+name: mod-base guard
+on:
+  workflow_call:
+    outputs:
+      kit-sha:
+        description: The mod-base commit this mod pins
+        value: ${{ jobs.guard.outputs.kit-sha }}
+permissions: {}
+env:
+  MB_KIT_SHA: "{{PIN}}"
+  MB_KIT_VERSION: "{{VERSION}}"
+jobs:
+  guard:
+    name: Report the pinned mod-base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      kit-sha: ${{ steps.kit.outputs.kit-sha }}
+    steps:
+      - name: Report the pinned mod-base
+        id: kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$MB_KIT_SHA" =~ ^[0-9a-f]{40}$ && "$MB_KIT_VERSION" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]
+          printf 'kit-sha=%s\n' "$MB_KIT_SHA" >> "$GITHUB_OUTPUT"

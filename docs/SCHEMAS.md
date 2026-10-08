@@ -707,18 +707,37 @@ mandatory requirements. Parsing this manifest grants no writer or consumer autho
 
 ## Profile activation data v1
 
-The new inactive mod-base.ci.activation kind writes/reads 1, with no fictional predecessor.
-The exhaustive compatibility ledger marks new-kind/previous null; the v1.0.3 reader rejects it.
-The fixed prospective location is site/mod-base-build-activation.json. Exact keys are kind,
-schema_version, repository (repository grammar, at most 201 characters), profile (quick-skin or
-block-pops), and mode (disabled, shadow, shared-build, shared-build-and-e2e, reviewed-rollback).
-Unknown/missing keys, wrong types/versions and unknown profiles/modes reject. Its central
-MAX_CI_ACTIVATION_BYTES cap is 8 KiB. No pin, template, job, permission, secret, approval,
-extension/deferral, matrix or scenario selector is accepted. Generic strict document decoding
-applies, including duplicate/non-finite/oversized input rejection.
+`mod-base.ci.activation` writes and reads 1. It is a new kind: the compatibility ledger records
+previous `null`, and the archived v1.0.3 reader rejects it. The file is
+`site/mod-base-build-activation.json`, at most `MAX_CI_ACTIVATION_BYTES` (8 KiB) of strict JSON
+(not necessarily canonical: it is written by hand).
 
-This is data shape only. Mode labels confer no owner approval or execution/status authority.
-Protected admission must bind repository/profile to the original native configuration, admit the
-exact current-head protected transition and predecessors, and verify fixed managed caller bytes.
-Profile-aware template/pin/bootstrap wiring, approved transitions and reviewed rollback remain
-incomplete; existing legacy consumers do not require this manifest or become activated here.
+| Field | Rule |
+|---|---|
+| `kind`, `schema_version` | `mod-base.ci.activation`, 1 |
+| `repository` | repository grammar, at most 201 characters; equals the `repository` of `scripts/ci/mod-base-build.json` |
+| `profile` | `quick-skin` or `block-pops`; equals the `profile` of the Build configuration |
+| `mode` | `disabled`, `shadow`, `shared-build`, `shared-build-and-e2e` or `reviewed-rollback` |
+| `rollback_from` | `null`, except in `reviewed-rollback`, where it names the mode being left: `shadow`, `shared-build` or `shared-build-and-e2e` |
+
+Every key is required and no other key exists: no pin, template, job, permission, secret, approval,
+extension, deferral, matrix or scenario selector.
+
+The mode alone decides which caller workflows are managed files of the mod
+(`mod_base.build_ci.activation.MANAGED_CALLERS`):
+
+| State | Managed callers |
+|---|---|
+| no manifest, `disabled` | none |
+| `shadow`, `shared-build-and-e2e` | `mod-base-guard.yml`, `mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml` (all in `.github/workflows/`) |
+| `shared-build` | `mod-base-guard.yml`, `mod-base-build.yml`, `mod-base-gate-status.yml` |
+| `reviewed-rollback` | those of `rollback_from` |
+
+A manifest changes only along these transitions, at an unchanged pin, and only its mode (and
+`rollback_from`) changes: none to `disabled`; `disabled` to none, `shadow` or `shared-build`;
+`shadow` to `disabled`, `shared-build`, `shared-build-and-e2e` or `reviewed-rollback`;
+`shared-build` to `shared-build-and-e2e` or `reviewed-rollback`; `shared-build-and-e2e` to
+`reviewed-rollback`; `reviewed-rollback` to `disabled`. A mod without a manifest is legacy only
+when it has no Build configuration either; a Build configuration without a manifest fails
+`template check`. The document is data: it is not owner approval, and the protected controller
+admits each transition (`mod_base.build_ci.transition`).

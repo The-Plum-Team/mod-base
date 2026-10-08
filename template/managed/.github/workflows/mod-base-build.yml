@@ -1,0 +1,21 @@
+# mod-base managed: Build caller, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-build.yml
+# PROVISIONAL: a synthetic stand-in that makes activation gating, rendering, drift detection and the staged-file lock testable. It runs on manual dispatch only; the reviewed caller replaces it before any release.
+name: mod-base Build
+on: workflow_dispatch
+permissions: {}
+jobs:
+  guard:
+    name: Verify pinned mod-base
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/mod-base-guard.yml
+  shared:
+    name: Shared Build
+    needs: guard
+    permissions:
+      actions: read
+      contents: read
+    uses: The-Plum-Team/mod-base/.github/workflows/build.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.guard.outputs.kit-sha }}

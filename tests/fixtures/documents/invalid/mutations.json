@@ -3225,6 +3225,74 @@
       ]
     },
     {
+      "expect": "valid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-names-the-mode-it-leaves",
+      "set": [
+        [
+          "/mode",
+          "reviewed-rollback"
+        ],
+        [
+          "/rollback_from",
+          "shared-build-and-e2e"
+        ]
+      ]
+    },
+    {
+      "error": "$.rollback_from: must name the mode a reviewed-rollback leaves and be null in every other mode",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-without-the-mode-it-leaves",
+      "set": [
+        [
+          "/mode",
+          "reviewed-rollback"
+        ]
+      ]
+    },
+    {
+      "error": "$.rollback_from: must name the mode a reviewed-rollback leaves and be null in every other mode",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-target-outside-a-rollback",
+      "set": [
+        [
+          "/mode",
+          "shadow"
+        ],
+        [
+          "/rollback_from",
+          "shadow"
+        ]
+      ]
+    },
+    {
+      "error": "$.rollback_from: must be one of",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-cannot-leave-disabled",
+      "set": [
+        [
+          "/mode",
+          "reviewed-rollback"
+        ],
+        [
+          "/rollback_from",
+          "disabled"
+        ]
+      ]
+    },
+    {
+      "error": "is missing required keys ['rollback_from']",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-key-is-required",
+      "delete": [
+        "/rollback_from"
+      ]
+    },
+    {
       "error": "has unknown keys",
       "expect": "invalid",
       "fixture": "ci-batch",

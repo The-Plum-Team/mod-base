@@ -3,5 +3,6 @@
   "mode": "disabled",
   "profile": "block-pops",
   "repository": "example/mod",
+  "rollback_from": null,
   "schema_version": 1
 }

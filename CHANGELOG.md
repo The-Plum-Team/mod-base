@@ -15,6 +15,26 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   subject and writes the private identity record, pure plan construction with the policy digest,
   and a synthetic mod (`tests/fixtures/ci_mod`) that implements every hook. Planned output paths
   accept the mods' real file names (single inner spaces and `+`).
+- Managed files: the bootstrap `scripts/ci/mod_base_kit.py` changes. `bump` now refuses, before it
+  edits anything, a kit that does not read the mod's `site/mod-base-build-activation.json` while a
+  mode other than `disabled` is active there (a rollback to v1.0.3 or older first returns the mod
+  to `disabled`), and it restores every workflow and action file when its write phase fails. A mod
+  without that manifest bumps exactly as before; every released bootstrap still stages and bumps
+  to this kit.
+- Managed files, by activation only: four caller workflows (`.github/workflows/mod-base-guard.yml`,
+  `mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`) become managed
+  files of a mod whose activation mode lists them. They are not template-manifest entries and no
+  mod without an activation manifest receives or is asked for one. Their templates in this change
+  are provisional stand-ins; the managed `.gitattributes` has no `eol=lf` rule for them yet.
+- `mod-base.ci.activation` v1 (still unreleased) gains the required `rollback_from` field, which
+  names the mode a `reviewed-rollback` leaves and is `null` otherwise. `template check|sync|init`
+  accept every mode, manage exactly the callers of the mod's mode, report a caller outside its mode
+  as `forbidden`, and fail on a Build configuration without a manifest. While a mode manages
+  callers, `.github/dependabot.yml` must also ignore the third-party actions they pin.
+- New commands (additive): `template activation --repo DIR` prints the validated activation state,
+  its managed callers and the allowed next states; `template transition --repo DIR --base DIR`
+  admits a change of activation against a checkout of the protected base (allowed transition,
+  unchanged pin, candidate callers equal to the rendered templates).
 
 - Add inactive historical PR Build selection/revalidation preserving original controller,
   newest run/attempt, complete graph and immutable bundle metadata after actual merged-source

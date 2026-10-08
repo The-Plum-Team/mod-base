@@ -322,6 +322,7 @@ Integration-round amendments:
 | MB10 | `mod_base.conformance.run`, `mod_base.conformance.commands` |
 | MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.installation`, `mod_base.build_ci.installation_schema`, `mod_base.build_ci.installation_record`, `mod_base.build_ci.bootstrap_installation`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.privileged_launch`, `mod_base.build_ci.python_archive`, `mod_base.build_ci.python_installation`, `mod_base.build_ci.python_transport`, `mod_base.build_ci.python_setup`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff`, `mod_base.build_ci.runtime_root_request_schema`, `mod_base.build_ci.runtime_root_request` |
 | MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject` |
+| MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.installation`, `mod_base.build_ci.installation_schema`, `mod_base.build_ci.installation_record`, `mod_base.build_ci.bootstrap_installation`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.privileged_launch`, `mod_base.build_ci.python_archive`, `mod_base.build_ci.python_installation`, `mod_base.build_ci.python_transport`, `mod_base.build_ci.python_setup`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff`, `mod_base.build_ci.runtime_root_request_schema`, `mod_base.build_ci.runtime_root_request` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -1645,23 +1646,36 @@ Owner: MB9 (register() implemented by MB0; handlers dispatch to the entry points
 
 ## `mod_base.template.tool`
 
-* `def load_template_activation(repo: Path) -> dict[str, Any] | None`: Local read-only preflight for legacy absence or bound disabled activation. Require no-follow regular activation/native config reads under separate 8 KiB/1 MiB caps, strict kind/config and matching repository/profile. Reject active/rollback modes until their fixed caller templates and native admission are implemented; existing check/sync/init call this before manifest selection or writes. No owner/transition/bootstrap/pin/native authority, automatic activation or complete removed-marker protection.
-
 Owner: MB9.
 
-`RENDERED_CALLERS` is the protected-code closed tuple of (destination, template source, renderer)
-entries. Its current sole member binds Pages to managed/.github/workflows/pages.yml and the
-existing pages-extension policy. Manifest data cannot remap its path/source/class or select a
-renderer. Manifest admission rejects unregistered workflow PIN/VERSION placeholders before
-check/sync/init effects; future Build/E2E registrations require protected code/templates and
-separate profile/native admission. Existing CLI and public method signatures remain unchanged.
-
-
 ``template check|sync|init`` (MB9, SPEC §8.2).
+
+Every workflow the kit renders with the mod's pin is a `RenderedCaller` of `RENDERED_CALLERS`,
+which is code: manifest data can neither enrol a caller, remap one nor choose its renderer, and a
+template the pin parser would read (a workflow, or an `action.yml` below `.github/actions`) may
+hold `{{PIN}}`/`{{VERSION}}` only when it is enrolled. The Pages caller is a manifest entry,
+rendered `pages-extension` and always managed. The four Build/E2E callers of
+`build_ci.activation.CALLERS` are enrolled in code alone (never in the manifest), rendered `pinned`
+(the whole file, no extension region) and managed only in the activation modes that list them.
+`check`, `sync` and `init` read the activation state first: a mod with neither an activation
+manifest nor a Build configuration is handled exactly as before those callers existed; with a
+manifest, a caller its mode manages is checked and written like a managed file and any other must
+not exist (`forbidden`); `sync` never deletes one. To add or replace a caller template, put it at
+`template/managed/<path>` and enrol its path in `build_ci.activation.CALLERS` and
+`MANAGED_CALLERS`; a new way of rendering is a new `RENDERERS` entry with its three functions.
 
 Constants:
 
 * `MANIFEST_PATH = 'template/manifest.json'`
+* `RENDERERS = ('pages-extension', 'pinned')`: every renderer a `RenderedCaller` may name; one of another name is an error in every verb, never a byte-identical managed file.
+* `RENDERED_CALLERS`: the closed registry, a tuple of `RenderedCaller`: the Pages caller, then one record per `build_ci.activation.CALLERS` path with `modes = build_ci.activation.managing_modes(path)`.
+
+* `class RenderedCaller`: One rendered workflow: its path in the mod, its template source below ``template/``, its renderer and the activation modes that manage it (``None``: a manifest entry, managed whatever the activation).
+  * fields: `path: str, source: str, renderer: str, modes: frozenset[str] | None`
+* `def load_template_activation(repo: Path) -> dict[str, Any] | None`: The mod's validated activation manifest, or ``None`` for a mod with neither the manifest nor a Build configuration. Read bounded without following symlinks and bound to the repository and profile of ``scripts/ci/mod-base-build.json``; a Build configuration without a manifest is an error, so a deleted manifest is never taken for ``disabled``.
+* `def activation_bytes(repo: Path) -> bytes | None`: The bytes of the manifest ``load_template_activation`` accepts (``None`` where it returns ``None``).
+* `def expected_callers(kit_root: Path, pin: Pin, activation: dict[str, Any] | None) -> dict[str, bytes | None]`: What every Build/E2E caller path must hold for a validated manifest and a pin: the template of ``kit_root`` rendered with the pin where the mode manages the caller, ``None`` where the file must not exist. ``kit_root`` must be the kit the pin names.
+* `def caller_files(repo: Path) -> dict[str, bytes]`: The bytes of every Build/E2E caller path that exists in ``repo``, each a bounded regular file reached without symlinks.
 
 * `class Drift`: One difference: ``kind`` is ``missing``, ``changed``, ``fragment``, ``agents``, ``links``, ``forbidden`` or ``extension``; ``detail`` is a bounded unified diff or message.
   * fields: `path: str, kind: str, detail: str`
@@ -1685,12 +1699,19 @@ Frozen for other units (integration round):
 
 Owner: MB9 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``template check|sync|init`` (MB9). Flags are frozen by SPEC §2.2; exit 2 on drift.
+``template check|sync|init|activation|transition`` (MB9). Flags are frozen by SPEC §2.2; exit 2 on
+drift. `template activation --repo DIR` and `template transition --repo DIR --base DIR` are
+additive (v1.1.0): the first validates the mod's activation manifest and prints `state`,
+`repository`, `profile`, `rollback_from`, `managed` and `next` lines; the second admits the change
+from the protected base checkout to the candidate (`build_ci.transition`) and prints `transition`,
+`pin` and `managed` lines. Both exit 2 on a refusal.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run_check(args: argparse.Namespace) -> int`
 * `def run_sync(args: argparse.Namespace) -> int`
 * `def run_init(args: argparse.Namespace) -> int`
+* `def run_activation(args: argparse.Namespace) -> int`
+* `def run_transition(args: argparse.Namespace) -> int`
 
 ## `mod_base.template.lock`
 
@@ -2250,9 +2271,44 @@ Owner: MB11. Fixed archive-derived read-only installation; not runtime launch en
 
 ## `mod_base.build_ci.activation`
 
-* `ACTIVATION_PATH`: Fixed site/mod-base-build-activation.json; not selectable by manifest data.
-* `ACTIVATION_MODES`: disabled, shadow, shared-build, shared-build-and-e2e, reviewed-rollback.
-* `def validate_activation(document: Any, *, path: str = '$') -> dict[str, Any]`: Pure closed mod-base.ci.activation v1 shape for repository, native profile and mode. No second kit pin, matrix/scenario catalog, arbitrary template/job/permission/secret/extension/deferral/approval selectors. Return the same data only; protected repository/config binding, current-head owner transition, native predecessors, rendered bytes and rollback proof remain separate mandatory prerequisites. Initial writer/reader 1 with no predecessor; 8 KiB generic reader cap.
+Owner: MB11. The Build/E2E activation manifest of a mod: its closed data, the caller workflows
+each mode makes managed files and the allowed transitions. Pure data and tables; it reads no file
+and grants nothing. `mod_base.template.tool` gates its rendered callers on these tables and
+`mod_base.build_ci.transition` admits a change of state.
+
+* `ACTIVATION_PATH = 'site/mod-base-build-activation.json'`
+* `ACTIVATION_KIND = 'mod-base.ci.activation'`
+* `ACTIVATION_MODES = ('disabled', 'shadow', 'shared-build', 'shared-build-and-e2e', 'reviewed-rollback')`
+* `DISABLED_MODE = 'disabled'`
+* `ROLLBACK_MODE = 'reviewed-rollback'`
+* `ROLLBACK_SOURCES = ('shadow', 'shared-build', 'shared-build-and-e2e')`: the modes a `reviewed-rollback` can leave (`rollback_from`).
+* `ABSENT_STATE = 'absent'`: the state of a mod without a manifest; never a `mode` value.
+* `GUARD_CALLER = '.github/workflows/mod-base-guard.yml'`
+* `BUILD_CALLER = '.github/workflows/mod-base-build.yml'`
+* `PACKAGED_CALLER = '.github/workflows/mod-base-packaged-e2e.yml'`
+* `STATUS_CALLER = '.github/workflows/mod-base-gate-status.yml'`
+* `CALLERS`: the four caller paths above, in that order.
+* `MANAGED_CALLERS`: mode -> the callers the kit manages in it: `disabled` none, `shadow` and `shared-build-and-e2e` all four, `shared-build` the guard, Build and status callers. `reviewed-rollback` has no row: it manages the row of the mode it leaves.
+* `TRANSITIONS`: state -> the states it may change to: `absent` to `disabled`; `disabled` to `absent`, `shadow` or `shared-build`; `shadow` to `disabled`, `shared-build`, `shared-build-and-e2e` or `reviewed-rollback`; `shared-build` to `shared-build-and-e2e` or `reviewed-rollback`; `shared-build-and-e2e` to `reviewed-rollback`; `reviewed-rollback` to `disabled`.
+* `def validate_activation(document: Any, *, path: str = '$') -> dict[str, Any]`: The closed mod-base.ci.activation v1 data: kind, schema_version, repository, profile, mode and rollback_from, which names the mode a reviewed-rollback leaves and is null in every other mode. No pin, template, job, permission, secret, approval, deferral or scenario key. Returns the same document; a valid one is data, not an admitted transition.
+* `def parse_activation(data: bytes, *, label: str = ACTIVATION_PATH) -> dict[str, Any]`: Strictly decode (at most `MAX_CI_ACTIVATION_BYTES`) and validate manifest bytes.
+* `def activation_state(document: dict[str, Any] | None) -> str`: The `TRANSITIONS` state of a validated manifest: its mode, or `ABSENT_STATE` for `None`.
+* `def managed_mode(document: dict[str, Any] | None) -> str`: The `MANAGED_CALLERS` row a validated manifest selects: the mode a reviewed-rollback leaves, `disabled` for `None`, else its mode.
+* `def managed_callers(document: dict[str, Any] | None) -> tuple[str, ...]`: The callers the kit manages for a mod with this validated manifest.
+* `def managing_modes(caller: str) -> frozenset[str]`: The `managed_mode` values for which `caller` is a managed file.
+* `def next_states(document: dict[str, Any] | None) -> tuple[str, ...]`: The states a mod with this validated manifest may change to in one transition.
+* `def transition_refusal(previous: dict[str, Any] | None, current: dict[str, Any] | None) -> str | None`: Why the change between two validated manifests (a mod without one is `None`) is not an allowed transition, or `None` when it is one or nothing changed. A transition changes the mode along `TRANSITIONS` and nothing else, and a reviewed-rollback names exactly the mode it leaves. Pins are not its concern (`transition.admit_transition`).
+
+## `mod_base.build_ci.transition`
+
+Owner: MB11. Admission of an activation change and of a candidate's Build/E2E caller bytes, from
+bytes the protected side read itself. `template transition` runs both over two checkouts. Neither
+is owner approval.
+
+* `class Transition`: An admitted change: the previous and current `activation_state`, whether the manifest changed at all, and the callers the candidate's state manages.
+  * fields: `previous: str, current: str, changed: bool, managed: tuple[str, ...]`
+* `def admit_transition(protected: bytes | None, candidate: bytes | None, *, protected_pin: Pin, candidate_pin: Pin) -> Transition`: Admit the change from the protected manifest bytes to the candidate's (a side without a manifest is `None`) or raise `MbError`. Both are decoded strictly. Equal documents are admitted whatever the pins (no transition); any difference must be an allowed transition (`activation.transition_refusal`) and both pins must carry the same SHA and version.
+* `def verify_candidate_callers(files: Mapping[str, bytes], *, candidate: bytes | None, pin: Pin, kit_root: Path) -> tuple[str, ...]`: Require the candidate's caller files (`{path: bytes}` of those that exist) to be exactly `template.tool.expected_callers` for its manifest and pin: a managed caller equals its rendered template, every other caller path is absent, and no other path is given. `kit_root` must be the verified kit `pin` names. Returns the managed paths; one `MbError` names every problem.
 
 ## `mod_base.build_ci.batch`
 

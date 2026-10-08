@@ -261,6 +261,55 @@ bump is staged by the controller's bootstrap, the base branch's: one older than 
 new kit without its `actions/`, so a gate step that reads the staged `actions/` can only follow
 once the controller's own pin is `v0.9.2` or later.
 
+## Build/E2E activation and rollback
+
+A mod states how far it uses the shared Build and packaged E2E in
+`site/mod-base-build-activation.json` ([SCHEMAS.md](SCHEMAS.md#profile-activation-data-v1)), next to
+its Build configuration `scripts/ci/mod-base-build.json`. The mode decides which of the four kit
+callers (`mod-base-guard.yml`, `mod-base-build.yml`, `mod-base-packaged-e2e.yml`,
+`mod-base-gate-status.yml` in `.github/workflows/`) are managed files: none in `disabled`, all in
+`shadow` and `shared-build-and-e2e`, all but the packaged E2E caller in `shared-build`, and in
+`reviewed-rollback` those of the mode it leaves. A managed caller is the kit template rendered with
+the mod's pin, byte for byte; it has no extension region and cannot be named in
+`template.deferred`. A caller outside its mode must not exist.
+
+Every change of mode is its own pull request, never combined with a kit bump:
+
+```bash
+git worktree add --detach ../base origin/master        # the protected state the change starts from
+python3 scripts/ci/mod_base_kit.py run template activation --repo .       # state, managed callers, allowed next states
+# edit "mode" (and "rollback_from") in site/mod-base-build-activation.json, then:
+python3 scripts/ci/mod_base_kit.py run template sync --repo . --write     # writes the callers the new mode manages
+git rm <every caller the new mode no longer manages>                      # sync never deletes; check names them as forbidden
+python3 scripts/ci/mod_base_kit.py run template check --repo .
+python3 scripts/ci/mod_base_kit.py run template transition --repo . --base ../base
+```
+
+`template transition` exits 2 unless the candidate's callers are exactly the rendered templates
+and its manifest is either unchanged (an ordinary bump, at any pin) or changed along an allowed
+transition with both checkouts at the same pin. It compares the callers with the templates of the
+kit that runs it, so run it through the candidate's bootstrap as above. The
+allowed transitions are: no manifest to `disabled` (with the Build configuration, in a preparatory
+pull request) and back; `disabled` to `shadow` or `shared-build`; `shadow` to `disabled`,
+`shared-build` or `shared-build-and-e2e`; `shared-build` to `shared-build-and-e2e`; any of
+`shadow`, `shared-build` and `shared-build-and-e2e` to `reviewed-rollback`; and `reviewed-rollback`
+to `disabled`.
+
+Rollback is two pull requests. The first sets `"mode": "reviewed-rollback"` and
+`"rollback_from"` to the mode being left: the callers stay managed and unchanged while the mod's
+previous gates are restored and reviewed. The second sets `disabled` (and `"rollback_from": null`)
+and removes the callers. Deleting the manifest is not a rollback: with the Build configuration
+still present `template check` fails, and a manifest is removed only from `disabled`.
+
+A kit bump in an active mode is an ordinary bump: `bump` rewrites the pin lines and the new kit's
+`template sync --write` renders every managed caller again. `bump` refuses a kit that does not read
+the activation manifest (v1.0.3 and older) while a mode other than `disabled` is active, so a pin
+rollback that far follows the two rollback pull requests. When `bump` fails after it started
+writing, it restores every workflow and action file; run `template sync --repo . --write` to
+restore any other managed file. On a `core.autocrlf=true` clone the callers check out with CRLF
+until the managed `.gitattributes` lists them: add `/.github/workflows/mod-base-*.yml text eol=lf`
+to `.git/info/attributes`.
+
 ## Canary procedure
 
 The canary is a separate public caller repository, so it exercises exactly the cross-repository

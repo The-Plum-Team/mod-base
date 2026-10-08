@@ -61,6 +61,24 @@ Detailed rules (``docs/OPERATIONS.md`` and ``docs/ONBOARDING.md`` describe the p
   ``license_label``, ``canonical_branch`` and the Modrinth/CurseForge slugs of ``project.links``)
   and leaves every other placeholder for the maintainer. ``LICENSE`` is seeded only for a known
   ``license_label`` (legal text is never managed afterwards).
+* Every workflow the kit renders with the mod's pin is enrolled in :data:`RENDERED_CALLERS`, which
+  is code: manifest data can neither enrol a caller, remap one nor choose how it is rendered, and a
+  template the pin parser would read (a workflow, or an ``action.yml`` below ``.github/actions``)
+  may hold ``{{PIN}}``/``{{VERSION}}`` only when it is enrolled. The Pages caller is a manifest
+  entry and always managed. The Build/E2E callers (the guard, the Build, the packaged E2E and the
+  status caller) are enrolled in code alone and managed only in the activation modes that list them
+  (:data:`mod_base.build_ci.activation.MANAGED_CALLERS`); they are rendered whole, so they have no
+  extension region, and ``template.deferred`` cannot name them.
+* The activation state is read before anything else (:func:`load_template_activation`). A mod with
+  neither ``site/mod-base-build-activation.json`` nor ``scripts/ci/mod-base-build.json`` never
+  adopted the shared Build/E2E: nothing about those callers is checked or written, exactly as
+  before they existed. A Build configuration without a manifest is an error, so deleting the
+  manifest never frees a caller from the check. With a manifest, a caller its mode manages is
+  missing, changed or current like any managed file, and one its mode does not manage must not
+  exist (``forbidden``): a kit caller is either drift-checked or absent. ``sync`` and ``init``
+  write the callers the mode manages and never delete one.
+* While a mode manages callers, ``.github/dependabot.yml`` must also ignore every third-party
+  action those callers pin, for the reason it ignores the Pages caller's.
 """
 
 from __future__ import annotations
@@ -71,12 +89,14 @@ import posixpath
 import re
 import stat
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import mod_base
-from mod_base.build_ci.activation import ACTIVATION_PATH, validate_activation
+from mod_base.build_ci.activation import (ACTIVATION_PATH, CALLERS, MANAGED_CALLERS, managed_mode, managing_modes,
+                                          parse_activation)
 from mod_base.build_ci.config import BUILD_CONFIG_PATH, validate_build_config
 from mod_base.config import DEFAULT_CONFIG_PATH, Config, load_config, parse_config
 from mod_base.errors import MbError, single_line
@@ -84,15 +104,36 @@ from mod_base.model import limits as lim
 from mod_base.model.canonical import read_regular_file, strict_loads
 from mod_base.model.documents import validate_template_manifest
 from mod_base.model.validators import DocumentError
-from mod_base.pin import PIN_LINE, Pin, checkout_head, parse_pin, read_pin_files, release_tags_at
+from mod_base.pin import (ACTION_FILES, PIN_LINE, Pin, checkout_head, parse_pin, parse_pin_files, read_pin_files,
+                          release_tags_at)
 from mod_base.workflow import CALLER
 
 OWNER = "MB9"
 MANIFEST_PATH = "template/manifest.json"
 
 CALLER_PATH = ".github/workflows/pages.yml"
-# Protected-code registry: profile/manifest data cannot choose a renderer or extension policy.
-RENDERED_CALLERS = ((CALLER_PATH, "managed/.github/workflows/pages.yml", "pages-extension"),)
+
+
+@dataclass(frozen=True)
+class RenderedCaller:
+    """One workflow the kit renders with the mod's pin: ``path`` in the mod, the template ``source``
+    below ``template/``, the ``renderer`` (a :data:`RENDERERS` name) and the activation ``modes``
+    that manage it (:func:`mod_base.build_ci.activation.managed_mode` values). ``modes`` is ``None``
+    for a caller that is a manifest entry and managed whatever the activation."""
+
+    path: str
+    source: str
+    renderer: str
+    modes: frozenset[str] | None
+
+
+#: The closed registry of rendered callers. It is code: neither the manifest nor the activation
+#: manifest can add an entry, move one or choose its renderer. A Build/E2E caller is enrolled here
+#: alone (never in ``template/manifest.json``) and takes its modes from the activation table.
+RENDERED_CALLERS: tuple[RenderedCaller, ...] = (
+    RenderedCaller(CALLER_PATH, f"managed/{CALLER_PATH}", "pages-extension", None),
+    *(RenderedCaller(path, f"managed/{path}", "pinned", managing_modes(path)) for path in CALLERS),
+)
 
 AGENTS_PATH = "AGENTS.md"
 CODEOWNERS_PATH = ".github/CODEOWNERS"
@@ -115,6 +156,8 @@ MANAGED_BEGIN = "# >>> mod-base managed:"
 MANAGED_END = "# <<< mod-base managed\n"
 EXTENSION_BEGIN = "# >>> mod-local extensions:"
 EXTENSION_END = "# <<< mod-local extensions\n"
+#: What a region marker line starts with: a caller that is rendered whole holds no such line.
+_REGION_MARKERS = (MANAGED_BEGIN, MANAGED_END.rstrip("\n"), EXTENSION_BEGIN, EXTENSION_END.rstrip("\n"))
 PIN_PLACEHOLDER = "{{PIN}}"
 VERSION_PLACEHOLDER = "{{VERSION}}"
 
@@ -123,6 +166,11 @@ MAX_DETAIL_CHARS = 20000
 CRLF_ADVICE = ("has CRLF line endings: this checkout converted them (core.autocrlf) before the managed "
                ".gitattributes pinned eol=lf; delete the file and check it out again (git checkout -- <path>) "
                "or run template sync --write, never commit CRLF")
+#: The managed ``.gitattributes`` lists the manifest's files, so a Build/E2E caller has no rule yet.
+ACTIVATION_CRLF_ADVICE = ("has CRLF line endings: this checkout converted them (core.autocrlf), because the managed "
+                          ".gitattributes pins eol=lf for no Build/E2E caller yet; add '/<path> text eol=lf' to "
+                          ".git/info/attributes and check the file out again, or run template sync --write, never "
+                          "commit CRLF")
 SEED_PLACEHOLDER = re.compile(r"\{\{([a-z_]+)\}\}")
 
 _EXTENSION_JOB = re.compile(r"^  (ext-[a-z0-9-]+):\s*$")
@@ -286,46 +334,87 @@ def _diff(path: str, expected: bytes, actual: bytes) -> str:
 # -- Manifest --------------------------------------------------------------------------------------
 
 
-def _rendered_caller_kind(entry: dict[str, Any]) -> str | None:
-    for path, source, kind in RENDERED_CALLERS:
-        if entry["path"].casefold() == path.casefold() or entry["source"].casefold() == source.casefold():
-            if entry["path"] != path or entry["source"] != source or entry["class"] != "managed":
+def _caller_record(entry: dict[str, Any]) -> RenderedCaller | None:
+    """The registry record the manifest ``entry`` names, or ``None`` for any other file.
+
+    An entry that names an enrolled path or source in any spelling must be that record exactly, of
+    class ``managed``; and only a caller without activation modes may be a manifest entry at all,
+    so manifest data can never make a Build/E2E caller a file every mod must hold.
+    """
+
+    for record in RENDERED_CALLERS:
+        if entry["path"].casefold() == record.path.casefold() or entry["source"].casefold() == record.source.casefold():
+            if entry["path"] != record.path or entry["source"] != record.source or entry["class"] != "managed":
                 raise MbError("rendered caller path/source/class differs from the closed registry", reason="template")
-            return kind
+            if record.modes is not None:
+                raise MbError(f"{record.path} is managed by activation mode and enrolled in the code registry "
+                              "alone; it must not be a template manifest entry", reason="template")
+            return record
     return None
 
 
-def load_template_activation(repo: Path) -> dict[str, Any] | None:
-    """Preflight optional legacy/disabled activation data before any template write.
+def _pin_scanned(path: str) -> bool:
+    """Whether ``path`` is a file the pin parser reads, in any letter case: a workflow, or an
+    ``action.yml``/``action.yaml`` below ``.github/actions``."""
 
-    Current registry has no Build/E2E caller enrollment. Other modes reject until their
-    fixed templates and native transition admission are implemented; this is not activation
-    authority or complete missing-marker/rollback protection. Legacy absence remains valid.
-    """
+    folded = path.casefold()
+    return folded.startswith(".github/workflows/") or (
+        folded.startswith(".github/actions/") and folded.rsplit("/", 1)[1] in ACTION_FILES)
+
+
+def _read_activation(repo: Path) -> tuple[bytes, dict[str, Any]] | None:
+    """``(bytes, validated document)`` of the mod's activation manifest, bound to its Build
+    configuration, or ``None`` for a mod that has neither file."""
+
     state = _state(repo, ACTIVATION_PATH)
-    if state == 'absent':
-        return None
-    if state != 'file':
-        raise MbError('activation must be a regular file reached without symlinks', reason='template')
-    data = read_regular_file(repo / ACTIVATION_PATH, label='template activation',
-                             max_bytes=lim.MAX_CI_ACTIVATION_BYTES)
-    document = validate_activation(strict_loads(data, label='template activation',
-                                                max_bytes=lim.MAX_CI_ACTIVATION_BYTES))
-    if _state(repo, BUILD_CONFIG_PATH) != 'file':
-        raise MbError('activation requires the regular native Build configuration', reason='template')
-    data = read_regular_file(repo / BUILD_CONFIG_PATH, label='native Build configuration',
-                             max_bytes=lim.MAX_CI_CONFIG_BYTES)
-    config = validate_build_config(strict_loads(data, label='native Build configuration',
-                                                max_bytes=lim.MAX_CI_CONFIG_BYTES))
-    if (document['repository'], document['profile']) != (config['repository'], config['profile']):
-        raise MbError('activation differs from native repository/profile configuration', reason='template')
-    if document['mode'] != 'disabled':
-        raise MbError('activation mode has no admitted Build/E2E caller templates yet', reason='template')
-    return document
+    configured = _state(repo, BUILD_CONFIG_PATH)
+    if state == "absent":
+        if configured == "absent":
+            return None
+        raise MbError(f"{BUILD_CONFIG_PATH} exists without {ACTIVATION_PATH}: a Build configuration needs its "
+                      "activation manifest (the disabled mode manages no caller)", reason="template")
+    if state != "file":
+        raise MbError(f"{ACTIVATION_PATH} must be a regular file reached without symlinks", reason="template")
+    data = read_regular_file(repo / ACTIVATION_PATH, label=ACTIVATION_PATH, max_bytes=lim.MAX_CI_ACTIVATION_BYTES)
+    document = parse_activation(data)
+    if configured != "file":
+        raise MbError(f"{ACTIVATION_PATH} needs {BUILD_CONFIG_PATH} as a regular file reached without symlinks",
+                      reason="template")
+    raw = read_regular_file(repo / BUILD_CONFIG_PATH, label=BUILD_CONFIG_PATH, max_bytes=lim.MAX_CI_CONFIG_BYTES)
+    config = validate_build_config(strict_loads(raw, label=BUILD_CONFIG_PATH, max_bytes=lim.MAX_CI_CONFIG_BYTES))
+    if (document["repository"], document["profile"]) != (config["repository"], config["profile"]):
+        raise MbError(f"{ACTIVATION_PATH} names another repository or profile than {BUILD_CONFIG_PATH}",
+                      reason="template")
+    return data, document
+
+
+def load_template_activation(repo: Path) -> dict[str, Any] | None:
+    """The mod's validated activation manifest, or ``None`` for a mod that never adopted the shared
+    Build/E2E (it has neither the manifest nor a Build configuration).
+
+    The manifest is read bounded and without following symlinks and must name the repository and
+    profile of ``scripts/ci/mod-base-build.json``. A Build configuration without a manifest is an
+    error: the manifest is the only thing that says which callers are managed, so its absence is
+    never taken for ``disabled`` once a mod is configured. ``check``, ``sync`` and ``init`` call
+    this before they read the template manifest or write anything.
+    """
+
+    found = _read_activation(_real_directory(Path(os.path.abspath(repo)), "repository"))
+    return None if found is None else found[1]
+
+
+def activation_bytes(repo: Path) -> bytes | None:
+    """The bytes of the manifest :func:`load_template_activation` accepts (``None`` where it
+    returns ``None``): what a transition is admitted from."""
+
+    found = _read_activation(_real_directory(Path(os.path.abspath(repo)), "repository"))
+    return None if found is None else found[0]
 
 
 def load_manifest(kit_root: Path) -> dict[str, Any]:
-    """Read and validate ``template/manifest.json`` (``mod-base.template-manifest`` v1)."""
+    """Read and validate ``template/manifest.json`` (``mod-base.template-manifest`` v1) and the
+    kit's rendered-caller registry with it: every enrolled template is well formed for its
+    renderer, and no other template the pin parser would read holds a pin placeholder."""
 
     kit_root = Path(os.path.abspath(kit_root))
     raw = _read(kit_root, MANIFEST_PATH, "template manifest")
@@ -334,15 +423,42 @@ def load_manifest(kit_root: Path) -> dict[str, Any]:
         validate_template_manifest(document)
     except DocumentError as exc:
         raise MbError(f"{MANIFEST_PATH}: {exc}", reason="template") from None
+    _check_registry(kit_root)
     for entry in document["files"]:
-        kind = _rendered_caller_kind(entry)
+        record = _caller_record(entry)
         if _state(kit_root / "template", entry["source"]) != "file":
             raise MbError(f"{MANIFEST_PATH}: template/{entry['source']} is not a regular file", reason="template")
-        if kind is None and entry["path"].casefold().startswith(".github/workflows/"):
+        if record is None and _pin_scanned(entry["path"]):
             data = _template_bytes(kit_root, entry["source"])
-            if any(token in data for token in (b"{{PIN}}", b"{{VERSION}}")):
-                raise MbError("unregistered workflow contains rendered caller placeholders", reason="template")
+            if any(token.encode("ascii") in data for token in (PIN_PLACEHOLDER, VERSION_PLACEHOLDER)):
+                raise MbError(f"{entry['path']} is not an enrolled caller, so its template may not hold "
+                              "{{PIN}}/{{VERSION}}: it would reach the mod unrendered", reason="template")
     return document
+
+
+def _check_registry(kit_root: Path) -> None:
+    """Require :data:`RENDERED_CALLERS` to be coherent and every enrolled template to be well formed.
+
+    Each record has a known renderer and a path and source no other record claims in any spelling.
+    A caller with activation modes names rows of the activation table and is rendered whole
+    (``pinned``): a Build/E2E caller never carries a mod-local extension region.
+    """
+
+    paths: set[str] = set()
+    sources: set[str] = set()
+    for record in RENDERED_CALLERS:
+        renderer = _renderer(record)
+        if record.path.casefold() in paths or record.source.casefold() in sources:
+            raise MbError(f"rendered caller {record.path} is enrolled twice", reason="template")
+        paths.add(record.path.casefold())
+        sources.add(record.source.casefold())
+        if record.modes is not None:
+            if not record.modes or not record.modes <= set(MANAGED_CALLERS):
+                raise MbError(f"rendered caller {record.path} names an unknown activation mode", reason="template")
+            if record.renderer != "pinned":
+                raise MbError(f"rendered caller {record.path} is managed by activation mode, so it is rendered "
+                              "whole: it can carry no extension region", reason="template")
+        renderer.text(kit_root, record.source)
 
 
 def _template_bytes(kit_root: Path, source: str) -> bytes:
@@ -404,6 +520,34 @@ def _caller_template(kit_root: Path, source: str) -> _Caller:
 
 def _render_managed(template: _Caller, pin: Pin) -> str:
     return template.managed.replace(PIN_PLACEHOLDER, pin.sha).replace(VERSION_PLACEHOLDER, pin.version)
+
+
+def _pages_text(kit_root: Path, source: str) -> str:
+    return _caller_template(kit_root, source).managed
+
+
+def _pinned_template(kit_root: Path, source: str) -> str:
+    """The text of a caller template that is rendered whole: UTF-8 with LF line endings and a final
+    newline, holding both pin placeholders and no region marker, since no part of it is the mod's."""
+
+    try:
+        text = _template_bytes(kit_root, source).decode("utf-8")
+    except UnicodeDecodeError:
+        raise MbError(f"the kit's caller template {source} is not UTF-8", reason="template") from None
+    if "\r" in text or not text.endswith("\n") or PIN_PLACEHOLDER not in text or VERSION_PLACEHOLDER not in text:
+        raise MbError(f"the kit's caller template {source} must hold {{{{PIN}}}}/{{{{VERSION}}}} and end every "
+                      "line with LF", reason="template")
+    if any(line.startswith(_REGION_MARKERS) for line in text.split("\n")):
+        raise MbError(f"the kit's caller template {source} is rendered whole and can hold no region marker",
+                      reason="template")
+    return text
+
+
+def _render_pinned(kit_root: Path, record: RenderedCaller, pin: Pin, current: bytes | None) -> bytes:
+    """The whole caller rendered for ``pin``; nothing of the mod's ``current`` file is kept."""
+
+    text = _pinned_template(kit_root, record.source)
+    return text.replace(PIN_PLACEHOLDER, pin.sha).replace(VERSION_PLACEHOLDER, pin.version).encode("utf-8")
 
 
 def _scan(line: str) -> tuple[str, bool, int]:
@@ -621,34 +765,34 @@ def extension_violations(body: tuple[str, ...] | list[str]) -> list[str]:
     return list(dict.fromkeys(problems))
 
 
-def _managed_drifts(path: str, expected: bytes, actual: bytes) -> list[Drift]:
+def _managed_drifts(path: str, expected: bytes, actual: bytes, advice: str = CRLF_ADVICE) -> list[Drift]:
     """The drifts of the managed file ``path``: none when byte-identical; CRLF line endings are
-    reported with :data:`CRLF_ADVICE`, and whatever else differs as the diff of the LF form."""
+    reported with ``advice``, and whatever else differs as the diff of the LF form."""
 
     if actual == expected:
         return []
     if b"\r\n" not in actual:
         return [Drift(path, "changed", _diff(path, expected, actual))]
     normalized = actual.replace(b"\r\n", b"\n")
-    drifts = [Drift(path, "changed", CRLF_ADVICE)]
+    drifts = [Drift(path, "changed", advice)]
     if normalized != expected:
         drifts.append(Drift(path, "changed", _diff(path, expected, normalized)))
     return drifts
 
 
-def _check_caller(repo: Path, entry: dict[str, Any], kit_root: Path, actual: bytes) -> list[Drift]:
+def _pages_drifts(repo: Path, kit_root: Path, record: RenderedCaller, actual: bytes) -> list[Drift]:
     """The caller's drifts; CRLF line endings are reported with :data:`CRLF_ADVICE` and the rest is
     checked on the LF form, since no region marker matches a CRLF line."""
 
     if b"\r\n" not in actual:
-        return _caller_drifts(repo, entry, kit_root, actual)
-    return [Drift(entry["path"], "changed", CRLF_ADVICE),
-            *_caller_drifts(repo, entry, kit_root, actual.replace(b"\r\n", b"\n"))]
+        return _region_drifts(repo, kit_root, record, actual)
+    return [Drift(record.path, "changed", CRLF_ADVICE),
+            *_region_drifts(repo, kit_root, record, actual.replace(b"\r\n", b"\n"))]
 
 
-def _caller_drifts(repo: Path, entry: dict[str, Any], kit_root: Path, actual: bytes) -> list[Drift]:
-    path = entry["path"]
-    template = _caller_template(kit_root, entry["source"])
+def _region_drifts(repo: Path, kit_root: Path, record: RenderedCaller, actual: bytes) -> list[Drift]:
+    path = record.path
+    template = _caller_template(kit_root, record.source)
     try:
         caller = _split_caller(actual.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
@@ -667,18 +811,80 @@ def _caller_drifts(repo: Path, entry: dict[str, Any], kit_root: Path, actual: by
     return drifts
 
 
-def _render_caller(repo: Path, template: _Caller, pin: Pin) -> bytes:
-    """The caller ``sync`` writes: the managed region rendered for ``pin`` and the current caller's
-    extension region, read with LF line endings (a CRLF checkout is rewritten with LF)."""
+def _pinned_drifts(repo: Path, kit_root: Path, record: RenderedCaller, actual: bytes) -> list[Drift]:
+    """The drifts of a caller that is rendered whole: any byte that is not the template rendered
+    with the mod's single pin, so nothing a mod adds to it (an ``ext-`` job least of all) passes."""
 
+    try:
+        pin = parse_pin(repo)
+    except MbError as exc:
+        return [Drift(record.path, "changed", f"cannot determine the mod's single pin: {single_line(exc)}")]
+    return _managed_drifts(record.path, _render_pinned(kit_root, record, pin, None), actual, ACTIVATION_CRLF_ADVICE)
+
+
+def _render_pages(kit_root: Path, record: RenderedCaller, pin: Pin, current: bytes | None) -> bytes:
+    """The caller ``sync`` writes: the managed region rendered for ``pin`` and the extension region
+    of the mod's ``current`` caller, read with LF line endings (a CRLF checkout is rewritten with LF)."""
+
+    template = _caller_template(kit_root, record.source)
     body: tuple[str, ...] = ()
-    if _state(repo, CALLER_PATH) == "file":
+    if current is not None:
         try:
-            body = _split_caller(_read(repo, CALLER_PATH, "caller").decode("utf-8").replace("\r\n", "\n")).body
+            body = _split_caller(current.decode("utf-8").replace("\r\n", "\n")).body
         except (UnicodeDecodeError, ValueError) as exc:
-            raise MbError(f"cannot preserve the extension region of {CALLER_PATH}: {exc}; repair it by hand",
+            raise MbError(f"cannot preserve the extension region of {record.path}: {exc}; repair it by hand",
                           reason="template") from None
     return (_render_managed(template, pin) + template.begin + "".join(body) + EXTENSION_END).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class _Renderer:
+    """One way of rendering a caller: ``text`` reads the managed text of its kit template (and
+    refuses a malformed one), ``render`` gives the bytes ``sync`` and ``init`` write for a pin and
+    the mod's current file, and ``drifts`` gives what ``check`` reports for the mod's file."""
+
+    text: Callable[[Path, str], str]
+    render: Callable[[Path, RenderedCaller, Pin, bytes | None], bytes]
+    drifts: Callable[[Path, Path, RenderedCaller, bytes], list[Drift]]
+
+
+_RENDERERS = {
+    "pages-extension": _Renderer(_pages_text, _render_pages, _pages_drifts),
+    "pinned": _Renderer(_pinned_template, _render_pinned, _pinned_drifts),
+}
+#: Every renderer a :class:`RenderedCaller` may name: a managed region followed by a region of
+#: mod-local ``ext-`` jobs, or the whole file with nothing of the mod's.
+RENDERERS = tuple(_RENDERERS)
+
+
+def _renderer(record: RenderedCaller) -> _Renderer:
+    """The renderer ``record`` names. This lookup is the only dispatch on a renderer, so a caller of
+    an unknown kind is an error everywhere and never passes for a byte-identical managed file."""
+
+    renderer = _RENDERERS.get(record.renderer)
+    if renderer is None:
+        raise MbError(f"rendered caller {record.path} names the unknown renderer "
+                      f"{single_line(record.renderer, limit=60)!r}; the renderers are {', '.join(RENDERERS)}",
+                      reason="template")
+    return renderer
+
+
+def _activation_callers(activation: dict[str, Any] | None) -> list[tuple[RenderedCaller, bool]]:
+    """``(record, whether the mod's activation manages it)`` for every caller enrolled with
+    activation modes, in registry order."""
+
+    mode = managed_mode(activation)
+    return [(record, mode in record.modes) for record in RENDERED_CALLERS if record.modes is not None]
+
+
+def expected_callers(kit_root: Path, pin: Pin, activation: dict[str, Any] | None) -> dict[str, bytes | None]:
+    """What every Build/E2E caller path must hold in a mod whose validated activation manifest is
+    ``activation`` (``None``: it has none) and whose pin is ``pin``: the kit template of
+    ``kit_root`` rendered with that pin where the mode manages the caller, ``None`` where the file
+    must not exist. ``kit_root`` must be the kit that ``pin`` names."""
+
+    return {record.path: _renderer(record).render(Path(kit_root), record, pin, None) if managed else None
+            for record, managed in _activation_callers(activation)}
 
 
 # -- Fragments -------------------------------------------------------------------------------------
@@ -743,20 +949,39 @@ def pinned_actions(kit_root: Path, manifest: dict[str, Any], entry: dict[str, An
     for a managed workflow without a caller region), read from the kit's template; the kit's own
     references are excluded. Sorted and unique by name, the first listing workflow kept."""
 
-    sources = {item["path"]: item["source"] for item in _entries(manifest, "managed")}
+    entries = {item["path"]: item for item in _entries(manifest, "managed")}
     found: dict[str, str] = {}
     for workflow in entry.get("ignore_actions_of", ()):
-        if workflow == CALLER_PATH:
-            text = _caller_template(kit_root, sources[workflow]).managed
+        record = _caller_record(entries[workflow])
+        if record is not None:
+            text = _renderer(record).text(kit_root, record.source)
         else:
             try:
-                text = _template_bytes(kit_root, sources[workflow]).decode("utf-8")
+                text = _template_bytes(kit_root, entries[workflow]["source"]).decode("utf-8")
             except UnicodeDecodeError:
                 raise MbError(f"the kit's template of {workflow} is not UTF-8", reason="template") from None
-        for line in text.split("\n"):
-            match = _USES.match(line)
-            if match is not None and match.group(1).lower() != mod_base.KIT_REPOSITORY.lower():
-                found.setdefault(match.group(1), workflow)
+        _collect_actions(found, workflow, text)
+    return tuple(sorted(found.items()))
+
+
+def _collect_actions(found: dict[str, str], workflow: str, text: str) -> None:
+    """Add the third-party actions ``text`` pins to ``found`` (name -> the first workflow listing it)."""
+
+    for line in text.split("\n"):
+        match = _USES.match(line)
+        if match is not None and match.group(1).lower() != mod_base.KIT_REPOSITORY.lower():
+            found.setdefault(match.group(1), workflow)
+
+
+def _ignored_actions(kit_root: Path, manifest: dict[str, Any], entry: dict[str, Any],
+                     activation: dict[str, Any] | None) -> tuple[tuple[str, str], ...]:
+    """What the Dependabot fragment ``entry`` must ignore in this mod: :func:`pinned_actions` and the
+    third-party actions of every Build/E2E caller the mod's activation manages."""
+
+    found = dict(pinned_actions(kit_root, manifest, entry))
+    for record, managed in _activation_callers(activation):
+        if managed:
+            _collect_actions(found, record.path, _renderer(record).text(kit_root, record.source))
     return tuple(sorted(found.items()))
 
 
@@ -944,7 +1169,7 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
     required lines are pending; every other drift fails."""
 
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
-    load_template_activation(repo)
+    activation = load_template_activation(repo)
     manifest = load_manifest(kit_root)
     config = load_config(repo, check_repository_facts=False)
     deferred = set(config.template["deferred"])
@@ -967,23 +1192,79 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
             continue
         actual = _read(repo, path, klass)
         if klass == "managed":
-            if _rendered_caller_kind(entry) == "pages-extension":
-                drifts.extend(_check_caller(repo, entry, kit_root, actual))
+            record = _caller_record(entry)
+            if record is not None:
+                drifts.extend(_renderer(record).drifts(repo, Path(kit_root), record, actual))
             else:
                 drifts.extend(_managed_drifts(path, _template_bytes(kit_root, entry["source"]), actual))
             if path in documents:
                 drifts.extend(Drift(path, "links", problem)
                               for problem in link_violations(path, actual.decode("utf-8", errors="replace"), documents))
         else:
-            actions = pinned_actions(kit_root, manifest, entry) if path == DEPENDABOT_PATH else ()
+            actions = _ignored_actions(kit_root, manifest, entry, activation) if path == DEPENDABOT_PATH else ()
             missing, other = _check_fragment(repo, entry, actual, config, actions)
             (pending if path in staged else drifts).extend(missing)
             drifts.extend(other)
+    if activation is not None:
+        drifts.extend(_activation_drifts(repo, Path(kit_root), activation))
     for path in FORBIDDEN_PATHS:
         if _state(repo, path) != "absent":
             drifts.append(Drift(path, "forbidden", f"{path} must not exist: Claude Code reads AGENTS.md only while "
                                                    "no CLAUDE.md, .claude/CLAUDE.md or CLAUDE.local.md exists"))
     return drifts, pending
+
+
+def _activation_drifts(repo: Path, kit_root: Path, activation: dict[str, Any]) -> list[Drift]:
+    """The drifts of the Build/E2E callers of a mod with an activation manifest: a caller its mode
+    manages is checked like a managed file, and any other must not exist. No deferral applies."""
+
+    drifts: list[Drift] = []
+    for record, managed in _activation_callers(activation):
+        path = record.path
+        state = _state(repo, path)
+        if not managed:
+            if state != "absent":
+                drifts.append(Drift(path, "forbidden", f"{path} must not exist in the {activation['mode']} activation "
+                                                       "mode, which does not manage it: a mod-base Build/E2E caller "
+                                                       "is either managed and checked or absent; remove it"))
+        elif state == "absent":
+            drifts.append(Drift(path, "missing", f"{path} is missing (managed in the {activation['mode']} activation "
+                                                 "mode); run template sync --write"))
+        elif state == "invalid":
+            drifts.append(Drift(path, "changed", f"{path} must be a regular file reached without symlinks"))
+        else:
+            drifts.extend(_renderer(record).drifts(repo, kit_root, record, _read(repo, path, "managed")))
+    return drifts
+
+
+def caller_files(repo: Path) -> dict[str, bytes]:
+    """The bytes of every Build/E2E caller path that exists in ``repo``, each a bounded regular file
+    reached without symlinks: what a mod holds where :func:`expected_callers` says what it must."""
+
+    repo = _real_directory(Path(os.path.abspath(repo)), "repository")
+    files: dict[str, bytes] = {}
+    for record, _managed in _activation_callers(None):
+        state = _state(repo, record.path)
+        if state == "invalid":
+            raise MbError(f"{record.path} must be a regular file reached without symlinks", reason="template")
+        if state == "file":
+            files[record.path] = _read(repo, record.path, "caller")
+    return files
+
+
+def _require_single_pin(repo: Path, writes: dict[str, bytes]) -> None:
+    """Refuse to write workflow bytes that would leave ``repo`` without its single pin: an
+    unrendered placeholder or a malformed kit reference in a template stops here, before any file
+    changes, instead of reaching the mod."""
+
+    scanned = {path: data for path, data in writes.items() if _pin_scanned(path)}
+    if not scanned:
+        return
+    try:
+        parse_pin_files({**read_pin_files(repo), **scanned})
+    except MbError as exc:
+        raise MbError(f"refusing to write {', '.join(sorted(scanned))}: the mod's workflows would no longer carry "
+                      f"one pin ({single_line(exc, limit=400)})", reason="template") from None
 
 
 def check(repo: Path, *, kit_root: Path) -> list[Drift]:
@@ -999,28 +1280,31 @@ def pending(repo: Path, *, kit_root: Path) -> list[Drift]:
 
 def sync(repo: Path, *, kit_root: Path, write: bool) -> list[Drift]:
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
-    load_template_activation(repo)
+    activation = load_template_activation(repo)
     manifest = load_manifest(kit_root)
     config = load_config(repo, check_repository_facts=False)
     staged = set(config.template["deferred"]) & DEFERRABLE
+    managed: list[tuple[str, str, RenderedCaller | None]] = [
+        (entry["path"], entry["source"], _caller_record(entry)) for entry in _entries(manifest, "managed")]
+    managed.extend((record.path, record.source, record)
+                   for record, active in _activation_callers(activation) if active)
     planned: list[tuple[Drift, str, bytes]] = []
-    for entry in _entries(manifest, "managed"):
-        path = entry["path"]
+    for path, source, record in managed:
         state = _state(repo, path)
         if state == "absent" and path in staged:
             continue
         if state == "invalid":
             raise MbError(f"cannot sync {path}: it is not a regular file reached without symlinks", reason="template")
-        if _rendered_caller_kind(entry) == "pages-extension":
-            expected = _render_caller(repo, _caller_template(kit_root, entry["source"]), parse_pin(repo))
+        actual = _read(repo, path, "managed") if state == "file" else None
+        if record is not None:
+            expected = _renderer(record).render(Path(kit_root), record, parse_pin(repo), actual)
         else:
-            expected = _template_bytes(kit_root, entry["source"])
-        if state == "absent":
+            expected = _template_bytes(kit_root, source)
+        if actual is None:
             planned.append((Drift(path, "missing", f"{path} would be created from the kit template"), path, expected))
-            continue
-        actual = _read(repo, path, "managed")
-        if actual != expected:
+        elif actual != expected:
             planned.append((Drift(path, "changed", _diff(path, expected, actual)), path, expected))
+    _require_single_pin(repo, {path: data for _drift, path, data in planned})
     if write:
         for _drift, path, data in planned:
             _write_replace(repo, path, data)
@@ -1092,7 +1376,7 @@ def init(repo: Path, *, kit_root: Path, seed: bool, from_config: Path | None) ->
     """Seed missing files; return the created paths; refuse to overwrite anything."""
 
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
-    load_template_activation(repo)
+    activation = load_template_activation(repo)
     manifest = load_manifest(kit_root)
     config, config_bytes = _load_seed_config(repo, from_config)
     values = seed_values(config)
@@ -1102,8 +1386,9 @@ def init(repo: Path, *, kit_root: Path, seed: bool, from_config: Path | None) ->
         path, klass, source = entry["path"], entry["class"], entry["source"]
         if (klass == "seeded" and not seed) or path in deferred or _state(repo, path) != "absent":
             continue
-        if _rendered_caller_kind(entry) == "pages-extension":
-            data = _render_caller(repo, _caller_template(kit_root, source), _initial_pin(repo, kit_root))
+        record = _caller_record(entry)
+        if record is not None:
+            data = _renderer(record).render(Path(kit_root), record, _initial_pin(repo, kit_root), None)
         elif klass == "managed":
             data = _template_bytes(kit_root, source)
         elif path == DEFAULT_CONFIG_PATH:
@@ -1116,6 +1401,11 @@ def init(repo: Path, *, kit_root: Path, seed: bool, from_config: Path | None) ->
         else:
             data = _render_seed(_template_bytes(kit_root, source).decode("utf-8"), values).encode("utf-8")
         planned.append((path, data))
+    for record, active in _activation_callers(activation):
+        if active and _state(repo, record.path) == "absent":
+            planned.append((record.path, _renderer(record).render(Path(kit_root), record, _initial_pin(repo, kit_root),
+                                                                  None)))
+    _require_single_pin(repo, dict(planned))
     for path, data in planned:
         _write_new(repo, path, data)
     return [path for path, _data in planned]

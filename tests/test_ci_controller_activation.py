@@ -30,7 +30,7 @@ class ControllerActivationTests(unittest.TestCase):
 
     def test_all_modes_bind_same_original_config_and_controller_bytes_without_execution(self):
         for mode in ACTIVATION_MODES:
-            plan,api,paths,rows,raw=self.fixture(document={**ci_activation(),'mode':mode})
+            plan,api,paths,rows,raw=self.fixture(document=ci_activation(mode))
             with self.subTest(mode=mode):
                 proof=self.invoke(plan,api,paths)
                 self.assertEqual(proof.manifest.data,raw)

@@ -901,9 +901,15 @@ def ci_root_request() -> dict[str, Any]:
             "plan": plan, "envelope": ci_envelope(), "run_id": 42, "run_attempt": 2}
 
 
-def ci_activation() -> dict[str, Any]:
+def ci_activation(mode: str = "disabled", rollback_from: str | None = None) -> dict[str, Any]:
+    """The activation manifest of the ``ci_config`` mod in ``mode``; ``rollback_from`` is the mode a
+    ``reviewed-rollback`` leaves (``shared-build`` unless given)."""
+
+    if mode == "reviewed-rollback" and rollback_from is None:
+        rollback_from = "shared-build"
     return {"kind": "mod-base.ci.activation", "schema_version": 1,
-            "repository": ci_config()["repository"], "profile": ci_config()["profile"], "mode": "disabled"}
+            "repository": ci_config()["repository"], "profile": ci_config()["profile"], "mode": mode,
+            "rollback_from": rollback_from}
 
 
 def ci_batch() -> dict[str, Any]:

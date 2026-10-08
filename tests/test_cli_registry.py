@@ -29,6 +29,9 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
     "template sync": (["template", "sync", "--repo", "mod", "--write"], {"write": True}),
     "template init": (["template", "init", "--repo", "mod", "--seed", "--from-config", "c.json"],
                       {"seed": True, "from_config": Path("c.json")}),
+    "template activation": (["template", "activation", "--repo", "mod"], {"template_command": "activation"}),
+    "template transition": (["template", "transition", "--repo", "candidate", "--base", "mod"],
+                            {"template_command": "transition", "base": Path("mod")}),
     "expect": (["expect", *REPO, "--key", "mc1.20.1", "--tested-run-json", "t.json", "--extensions", "e.json",
                 "--output", "x.json"], {"key": "mc1.20.1", "tested_run_json": Path("t.json")}),
     "prepare": ([

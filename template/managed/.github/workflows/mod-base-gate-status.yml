@@ -1,0 +1,30 @@
+# mod-base managed: gate status caller, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-gate-status.yml
+# PROVISIONAL: a synthetic stand-in that makes activation gating, rendering, drift detection and the staged-file lock testable. It publishes nothing; the reviewed caller replaces it before any release.
+name: mod-base gate status
+on: workflow_dispatch
+permissions: {}
+jobs:
+  evaluate:
+    name: Evaluate protected gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Obtain the pinned kit
+        uses: The-Plum-Team/mod-base/actions/setup@{{PIN}} # {{VERSION}}
+        with:
+          install-imaging: "false"
+  publish:
+    name: Publish protected gate statuses
+    needs: evaluate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Publish nothing
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'provisional status caller: no status is published\n'
