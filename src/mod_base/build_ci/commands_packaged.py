@@ -1,4 +1,4 @@
-"""``ci select-build``: the exact Build a packaged run consumes.
+"""``ci select-build`` and ``ci fetch-build``: the exact Build a packaged run consumes.
 
 ``select-build`` runs in the packaged ``input`` job and in the one job of ``select-build.yml``.
 The subject ``ci subject`` authenticated and ``--build-run-id`` choose the route
@@ -16,7 +16,13 @@ to ``ci-selection.json`` in the state directory, and outputs ``found=true``, ``b
 ``selection`` (the record on one line, for the jobs that consume it). Nothing to select writes no
 record and outputs ``found=false`` with an empty ``build_run_id``.
 
-The command reads the job's subject and plan from the state directory and writes nothing to GitHub.
+``fetch-build`` runs in every lane job and in the aggregate job, immediately before the Build is
+used. It takes the record of this run attempt's ``input`` job as ``--selection``, re-validates
+the selected Build and publishes its complete bundle at the fixed
+``exports.BUILD_VALIDATION_ROOT`` (:func:`mod_base.build_ci.selection.fetch_build`); the bound
+record is kept as ``ci-selection.json`` in the state directory.
+
+Both read the job's subject and plan from the state directory and write nothing to GitHub.
 """
 
 from __future__ import annotations
@@ -27,12 +33,12 @@ from pathlib import Path
 from typing import Any
 
 from mod_base import cli, runtime
-from mod_base.build_ci import commands, identity, planning, selection
+from mod_base.build_ci import commands, exports, identity, planning, selection
 from mod_base.build_ci.protocol import validate_plan
 from mod_base.errors import MbError
 from mod_base.io.secure_json import loads
 from mod_base.model import grammar, limits
-from mod_base.model.canonical import canonical_json
+from mod_base.model.canonical import canonical_json, read_json_file
 
 
 def _build_run(value: str) -> int | str | None:
@@ -54,7 +60,7 @@ WAIT_SECONDS = cli.typed(_wait_seconds, f"wait of 1 to {limits.CI_BUILD_WAIT_SEC
 
 
 def add_verbs(verbs: argparse._SubParsersAction) -> None:
-    """Register ``select-build`` on the ``ci`` verb group ``verbs``."""
+    """Register ``select-build`` and ``fetch-build`` on the ``ci`` verb group ``verbs``."""
 
     select = verbs.add_parser("select-build", help="find and authenticate the exact Build of this packaged run")
     commands.add_job_arguments(select)
@@ -67,6 +73,12 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
                         help="where the selection record is written (a new file)")
     select.add_argument("--github-output", type=cli.PATH, required=True, metavar="FILE")
     select.set_defaults(handler=run_select_build)
+
+    fetch = verbs.add_parser("fetch-build", help="re-validate the selected Build and materialise its bundle")
+    commands.add_job_arguments(fetch)
+    fetch.add_argument("--selection", type=cli.PATH, required=True, metavar="FILE",
+                       help="the selection record this run attempt's input job wrote")
+    fetch.set_defaults(handler=run_fetch_build)
 
 
 def job_plan(state: Path) -> dict[str, Any]:
@@ -124,4 +136,15 @@ def run_select_build(args: argparse.Namespace) -> int:
     identity.write_state_record(args.state, selection.SELECTION_NAME, raw)
     cli.write_github_output(args.github_output, {"found": True, "build_run_id": document["build"]["producer"]["run_id"],
                                                  "selection": raw.decode("utf-8").rstrip("\n")})
+    return 0
+
+
+def run_fetch_build(args: argparse.Namespace) -> int:
+    invocation, record, plan, run_id, run_attempt = _job(args)
+    document, _ = read_json_file(args.selection, label="selection record", max_bytes=limits.MAX_CI_RECORD_BYTES)
+    api = commands.api_client(invocation, max_requests=limits.MAX_CI_FETCH_BUILD_REQUESTS)
+    selection.fetch_build(api, record=document, plan=plan, run_id=run_id, run_attempt=run_attempt,
+                          workflow_path=record["workflow_path"], event=record["event"],
+                          output=exports.BUILD_VALIDATION_ROOT)
+    identity.write_state_record(args.state, selection.SELECTION_NAME, canonical_json(document))
     return 0

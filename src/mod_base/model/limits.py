@@ -280,6 +280,9 @@ MAX_CI_BUILD_POLLS = CI_BUILD_WAIT_SECONDS // CI_BUILD_POLL_SECONDS + 1
 #: one more for every poll before that (91 polls at most, one a minute); a protected subject costs
 #: 15. The rest is for retried attempts and for the further pages of a run with over 100 jobs.
 MAX_CI_SELECT_BUILD_REQUESTS = MAX_CI_BUILD_POLLS + 64
+#: API requests of one ``ci fetch-build`` (21 for a pull request, 18 and 15 for a protected subject);
+#: the rest is for retries and pages.
+MAX_CI_FETCH_BUILD_REQUESTS = 48
 MAX_CI_BATCH_MEMBERS = 50
 #: A batch manifest travels in the body of its pull request, which GitHub bounds at 65,536; the
 #: whole body, the marker inside it and the decoded document share this bound.

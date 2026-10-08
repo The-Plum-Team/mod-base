@@ -1,7 +1,8 @@
-"""``ci select-build`` end to end.
+"""``ci select-build`` and ``ci fetch-build`` end to end.
 
 The synthetic mod checkout, the private state directory a job holds after ``ci subject`` and
-``ci plan``, real bundle ZIPs and the real filesystem (Linux). Only the GitHub API is faked.
+``ci plan``, real bundle ZIPs and the real filesystem (Linux). Only the GitHub API is faked; the
+fixed ``sealed-build`` root is pointed at a temporary directory.
 """
 
 from __future__ import annotations
@@ -16,8 +17,9 @@ from typing import Any
 from unittest import mock
 
 from mod_base import cli
-from mod_base.build_ci import commands, identity, selection
+from mod_base.build_ci import commands, exports, identity, selection
 from mod_base.build_ci.config import load_build_config
+from mod_base.build_ci.exports import verify_build_export
 from mod_base.build_ci.protocol import plan_sha256
 from mod_base.build_ci.records import validate_source_selection
 from mod_base.model import grammar, limits
@@ -318,6 +320,123 @@ class SelectBuildCommandTests(CommandTestCase):
                 self.assertTrue(stderr.startswith("mod_base: usage: "), stderr)
         self.assertEqual((world.api.request_count, world.budgets), (0, []))
         self.assert_nothing_written(state)
+
+
+class FetchBuildCommandTests(CommandTestCase):
+    def fresh(self) -> None:
+        super().fresh()
+        (self.directory / "worker").mkdir()
+        self.sealed = self.directory / "worker" / "sealed-build"
+
+    def selected(self, world: JobWorld, *argv: str) -> None:
+        """Run the ``input`` job's ``select-build`` and forget what it spent."""
+
+        self.assertEqual(self.select(world, world.state("input"), *argv), (0, ""))
+        self.spent = world.api.request_count
+        world.budgets.clear()
+
+    def fetch(self, world: JobWorld, state: Path, *, selection_file: Path | None = None,
+              environment: dict[str, str] | None = None) -> tuple[int, str]:
+        with mock.patch.object(exports, "BUILD_VALIDATION_ROOT", self.sealed):
+            code, stderr, stdout = run_ci(self, world, state, "fetch-build", "--selection",
+                                          str(self.record if selection_file is None else selection_file),
+                                          environment=environment)
+        self.assertEqual(stdout, b"")
+        return code, stderr
+
+    def assert_refused(self, world: JobWorld, state: Path, code: int, stderr: str, message: str) -> None:
+        self.assertEqual(code, 2)
+        self.assertIn(message, stderr)
+        self.assertFalse(self.sealed.exists())
+        self.assertEqual(list((self.directory / "worker").iterdir()), [])
+        self.assertEqual(sorted(path.name for path in state.iterdir()), [grammar.CI_PLAN_NAME, identity.IDENTITY_NAME])
+        self.assertEqual(world.api.mutations, [])
+
+    def test_each_route_materialises_the_selected_bundle_in_the_fixed_root(self) -> None:
+        cases = {"pull request": (lambda: JobWorld(self.directory).build(), (), 21),
+                 "selected": (lambda: JobWorld(self.directory, push=True).build(), ("--build-run-id", "42"), 18),
+                 "rebuilt": (lambda: rebuild(JobWorld(self.directory, push=True)), ("--build-run-id", "same-run"), 15)}
+        for name, (build, argv, requests) in cases.items():
+            with self.subTest(route=name):
+                self.fresh()
+                world = build()
+                self.selected(world, *argv)
+                state = world.state("lane")
+                self.assertEqual(self.fetch(world, state), (0, ""))
+                self.assertEqual(verify_build_export(self.sealed, plan=world.plan), world.envelope)
+                self.assertEqual(self.sealed.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(list((self.directory / "worker").iterdir()), [self.sealed])
+                self.assertEqual((state / selection.SELECTION_NAME).read_bytes(), self.record.read_bytes())
+                self.assertEqual((world.api.request_count - self.spent, world.budgets),
+                                 (requests, [limits.MAX_CI_FETCH_BUILD_REQUESTS]))
+                self.assertLess(requests, 60)
+                self.assertEqual(world.api.mutations, [])
+
+    def test_a_bundle_that_expired_after_selection_is_refused_before_use(self) -> None:
+        for push in (False, True):
+            with self.subTest(push=push):
+                self.fresh()
+                world = JobWorld(self.directory, push=push).build()
+                self.selected(world)
+                world.set_artifact(100, expired=True)
+                state = world.state("lane")
+                self.assert_refused(world, state, *self.fetch(world, state), "expired artifact")
+
+    def test_a_newer_generation_after_selection_is_refused_before_use(self) -> None:
+        world = JobWorld(self.directory).build()
+        self.selected(world)
+        later_run(world, status="queued", conclusion=None)
+        state = world.state("lane")
+        self.assert_refused(world, state, *self.fetch(world, state),
+                            "no longer the newest exact available producer; rerun complete Build and E2E")
+
+    def test_another_attempt_of_the_run_never_inherits_the_selection(self) -> None:
+        world = JobWorld(self.directory).build()
+        self.selected(world)
+        state = world.state("lane")
+        for name, value in (("GITHUB_RUN_ATTEMPT", "3"), ("GITHUB_RUN_ID", "44")):
+            code, stderr = self.fetch(world, state, environment={**world.environment, name: value})
+            with self.subTest(name=name):
+                self.assert_refused(world, state, code, stderr, "rerun all jobs")
+        self.assertEqual(world.api.request_count, self.spent)
+
+    def test_a_missing_malformed_or_foreign_selection_file_is_refused_before_any_request(self) -> None:
+        world = JobWorld(self.directory).build()
+        self.selected(world)
+        state = world.state("lane")
+        document = decoded(self.record.read_bytes())
+        files = {"missing": None, "empty": b"", "text": b"not json", "array": b"[]\n",
+                 "duplicate key": self.record.read_bytes()[:-2] + b',"kind":"mod-base.ci.selection"}\n',
+                 "other plan": canonical_json({**document, "plan_sha256": "f" * 64}),
+                 "other kind": canonical_json({**document, "kind": "mod-base.ci.gate"})}
+        for name, data in files.items():
+            path = self.directory / f"selection-{name.replace(' ', '-')}.json"
+            if data is not None:
+                path.write_bytes(data)
+            code, stderr = self.fetch(world, state, selection_file=path)
+            with self.subTest(file=name):
+                self.assert_refused(world, state, code, stderr, "")
+        self.assertEqual(world.api.request_count, self.spent)
+
+    def test_an_existing_fixed_root_is_never_replaced(self) -> None:
+        world = JobWorld(self.directory).build()
+        self.selected(world)
+        self.sealed.mkdir()
+        (self.sealed / "kept").write_bytes(b"kept")
+        state = world.state("lane")
+        code, stderr = self.fetch(world, state)
+        self.assertEqual(code, 2)
+        self.assertIn("preexisting output", stderr)
+        self.assertEqual([path.name for path in self.sealed.iterdir()], ["kept"])
+        self.assertFalse((state / selection.SELECTION_NAME).exists())
+
+    def test_a_missing_selection_flag_is_a_usage_error(self) -> None:
+        world = JobWorld(self.directory).build()
+        state = world.state("lane")
+        code, stderr, _ = run_ci(self, world, state, "fetch-build")
+        self.assertEqual(code, 2)
+        self.assertTrue(stderr.startswith("mod_base: usage: "), stderr)
+        self.assertEqual((world.api.request_count, world.budgets), (0, []))
 
 
 if __name__ == "__main__":

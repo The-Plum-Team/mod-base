@@ -121,6 +121,8 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                                "--output", "s.json", "--github-output", "out"], {"build_run_id": 42}),
     "ci select-build same run": (["ci", "select-build", *REPO, "--state", "state", "--build-run-id", "same-run",
                                   "--output", "s.json", "--github-output", "out"], {"build_run_id": "same-run"}),
+    "ci fetch-build": (["ci", "fetch-build", *REPO, "--state", "state", "--selection", "selection.json"],
+                       {"ci_command": "fetch-build", "state": Path("state"), "selection": Path("selection.json")}),
 }
 
 
@@ -225,6 +227,8 @@ class SurfaceTest(unittest.TestCase):
              "--github-output", "o"],
             ["ci", "select-build", *REPO, "--state", "s", "--wait-seconds", "0", "--output", "o",
              "--github-output", "o"],
+            ["ci", "fetch-build", *REPO, "--state", "s"],
+            ["ci", "fetch-build", *REPO, "--selection", "f"],
         ]
         for argv in bad:
             with self.subTest(argv=argv), self.assertRaises(MbError) as caught:
@@ -275,7 +279,7 @@ class CiVerbsTest(unittest.TestCase):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
         self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-finish", "batch-prepare",
-                              "batch-settle", "select-build"}, set(verbs))
+                              "batch-settle", "select-build", "fetch-build"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

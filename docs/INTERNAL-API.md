@@ -707,6 +707,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `CI_GIT_READ_TIMEOUT_SECONDS`, `MAX_CI_GIT_ANSWER_BYTES`: 60 seconds for one read of the candidate checkout's object store, and 4 KiB for what such a read answers besides a blob (one object id, or one tree entry with its path).
 * `MAX_CI_PLAN_INPUT_FILES`, `MAX_CI_PLAN_INPUT_ENTRIES`, `MAX_CI_PLAN_INPUT_BYTES`: The validator's input tree `validation-input/`: at most the plan, the inventory, the scenario contract and `MAX_CI_PLAN_INPUTS` extra plan inputs (11 files, 12 entries with the directory, the plan cap plus ten times the candidate file cap). A check of the tree requires exactly the files of its state, not merely at most these.
 * `MAX_CI_SELECT_BUILD_REQUESTS`: 155, the request budget of `ci select-build`: a pull request whose Build is complete costs 17 and each earlier poll of its wait one more (91 polls at most); a protected subject costs 15. The rest is for retries and for the further pages of a run that lists more than 100 jobs.
+* `MAX_CI_FETCH_BUILD_REQUESTS`: 48, the request budget of `ci fetch-build` (21 for a pull request, 18 for a selected and 15 for a rebuilt Build of a protected subject).
 * `MAX_CI_PRIVATE_RECORD_ENTRIES`: Exact entry budget of a fixed single-leaf private record directory. MB1 entry caps count the root, so the directory plus its one leaf; an empty stage stays 1.
 * `MAX_CI_POLICY_TESTS`, `MAX_CI_POLICY_WORKERS`: Policy discovery/count and worker ceilings.
 * `MAX_CI_ENVELOPE_BYTES`, `MAX_CI_RECORD_BYTES`, `MAX_CI_ARTIFACTS_PER_GATE`
@@ -2328,9 +2329,11 @@ run is still in progress.
 * `def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any]) -> None`: Repeat the newest-run observation around consumption and require the same descriptor.
 * `def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], output: Path, wait_seconds: int = limits.CI_BUILD_WAIT_SECONDS, monotonic: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]`: Wait/select, download by immutable numeric ID, verify the canonical envelope and bytes, and observe the pull request, the newest run, its latest attempt and the bundle's availability again inside the private atomic copy before publication. Returns the descriptor and envelope.
 * `def select_protected_build(api: GitHubApi, *, plan: dict[str, Any]) -> dict[str, Any] | None`: Admit the live protected subject, then describe the complete bundle of the newest Build run of its commit. None when no run exists or the newest one is an admitted reuse (the caller builds for itself); a pending, failed or cancelled newest run is a rejection.
+* `def revalidate_protected_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any]) -> None`: Repeat that observation around consumption and require the same descriptor.
 * `def download_protected_build(api: GitHubApi, *, plan: dict[str, Any], output: Path, run_id: int | None = None) -> dict[str, Any] | None`: Select the newest Build run of a protected subject (which must be `run_id` when one is named; None only when nothing is selected and no run was named), download its bundle by numeric ID and observe the subject, the newest run, its latest attempt and the bundle's availability again before publication. Returns the descriptor and envelope.
 * `def download_rebuilt_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attempt: int, event: str, output: Path, descriptor: dict[str, Any] | None = None) -> dict[str, Any]`: For a later job of the standalone packaged run that built for itself: authenticate the run's latest attempt (still in progress), its controller and kit pin and the finished guard, selection and Build jobs with their seals, describe the bundle the assembling job uploaded (which must be `descriptor` when one is given), download it and observe the mutable part again before publication. Returns the descriptor and envelope.
 * `def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attempt: int, workflow_path: str, event: str, temporary_root: Path, build_run_id: int | str | None = None, wait_seconds: int = limits.CI_BUILD_WAIT_SECONDS, monotonic: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any] | None`: The selection record (`records.build_source_selection`) of the exact Build that run attempt of the packaged caller consumes, or None when a protected subject has no Build to select. A pull request names no run and waits (`download_latest_pr_build`); a protected subject takes the newest Build run of its commit, which must be `build_run_id` when that is a run id (`download_protected_build`), or with `SAME_RUN` the Build this run built (`download_rebuilt_build`). The bundle is verified in a private directory below `temporary_root` and removed; the request names the run attempt, `workflow_path` on the default branch and a fresh 256-bit nonce.
+* `def fetch_build(api: GitHubApi, *, record: dict[str, Any], plan: dict[str, Any], run_id: int, run_attempt: int, workflow_path: str, event: str, output: Path) -> dict[str, Any]`: Bind a selection record to this run attempt (`records.bind_source_selection`), repeat the newest-run observation and require the selected descriptor (`revalidate_latest_pr_build`, `revalidate_protected_build`), then publish the complete bundle at `output` (`transport.download_completed_build`; a rebuilt Build through `download_rebuilt_build`). The envelope must hash to the record's `envelope_sha256`. Returns the envelope.
 
 ## `mod_base.build_ci.transport`
 
@@ -2512,14 +2515,15 @@ JSON document.
 
 ## `mod_base.build_ci.commands_packaged`
 
-Owner: MB11. `ci select-build`, listed in `commands.VERB_MODULES`. It takes the job arguments,
-reads the subject and the plan of the job from `--state`, builds its API client through
-`commands.api_client` with an explicit request budget and writes nothing to GitHub.
+Owner: MB11. `ci select-build` and `ci fetch-build`, listed in `commands.VERB_MODULES`. Both take
+the job arguments, read the subject and the plan of the job from `--state`, build their API client
+through `commands.api_client` with an explicit request budget and write nothing to GitHub.
 
 * `BUILD_RUN`, `WAIT_SECONDS`: the argparse types of `--build-run-id` (a run id as `int`, `same-run`, or the empty string as `None`) and `--wait-seconds` (1 to 5400).
-* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register the verb: `select-build [--wait-seconds N] [--build-run-id ID|same-run] --output FILE --github-output FILE` (outputs `found`, `build_run_id` and, when found, `selection`: the record on one line).
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register both verbs. `select-build [--wait-seconds N] [--build-run-id ID|same-run] --output FILE --github-output FILE` (outputs `found`, `build_run_id` and, when found, `selection`: the record on one line). `fetch-build --selection FILE`.
 * `def job_plan(state: Path) -> dict[str, Any]`: The plan `ci plan` left in the job's state directory (`ci-plan.json`), strictly decoded and validated.
 * `def run_select_build(args: argparse.Namespace) -> int`: The `select-build` handler: `selection.select_build` for this run attempt; a selection is written to `--output` (a new file of this user) and to `ci-selection.json` in the state directory.
+* `def run_fetch_build(args: argparse.Namespace) -> int`: The `fetch-build` handler: `selection.fetch_build` into `exports.BUILD_VALIDATION_ROOT`; the bound record is kept as `ci-selection.json` in the state directory.
 
 ## `mod_base.build_ci.runtime_schema`
 

@@ -29,6 +29,7 @@ which the consumer compares with its own admitted plan.
 
 :func:`select_build` finds the exact Build of a packaged run and writes its
 ``mod-base.ci.selection`` record.
+:func:`fetch_build` re-validates that Build immediately before a job of the run consumes it.
 """
 
 from __future__ import annotations
@@ -48,14 +49,16 @@ from mod_base.build_ci.graph import (job_name, require_graph, require_partial_gr
                                      upload_job_name)
 from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.records import build_source_selection
+from mod_base.build_ci.records import bind_source_selection, build_source_selection
 from mod_base.build_ci.transport import (_admit_source, _artifact_state, _authenticate_artifacts, _authenticate_run,
-                                         _descriptor, _download_build, _materialize_build, _merged, _plan, _run)
+                                         _descriptor, _download_build, _materialize_build, _merged, _plan, _run,
+                                         download_completed_build)
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.jobs import job_graph
 from mod_base.github.runs import run_order, workflow_runs
 from mod_base.model import grammar, limits
+from mod_base.model.canonical import canonical_sha256
 from mod_base.model.validators import Int, Str, check
 from mod_base.workflow import CI_CALLER_WORKFLOWS, ci_producer, find_job
 
@@ -366,6 +369,17 @@ def select_protected_build(api: GitHubApi, *, plan: dict[str, Any]) -> dict[str,
     return _protected(reads, watch, plan)
 
 
+def revalidate_protected_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any]) -> None:
+    """Repeat the newest-run observation of a protected subject immediately around consumption
+    and require the selected descriptor: a newer run, an expired bundle or a moved default branch
+    is a rejection."""
+
+    descriptor = _descriptor(descriptor)
+    latest = select_protected_build(api, plan=plan)
+    check(latest is not None and latest == descriptor, "$.descriptor",
+          "selected Build is no longer the newest exact available producer; rerun the standalone run")
+
+
 def download_protected_build(api: GitHubApi, *, plan: dict[str, Any], output: Path,
                              run_id: int | None = None) -> dict[str, Any] | None:
     """Select the newest Build run of a protected subject and privately copy its complete bundle.
@@ -488,3 +502,34 @@ def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attem
     if found is None:
         return None
     return build_source_selection(plan=plan, request=request, build=found["descriptor"], envelope=found["envelope"])
+
+
+def fetch_build(api: GitHubApi, *, record: dict[str, Any], plan: dict[str, Any], run_id: int, run_attempt: int,
+                workflow_path: str, event: str, output: Path) -> dict[str, Any]:
+    """Re-validate the Build a selection record names and publish its complete bundle at ``output``.
+
+    ``record`` must have been requested by this very run attempt of the packaged caller
+    (``records.bind_source_selection``). Immediately before the download the newest-run
+    observation is repeated and must give the selected descriptor again
+    (:func:`revalidate_latest_pr_build`, :func:`revalidate_protected_build`); a Build this run
+    rebuilt is authenticated inside this run instead (:func:`download_rebuilt_build`). The
+    published envelope must be the one whose hash the record carries: a difference is a rejection
+    after publication, which leaves the authenticated bundle but fails the job. Returns the
+    envelope.
+    """
+
+    plan = _plan(plan)
+    record = bind_source_selection(record, plan=plan, run_id=run_id, run_attempt=run_attempt,
+                                   workflow_path=workflow_path)
+    descriptor = record["build"]
+    reads = CommandReads.of(api)
+    if ci_producer(descriptor["producer"]["workflow_path"]) == "packaged":
+        envelope = download_rebuilt_build(reads, plan=plan, run_id=run_id, run_attempt=run_attempt, event=event,
+                                          output=output, descriptor=descriptor)["envelope"]
+    else:
+        revalidate = revalidate_latest_pr_build if plan["identity"]["pr_number"] else revalidate_protected_build
+        revalidate(reads, descriptor=descriptor, plan=plan)
+        envelope = download_completed_build(reads, descriptor=descriptor, plan=plan, output=output)
+    check(canonical_sha256(envelope) == record["envelope_sha256"], "$.envelope_sha256",
+          "the selected Build's envelope differs from the one its selection recorded")
+    return envelope

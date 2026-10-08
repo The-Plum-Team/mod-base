@@ -129,6 +129,8 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation without a candidate checkout may spend"),
     "CI_GIT_READ_TIMEOUT_SECONDS": (60.0, "one object read from the candidate checkout"),
     "MAX_CI_GIT_ANSWER_BYTES": (4 * KIB, "one object id or tree entry read from the candidate checkout"),
+    "MAX_CI_FETCH_BUILD_REQUESTS": (48, "API requests one `ci fetch-build` may spend: 21 for a pull request, the "
+                                        "rest for retries and further listing pages"),
     "MAX_CI_PRIVATE_RECORD_ENTRIES": (2, "a private record directory and its one file"),
     "MAX_CI_POLICY_TESTS": (100_000, "tests one policy suite may discover"),
     "MAX_CI_POLICY_WORKERS": (256, "worker processes of the policy runner"),

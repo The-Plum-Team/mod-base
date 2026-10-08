@@ -1,4 +1,4 @@
-"""The exact Build of a packaged run: three routes and one record.
+"""The exact Build of a packaged run: three routes, one record, and the check before use.
 
 Only the API is faked. Job listings are the literal ones of ``tests/fixtures/ci_graphs``, bundles
 are real ZIPs, and every download is extracted, verified and published on the real filesystem
@@ -269,6 +269,33 @@ class ProtectedSelectionTests(unittest.TestCase):
         with patch.object(world.api, "get_json") as get, self.assertRaisesRegex(MbError, "waits for its own Build"):
             self.call(world)
         get.assert_not_called()
+
+    def test_revalidation_accepts_only_the_unchanged_newest_descriptor(self):
+        for change in (None, "pending", "failure", "reuse", "expired", "metadata", "descriptor", "controller"):
+            world = build_world(push=True)
+            if change == "pending":
+                later_run(world, status="queued", conclusion=None)
+            elif change == "failure":
+                later_run(world)
+            elif change == "reuse":
+                later_run(world, listing="build-reuse", conclusion="success")
+            elif change == "expired":
+                world.set_artifact(100, expired=True)
+            elif change == "metadata":
+                world.set_artifact(100, digest="sha256:" + "f" * 64)
+            elif change == "descriptor":
+                world.bundle["artifact"]["id"] += 1
+            elif change == "controller":
+                world.api.set_branch("master", "f" * 40, "e" * 40)
+            with self.subTest(change=change):
+                if change is None:
+                    self.assertIsNone(selection.revalidate_protected_build(world.api, descriptor=world.bundle,
+                                                                          plan=world.plan))
+                    self.assertEqual(world.api.request_count, 8)
+                else:
+                    with self.assertRaises(MbError):
+                        selection.revalidate_protected_build(world.api, descriptor=world.bundle, plan=world.plan)
+            self.assertEqual(world.api.mutations, [])
 
 
 class ProtectedDownloadTests(unittest.TestCase):
@@ -762,6 +789,156 @@ class SelectBuildTests(unittest.TestCase):
         world = build_world()
         with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(MbError, "private Build copy"):
             self.select(world, Path(directory) / "absent")
+
+
+class FetchBuildTests(unittest.TestCase):
+    """``fetch_build``: the selected Build is checked again immediately before it is used."""
+
+    def selected(self, world, **changes):
+        arguments = {"plan": world.plan, "run_id": 43, "run_attempt": 2, "workflow_path": PACKAGED,
+                     "event": "pull_request_target" if world.plan["identity"]["pr_number"] else "push", **changes}
+        with tempfile.TemporaryDirectory() as directory:
+            record = selection.select_build(world.api, temporary_root=Path(directory), monotonic=lambda: 0,
+                                            sleep=Mock(side_effect=AssertionError), **arguments)
+        self.spent = world.api.request_count
+        return record
+
+    def fetch(self, world, record, output, **changes):
+        arguments = {"record": record, "plan": world.plan, "run_id": 43, "run_attempt": 2, "workflow_path": PACKAGED,
+                     "event": "pull_request_target" if world.plan["identity"]["pr_number"] else "push",
+                     "output": output, **changes}
+        return selection.fetch_build(world.api, **arguments)
+
+    def refused(self, world, record, message="", **changes):
+        with tempfile.TemporaryDirectory() as directory, patch.object(world.api, "download") as download:
+            with self.assertRaisesRegex(MbError, message):
+                self.fetch(world, record, Path(directory) / "sealed-build", **changes)
+            download.assert_not_called()
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_each_route_publishes_the_selected_bundle_within_budget(self):
+        # A Build of another run: the newest-run observation again (9 for a pull request, 8 for a
+        # protected subject), then the download with its own admission (12 and 10); the commit and
+        # the job list are read once. A rebuilt Build is authenticated inside its own run.
+        cases = {"pull request": (build_world, {}, 21), "selected": (lambda: build_world(push=True), {}, 18),
+                 "rebuilt": (rebuilt_world, {"build_run_id": selection.SAME_RUN}, 15)}
+        for name, (build, changes, requests) in cases.items():
+            world = build()
+            record = self.selected(world, **changes)
+            with self.subTest(route=name), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "sealed-build"
+                self.assertEqual(self.fetch(world, record, output), world.envelope)
+                published(self, world, output)
+                self.assertEqual(list(Path(directory).iterdir()), [output])
+                self.assertEqual(world.api.request_count - self.spent, requests)
+                self.assertEqual(world.api.mutations, [])
+
+    def test_artifacts_that_disappear_after_selection_reject_before_use(self):
+        for build, changes in ((build_world, {}), (lambda: build_world(push=True), {}),
+                               (rebuilt_world, {"build_run_id": selection.SAME_RUN})):
+            for mutation in ("expired", "deleted"):
+                world = build()
+                record = self.selected(world, **changes)
+                if mutation == "expired":
+                    world.set_artifact(100, expired=True)
+                else:
+                    world.set_artifact(100, name=grammar.ci_artifact_name("target", 42, 2, "target-a"))
+                with self.subTest(route=build.__name__, mutation=mutation):
+                    self.refused(world, record)
+
+    def test_a_newer_generation_after_selection_rejects_before_use(self):
+        for push in (False, True):
+            for newer in ({"status": "queued", "conclusion": None}, {"conclusion": "failure"},
+                          {"conclusion": "success", "listing": "build-reuse" if push else "build-deferred"}):
+                world = build_world(push=push)
+                record = self.selected(world)
+                later_run(world, **newer)
+                with self.subTest(push=push, newer=newer):
+                    self.refused(world, record)
+        world = build_world()
+        record = self.selected(world)
+        world.set_run(42, run_attempt=3, status="queued", conclusion=None)  # the selected run was rerun
+        self.refused(world, record, "no longer the newest")
+
+    def test_a_moved_source_after_selection_rejects_before_use(self):
+        for push in (False, True):
+            world = build_world(push=push)
+            record = self.selected(world)
+            world.api.set_branch("master", "f" * 40, "e" * 40)
+            with self.subTest(push=push):
+                self.refused(world, record)
+        world = build_world()
+        record = self.selected(world)
+        world.api.add_response("/repos/example/mod/pulls/7", {**world.pr, "draft": True})
+        self.refused(world, record, "ready")
+
+    def test_only_the_run_attempt_that_selected_may_consume_the_selection(self):
+        world = build_world()
+        record = self.selected(world)
+        for changes in ({"run_attempt": 3}, {"run_attempt": 1}, {"run_id": 44},
+                        {"workflow_path": CI_WORKFLOWS["build"]}):
+            with self.subTest(changes=changes), patch.object(world.api, "get_json") as get:
+                self.refused(world, record, **changes)
+            get.assert_not_called()
+        # A bundle of the Build caller never comes from the consuming run itself.
+        own = copy.deepcopy(record)
+        own["request"].update(run_id=42)
+        with patch.object(world.api, "get_json") as get:
+            self.refused(world, own, "comes from a separate run", run_id=42)
+        get.assert_not_called()
+        # A rebuilt Build serves the run attempt that built it and no other.
+        world = rebuilt_world()
+        record = self.selected(world, build_run_id=selection.SAME_RUN)
+        foreign = copy.deepcopy(record)
+        foreign["request"].update(run_id=44)
+        with patch.object(world.api, "get_json") as get:
+            self.refused(world, foreign, "rebuilt Build serves only", run_id=44)
+        get.assert_not_called()
+
+    def test_a_record_of_another_plan_kind_or_shape_rejects_before_any_read(self):
+        world = build_world()
+        record = self.selected(world)
+        other = build_world(push=True)
+        cases = [{"plan": other.plan}, {"record": {}}, {"record": None}, {"record": {**record, "extra": 1}},
+                 {"record": {**record, "plan_sha256": "f" * 64}},
+                 {"record": {**record, "request": {**record["request"], "nonce": "short"}}},
+                 {"record": {**record, "build": {**record["build"], "artifact": {
+                     **record["build"]["artifact"], "name": grammar.ci_artifact_name("target", 42, 2, "target-a")}}}}]
+        for index, changes in enumerate(cases):
+            with self.subTest(index=index), patch.object(world.api, "get_json") as get:
+                self.refused(world, changes.get("record", record), **{key: value for key, value in changes.items()
+                                                                     if key != "record"})
+            get.assert_not_called()
+
+    def test_a_changed_descriptor_or_envelope_hash_is_not_the_selected_build(self):
+        world = build_world()
+        record = self.selected(world)
+        changed = copy.deepcopy(record)
+        changed["build"]["artifact"]["id"] += 1
+        self.refused(world, changed, "no longer the newest")
+        changed = {**record, "envelope_sha256": "f" * 64}
+        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(MbError, "envelope differs"):
+            self.fetch(world, changed, Path(directory) / "sealed-build")
+
+    def test_an_existing_output_is_never_replaced(self):
+        for build, changes in ((build_world, {}), (rebuilt_world, {"build_run_id": selection.SAME_RUN})):
+            world = build()
+            record = self.selected(world, **changes)
+            with self.subTest(route=build.__name__), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(world.api, "download") as download:
+                (Path(directory) / "kept").write_bytes(b"kept")
+                with self.assertRaises(MbError):
+                    self.fetch(world, record, Path(directory))
+                download.assert_not_called()
+                self.assertEqual([path.name for path in Path(directory).iterdir()], ["kept"])
+
+    def test_an_api_failure_is_never_permission_to_use_the_selection(self):
+        world = build_world()
+        record = self.selected(world)
+        failure = ApiError("GitHub API GET failed: HTTP 502", status=502, method="GET", path="/")
+        with tempfile.TemporaryDirectory() as directory, patch.object(world.api, "get_json", side_effect=failure), \
+                self.assertRaisesRegex(ApiError, "HTTP 502"):
+            self.fetch(world, record, Path(directory) / "sealed-build")
 
 
 if __name__ == "__main__":
