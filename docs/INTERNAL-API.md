@@ -505,7 +505,9 @@ Constants:
   follows it in every target, assemble, lane, aggregate and gate job.
 * `CI_JOB_VERBS`: Build/E2E callee id -> job key -> the `ci` verbs its steps issue after the Build
   controller prologue, one verb per step and in step order. A callee enters this table and the two
-  below with its workflow file; `build` and `select-build` are tabled.
+  below with its workflow file; all three (`build`, `select-build`, `packaged-e2e`) are tabled.
+  Every packaged job after `input` issues `select-build` again, naming the run `input`
+  authenticated, and the `aggregate` job's sealing step is `ci aggregate` itself.
 * `CI_JOB_ARTIFACTS`: Build/E2E callee id -> sealing job key -> callee mode (`full`, `reuse`) -> the
   kind of the one artifact the job uploads in that mode. Exactly these jobs have a `CI_SEAL_STEP`
   directly followed by a `CI_UPLOAD_STEP`; `select-build` has no row and uploads nothing.

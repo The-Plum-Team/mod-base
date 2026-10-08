@@ -53,6 +53,12 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   dispatch; both empty in reuse mode). A pull request never reaches it. It has its rows in the
   `CI_JOB_*` tables, the prologue and the policy tests of `build.yml`, and a literal the digest
   tool maintains.
+- Add the Build/E2E callee workflow `.github/workflows/packaged-e2e.yml`: jobs `input`, `lane` (one
+  per planned lane), `aggregate` and `gate`, inputs `kit-sha`, `pr-number`, `mode` and
+  `build-run-id` (empty for a pull request, whose `input` job waits up to 5400 seconds for the
+  separate Build run; a run id; or `same-run` after a rebuild in the same run). Every job after
+  `input` selects that run again by its id, the `aggregate` job's sealing step is `ci aggregate`,
+  and in reuse mode only the gate runs. It is tabled, policed and digested like the other two.
 - `mod-base.ci.activation` v1 (still unreleased) gains the required `rollback_from` field, which
   names the mode a `reviewed-rollback` leaves and is `null` otherwise. `template check|sync|init`
   accept every mode, manage exactly the callers of the mod's mode, report a caller outside its mode

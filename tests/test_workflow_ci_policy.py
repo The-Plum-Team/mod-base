@@ -7,10 +7,11 @@ and names), ``CI_JOB_VERBS`` (the ``ci`` verb of every step, in order), ``CI_JOB
 sealing jobs and what they upload) and ``CI_JOB_PERMISSIONS``. A callee is policed from the moment
 its file exists: a workflow file without rows in those tables fails, and so do rows without a file.
 
-The module also holds what the per-workflow modules (``tests/test_workflow_build.py`` and
-``tests/test_workflow_select_build.py``) import (functions and tables only, so no test runs twice):
-the loader, the closed tables below and :class:`CiStepRunner`, which executes a step's ``run:``
-body under the Pages tests' ``ShellHarness`` and returns the ``ci`` command lines it issued.
+The module also holds what the per-workflow modules (``tests/test_workflow_build.py``,
+``tests/test_workflow_select_build.py`` and ``tests/test_workflow_packaged_e2e.py``) import
+(functions and tables only, so no test runs twice): the loader, the closed tables below and
+:class:`CiStepRunner`, which executes a step's ``run:`` body under the Pages tests' ``ShellHarness``
+and returns the ``ci`` command lines it issued.
 """
 
 from __future__ import annotations
@@ -48,26 +49,31 @@ CI_CALLEE_PATHS = {name: ROOT / path for name, path in workflow.CI_CALLEE_WORKFL
 CI_CALLEES = tuple(workflow.CI_JOB_VERBS)
 
 #: The inputs of each callee, in order; ``kit-sha`` is the only required one.
-CI_INPUTS = {"build": ("kit-sha", "pr-number"), "select-build": ("kit-sha",)}
+CI_INPUTS = {"build": ("kit-sha", "pr-number"), "select-build": ("kit-sha",),
+             "packaged-e2e": ("kit-sha", "pr-number", "mode", "build-run-id")}
 #: What each callee returns to its caller, in order: output -> the job that has an output of that name.
-CI_OUTPUTS = {"build": {}, "select-build": {"mode": "select", "found": "select", "build-run-id": "select"}}
+CI_OUTPUTS = {"build": {}, "select-build": {"mode": "select", "found": "select", "build-run-id": "select"},
+              "packaged-e2e": {}}
 #: The producer each callee's jobs authenticate as (``ci subject --producer``, ``ci seal-gate --gate``).
-CI_PRODUCER = {"build": "build", "select-build": "packaged"}
+CI_PRODUCER = {"build": "build", "select-build": "packaged", "packaged-e2e": "packaged"}
 #: Where a callee reads its mode and the tested commit from (the callee's own spelling): the callees
 #: whose gate seals one of two records, and the callees with a job that stages candidate code.
-MODE_EXPRESSION = {"build": "needs.plan.outputs.mode"}
-CANDIDATE_REF = {"build": "${{ needs.plan.outputs.tested-sha }}"}
+MODE_EXPRESSION = {"build": "needs.plan.outputs.mode", "packaged-e2e": "inputs.mode"}
+CANDIDATE_REF = {"build": "${{ needs.plan.outputs.tested-sha }}",
+                 "packaged-e2e": "${{ needs.input.outputs.tested-sha }}"}
 #: Where the environment of a callee's steps differs from a Build step of pull request 17: the
 #: managed caller that reaches the callee and, for the one no pull request reaches, the event.
 PACKAGED_CALLER_REF = "example/mod/" + workflow.CI_CALLER_WORKFLOWS["packaged"] + "@refs/heads/master"
 CI_ENVIRONMENT = {"build": {},
-                  "select-build": {"GITHUB_EVENT_NAME": "push", "GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF}}
+                  "select-build": {"GITHUB_EVENT_NAME": "push", "GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF},
+                  "packaged-e2e": {"GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF}}
 
 #: The third checkout, present exactly in the jobs that stage and run candidate code.
 CANDIDATE_CHECKOUT = "Check out the tested candidate"
 CANDIDATE_VERBS = frozenset({"worker-stage", "worker-run"})
 #: The verbs that call the API: exactly the steps that run one hold the step-scoped token.
-API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate", "select-build"})
+API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate", "select-build", "fetch-build",
+                       "aggregate"})
 #: The verbs that must also run after a failure or a cancellation, and the step each depends on.
 #: A bare ``always()`` would run kit Python in a job whose prologue failed, that is from a kit tree
 #: nobody verified; a step that follows the prologue can only have succeeded when the prologue did.
@@ -78,14 +84,17 @@ ALWAYS_VERBS = {"worker-seal": "${{ always() && steps.prepare.outcome == 'succes
 #: The step ids those conditions name, by the verb of the step that carries each.
 GATING_IDS = {"subject": "subject", "worker-prepare": "prepare"}
 #: The only other condition a step may carry, by callee, job and verb. Reuse is admitted for a push
-#: alone, and a job that also runs in reuse mode selects no Build then.
+#: alone, and a job that also runs in reuse mode selects no Build then. (The packaged ``input``,
+#: ``lane`` and ``aggregate`` jobs are skipped as a whole in that mode.)
 CONDITIONAL_STEPS = {
     ("build", "plan", "reuse-admit"): "github.event_name == 'push'",
     ("select-build", "select", "reuse-admit"): "github.event_name == 'push'",
     ("select-build", "select", "select-build"): "steps.reuse.outputs.mode != 'reuse'",
+    ("packaged-e2e", "gate", "select-build"): "inputs.mode != 'reuse'",
 }
-#: The verbs of a job's one ``workflow.CI_SEAL_STEP``.
-SEAL_VERBS = frozenset({"worker-validate", "seal-gate"})
+#: The verbs of a job's one ``workflow.CI_SEAL_STEP``: a hook of the validator account, a gate, or
+#: the kit's own index of the lane results (``ci aggregate`` runs no hook).
+SEAL_VERBS = frozenset({"worker-validate", "seal-gate", "aggregate"})
 #: The third-party actions a Build/E2E callee may use, at the reviewed pins of the Pages callees.
 CI_ACTIONS = frozenset({CHECKOUT, SETUP_PYTHON, UPLOAD})
 UPLOAD_PATH = "${{ runner.temp }}/mb-upload"
@@ -95,7 +104,8 @@ RUN_EXPRESSION, ATTEMPT_EXPRESSION = "${{ github.run_id }}", "${{ github.run_att
 #: The ``ci`` verbs the workflows already issue but no work package has registered yet. Each one
 #: leaves this set in the change that registers it; from then on its command lines must parse.
 PENDING_VERBS = frozenset({"worker-prepare", "plan", "reuse-admit", "worker-stage", "worker-run", "worker-seal",
-                           "assemble", "worker-validate", "seal-gate", "worker-finish", "select-build"})
+                           "assemble", "worker-validate", "seal-gate", "worker-finish", "select-build",
+                           "fetch-build", "aggregate"})
 
 #: The one fixed first line of every kit command of a Build/E2E job.
 CI_COMMAND = re.compile(r"^  python3 -P -m mod_base ci ([a-z][a-z-]*) --repo mod --config mod/site/mod-base\.json "
@@ -189,9 +199,12 @@ def registered_ci_verbs() -> frozenset[str]:
 
 # -- Executing a step's shell ------------------------------------------------------------------------
 
-#: One value for every name a step's ``env:`` may define; an unknown name fails the run.
+#: One value for every name a step's ``env:`` may define; an unknown name fails the run. ``MODE``
+#: and ``BUILD_RUN_ID`` are the packaged call inputs of a pull request (both empty); the run the
+#: ``input`` job then authenticated reaches the later jobs as ``SELECTED_RUN_ID``.
 SAMPLES = {"KIT_SHA": "b" * 40, "PR_NUMBER": "17", "GH_TOKEN": "step-token", "PLAN_SHA256": "c" * 64,
-           "TESTED_SHA": "d" * 40, "TARGET": "target-a"}
+           "TESTED_SHA": "d" * 40, "TARGET": "target-a", "LANE": "lane-a", "MODE": "", "BUILD_RUN_ID": "",
+           "SELECTED_RUN_ID": "36042781699"}
 #: What the runner could leak into a step: every script scrubs these before it runs anything.
 AMBIENT = ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
            "ACTIONS_ID_TOKEN_REQUEST_URL", "GITHUB_TOKEN", "GH_TOKEN")
@@ -280,17 +293,27 @@ class CiRegistryTests(unittest.TestCase):
             "select-build": {
                 "select": ("subject", "worker-prepare", "plan", "reuse-admit", "select-build", "worker-finish"),
             },
+            "packaged-e2e": {
+                "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
+                "lane": ("subject", "worker-prepare", "plan", "select-build", "fetch-build", "worker-stage",
+                         "worker-run", "worker-seal", "worker-validate", "worker-finish"),
+                "aggregate": ("subject", "worker-prepare", "plan", "select-build", "aggregate", "worker-finish"),
+                "gate": ("subject", "worker-prepare", "plan", "select-build", "seal-gate", "worker-finish"),
+            },
         })
         self.assertEqual(list(workflow.CI_JOB_VERBS),
                          [name for name in workflow.CI_CALLEE_WORKFLOWS if name in workflow.CI_JOB_VERBS],
                          "the tables keep the registry's order")
         self.assertEqual(workflow.CI_JOB_ARTIFACTS, {
             "build": {"target": {"full": "target"}, "assemble": {"full": "build"},
-                      "gate": {"full": "tested", "reuse": "reuse"}}})
+                      "gate": {"full": "tested", "reuse": "reuse"}},
+            "packaged-e2e": {"lane": {"full": "runtime"}, "aggregate": {"full": "results"},
+                             "gate": {"full": "tested", "reuse": "reuse"}}})
         read = {"actions": "read", "contents": "read", "pull-requests": "read"}
         self.assertEqual(workflow.CI_JOB_PERMISSIONS, {
             "build": {"plan": read, "policy": read, "target": read, "assemble": read, "gate": read},
-            "select-build": {"select": read}})
+            "select-build": {"select": read},
+            "packaged-e2e": {"input": read, "lane": read, "aggregate": read, "gate": read}})
 
     def test_every_table_describes_exactly_the_jobs_of_its_callee(self) -> None:
         self.assertEqual(set(workflow.CI_JOB_PERMISSIONS), set(CI_CALLEES))

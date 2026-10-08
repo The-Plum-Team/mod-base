@@ -70,7 +70,9 @@ CI_SEAL_STEP = "Validate frozen native exports"
 CI_UPLOAD_STEP = "Upload sealed outputs"
 #: Build/E2E callee id -> job key -> the ``ci`` verbs its steps issue after the Build controller
 #: prologue, one verb per step and in step order. A callee enters this table and the two below
-#: with its workflow file: ``build.yml`` and ``select-build.yml`` are written.
+#: with its workflow file; all three are written. Every packaged job after ``input`` issues
+#: ``select-build`` again, with the run ``input`` authenticated: a selection record never leaves
+#: the job that wrote it. The ``aggregate`` job's sealing step is ``ci aggregate`` itself.
 CI_JOB_VERBS = {
     "build": {
         "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
@@ -84,6 +86,13 @@ CI_JOB_VERBS = {
     "select-build": {
         "select": ("subject", "worker-prepare", "plan", "reuse-admit", "select-build", "worker-finish"),
     },
+    "packaged-e2e": {
+        "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
+        "lane": ("subject", "worker-prepare", "plan", "select-build", "fetch-build", "worker-stage", "worker-run",
+                 "worker-seal", "worker-validate", "worker-finish"),
+        "aggregate": ("subject", "worker-prepare", "plan", "select-build", "aggregate", "worker-finish"),
+        "gate": ("subject", "worker-prepare", "plan", "select-build", "seal-gate", "worker-finish"),
+    },
 }
 #: Build/E2E callee id -> sealing job key -> callee mode -> the kind (``grammar.ci_artifact_name``)
 #: of the one artifact the job uploads in that mode. Exactly these jobs have a ``CI_SEAL_STEP``
@@ -91,6 +100,8 @@ CI_JOB_VERBS = {
 CI_JOB_ARTIFACTS = {
     "build": {"target": {"full": "target"}, "assemble": {"full": "build"},
               "gate": {"full": "tested", "reuse": "reuse"}},
+    "packaged-e2e": {"lane": {"full": "runtime"}, "aggregate": {"full": "results"},
+                     "gate": {"full": "tested", "reuse": "reuse"}},
 }
 #: Build/E2E callee id -> job key -> the complete ``permissions:`` of that job, which the calling
 #: job of a managed caller must grant.
