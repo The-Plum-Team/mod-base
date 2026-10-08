@@ -711,7 +711,7 @@ class UploadTests(UploadCase):
 class RoundTripTests(UploadCase):
     """The uploaded artifact as its consumer reads it: a real ZIP through the transport readers.
 
-    ``detach`` is the one step the readers do not take themselves yet.
+    Complete Builds include their validation record; bare target copies test export transport.
     """
 
     def uploaded(self, plan: dict, hook: str, unit_id: str | None) -> tuple[dict, bytes, dict[str, bytes]]:
@@ -728,7 +728,7 @@ class RoundTripTests(UploadCase):
         export, detached = detach(archive)
         self.assertEqual(sorted(detached), sorted([RECORD, *(unit["id"] + ".json"
                                                              for unit in self.units(hook, unit_id))]))
-        return arguments, export, detached
+        return arguments, archive if hook == "verify_build" else export, detached
 
     def assert_detached_verification(self, arguments: dict, detached: dict[str, bytes], record: dict) -> None:
         """What was detached is the sealed verification of that export, verifiable on its own."""

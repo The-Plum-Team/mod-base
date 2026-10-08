@@ -22,7 +22,7 @@ from mod_base.model.canonical import canonical_sha256
 from tests.helpers import (CI_WORKFLOWS, ci_descriptor, ci_envelope, ci_graph_jobs, ci_plan, ci_run_descriptor,
                            ci_selection, ci_staged_plan)
 from tests.test_ci_build_selection import later_run
-from tests.test_ci_transport import ASSEMBLE, GATE, World, after_download, build_archive, build_world, exported
+from tests.test_ci_transport import ASSEMBLE, GATE, World, after_download, sealed_build_archive, build_world, exported
 
 LISTING = "/repos/example/mod/actions/workflows/mod-base-build.yml/runs"
 PACKAGED = CI_WORKFLOWS["packaged"]
@@ -51,7 +51,7 @@ def dispatched_world():
     world = World(push=True)
     world.add_run("build", "build-full", event="workflow_dispatch")
     record = {**ci_run_descriptor(world.plan, "build", "full", "build")["producer"], "event": "workflow_dispatch"}
-    data, world.envelope = build_archive(world.plan, record)
+    data, world.envelope = sealed_build_archive(world.plan, record)
     descriptor = world.describe("build", "full", "build", data)
     descriptor["producer"]["event"] = "workflow_dispatch"
     world.bundle = world.publish(descriptor, data)

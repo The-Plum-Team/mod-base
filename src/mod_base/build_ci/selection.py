@@ -350,7 +350,8 @@ def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], pl
 def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], output: Path,
                              wait_seconds: int = limits.CI_BUILD_WAIT_SECONDS,
                              monotonic: Callable[[], float] = time.monotonic,
-                             sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+                             sleep: Callable[[float], None] = time.sleep,
+                             source_config_sha256: str | None = None) -> dict[str, Any]:
     """Wait/select, download by immutable ID, and reject supersession inside atomic publication.
 
     Caller owns a private output parent inaccessible to both worker UIDs. The downloaded tuple and
@@ -364,7 +365,8 @@ def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], output: Pa
     check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
     reads = CommandReads.of(api)
     descriptor, watch = _wait(reads, plan, wait_seconds, monotonic, sleep)
-    return {"descriptor": descriptor, "envelope": _download_build(reads, watch, descriptor, plan, output)}
+    return {"descriptor": descriptor, "envelope": _download_build(
+        reads, watch, descriptor, plan, output, source_config_sha256)}
 
 
 def _protected(reads: CommandReads, watch: Watch, plan: dict[str, Any]) -> dict[str, Any] | None:
@@ -413,7 +415,8 @@ def download_protected_build(api: GitHubApi, *, plan: dict[str, Any], output: Pa
                              run_id: int | None = None,
                              wait_seconds: int = limits.CI_BUILD_WAIT_SECONDS,
                              monotonic: Callable[[], float] = time.monotonic,
-                             sleep: Callable[[float], None] = time.sleep) -> dict[str, Any] | None:
+                             sleep: Callable[[float], None] = time.sleep,
+                             source_config_sha256: str | None = None) -> dict[str, Any] | None:
     """Select the newest Build run of a protected subject and privately copy its complete bundle.
 
     A newest run that is still in progress is waited for, with the bounded wait of a pull request
@@ -440,7 +443,8 @@ def download_protected_build(api: GitHubApi, *, plan: dict[str, Any], output: Pa
         return None
     check(descriptor is not None and run_id in (None, descriptor["producer"]["run_id"]), "$.run_id",
           "the named Build run is not the newest exact Build of this subject; rerun the standalone run")
-    return {"descriptor": descriptor, "envelope": _download_build(reads, watch, descriptor, plan, output)}
+    return {"descriptor": descriptor, "envelope": _download_build(
+        reads, watch, descriptor, plan, output, source_config_sha256)}
 
 
 def _rebuilt(reads: CommandReads, watch: Watch, plan: dict[str, Any], *, run_id: int, run_attempt: int,
@@ -469,7 +473,8 @@ def _rebuilt(reads: CommandReads, watch: Watch, plan: dict[str, Any], *, run_id:
 
 
 def download_rebuilt_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attempt: int, event: str,
-                           output: Path, descriptor: dict[str, Any] | None = None) -> dict[str, Any]:
+                           output: Path, descriptor: dict[str, Any] | None = None,
+                           source_config_sha256: str | None = None) -> dict[str, Any]:
     """Privately copy the complete bundle that the standalone packaged run ``run_id`` built for
     itself in ``run_attempt``; the reader is a later job of that run.
 
@@ -491,14 +496,16 @@ def download_rebuilt_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int,
     selected = _rebuilt(reads, watch, plan, run_id=run_id, run_attempt=run_attempt, event=event)
     check(expected is None or selected == expected, "$.descriptor",
           "the Build this run rebuilt is no longer the selected one; rerun all jobs")
-    return {"descriptor": selected, "envelope": _materialize_build(reads, selected, plan, output, watch.recheck)}
+    return {"descriptor": selected, "envelope": _materialize_build(
+        reads, selected, plan, output, watch.recheck, source_config_sha256)}
 
 
 def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attempt: int, workflow_path: str,
                  event: str, temporary_root: Path, build_run_id: int | str | None = None,
                  wait_seconds: int = limits.CI_BUILD_WAIT_SECONDS,
                  monotonic: Callable[[], float] = time.monotonic,
-                 sleep: Callable[[float], None] = time.sleep) -> dict[str, Any] | None:
+                 sleep: Callable[[float], None] = time.sleep,
+                 source_config_sha256: str | None = None) -> dict[str, Any] | None:
     """The selection record of the exact Build that run attempt ``run_id``/``run_attempt`` of the
     packaged caller consumes, or None when a protected subject has no Build to select.
 
@@ -530,13 +537,15 @@ def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attem
             output = Path(temporary) / "build"
             if identity["pr_number"]:
                 found = download_latest_pr_build(reads, plan=plan, output=output, wait_seconds=wait_seconds,
-                                                 monotonic=monotonic, sleep=sleep)
+                                                 monotonic=monotonic, sleep=sleep,
+                                                 source_config_sha256=source_config_sha256)
             elif build_run_id == SAME_RUN:
                 found = download_rebuilt_build(reads, plan=plan, run_id=run_id, run_attempt=run_attempt, event=event,
-                                               output=output)
+                                               output=output, source_config_sha256=source_config_sha256)
             else:
                 found = download_protected_build(reads, plan=plan, output=output, run_id=build_run_id,
-                                                 wait_seconds=wait_seconds, monotonic=monotonic, sleep=sleep)
+                                                 wait_seconds=wait_seconds, monotonic=monotonic, sleep=sleep,
+                                                 source_config_sha256=source_config_sha256)
     except OSError as error:
         raise MbError("cannot hold the private Build copy of a selection", reason="ci-transport") from error
     if found is None:
@@ -545,7 +554,8 @@ def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attem
 
 
 def fetch_build(api: GitHubApi, *, record: dict[str, Any], plan: dict[str, Any], run_id: int, run_attempt: int,
-                workflow_path: str, event: str, output: Path) -> dict[str, Any]:
+                workflow_path: str, event: str, output: Path,
+                source_config_sha256: str | None = None) -> dict[str, Any]:
     """Download the Build the protected input job selected and publish its bundle at ``output``.
 
     ``record`` must have been requested by this very run attempt of the packaged caller
@@ -564,7 +574,7 @@ def fetch_build(api: GitHubApi, *, record: dict[str, Any], plan: dict[str, Any],
     descriptor = record["build"]
     reads = CommandReads.of(api)
     check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
-    envelope = _materialize_build(reads, descriptor, plan, output, None)
+    envelope = _materialize_build(reads, descriptor, plan, output, None, source_config_sha256)
     check(canonical_sha256(envelope) == record["envelope_sha256"], "$.envelope_sha256",
           "the selected Build's envelope differs from the one its selection recorded")
     return envelope

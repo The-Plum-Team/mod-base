@@ -5,7 +5,7 @@ frozen export, its envelope and, beside the envelope, the validation record of t
 reports (``validation.materialize_validated_export``). ``tests/test_ci_gate.py`` reads such a
 Build back at the Build gate. The other readers of the same artifact are the packaged jobs: the
 ``input`` job selects it (``selection.select_build``) and every lane fetches it
-(``selection.fetch_build``). Their own tests feed them a bare export, which no job uploads.
+(``selection.fetch_build``). Every complete Build reader requires those sealed files; a bare export is rejected.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from mod_base.errors import MbError
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.workflow import CI_CALLER_WORKFLOWS
 from tests.test_ci_gate import GateCase
-from tests.test_ci_transport import World
+from tests.test_ci_transport import World, build_archive, build_world
 from tests.test_ci_validated_export import UploadCase, tree, upload_archive
 
 PACKAGED = CI_CALLER_WORKFLOWS["packaged"]
@@ -88,6 +88,7 @@ class SealedBuildConsumerTests(GateCase):
                    "another hook": lambda document, files, data: document.update(hook="verify_target",
                                                                                 unit_id="target-a"),
                    "another plan": lambda document, files, data: document.update(plan_sha256="f" * 64),
+                   "no validation": lambda document, files, data: document.clear(),
                    "another report": other_report, "a missing report": no_report, "a stray file": stray_file}
         for name, change in changes.items():
             attempt = self.finished_build(change=change)
@@ -95,6 +96,37 @@ class SealedBuildConsumerTests(GateCase):
                 with self.assertRaises(MbError):
                     self.select(attempt, Path(directory))
                 self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_fetch_rejects_a_bare_complete_export(self) -> None:
+        world = build_world()
+        with tempfile.TemporaryDirectory(dir=self.temporary) as directory:
+            root = Path(directory)
+            record = selection.select_build(world.api, plan=world.plan, run_id=43, run_attempt=2,
+                                             workflow_path=PACKAGED, event="pull_request_target", temporary_root=root)
+            data, _ = build_archive(world.plan, world.bundle["producer"])
+            record["build"] = world.publish(world.describe("build", "full", "build", data), data)
+            with self.assertRaises(MbError):
+                selection.fetch_build(world.api, record=record, plan=world.plan, run_id=43,
+                                      run_attempt=2, workflow_path=PACKAGED, event="pull_request_target",
+                                      output=root / "build")
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_a_loaded_config_digest_is_bound_by_selection_and_fetch(self) -> None:
+        attempt = self.finished_build()
+        digest = attempt.validation["source_config_sha256"]
+        with tempfile.TemporaryDirectory(dir=self.temporary) as directory:
+            root = Path(directory)
+            record = self.select(attempt, root, source_config_sha256=digest)
+            with self.assertRaisesRegex(MbError, "protected execution/input context"):
+                self.select(attempt, root, source_config_sha256="f" * 64)
+            output = root / "build"
+            with self.assertRaisesRegex(MbError, "protected execution/input context"):
+                selection.fetch_build(attempt.api, record=record, plan=attempt.plan, run_id=43,
+                                      run_attempt=2, workflow_path=PACKAGED, event="pull_request_target",
+                                      output=output, source_config_sha256="f" * 64)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.iterdir()), [])
+
 
 
 class WriterRoundTripTests(UploadCase):

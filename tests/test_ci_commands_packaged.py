@@ -59,6 +59,7 @@ class JobWorld(World):
         self.event = event or ("push" if push else "pull_request_target")
         self.subject = h.subject(pull_request=not push)
         self.plan = synthetic_plan(self.subject, mod)
+        self.config_sha256 = load_build_config(mod, repository=h.REPOSITORY).sha256
         self.api, self.pr = h.github(max_requests=max_requests)
         self.runs, self.jobs, self.records, self.archives = {}, {}, {}, {}
         self.environment = {**h.environment(event=self.event, caller=caller),
@@ -164,6 +165,16 @@ class SelectBuildCommandTests(CommandTestCase):
                 state = world.state("input")
                 self.assertEqual(self.select(world, state, *argv), (0, ""))
                 self.assert_selected(world, state, requests=17)
+
+    def test_selection_rejects_validation_for_another_protected_config(self) -> None:
+        world = JobWorld(self.directory)
+        world.config_sha256 = "f" * 64
+        world.build()
+        state = world.state("input")
+        code, stderr = self.select(world, state)
+        self.assertEqual(code, 2)
+        self.assertIn("protected execution/input context", stderr)
+        self.assert_nothing_written(state)
 
     def test_a_pull_request_without_a_build_fails_closed_when_its_wait_ends(self) -> None:
         world = JobWorld(self.directory)
@@ -333,6 +344,21 @@ class FetchBuildCommandTests(CommandTestCase):
         super().fresh()
         (self.directory / "worker").mkdir()
         self.sealed = self.directory / "worker" / "sealed-build"
+
+    def test_fetch_rejects_validation_for_another_protected_config(self) -> None:
+        world = JobWorld(self.directory)
+        world.config_sha256 = "f" * 64
+        world.build()
+        document = selection.select_build(world.api, plan=world.plan, run_id=43, run_attempt=2,
+                                          workflow_path=PACKAGED, event="pull_request_target",
+                                          temporary_root=self.directory)
+        self.record.write_bytes(canonical_json(document))
+        state = world.state("lane")
+        code, stderr = self.fetch(world, state)
+        self.assertEqual(code, 2)
+        self.assertIn("protected execution/input context", stderr)
+        self.assertFalse(self.sealed.exists())
+        self.assertFalse((state / selection.SELECTION_NAME).exists())
 
     def selected(self, world: JobWorld, *argv: str) -> None:
         """Run the ``input`` job's ``select-build`` and forget what it spent."""

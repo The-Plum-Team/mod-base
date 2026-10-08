@@ -43,6 +43,7 @@ from typing import Any
 
 from mod_base import cli, runtime
 from mod_base.build_ci import commands, exports, identity, planning, selection
+from mod_base.build_ci.config import load_build_config
 from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.records import bind_source_selection
 from mod_base.errors import MbError
@@ -159,11 +160,12 @@ def _write_new(path: Path, data: bytes) -> None:
 
 def run_select_build(args: argparse.Namespace) -> int:
     invocation, record, plan, run_id, run_attempt = _job(args)
+    config = load_build_config(invocation.repo_root, repository=invocation.repository)
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_SELECT_BUILD_REQUESTS)
     document = selection.select_build(api, plan=plan, run_id=run_id, run_attempt=run_attempt,
                                       workflow_path=record["workflow_path"], event=record["event"],
                                       temporary_root=args.state, build_run_id=args.build_run_id,
-                                      wait_seconds=args.wait_seconds)
+                                      wait_seconds=args.wait_seconds, source_config_sha256=config.sha256)
     if document is None:
         cli.write_github_output(args.github_output, {"found": False, "run_id": ""})
         return 0
@@ -179,9 +181,10 @@ def run_fetch_build(args: argparse.Namespace) -> int:
     invocation, record, plan, run_id, run_attempt = _job(args)
     document = received_selection(args.selection, plan=plan, run_id=run_id, run_attempt=run_attempt,
                                   workflow_path=record["workflow_path"])
+    config = load_build_config(invocation.repo_root, repository=invocation.repository)
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_FETCH_BUILD_REQUESTS)
     selection.fetch_build(api, record=document, plan=plan, run_id=run_id, run_attempt=run_attempt,
                           workflow_path=record["workflow_path"], event=record["event"],
-                          output=exports.BUILD_VALIDATION_ROOT)
+                          output=exports.BUILD_VALIDATION_ROOT, source_config_sha256=config.sha256)
     identity.write_state_record(args.state, selection.SELECTION_NAME, canonical_json(document))
     return 0

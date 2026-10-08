@@ -21,7 +21,8 @@ from mod_base.build_ci.protocol import plan_sha256
 from mod_base.build_ci.reads import CommandReads
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
-from mod_base.model.canonical import canonical_json
+from mod_base.model.canonical import canonical_json, canonical_sha256
+from tests.ci_attempt import sealed, validation
 from tests.helpers import (ci_api_artifact, ci_api_run, ci_graph_jobs, ci_run_descriptor, ci_run_gate,
                            ci_runtime_envelope)
 from tests.test_ci_protocol import protected_subject, seeded_pr
@@ -60,6 +61,16 @@ def build_archive(plan, producer, *, target_id=None):
                     "native_reports": [file["path"] for file in files if file["role"] == "native-report"]}
         archive.writestr(grammar.CI_ENVELOPE_NAME, canonical_json(envelope))
     return stream.getvalue(), envelope
+
+
+def sealed_build_archive(plan, producer, *, source_config_sha256=None):
+    """The complete Build archive the assembling job uploads, including its validation."""
+
+    data, envelope = build_archive(plan, producer)
+    changes = {} if source_config_sha256 is None else {"source_config_sha256": source_config_sha256}
+    record, reports = validation(plan, hook="verify_build", unit_id=None, run_id=producer["run_id"],
+                                 run_attempt=producer["run_attempt"], input_sha256=canonical_sha256(envelope), **changes)
+    return sealed(data, record, reports), envelope
 
 
 def runtime_archive(plan, producer, owning_build):
@@ -143,7 +154,8 @@ class World:
         """The complete Build bundle of the run of ``producer`` (a packaged run only when it rebuilt)."""
 
         record = ci_run_descriptor(self.plan, producer, mode, "build")["producer"]
-        data, self.envelope = build_archive(self.plan, record)
+        data, self.envelope = sealed_build_archive(self.plan, record,
+                                                   source_config_sha256=getattr(self, "config_sha256", None))
         self.bundle = self.publish(self.describe(producer, mode, "build", data), data)
         return self.bundle
 
@@ -238,6 +250,16 @@ class CompletedBuildTransportTests(unittest.TestCase):
             self.assertEqual(list(Path(directory).iterdir()), [output])
         self.assertEqual(world.api.mutations, [])
         self.assertNotIn("upload_window", world.envelope["producer"])
+
+    def test_a_bare_complete_export_cannot_be_downloaded(self):
+        world = build_world()
+        data, _ = build_archive(world.plan, world.bundle["producer"])
+        world.bundle = world.publish(world.describe("build", "full", "build", data), data)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            with self.assertRaises(MbError):
+                self.call(world, output)
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_request_budget_and_single_reads_of_immutable_objects(self):
         world = build_world()
@@ -377,7 +399,7 @@ class CompletedBuildTransportTests(unittest.TestCase):
         for event in ("push", "workflow_dispatch"):
             world = build_world(push=True, event=event)
             world.bundle["producer"]["event"] = event
-            data, world.envelope = build_archive(world.plan, world.bundle["producer"])
+            data, world.envelope = sealed_build_archive(world.plan, world.bundle["producer"])
             world.bundle["artifact"].update(size=len(data), digest="sha256:" + hashlib.sha256(data).hexdigest())
             world.publish(world.bundle, data)
             identity = world.plan["identity"]

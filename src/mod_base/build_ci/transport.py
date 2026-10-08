@@ -241,14 +241,15 @@ def _authenticate_build(reads: CommandReads, watch: Watch, descriptor: dict[str,
 
 
 def _materialize_build(reads: CommandReads, descriptor: dict[str, Any], plan: dict[str, Any], output: Path,
-                       before_publish: Callable[[], None] | None) -> dict[str, Any]:
+                       before_publish: Callable[[], None] | None,
+                       source_config_sha256: str | None = None) -> dict[str, Any]:
     """Download an authenticated complete bundle by id and publish a verified private copy.
 
     The artifact is what the assembling job uploaded: the export and, beside its envelope, the
     validation record of that export with its reports (:func:`_verify_sealed_build`). The record
     is moved aside and must be the one frozen for exactly these bytes in the descriptor's
-    attempt; what is published is the export alone, exactly its inventory. An artifact that holds
-    no record is read as the bare export.
+    attempt; what is published is the export alone, exactly its inventory. The validation record
+    and its reports are mandatory, and a caller that loaded the protected config binds its digest.
 
     Without ``before_publish`` the copy is a child of the caller's own unpublished stage, and it
     must carry the very envelope that was bound here."""
@@ -259,11 +260,8 @@ def _materialize_build(reads: CommandReads, descriptor: dict[str, Any], plan: di
             root = Path(temporary) / "export"
             extract_build(data, root)
             del data
-            if os.path.lexists(root / grammar.CI_VALIDATION_NAME):
-                envelope, _ = _verify_sealed_build(root, Path(temporary) / "validation", descriptor, plan, None)
-            else:
-                envelope = verify_build_export(root, plan=plan)
-                bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
+            envelope, _ = _verify_sealed_build(root, Path(temporary) / "validation", descriptor, plan,
+                                                source_config_sha256)
             check((envelope["scope"], envelope["target_id"]) == ("complete", None),
                   "$.envelope.scope", "export is not the complete Build bundle")
             if before_publish is not None:
@@ -276,14 +274,14 @@ def _materialize_build(reads: CommandReads, descriptor: dict[str, Any], plan: di
 
 
 def _download_build(reads: CommandReads, watch: Watch, descriptor: dict[str, Any], plan: dict[str, Any],
-                    output: Path) -> dict[str, Any]:
+                    output: Path, source_config_sha256: str | None = None) -> dict[str, Any]:
     check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
     _authenticate_build(reads, watch, descriptor, plan)
-    return _materialize_build(reads, descriptor, plan, output, watch.recheck)
+    return _materialize_build(reads, descriptor, plan, output, watch.recheck, source_config_sha256)
 
 
 def download_completed_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any],
-                             output: Path) -> dict[str, Any]:
+                             output: Path, source_config_sha256: str | None = None) -> dict[str, Any]:
     """Authenticate and privately copy one complete bundle by immutable numeric ID.
 
     The bundle must come from a completed successful full run of the managed Build caller for the
@@ -300,7 +298,7 @@ def download_completed_build(api: GitHubApi, *, descriptor: dict[str, Any], plan
     check(ci_producer(descriptor["producer"]["workflow_path"]) == "build",
           "$.producer.workflow_path", "a Build rebuilt inside a packaged run is read by that run only")
     _admit_source(reads, watch, plan["identity"])
-    return _download_build(reads, watch, descriptor, plan, output)
+    return _download_build(reads, watch, descriptor, plan, output, source_config_sha256)
 
 
 def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], plan: dict[str, Any],
@@ -420,10 +418,9 @@ def _verify_sealed_build(root: Path, receipt: Path, descriptor: dict[str, Any], 
     target, or ``verify_build``, in the descriptor's attempt, under the protected Build config the
     reader itself loaded (``source_config_sha256``), over the canonical envelope.
 
-    A job of the uploading attempt always passes that digest. The reader of a finished Build
-    consumes it for another job and passes None: the record then answers for the config digest it
-    carries, which the gate of its own run compared with that run's checkout, and the reader
-    authenticates that run, its controller commit and its complete graph."""
+    A reader that loaded the protected config passes its digest. A historical reader without
+    that config passes None: the record then answers for the digest its own gate compared with
+    the original checkout, and the reader authenticates that run, controller and complete graph."""
 
     recorded = _detach_validation(root, receipt, plan)
     envelope = verify_build_export(root, plan=plan)
@@ -692,7 +689,8 @@ def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any
 
 def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any],
                           packaged_descriptor: dict[str, Any], plan: dict[str, Any],
-                          controller_sha: str, merged_sha: str, output: Path) -> dict[str, Any]:
+                          controller_sha: str, merged_sha: str, output: Path,
+                          source_config_sha256: str | None = None) -> dict[str, Any]:
     """Copy the exact original complete Build bytes only under coherent historical gate proof.
 
     Caller owns a private output parent excluding disposable writers and independently admits the
@@ -709,4 +707,4 @@ def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any],
     reads, watch = CommandReads.of(api), Watch()
     build, _ = _merged_pair(reads, watch, build_descriptor=build_descriptor, packaged_descriptor=packaged_descriptor,
                             plan=plan, merged=merged, temporary_root=output.parent)
-    return _materialize_build(reads, build["artifacts"][0], plan, output, watch.recheck)
+    return _materialize_build(reads, build["artifacts"][0], plan, output, watch.recheck, source_config_sha256)
