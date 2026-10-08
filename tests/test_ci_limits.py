@@ -112,6 +112,10 @@ PLATFORM: dict[str, tuple[Any, str]] = {
 #: A decision of the kit: name -> (value, what it bounds).
 KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_PLAN_BYTES": (4 * MIB, "one canonical plan"),
+    "MAX_CI_PLAN_SOURCE_BYTES": (4 * MIB, "one candidate file a plan is derived from, and one derive hook output"),
+    "MAX_CI_IDENTITY_BYTES": (16 * KIB, "the private subject record of one job"),
+    "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
+    "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),
     "MAX_CI_PLAN_INPUT_FILES": (1, "the plan input tree holds the plan only"),
     "MAX_CI_PLAN_INPUT_ENTRIES": (2, "that file and its directory"),
     "MAX_CI_PRIVATE_RECORD_ENTRIES": (2, "a private record directory and its one file"),
