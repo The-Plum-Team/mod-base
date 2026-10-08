@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -503,8 +504,48 @@ class PolicyDigestTests(unittest.TestCase):
         self.assertEqual(identity.policy_sha256(self.config, self.subject), canonical_sha256({
             "format": "mod-base.build.policy-v1", "build_adapter_api": 1, "graph_versions": {"build": 1, "packaged": 1},
             "kit": self.subject["kit"], "config_sha256": self.config.sha256,
-            "adapter_files": [{"path": file.path, "sha256": file.sha256} for file in self.config.files]}))
+            "adapter_files": [{"path": file.path, "sha256": file.sha256} for file in self.config.files],
+            "control_files": [{"path": path, "sha256": None} for path in (
+                "site/mod-base-build-activation.json", ".github/workflows/mod-base-guard.yml",
+                ".github/workflows/mod-base-build.yml", ".github/workflows/mod-base-packaged-e2e.yml",
+                ".github/workflows/mod-base-gate-status.yml")]}))
         self.assertEqual(len(self.config.files), 3)
+
+    def test_the_control_files_of_the_mod_alter_it_by_their_bytes_and_by_their_presence(self) -> None:
+        # A merge that changes a caller workflow or the activation mode changes how the gates execute
+        # without touching the Build config, the adapter or the pin. Post-merge reuse compares this
+        # digest, so such a merge must not be covered by evidence sealed under the files before it.
+        from mod_base.build_ci.config import CONTROL_PATHS, BuildConfigError
+
+        digests = {identity.policy_sha256(self.config, self.subject)}
+        with tempfile.TemporaryDirectory() as directory:
+            for index, path in enumerate(CONTROL_PATHS):
+                root = h.materialize(Path(directory) / str(index))
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                for content in (b"", b"first\n", b"second\n"):
+                    target.write_bytes(content)
+                    config = load_build_config(root, repository=h.REPOSITORY)
+                    self.assertEqual([file.path for file in config.control], list(CONTROL_PATHS))
+                    self.assertEqual({file.path for file in config.control if file.sha256 is not None}, {path})
+                    digests.add(identity.policy_sha256(config, self.subject))
+            self.assertEqual(len(digests), 1 + 3 * len(CONTROL_PATHS))
+
+            root = h.materialize(Path(directory) / "unsafe")
+            (root / "site").mkdir(exist_ok=True)
+            link = root / CONTROL_PATHS[0]
+            try:
+                os.symlink(root / "scripts/ci/mod-base-build.json", link)
+            except (OSError, NotImplementedError):
+                link = None
+            if link is not None:
+                with self.assertRaisesRegex(BuildConfigError, "crosses a symlink"):
+                    load_build_config(root, repository=h.REPOSITORY)
+                link.unlink()
+            shutil.rmtree(root / ".github")
+            (root / ".github").write_bytes(b"a file where the workflows directory would be\n")
+            config = load_build_config(root, repository=h.REPOSITORY)
+            self.assertTrue(all(file.sha256 is None for file in config.control))
 
     def test_every_control_plane_change_alters_it(self) -> None:
         digest = identity.policy_sha256(self.config, self.subject)

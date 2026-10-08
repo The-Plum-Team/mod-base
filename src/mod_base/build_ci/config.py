@@ -6,7 +6,8 @@ the candidate files a plan is derived from (the inventory, the scenario contract
 Build, the two required status contexts and the native timeouts. :func:`validate_build_config` is the
 pure schema; :func:`load_build_config` reads the file from the protected checkout the prologue
 verified and requires every listed source there to have its configured hash, so its result is the
-complete protected adapter that planning hashes into the policy digest.
+complete protected adapter that planning hashes into the policy digest. It also records the mod's
+own control files (:data:`CONTROL_PATHS`), which the same digest covers.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from mod_base import readable_schema_versions
+from mod_base.build_ci.activation import ACTIVATION_PATH, CALLERS
 from mod_base.build_ci.adapter import plan_input_name, plan_sources
 from mod_base.build_ci.protocol import BUILD_ADAPTER_API, PROFILES, check_output_paths, repo_path
 from mod_base.errors import MbError
@@ -104,17 +106,34 @@ class AdapterFile:
     data: bytes
 
 
+#: What decides, beside the Build config and the adapter closure, how the Build and the packaged E2E
+#: of a mod execute: its activation manifest and the caller workflows the kit can manage. A mode
+#: that leaves one of them to the mod still makes it a file that runs the mod's gates.
+CONTROL_PATHS = (ACTIVATION_PATH, *CALLERS)
+
+
+@dataclass(frozen=True)
+class ControlFile:
+    """One control file of the protected checkout: its path and the SHA-256 of its bytes, or
+    ``None`` for a file the checkout does not have."""
+
+    path: str
+    sha256: str | None
+
+
 @dataclass(frozen=True)
 class BuildConfig:
     """A validated protected Build config with the exact bytes of everything it lists.
 
-    ``data`` is the validated document (treat it as read-only), ``raw`` the file's bytes and
-    ``files`` the import closure in the config's order, each with its configured hash."""
+    ``data`` is the validated document (treat it as read-only), ``raw`` the file's bytes,
+    ``files`` the import closure in the config's order, each with its configured hash, and
+    ``control`` the state of every path of :data:`CONTROL_PATHS` in the same checkout."""
 
     data: dict[str, Any]
     raw: bytes
     sha256: str
     files: tuple[AdapterFile, ...]
+    control: tuple[ControlFile, ...]
 
 
 def _protected_file(root: Path, relative: str, *, max_bytes: int) -> bytes:
@@ -131,11 +150,31 @@ def _protected_file(root: Path, relative: str, *, max_bytes: int) -> bytes:
     return read_regular_file(current, label=relative, max_bytes=max_bytes, allow_empty=True)
 
 
+def _control_file(root: Path, relative: str) -> ControlFile:
+    """The state of one control file of the protected checkout. A missing file is a state of its
+    own (a mode manages only some callers); what exists must be a regular file, reached without
+    crossing a symlink, within the size of a workflow."""
+
+    current = root
+    try:
+        for part in relative.split("/"):
+            current = current / part
+            if stat.S_ISLNK(current.lstat().st_mode):
+                raise BuildConfigError(f"protected source crosses a symlink: {relative}")
+    except (FileNotFoundError, NotADirectoryError):
+        return ControlFile(relative, None)
+    except OSError as exc:
+        raise BuildConfigError(f"protected source cannot be read: {relative} ({exc.strerror or exc})") from exc
+    data = read_regular_file(current, label=relative, max_bytes=lim.MAX_WORKFLOW_FILE_BYTES, allow_empty=True)
+    return ControlFile(relative, sha256_hex(data))
+
+
 def load_build_config(repo_root: Path, *, repository: str) -> BuildConfig:
     """Read the protected Build config of ``repository`` and its complete adapter closure.
 
     ``repo_root`` is the protected mod checkout. Every listed source must be a regular file whose
-    SHA-256 is the configured one; sizes are bounded per file and for the whole closure."""
+    SHA-256 is the configured one; sizes are bounded per file and for the whole closure. The
+    control files of the same checkout are recorded as they are, present or not."""
 
     root = Path(repo_root)
     raw = _protected_file(root, BUILD_CONFIG_PATH, max_bytes=lim.MAX_CI_CONFIG_BYTES)
@@ -152,4 +191,5 @@ def load_build_config(repo_root: Path, *, repository: str) -> BuildConfig:
         if sha256_hex(data) != entry["sha256"]:
             raise BuildConfigError(f"protected source differs from its configured hash: {entry['path']}")
         files.append(AdapterFile(entry["path"], entry["sha256"], data))
-    return BuildConfig(document, raw, sha256_hex(raw), tuple(files))
+    control = tuple(_control_file(root, path) for path in CONTROL_PATHS)
+    return BuildConfig(document, raw, sha256_hex(raw), tuple(files), control)

@@ -130,7 +130,8 @@ class GateStatusTestCase(unittest.TestCase):
         self.mod = activated(self.directory)
 
     def world(self, **options: Any) -> StatusWorld:
-        return StatusWorld(Path(tempfile.mkdtemp(dir=self.directory)), **options)
+        # The plan of a job belongs to the checkout it runs on: the activation manifest is policy.
+        return StatusWorld(Path(tempfile.mkdtemp(dir=self.directory)), **{"mod": self.mod, **options})
 
     def evaluate(self, world: StatusWorld, state: Path, *, pr: str = "7", mod: Path | None = None,
                  environment: dict[str, str] | None = None) -> tuple[int, str, bytes]:
@@ -249,7 +250,7 @@ class GateStatusTests(GateStatusTestCase):
         h.seed_pull_request(world.api, moved)
         world.api.add_commit(merge, "5" * 40, parents=[h.CONTROLLER_SHA, head])
         plan = synthetic_plan({**h.subject(), "head_sha": head, "tested_sha": merge, "tested_tree": "5" * 40,
-                               "tested_parents": [h.CONTROLLER_SHA, head]})
+                               "tested_parents": [h.CONTROLLER_SHA, head]}, self.mod)
         document = self.intents(world, world.planned(plan=plan))
         self.assertEqual(document["target_sha"], head)
         self.assertEqual(self.states(document), {gate: ("pending", WAITING[gate], None) for gate in CONTEXTS})
@@ -269,7 +270,7 @@ class GateStatusTests(GateStatusTestCase):
                                         "merge_commit_sha": merge})
         plan = synthetic_plan({**h.subject(), "base_sha": controller, "controller_sha": controller,
                                "tested_sha": merge, "tested_tree": "5" * 40,
-                               "tested_parents": [controller, h.HEAD_SHA]})
+                               "tested_parents": [controller, h.HEAD_SHA]}, self.mod)
         environment = {**world.environment, "GITHUB_SHA": controller}
         states = self.states(self.intents(world, world.planned(plan=plan), environment=environment))
         for gate, run_id in (("build", 42), ("packaged", 43)):
@@ -404,8 +405,8 @@ class GateStatusTests(GateStatusTestCase):
 
     def test_a_plan_of_another_pull_request_controller_or_policy_is_refused(self) -> None:
         world = self.world().gated()
-        plans = {"pull request": synthetic_plan({**h.subject(), "pr_number": 8}),
-                 "policy": synthetic_plan(h.subject()), "profile": synthetic_plan(h.subject())}
+        plans = {"pull request": synthetic_plan({**h.subject(), "pr_number": 8}, self.mod),
+                 "policy": synthetic_plan(h.subject(), self.mod), "profile": synthetic_plan(h.subject(), self.mod)}
         plans["policy"]["identity"]["policy_sha256"] = "f" * 64
         plans["profile"]["profile"] = "block-pops"
         for plan in plans.values():
@@ -431,13 +432,15 @@ class GateStatusTests(GateStatusTestCase):
                  ("reviewed-rollback", "shadow"): shadow, ("reviewed-rollback", "shared-build-and-e2e"): CONTEXTS,
                  ("reviewed-rollback", "shared-build"): {"build": CONTEXTS["build"]}}
         for index, ((mode, rollback_from), contexts) in enumerate(cases.items()):
-            document = self.intents(world, world.planned(f"state-{index}"),
-                                    mod=activated(self.directory, mode, rollback_from))
+            mod = activated(self.directory, mode, rollback_from)
+            world = self.world(mod=mod).gated()
+            document = self.intents(world, world.planned(f"state-{index}"), mod=mod)
             with self.subTest(mode=mode, rollback_from=rollback_from):
                 self.assertEqual({gate: intent["context"] for gate, intent in document["gates"].items()}, contexts)
                 self.assertEqual({intent["state"] for intent in document["gates"].values()}, {"success"})
-        self.refused(world, world.planned("disabled"), "manages no gate status caller",
-                     mod=activated(self.directory, "disabled"))
+        disabled = activated(self.directory, "disabled")
+        world = self.world(mod=disabled).gated()
+        self.refused(world, world.planned("disabled"), "manages no gate status caller", mod=disabled)
         self.refused(world, world.planned("unconfigured"), "", mod=h.MOD)  # a Build config without a manifest
 
     def test_a_change_during_the_evaluation_produces_no_intent(self) -> None:

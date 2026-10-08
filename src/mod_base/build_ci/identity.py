@@ -222,10 +222,12 @@ def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str:
     """The closed protected-policy digest of the controller that executes ``subject``.
 
     It covers the exact bytes of the protected Build config, every source of the adapter import
-    closure the config lists (as read from the protected checkout), the kit pin with its tree
-    digest, the adapter API and both graph versions. Any change of one of them, and nothing a
-    candidate controls, changes the digest; post-merge reuse compares it instead of the controller
-    commit, which an ordinary merge always moves."""
+    closure the config lists (as read from the protected checkout), the mod's own control files
+    (``config.CONTROL_PATHS``: the activation manifest and the caller workflows, each by its
+    bytes or as absent), the kit pin with its tree digest, the adapter API and both graph
+    versions. Any change of one of them, and nothing a candidate controls, changes the digest;
+    post-merge reuse compares it instead of the controller commit, which an ordinary merge always
+    moves. So a merge that changes how the gates execute is tested in full under what it merged."""
 
     validate_subject(subject)
     check(type(config) is BuildConfig and config.data["repository"] == subject["repository"],
@@ -237,6 +239,7 @@ def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str:
         "kit": subject["kit"],
         "config_sha256": config.sha256,
         "adapter_files": [{"path": file.path, "sha256": file.sha256} for file in config.files],
+        "control_files": [{"path": file.path, "sha256": file.sha256} for file in config.control],
     })
 
 

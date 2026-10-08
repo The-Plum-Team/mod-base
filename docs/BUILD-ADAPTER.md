@@ -28,9 +28,11 @@ protected default branch, never from a pull request.
 | `contexts.build`, `contexts.packaged` | the two required status contexts |
 | `timeouts` | `validator_seconds` for every protected hook, `policy_seconds`, `target_seconds` and `runtime_seconds` for the three candidate hooks |
 
-The config bytes, the listed files, the pinned kit and the graph versions form the policy digest
-(`policy_sha256`) of every plan. Changing any of them makes the next default-branch run a full run
-instead of a reuse of the pull request's evidence.
+The config bytes, the listed files, the pinned kit, the graph versions and the mod's own control
+files (`site/mod-base-build-activation.json` and the four `mod-base-*.yml` caller workflows, each by
+its bytes or as absent) form the policy digest (`policy_sha256`) of every plan. Changing any of
+them makes the next default-branch run a full run instead of a reuse of the pull request's
+evidence.
 
 ## How a hook runs
 

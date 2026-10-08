@@ -34,11 +34,12 @@ from tests.test_ci_transport import World
 PACKAGED = CI_CALLER_WORKFLOWS["packaged"]
 
 
-def synthetic_plan(subject: dict[str, Any]) -> dict[str, Any]:
+def synthetic_plan(subject: dict[str, Any], mod: Path = h.MOD) -> dict[str, Any]:
     """The plan of a subject of the synthetic mod under its real protected policy, with the units
-    of the fixture plan (the literal job listings name ``target-a`` and ``lane-a``)."""
+    of the fixture plan (the literal job listings name ``target-a`` and ``lane-a``). ``mod`` is the
+    protected checkout the job runs on: its control files are part of the policy."""
 
-    config = load_build_config(h.MOD, repository=h.REPOSITORY)
+    config = load_build_config(mod, repository=h.REPOSITORY)
     plan = ci_plan()
     hashes = {key: plan["identity"][key] for key in ("inventory_blob", "inventory_sha256", "scenario_sha256",
                                                      "runtime_selection_sha256")}
@@ -53,11 +54,11 @@ class JobWorld(World):
     managed caller: its runs, literal job listings, real archives and private job states."""
 
     def __init__(self, directory: Path, *, push: bool = False, event: str | None = None,
-                 max_requests: int | None = None, caller: str = "packaged") -> None:
+                 max_requests: int | None = None, caller: str = "packaged", mod: Path = h.MOD) -> None:
         self.directory = directory
         self.event = event or ("push" if push else "pull_request_target")
         self.subject = h.subject(pull_request=not push)
-        self.plan = synthetic_plan(self.subject)
+        self.plan = synthetic_plan(self.subject, mod)
         self.api, self.pr = h.github(max_requests=max_requests)
         self.runs, self.jobs, self.records, self.archives = {}, {}, {}, {}
         self.environment = {**h.environment(event=self.event, caller=caller),
