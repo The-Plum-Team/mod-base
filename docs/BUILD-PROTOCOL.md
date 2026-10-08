@@ -382,7 +382,8 @@ mandatory in the descriptor and are reauthenticated against the API by transport
 rewrites the export or infers the window from its self-report.
 
 The envelope also has sorted `files` and sorted `native_reports`. Each file has `path`, `size`, `sha256`, `lane_id`,
-`role`. With an independently derived plan it must equal the exact target partition or complete
+`role`; a path is an export path, as in the plan, and the frozen tree, the archive encoder and
+`extract_build` apply that same grammar. With an independently derived plan it must equal the exact target partition or complete
 union. Native reports equal the report-role subset. Actual size/hash equality is separately
 verified by `verify_build_export` over canonical `ci-envelope.json` and descriptor-relative MB1
 regular-file inventory. No missing/extra files, links, duplicate names or envelope mutation
@@ -1504,7 +1505,9 @@ and native_contract_sha256; each file declares path, lane_id, role, size and sha
 transport inventory derived from native outputs, never another scenario/capture catalog.
 The owning_build must be the bound complete Build descriptor. Scope lane selects one lane;
 complete retains the complete ordered plan lanes/contracts when a plan is supplied. Files are
-canonical, path ordered, case/prefix consistent, exclude Git internals and reserved envelopes,
+canonical export paths (`grammar.is_export_path`, the rule the sealed tree and its archive are
+walked and extracted with, so a file keeps the name the mod gave it), path ordered, case/prefix
+consistent, exclude Git internals and reserved envelopes,
 and cover every declared lane. Aggregate-only files have null lane_id only in complete scope.
 Every lane retains the original QS/BP 512-file/256-MiB caps, including inside a complete export.
 Whole complete inventory retains BP's 4,096-file/512-MiB fan-in cap. The envelope is at most

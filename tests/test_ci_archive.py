@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from mod_base.build_ci import archive
 from mod_base.errors import MbError
+from mod_base.io.tree import EXPORT_PATHS
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from tests.test_ci_transport import transport_fixture
@@ -43,7 +44,8 @@ class ArchiveEncodingTests(unittest.TestCase):
             finally:
                 if stage.exists():
                     shutil.rmtree(stage)
-        def stream_file(source, relative, *, max_bytes, consume):
+        def stream_file(source, relative, *, max_bytes, consume, rule):
+            self.assertIs(rule, EXPORT_PATHS)  # A sealed export keeps the mod's own file names.
             data = (source / relative).read_bytes()
             consume(data)
             return len(data)
@@ -111,7 +113,7 @@ class ArchiveEncodingTests(unittest.TestCase):
                 base = Path(directory)
                 plan, envelope = archive_fixture(base / "source")
                 calls = [0]
-                def stream(source, relative, *, max_bytes, consume):
+                def stream(source, relative, *, max_bytes, consume, rule):
                     data = (source / relative).read_bytes()
                     consume(data if late else b"x" * len(data))
                     calls[0] += 1

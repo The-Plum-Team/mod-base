@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from mod_base.build_ci import inputs, runtime_inputs
 from mod_base.errors import MbError
+from mod_base.io.tree import EXPORT_PATHS
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json
 from tests import test_ci_runtime_inputs as runtime_fixture
@@ -38,6 +39,8 @@ class RuntimeReadHandoffTests(unittest.TestCase):
             self.assertEqual(kwargs['max_files'], limits.MAX_CI_RUNTIME_FILES + 1)
             self.assertEqual(kwargs['max_total_bytes'], limits.MAX_CI_RUNTIME_BYTES + len(canonical_json(original[2])))
             self.assertEqual(kwargs['max_entries'], limits.MAX_CI_RUNTIME_ENTRIES)
+            # The lane keeps the mod's own file names: the handoff walks it with the export rule.
+            self.assertIs(kwargs['rule'], EXPORT_PATHS)
             if mutate is not None:
                 mutate(*documents)
             if fault in ('grant', 'cleanup'):

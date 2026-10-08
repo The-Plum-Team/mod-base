@@ -385,6 +385,26 @@ class EnvelopeTests(unittest.TestCase):
         with self.assertRaises(MbError):
             validate_build_envelope(envelope, plan=plan)
 
+    def test_files_and_native_reports_are_named_by_the_export_grammar(self):
+        def renamed(name):
+            envelope = ci_envelope()
+            report = next(item for item in envelope["files"] if item["role"] == "native-report")
+            report["path"] = name
+            envelope["files"].sort(key=lambda item: str(item["path"]))
+            envelope["native_reports"] = [name]
+            return envelope
+
+        for name in ("reports/Build Report - 1.20.1+build.5.json", "reports/v1.0.0+build.7/observations.json"):
+            with self.subTest(name=name):
+                validate_build_envelope(renamed(name))
+        # A repository path may be hidden; no file of a sealed export is, and none has a name a
+        # case-folding or trimming filesystem would change.
+        for name in (".github/report.json", "reports/.hidden.json", "reports/trailing.", "reports/double  space.json",
+                     " reports/a.json", "reports/a.json ", "reports/tab\tname.json", "reports/café.json",
+                     "reports/colon:name.json", "reports\\a.json", "../reports/a.json", "/reports/a.json", "", None, 7):
+            with self.subTest(name=name), self.assertRaises(MbError):
+                validate_build_envelope(renamed(name))
+
     def test_path_aliases_and_file_directory_conflicts_reject_before_extraction(self):
         for paths in (("a", "A"), ("Dir/a", "dir/b"), ("a", "a/b")):
             envelope = ci_envelope()

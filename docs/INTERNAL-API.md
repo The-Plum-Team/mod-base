@@ -974,9 +974,9 @@ Bounded ZIP extraction (MB1).
 * `class ZipRejected(MbError)`: An archive violates the extraction policy (exit 2).
 * `class ExtractionLimits`: Bounds for one archive. ``suffixes`` (when set) restricts every file name's extension.
   * fields: `max_entries: int, max_total_bytes: int, max_entry_bytes: int, max_ratio: int = 200, suffixes: frozenset[str] | None = None`
-* `def extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits) -> list[str]`: Validate and extract ``archive`` into the new directory ``destination``.
-* `def extract_build(archive: Path | bytes, destination: Path) -> list[str]`: Extract with fixed CI export entry/file/expanded bounds through the same hostile ZIP validator and exclusive publication. Existing Pages extract/archive_limit entry ceilings remain unchanged.
-* `def extract_runtime(archive: Path | bytes, destination: Path, *, scope: str) -> list[str]`: Extract closed lane/complete runtime data under fixed native payload file/expanded/per-entry and compressed bounds, preserving empty logs only on this route. Shared complete hostile ZIP checks and exclusive publication remain; exact canonical envelope/bytes/native role admission is separately mandatory. Existing Pages/Build nonempty-file contracts and limits are unchanged.
+* `def extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits) -> list[str]`: Validate and extract ``archive`` into the new directory ``destination``. Every entry name is a canonical bundle path (`tree.BUNDLE_PATHS`): the Pages artifacts, whose file names the kit chooses.
+* `def extract_build(archive: Path | bytes, destination: Path) -> list[str]`: Extract with fixed CI export entry/file/expanded bounds through the same hostile ZIP validator and exclusive publication. Entry names are export paths (`tree.EXPORT_PATHS`, the mod's own staged file names); names that differ only in case are refused as on every route. Existing Pages extract/archive_limit entry ceilings remain unchanged.
+* `def extract_runtime(archive: Path | bytes, destination: Path, *, scope: str) -> list[str]`: Extract closed lane/complete runtime data under fixed native payload file/expanded/per-entry and compressed bounds, preserving empty logs only on this route. Entry names are export paths (`tree.EXPORT_PATHS`). Shared complete hostile ZIP checks and exclusive publication remain; exact canonical envelope/bytes/native role admission is separately mandatory. Existing Pages/Build nonempty-file contracts and limits are unchanged.
 
 Frozen for other units (integration round):
 

@@ -57,6 +57,23 @@ class RuntimeEnvelopeTest(unittest.TestCase):
             document['files'] = [{**document['files'][0], 'path': name} for name in names]
             self.reject(document)
 
+    def test_files_keep_the_mods_own_names_and_nothing_the_sealed_tree_refuses(self):
+        # The tree walks of a sealed runtime export admit exactly ``tree.EXPORT_PATHS``.
+        for name in ('lanes/lane-a/screenshots/Title Screen - 1.20.1+build.5.png', 'lanes/lane-a/logs/latest.log',
+                     'profiles/fabric-26.1.1--26.1.1--full/crash-reports/crash-2026-10-08_12.34.56-client.txt'):
+            document = ci_runtime_envelope()
+            document['files'][0]['path'] = name
+            with self.subTest(name=name):
+                runtime_schema.validate_runtime_envelope(document)
+        for name in ('lanes/lane-a/.hidden.png', '.cache/result.json', 'lanes/lane-a/double  space.png',
+                     'lanes/lane-a/trailing.', ' lanes/lane-a/a.png', 'lanes/lane-a/a.png ', 'lanes/lane-a/tab\tname.png',
+                     'lanes/lane-a/café.png', 'lanes/lane-a/colon:name.png', 'lanes\\lane-a\\a.png', 'x' * 129,
+                     '/'.join(['d'] * (limits.MAX_BUNDLE_PATH_DEPTH + 1)), '', None, 7, ['lanes/lane-a/a.png']):
+            document = ci_runtime_envelope()
+            document['files'][0]['path'] = name
+            with self.subTest(name=name):
+                self.reject(document)
+
     def test_scope_lane_membership_and_coverage(self):
         for key, value in (('lane_id', 'lane-a'), ('scope', 'unknown')):
             document = ci_runtime_envelope()

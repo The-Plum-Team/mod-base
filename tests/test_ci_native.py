@@ -348,12 +348,9 @@ class KitNamingTest(unittest.TestCase):
                 validate_build_envelope(envelope_with([path.replace(" ", "_") for path in staged]))
                 validate_build_envelope(envelope_with([path.replace(" ", "_") for path in built]))
 
-    # Decision D6 (export paths get their own grammar: letters, digits, ".", "_", "-", "+" and single
-    # inner spaces) is implemented by another package of this wave. Until it is merged, an export
-    # path must be a repository path, which refuses every real JAR name for its spaces. Remove the
-    # decorator when this test reports an unexpected success.
-    @unittest.expectedFailure
     def test_every_real_output_path_passes_the_export_path_rule(self) -> None:
+        # Decision D6: an export path keeps the mod's own file name (letters, digits, ".", "_", "-",
+        # "+" and single inner spaces), which a repository path refuses for its spaces.
         refused: dict[str, list[str]] = {}
         for profile in ci_native.profiles():
             for path in ci_native.output_paths(profile):

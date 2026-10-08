@@ -14,7 +14,7 @@ from mod_base.build_ci.exports import verify_build_export
 from mod_base.errors import MbError
 from mod_base.io.atomic_directory import atomic_directory
 from mod_base.io.bounded_zip import extract_build
-from mod_base.io.tree import sha256_file, stream_child_file
+from mod_base.io.tree import EXPORT_PATHS, sha256_file, stream_child_file
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.validators import check
@@ -93,7 +93,8 @@ def encode_build_export(root: Path, output: Path, *, plan: dict[str, Any]) -> di
                         def consume(chunk: bytes) -> None:
                             digest.update(chunk)
                             check(entry.write(chunk) == len(chunk), "$.archive", "ZIP entry write was incomplete")
-                        size = stream_child_file(root, record["path"], max_bytes=record["size"], consume=consume)
+                        size = stream_child_file(root, record["path"], max_bytes=record["size"], consume=consume,
+                                                 rule=EXPORT_PATHS)
                     check(size == record["size"] and digest.hexdigest() == record["sha256"],
                           "$.archive.source", "export bytes changed during archive encoding")
             stream.flush()

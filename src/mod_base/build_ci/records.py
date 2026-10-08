@@ -37,8 +37,10 @@ def _timestamp(value: Any, path: str) -> str:
 
 
 def _file_path(value: Any, path: str) -> str:
-    check(g.is_repo_path(value) and value != g.CI_ENVELOPE_NAME, path,
-          "must be a canonical bundle path distinct from the outer envelope")
+    """A file of a sealed Build export under the name the mod staged it with (a plan's own rule)."""
+
+    check(g.is_export_path(value) and value != g.CI_ENVELOPE_NAME, path,
+          "must be a canonical export path distinct from the outer envelope")
     return value
 
 

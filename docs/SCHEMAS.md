@@ -68,6 +68,7 @@ and 32`.
 | `RUN_URL` | `https://github.com/<repository>/actions/runs/<id>` | Always built by the renderer. |
 | bundle path | `/`-separated components `[A-Za-z0-9_][A-Za-z0-9._-]*` (or a dotfile), no `.`, `..`, empty, absolute or backslash component, at most 16 components and 300 characters | |
 | repo path | a bundle path with no `.git` component (case-insensitive) | Config and template paths. |
+| export path | `/`-separated components of ASCII letters, digits, `.`, `_`, `-`, `+` and single inner spaces, none starting or ending with a space or a dot (so no dotfile), at most 128 characters each, 16 components and 300 characters | Files of a sealed Build or runtime export under the mod's own names (`files/Quick Skin - Fabric - 1.20.1-3.1.0.jar`): plan outputs, both envelopes, their trees and their archives. |
 
 ### Text rules
 

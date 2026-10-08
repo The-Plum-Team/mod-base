@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from mod_base import readable_schema_versions
-from mod_base.build_ci.protocol import check_output_paths, validate_identity, validate_plan
+from mod_base.build_ci.protocol import check_output_paths, export_path, validate_identity, validate_plan
 from mod_base.build_ci.records import _PRODUCER_IDENTITY, _producer_binding, validate_descriptor
 from mod_base.model import grammar as g, limits as lim
 from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check
@@ -13,7 +13,8 @@ from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, chec
 
 _ID = Str(g.CI_UNIT_ID, max_len=80)
 _SHA = Str(g.SHA256, max_len=64)
-_FILE = Obj({'path': Str(max_len=lim.MAX_BUNDLE_PATH_CHARS), 'lane_id': Nullable(_ID),
+#: A runtime file keeps the name the mod gave it: the rule of the sealed tree that holds it.
+_FILE = Obj({'path': export_path, 'lane_id': Nullable(_ID),
              'role': Str(choices=('native-report', 'runtime-log', 'screenshot', 'crash-report')),
              'size': Int(0, lim.MAX_CI_PNG_BYTES), 'sha256': _SHA})
 _LANE = Obj({'id': _ID, 'native_contract_sha256': _SHA})

@@ -11,6 +11,7 @@ from mod_base.build_ci import runtime_freeze
 from mod_base.build_ci.source import GitSourceEntry
 from mod_base.build_ci.worker import WorkerResult
 from mod_base.errors import MbError
+from mod_base.io.tree import EXPORT_PATHS
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json
 from tests import test_ci_runtime_inputs as runtime_fixture
@@ -85,6 +86,8 @@ class RuntimeFreezeTests(unittest.TestCase):
             self.assertEqual((kwargs['source_owner_uid'], kwargs['owner_uid'], kwargs['owner_gid']), (0, 1001, 121))
             self.assertEqual(kwargs['max_files'], limits.MAX_CI_RUNTIME_FILES + 1)
             self.assertEqual(kwargs['max_total_bytes'], limits.MAX_CI_RUNTIME_BYTES + len(canonical_json(expected)))
+            # The copy keeps the mod's own file names: the transfer walks it with the export rule.
+            self.assertIs(kwargs['rule'], EXPORT_PATHS)
             if fault in ('transfer', 'cleanup'):
                 raise OSError('ownership failed')
         def close(fd):
