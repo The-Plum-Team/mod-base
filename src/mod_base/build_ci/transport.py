@@ -246,6 +246,12 @@ def _materialize_build(reads: CommandReads, descriptor: dict[str, Any], plan: di
                        before_publish: Callable[[], None] | None) -> dict[str, Any]:
     """Download an authenticated complete bundle by id and publish a verified private copy.
 
+    The artifact is what the assembling job uploaded: the export and, beside its envelope, the
+    validation record of that export with its reports (:func:`_verify_sealed_build`). The record
+    is moved aside and must be the one frozen for exactly these bytes in the descriptor's
+    attempt; what is published is the export alone, exactly its inventory. An artifact that holds
+    no record is read as the bare export.
+
     Without ``before_publish`` the copy is a child of the caller's own unpublished stage, and it
     must carry the very envelope that was bound here."""
 
@@ -255,10 +261,13 @@ def _materialize_build(reads: CommandReads, descriptor: dict[str, Any], plan: di
             root = Path(temporary) / "export"
             extract_build(data, root)
             del data
-            envelope = verify_build_export(root, plan=plan)
+            if os.path.lexists(root / grammar.CI_VALIDATION_NAME):
+                envelope, _ = _verify_sealed_build(root, Path(temporary) / "validation", descriptor, plan, None)
+            else:
+                envelope = verify_build_export(root, plan=plan)
+                bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
             check((envelope["scope"], envelope["target_id"]) == ("complete", None),
                   "$.envelope.scope", "export is not the complete Build bundle")
-            bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
             if before_publish is not None:
                 return _materialize_build_export(root, output, plan=plan, before_publish=before_publish)
             check(materialize_build_export(root, output, plan=plan) == envelope,
@@ -415,8 +424,9 @@ def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], pl
 # -- A job's reads of its own attempt: sealed exports with their validation record, and the index -----
 
 
-def _detach_validation(root: Path, receipt: Path, plan: dict[str, Any]) -> None:
-    """Split an extracted sealed artifact into its two exactly inventoried trees.
+def _detach_validation(root: Path, receipt: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Split an extracted sealed artifact into its two exactly inventoried trees; return the
+    validation record as it was read, before anything it says is verified.
 
     A sealing job uploads its frozen export together with the validation record of that export:
     ``ci-validation.json`` and the reports it inventories lie beside the outer envelope. They are
@@ -430,26 +440,33 @@ def _detach_validation(root: Path, receipt: Path, plan: dict[str, Any]) -> None:
         moved = receipt / relative
         moved.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.rename(root / relative, moved)
+    return document
 
 
 def _verify_sealed_build(root: Path, receipt: Path, descriptor: dict[str, Any], plan: dict[str, Any],
-                         source_config_sha256: str) -> tuple[dict[str, Any], dict[str, Any]]:
+                         source_config_sha256: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Verify an extracted sealed Build artifact, a target partition or the complete bundle:
     ``(envelope, validation record)``. The export stays in ``root``, exactly its inventory.
 
     The export is bound to its descriptor, whose kind fixes the scope. The validation record is
     the one the uploading job froze for exactly these bytes: the ``verify_target`` hook of that
     target, or ``verify_build``, in the descriptor's attempt, under the protected Build config the
-    reader itself loaded (``source_config_sha256``), over the canonical envelope."""
+    reader itself loaded (``source_config_sha256``), over the canonical envelope.
 
-    _detach_validation(root, receipt, plan)
+    A job of the uploading attempt always passes that digest. The reader of a finished Build
+    consumes it for another job and passes None: the record then answers for the config digest it
+    carries, which the gate of its own run compared with that run's checkout, and the reader
+    authenticates that run, its controller commit and its complete graph."""
+
+    recorded = _detach_validation(root, receipt, plan)
     envelope = verify_build_export(root, plan=plan)
     bind_build_envelope(envelope, descriptor=descriptor, plan=plan)
     producer = descriptor["producer"]
     validation = verify_validation_export(
         receipt, plan=plan, hook="verify_build" if envelope["scope"] == "complete" else "verify_target",
         unit_id=envelope["target_id"], run_id=producer["run_id"], run_attempt=producer["run_attempt"],
-        source_config_sha256=source_config_sha256,
+        source_config_sha256=recorded["source_config_sha256"] if source_config_sha256 is None
+        else source_config_sha256,
         input_sha256=hashlib.sha256(canonical_json(envelope)).hexdigest())
     return envelope, validation
 
