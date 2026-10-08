@@ -157,7 +157,8 @@ jobs:
           PYTHONPATH=src python3 -m unittest -v tests.test_workflow_policy tests.test_workflow_names \
             tests.test_workflow_names_constants tests.test_workflow_pins tests.test_workflow_publish \
             tests.test_workflow_finalize tests.test_workflow_rotate tests.test_managed_caller \
-            tests.test_composite_credential_boundary tests.test_tree_digest_literal
+            tests.test_composite_credential_boundary tests.test_tree_digest_literal \
+            tests.test_workflow_ci_policy tests.test_workflow_build
 
   front-end:
     name: Front end
