@@ -28,6 +28,7 @@ import ast
 import copy
 import re
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -145,25 +146,37 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_RUNTIME_ENVELOPE_BYTES": (4 * MIB, "one runtime envelope"),
 }
 
-#: Computed from other bounds: name -> (value, the formula ``test_derived_bounds`` checks).
-DERIVED: dict[str, tuple[Any, str]] = {
-    "MAX_CI_ARTIFACTS_PER_GATE": (1000, "MAX_JOBS_PER_ATTEMPT: at most one artifact per job"),
-    "MAX_CI_ROOT_REQUEST_BYTES": (10_551_296, "plan + envelope + 2 MiB of source metadata + 64 KiB"),
-    "MAX_CI_GIT_METADATA_FILES": (200_000, "MAX_CI_SOURCE_FILES"),
-    "MAX_CI_GIT_METADATA_ENTRIES": (250_000, "MAX_CI_SOURCE_ENTRIES"),
-    "MAX_CI_GIT_METADATA_FILE_BYTES": (2 * GIB, "MAX_CI_SOURCE_FILE_BYTES"),
-    "MAX_CI_GIT_METADATA_TREE_BYTES": (20 * GIB, "MAX_CI_SOURCE_TREE_BYTES"),
-    "MAX_CI_BUILD_POLLS": (91, "CI_BUILD_WAIT_SECONDS // CI_BUILD_POLL_SECONDS + 1"),
-    "MAX_CI_BATCH_DOCUMENT_BYTES": (64 * MIB, "MAX_CI_SOURCE_LIST_BYTES"),
-    "MAX_CI_BATCH_PATCH_FILES": (400_000, "2 * MAX_CI_SOURCE_FILES"),
-    "MAX_CI_BATCH_PATCH_ENTRIES": (500_000, "2 * MAX_CI_SOURCE_ENTRIES"),
-    "MAX_CI_BATCH_PATCH_PATH_BYTES": (128 * MIB, "2 * MAX_CI_SOURCE_LIST_BYTES"),
-    "MAX_CI_TARGET_INPUT_ENTRIES": (174_353, "(export files + targets) * (path depth + 1) + 1"),
-    "MAX_CI_RUNTIME_ROOT_REQUEST_BYTES": (14_745_600, "MAX_CI_ROOT_REQUEST_BYTES + MAX_CI_RUNTIME_ENVELOPE_BYTES"),
-    "MAX_CI_RUNTIME_ENTRIES": (69_650, "(aggregate files + 1) * (path depth + 1) + 1"),
-    "MAX_CI_ORIGINAL_INPUT_ENTRIES": (89_651, "MAX_CI_EXPORT_ENTRIES + MAX_CI_RUNTIME_ENTRIES + 1"),
-    "MAX_CI_EXECUTION_LOG_CHARS": (22_369_624, "base64 length of MAX_CI_LOG_BYTES"),
-    "MAX_CI_EXECUTION_BYTES": (22_435_160, "MAX_CI_EXECUTION_LOG_CHARS + 64 KiB"),
+#: Computed from other bounds: name -> (value, the formula in words, the formula).
+DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
+    "MAX_CI_ARTIFACTS_PER_GATE": (1000, "at most one artifact per job", lambda: limits.MAX_JOBS_PER_ATTEMPT),
+    "MAX_CI_ROOT_REQUEST_BYTES": (
+        10_551_296, "plan + envelope + 2 MiB of source metadata + 64 KiB",
+        lambda: limits.MAX_CI_PLAN_BYTES + limits.MAX_CI_ENVELOPE_BYTES + 2 * MIB + 64 * KIB),
+    "MAX_CI_GIT_METADATA_FILES": (200_000, "the source tree bound", lambda: limits.MAX_CI_SOURCE_FILES),
+    "MAX_CI_GIT_METADATA_ENTRIES": (250_000, "the source tree bound", lambda: limits.MAX_CI_SOURCE_ENTRIES),
+    "MAX_CI_GIT_METADATA_FILE_BYTES": (2 * GIB, "the source tree bound", lambda: limits.MAX_CI_SOURCE_FILE_BYTES),
+    "MAX_CI_GIT_METADATA_TREE_BYTES": (20 * GIB, "the source tree bound", lambda: limits.MAX_CI_SOURCE_TREE_BYTES),
+    "MAX_CI_BUILD_POLLS": (91, "one poll per interval of the wait, and the first",
+                           lambda: limits.CI_BUILD_WAIT_SECONDS // limits.CI_BUILD_POLL_SECONDS + 1),
+    "MAX_CI_BATCH_DOCUMENT_BYTES": (64 * MIB, "one Git tree listing", lambda: limits.MAX_CI_SOURCE_LIST_BYTES),
+    "MAX_CI_BATCH_PATCH_FILES": (400_000, "two source trees", lambda: 2 * limits.MAX_CI_SOURCE_FILES),
+    "MAX_CI_BATCH_PATCH_ENTRIES": (500_000, "two source trees", lambda: 2 * limits.MAX_CI_SOURCE_ENTRIES),
+    "MAX_CI_BATCH_PATCH_PATH_BYTES": (128 * MIB, "two Git tree listings", lambda: 2 * limits.MAX_CI_SOURCE_LIST_BYTES),
+    "MAX_CI_TARGET_INPUT_ENTRIES": (
+        174_353, "every export file and target directory with all its parent directories, and the root",
+        lambda: (limits.MAX_CI_EXPORT_FILES + limits.MAX_CI_TARGETS) * (limits.MAX_BUNDLE_PATH_DEPTH + 1) + 1),
+    "MAX_CI_RUNTIME_ROOT_REQUEST_BYTES": (
+        14_745_600, "a Build root request and one runtime envelope",
+        lambda: limits.MAX_CI_ROOT_REQUEST_BYTES + limits.MAX_CI_RUNTIME_ENVELOPE_BYTES),
+    "MAX_CI_RUNTIME_ENTRIES": (
+        69_650, "every aggregate file and the envelope with all their parent directories, and the root",
+        lambda: (limits.MAX_CI_RUNTIME_AGGREGATE_FILES + 1) * (limits.MAX_BUNDLE_PATH_DEPTH + 1) + 1),
+    "MAX_CI_ORIGINAL_INPUT_ENTRIES": (89_651, "a Build export, a runtime export and their parent",
+                                      lambda: limits.MAX_CI_EXPORT_ENTRIES + limits.MAX_CI_RUNTIME_ENTRIES + 1),
+    "MAX_CI_EXECUTION_LOG_CHARS": (22_369_624, "the base64 length of a full log",
+                                   lambda: 4 * ((limits.MAX_CI_LOG_BYTES + 2) // 3)),
+    "MAX_CI_EXECUTION_BYTES": (22_435_160, "that log and 64 KiB of record",
+                               lambda: limits.MAX_CI_EXECUTION_LOG_CHARS + 64 * KIB),
 }
 
 #: Bounds of the private interpreter and installation tower, which architecture decision D4 deletes
@@ -183,7 +196,7 @@ TOWER: dict[str, Any] = {
     "CI_PRIVILEGED_ENTRY_TIMEOUT_SECONDS": 20.0,
 }
 
-PINNED = {**NATIVE, **PLATFORM, **KIT, **DERIVED}
+PINNED = {**NATIVE, **PLATFORM, **KIT, **{name: row[:2] for name, row in DERIVED.items()}}
 #: Bounds no Python module reads: the workflows carry them as literals, which workflow tests compare
 #: (like the Pages ``RETENTION_DAYS``).
 WORKFLOW_LITERALS = frozenset({"CI_RETENTION_DAYS"})
@@ -264,38 +277,19 @@ class PinnedBoundsTest(unittest.TestCase):
         for name, (_value, source) in NATIVE.items():
             with self.subTest(name=name):
                 self.assertRegex(source, NATIVE_SOURCE)
-        for table in (PLATFORM, KIT, DERIVED):
-            for name, (_value, source) in table.items():
-                with self.subTest(name=name):
-                    self.assertTrue(source.strip())
+        for name in (*PLATFORM, *KIT, *DERIVED):
+            with self.subTest(name=name):
+                self.assertTrue(PINNED[name][1].strip())
 
     def test_every_bound_is_enforced_by_kit_code(self) -> None:
         dead = sorted(ci_bounds() - live_bounds())
         self.assertEqual(dead, [], "no module under src/ or tools/ names these bounds: enforce or delete them")
         self.assertLessEqual(WORKFLOW_LITERALS, ci_bounds())
 
-    def test_derived_bounds(self) -> None:
-        self.assertEqual(limits.MAX_CI_ARTIFACTS_PER_GATE, limits.MAX_JOBS_PER_ATTEMPT)
-        self.assertEqual(limits.MAX_CI_ROOT_REQUEST_BYTES,
-                         limits.MAX_CI_PLAN_BYTES + limits.MAX_CI_ENVELOPE_BYTES + 2 * MIB + 64 * KIB)
-        for suffix in ("FILES", "ENTRIES", "FILE_BYTES", "TREE_BYTES"):
-            self.assertEqual(getattr(limits, f"MAX_CI_GIT_METADATA_{suffix}"),
-                             getattr(limits, f"MAX_CI_SOURCE_{suffix}"))
-        self.assertEqual(limits.MAX_CI_BUILD_POLLS, limits.CI_BUILD_WAIT_SECONDS // limits.CI_BUILD_POLL_SECONDS + 1)
-        self.assertEqual(limits.MAX_CI_BATCH_DOCUMENT_BYTES, limits.MAX_CI_SOURCE_LIST_BYTES)
-        self.assertEqual(limits.MAX_CI_BATCH_PATCH_FILES, 2 * limits.MAX_CI_SOURCE_FILES)
-        self.assertEqual(limits.MAX_CI_BATCH_PATCH_ENTRIES, 2 * limits.MAX_CI_SOURCE_ENTRIES)
-        self.assertEqual(limits.MAX_CI_BATCH_PATCH_PATH_BYTES, 2 * limits.MAX_CI_SOURCE_LIST_BYTES)
-        depth = limits.MAX_BUNDLE_PATH_DEPTH + 1
-        self.assertEqual(limits.MAX_CI_TARGET_INPUT_ENTRIES,
-                         (limits.MAX_CI_EXPORT_FILES + limits.MAX_CI_TARGETS) * depth + 1)
-        self.assertEqual(limits.MAX_CI_RUNTIME_ROOT_REQUEST_BYTES,
-                         limits.MAX_CI_ROOT_REQUEST_BYTES + limits.MAX_CI_RUNTIME_ENVELOPE_BYTES)
-        self.assertEqual(limits.MAX_CI_RUNTIME_ENTRIES, (limits.MAX_CI_RUNTIME_AGGREGATE_FILES + 1) * depth + 1)
-        self.assertEqual(limits.MAX_CI_ORIGINAL_INPUT_ENTRIES,
-                         limits.MAX_CI_EXPORT_ENTRIES + limits.MAX_CI_RUNTIME_ENTRIES + 1)
-        self.assertEqual(limits.MAX_CI_EXECUTION_LOG_CHARS, 4 * ((limits.MAX_CI_LOG_BYTES + 2) // 3))
-        self.assertEqual(limits.MAX_CI_EXECUTION_BYTES, limits.MAX_CI_EXECUTION_LOG_CHARS + 64 * KIB)
+    def test_derived_bounds_follow_their_formulas(self) -> None:
+        for name, (value, _words, formula) in DERIVED.items():
+            with self.subTest(name=name):
+                self.assertEqual(formula(), value)
 
     def test_the_wait_is_a_ceiling_the_polling_cannot_outlast(self) -> None:
         # Every pause but the last is a whole interval, so the polls end within the native 5400 s.
@@ -392,8 +386,10 @@ class MeasuredTest(unittest.TestCase):
                 self.assertLessEqual(bundle["files"], limits.MAX_CI_EXPORT_FILES)
                 self.assertLessEqual(bundle["expanded_bytes"], limits.MAX_CI_EXPORT_TREE_BYTES)
                 self.assertLessEqual(bundle["largest_jar_bytes"], limits.MAX_CI_JAR_BYTES)
-                reports = [*bundle["other_files"].values(), *([build["report"]["bytes"]] if "report" in build else [])]
-                self.assertLessEqual(max(reports), limits.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE[profile])
+                # Every native file beside the JARs: the manifest, Quick Skin's SBOM and Block Pops'
+                # build report (1.3 MiB of its 8 MiB).
+                beside = [*bundle["other_files"].values(), *([build["report"]["bytes"]] if "report" in build else [])]
+                self.assertLessEqual(max(beside), limits.MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE[profile])
 
     def test_real_lanes_fit_the_lane_caps_with_every_scenario_counted_together(self) -> None:
         for profile in ci_native.profiles():
