@@ -29,6 +29,7 @@ from __future__ import annotations
 from typing import Any
 
 from mod_base import readable_schema_versions
+from mod_base.build_ci.protocol import PROFILES
 from mod_base.model import grammar
 from mod_base.model import limits as lim
 from mod_base.model.canonical import strict_loads
@@ -76,7 +77,7 @@ _ACTIVATION = Obj({
     "schema_version": Int(min(readable_schema_versions(ACTIVATION_KIND)),
                           max(readable_schema_versions(ACTIVATION_KIND))),
     "repository": Str(grammar.REPOSITORY, max_len=201),
-    "profile": Str(choices=("quick-skin", "block-pops")),
+    "profile": Str(choices=PROFILES),
     "mode": Str(choices=ACTIVATION_MODES),
     "rollback_from": Nullable(Str(choices=ROLLBACK_SOURCES)),
 })

@@ -9,11 +9,9 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 
+from mod_base.build_ci.protocol import PROFILES
 from mod_base.errors import MbError
 from mod_base.model import limits
-
-
-POLICY_PROFILES = ("block-pops", "quick-skin")
 
 
 class PolicyError(MbError):
@@ -42,7 +40,7 @@ def admit_policy_unit(*, profile: str, discovered: int, repeat: int,
     tests_run and complete discovery/worker results. Matching constructed counts are not proof.
     """
 
-    if (type(profile) is not str or profile not in POLICY_PROFILES
+    if (type(profile) is not str or profile not in PROFILES
             or type(discovered) is not int or not 1 <= discovered <= limits.MAX_CI_POLICY_TESTS
             or type(repeat) is not int or not 1 <= repeat <= discovered or discovered % repeat
             or type(fixture) is not bool or type(counts) is not PolicyCounts):

@@ -2263,7 +2263,6 @@ Owner: MB11. Native policy-runner count parity and bounded UTF-8 diagnostics. Di
 suite execution belong only in credentialless disposable workers; these in-process counts do
 not authenticate candidate reports, protected source provenance, native policy or statuses.
 
-* `POLICY_PROFILES`: Closed block-pops/quick-skin count/discovery profiles; kit defaults stay strict.
 * `class PolicyError(MbError)`
 * `class PolicyCounts`
   * fields: `tests_run: int, failures: int, errors: int, skipped: int, class_skips: int, expected_failures: int, unexpected_successes: int, successful: bool`

@@ -40,8 +40,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mod_base.build_ci.policy import (POLICY_PROFILES, BoundedPolicyStream, PolicyCounts,
-                                       PolicyError, admit_policy_unit)
+from mod_base.build_ci.policy import BoundedPolicyStream, PolicyCounts, PolicyError, admit_policy_unit
+from mod_base.build_ci.protocol import PROFILES
 from mod_base.model.limits import MAX_CI_POLICY_TESTS, MAX_CI_POLICY_WORKERS
 
 SEPARATOR = "-" * 70
@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("starts", nargs="+", metavar="START_DIRECTORY")
     parser.add_argument("-p", "--pattern", default="test_*.py")
     parser.add_argument("-t", "--top-level-directory", type=Path)
-    parser.add_argument("--policy-profile", choices=POLICY_PROFILES, default="block-pops")
+    parser.add_argument("--policy-profile", choices=PROFILES, default="block-pops")
     parser.add_argument("-j", "--jobs", type=int, default=_default_jobs())
     parser.add_argument("-v", "--verbose", action="store_const", const=2, default=1)
     parser.add_argument("--slowest", type=int, default=10, help="units listed in the timing table")
