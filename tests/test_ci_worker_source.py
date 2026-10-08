@@ -10,7 +10,8 @@ from mod_base.build_ci import worker_source as source
 from mod_base.build_ci.source import GitSourceEntry
 from mod_base.build_ci.worker import WorkerError
 from tests.test_ci_gradle_cache import ACCOUNT
-from tests.test_ci_python_installation import BOUNDARY, info
+from tests.helpers import ci_stat as info
+from tests.test_ci_host import BOUNDARY
 
 
 ROOT = Path('/home/runner/candidate')

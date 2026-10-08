@@ -321,7 +321,7 @@ Integration-round amendments:
 | MB9 | `mod_base.pin`, `mod_base.pin_commands`, `mod_base.template.tool`, `mod_base.template.commands`, `mod_base.template.lock` |
 | MB10 | `mod_base.conformance.run`, `mod_base.conformance.commands` |
 | MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject` |
-| MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.installation`, `mod_base.build_ci.installation_schema`, `mod_base.build_ci.installation_record`, `mod_base.build_ci.bootstrap_installation`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.privileged_launch`, `mod_base.build_ci.python_archive`, `mod_base.build_ci.python_installation`, `mod_base.build_ci.python_transport`, `mod_base.build_ci.python_setup`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff`, `mod_base.build_ci.runtime_root_request_schema`, `mod_base.build_ci.runtime_root_request` |
+| MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.root_request_operations`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -551,11 +551,8 @@ Constants:
 * `CI_GATE_NAME`: fixed single root filename of a tested gate-record ZIP.
 * `CI_VALIDATION_NAME`: reserved verifier output record filename.
 * `CI_EXECUTION_NAME`: fixed private local runner-to-root execution record filename.
-* `CI_KIT_INSTALLATION_NAME`: fixed private root installation record filename.
-* `CI_BOOTSTRAP_PROGRAM_NAME`: fixed private bootstrap program filename.
-* `CI_ROOT_REQUEST_NAME`: fixed local root-freeze request filename.
-* `CI_RUNTIME_ROOT_REQUEST_NAME`: separate fixed local runtime Root request filename.
-* `CI_RUNTIME_FREEZE_OPERATION`: closed runtime process capability `runtime-validation-v1`; independently enrolled caller selects it explicitly, never request data.
+* `CI_ROOT_REQUEST_NAME`: fixed file name of the one private request inside a root operation's request directory.
+* `CI_ROOT_OPERATIONS`: the closed, ordered set of operations the root bootstrap dispatches (`tools/ci_privileged_bootstrap.py` mirrors it without importing the kit). A request never selects code outside this set.
 * `CI_PLAN_NAME`: fixed existing-kind plan filename for protected verifier input.
 * `CI_ARTIFACT_PREFIXES`: separate attempt-specific CI name prefixes, excluded from the Pages parser.
 * `class CIArtifactName`
@@ -698,20 +695,13 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_ADAPTER_FILE_BYTES`, `MAX_CI_ADAPTER_TREE_BYTES`
 * `MAX_CI_ENV_VALUE_BYTES`, `MAX_CI_ENV_BYTES`, `MAX_CI_CONTROL_OUTPUT_BYTES`, `MAX_CI_TOOL_PATH_BYTES`
 * `MAX_CI_TOOL_ROOTS`, `MAX_CI_TOOL_SYMLINK_HOPS`, `MAX_CI_TOOL_TREE_DEPTH`
-* `MAX_CI_KIT_INSTALL_FILES`, `MAX_CI_KIT_INSTALL_BYTES`, `MAX_CI_KIT_INSTALL_ENTRIES`
-* `MAX_CI_KIT_INSTALL_RECORD_BYTES`, `MAX_CI_FILE_ID`
-* `MAX_CI_PYTHON_ARCHIVE_BYTES`, `MAX_CI_PYTHON_EXPANDED_BYTES`: Separate 128 MiB compressed and 512 MiB decompressed installer-inspection caps; no native, kit or artifact bound changes.
-* `MAX_CI_PYTHON_COMPRESSION_RATIO`: Separate 200:1 whole decompressed GNU TAR to approved compressed-byte ratio cap, including headers and padding.
-* `MAX_CI_PYTHON_LOCK_BYTES`: Separate 4 KiB admitted Python archive-lock read cap.
-* `MAX_CI_PYTHON_RELEASE_ASSETS`: Separate 128-entry publisher release membership cap; duplicate IDs or names reject.
-* `MAX_CI_PYTHON_ARCHIVE_HEADERS`, `MAX_CI_PYTHON_TAR_PADDING_BYTES`: Separate 20,000 nonzero GNU TAR headers (including long-name metadata) and 10 KiB terminal zero padding.
-* `MAX_CI_BOOTSTRAP_BYTES`, `MAX_CI_BOOTSTRAP_LOCK_BYTES`: Separate 256 KiB fixed-program and 1 MiB admitted tools-lock caps; no native/artifact bound changes.
-* `MAX_CI_ROOT_REQUEST_BYTES`: Separate local metadata request cap: existing plan plus envelope caps, 2 MiB source metadata allowance and 64 KiB framing. No native or artifact cap is enlarged.
-* `MAX_CI_RUNTIME_ROOT_REQUEST_BYTES`: Separate runtime Root metadata cap: existing Build request allowance plus the original runtime envelope cap. Native/file/artifact limits are unchanged.
+* `MAX_CI_KIT_INSTALL_FILES`, `MAX_CI_KIT_INSTALL_BYTES`, `MAX_CI_KIT_INSTALL_ENTRIES`: Bounds of one kit tree (the checkout the root bootstrap hashes and the overlay staged for a candidate); they equal the kit-digest-v1 bounds of `mod_base.pin`.
+* `MAX_CI_FILE_ID`
+* `MAX_CI_ROOT_REQUEST_BYTES`: Cap of one private root request: twice the source-listing cap (a tested-tree inventory as JSON rows), the plan, Build envelope, runtime envelope and record caps and 2 MiB of framing. No native or artifact cap is enlarged.
 * `MIN_CI_WORKER_UID`, `CI_TERMINATION_GRACE_SECONDS`, `CI_TERMINATION_POLL_SECONDS`
 * `MAX_CI_UNIX_ID`
 * `MAX_CI_COMMAND_ARGUMENTS`, `MAX_CI_COMMAND_BYTES`, `CI_PROCESS_READ_BYTES`
-* `CI_PRIVILEGED_ENTRY_TIMEOUT_SECONDS`: Separate fixed root sealing-process bound of 20 seconds; no worker/domain hook timeout changes.
+* `CI_ROOT_OPERATION_TIMEOUT_SECONDS`, `MAX_CI_ROOT_DIAGNOSTIC_BYTES`: The 1800-second bound of one root operation process (the bootstrap arms the same alarm on itself) and the 4 KiB of its stderr the launching runner keeps for its own single error line. No worker or hook timeout changes.
 * `MAX_CI_SOURCE_LIST_BYTES`, `MAX_CI_SOURCE_FILES`, `MAX_CI_SOURCE_ENTRIES`
 * `MAX_CI_SOURCE_FILE_BYTES`, `MAX_CI_SOURCE_TREE_BYTES`, `MAX_CI_SOURCE_LINK_BYTES`
 * `MAX_CI_GIT_METADATA_FILES`, `MAX_CI_GIT_METADATA_ENTRIES`, `MAX_CI_GIT_METADATA_FILE_BYTES`
@@ -1020,7 +1010,6 @@ Constants:
   * `post_json(self, path: str, payload: Mapping[str, Any]) -> Any`: POST canonical JSON; requires ``writable``. Returns decoded JSON or None for 204.
   * `delete(self, path: str) -> None`: DELETE ``path``; requires ``writable``. 204 is success; anything else raises.
   * `download(self, path: str, *, max_bytes: int) -> bytes`: GET a binary endpoint (artifact ZIP) that answers with one redirect: the redirect is followed exactly once to an https URL with the ``Authorization`` header stripped; the body is read to at most ``max_bytes``.
-  * `download_release_asset(self, repository: str, asset_id: int, *, max_bytes: int) -> bytes`: Numeric release asset download with octet-stream negotiation, direct HTTP 200 or exactly one HTTP 302 to credential-free HTTPS storage, bounded reads/retries/request budget. Caller separately authenticates metadata and expected bytes.
   * `rate_limit_snapshot(self) -> dict[str, int]`: ``GET /rate_limit`` projected to numeric ``core`` counters: ``limit``, ``used``, ``remaining``, ``reset`` (the ``budget`` command; never tokens or headers).
 * `def listing_retry_delay(attempt: int) -> float`: The wait before re-reading an inconsistent listing after its read ``attempt`` (0-based): ``limits.LISTING_RETRY_DELAY_SECONDS`` doubling per re-read, at most ``limits.MAX_LISTING_RETRY_DELAY_SECONDS``.
 * `def read_consistently(read: Callable[[], _T], *, sleep: Callable[[float], None]) -> _T`: ``read()``, one complete listing from its first page, until it returns a consistent snapshot: an :class:`InconsistentListing` is read again after :func:`listing_retry_delay`, at most ``limits.LISTING_READ_ATTEMPTS`` times in all, and the last one fails closed; every read spends the client's request budget.
@@ -1128,8 +1117,6 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
   * `post_json(self, path: str, payload: Mapping[str, Any]) -> Any`
   * `delete(self, path: str) -> None`
   * `download(self, path: str, *, max_bytes: int) -> bytes`
-  * `download_release_asset(self, repository: str, asset_id: int, *, max_bytes: int) -> bytes`
-  * `add_release_asset(self, repository: str, asset_id: int, data: bytes) -> None`: Seed bounded raw bytes independently of JSON producer metadata; simulates a direct HTTP 200 download spending one request.
   * `rate_limit_snapshot(self) -> dict[str, int]`
 
 ## `mod_base.github.commands`
@@ -2021,7 +2008,6 @@ Receipts are retained protected in-memory API evidence; candidate-supplied recei
 * `def materialize_controller_sources(output: Path, *, sources: ControllerSources, identity: dict[str, Any]) -> dict[str, Any]`: Prevalidate retained protected byte evidence, write exclusive descriptor-relative regular files into a private stage, independently verify the exact copy and publish atomically without replacing an existing output. Protected-parent ownership and authentic receipt retention remain caller obligations.
 * `def prepare_controller_validation(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, identity: dict[str, Any]) -> dict[str, Any]`: Protected-root-only fixed source handoff; authenticate host/accounts/layout, terminate candidate, verify private bytes/modes, grant only validator-group reads and recheck normalized regular modes, hashes/inode/host. Accepted-copy failure restores private traversal. Import enrollment, provenance and native execution/sealing remain required.
 * `def execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolTreeProof, plan: dict[str, Any], hook: str, unit_id: str | None, python: str, java_home: str | None, run_id: int, run_attempt: int) -> WorkerResult`: Fixed validator hook execution using protected source config/dispatcher/timeout, exact plan unit selection, metadata/byte/host checks before and after, existing tool fence and mandatory final UID termination. Caller must authenticate installer/import closure and native inputs; exit zero/logs do not confer receipt/upload/status authority.
-* `def execute_byte_fenced_controller_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolBytesProof, expected_digest: str, plan: dict[str, Any], hook: str, unit_id: str | None, python: str, java_home: str | None, run_id: int, run_attempt: int) -> WorkerResult`: Additive MB11 closed-hook route sharing original plan/config/profile/unit/account/source admission and pre/post controller-copy checks. Require a separately approved tool digest and byte receipt without metadata fallback; select full byte reauthentication around existing fenced execution/UID termination and retain mandatory final validator cleanup. Native immutable inputs, original caller/runtime, complete import/system enrollment and receipt/API authority remain separate prerequisites; no frozen-input/workflow activation or Linux completion claim.
 
 ## `mod_base.build_ci.inputs`
 
@@ -2037,8 +2023,6 @@ required. These helpers do not authorize uploads, workflow execution or status p
 * `def prepare_validation_plan(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any]) -> dict[str, Any]`: Root-only fixed plan read handoff; authenticate host/layout/accounts, terminate candidate, check bytes, grant only validator-group reads and recheck metadata/inode/bytes. Failures restore admitted copy traversal to private.
 * `def execute_frozen_build_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolTreeProof, plan: dict[str, Any], envelope: dict[str, Any], python: str, java_home: str | None, run_id: int, run_attempt: int) -> BuildValidationExecution`: Same-producer aggregate verification only. Require complete retained envelope and exact run/attempt, authenticate fixed plan/Build metadata/bytes and stable directory identities before and after closed protected verify_build execution; always terminate admitted validator. Return retained execution plus canonical envelope input digest for output freezing. Native semantics/provenance and final authority remain separate.
 * `def execute_frozen_target_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolTreeProof, plan: dict[str, Any], envelope: dict[str, Any], target_id: str, python: str, java_home: str | None, run_id: int, run_attempt: int) -> BuildValidationExecution`: Require the exact protected enrolled target partition and same producing run/attempt; use the shared fixed read-only plan/Build input lifecycle, closed verify_target/unit execution and mandatory validator termination. Retain actual execution and canonical partition digest for output freezing. Complete or other-target bundles cannot substitute; native semantics/provenance/API authority remain separate.
-* `def execute_byte_fenced_build_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolBytesProof, expected_digest: str, plan: dict[str, Any], envelope: dict[str, Any], python: str, java_home: str | None, run_id: int, run_attempt: int) -> BuildValidationExecution`: Additive complete same-producer Build input route with separately approved byte digest. Preserve account separation, canonical plan/envelope validation, fixed input read-only metadata/bytes and original directory identities around byte-fenced protected controller execution. Return retained execution and canonical input digest only after final input identity recheck; always terminate validator. No missing-digest metadata fallback, native semantics, receipt authority or workflow activation.
-* `def execute_byte_fenced_target_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolBytesProof, expected_digest: str, plan: dict[str, Any], envelope: dict[str, Any], target_id: str, python: str, java_home: str | None, run_id: int, run_attempt: int) -> BuildValidationExecution`: Same stronger frozen-input lifecycle for exactly the enrolled target partition and same producer run/attempt. Preserve closed verify_target/unit selection, input identities and canonical partition digest; reject byte/source/input drift and terminate validator. Complete/foreign-target inputs cannot substitute; independent caller/runtime/native/API prerequisites remain.
 * `def freeze_frozen_build_validation(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, bound: BuildValidationExecution, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int) -> dict[str, Any]`: Root-only receipt freeze tied to retained successful execution and the exact canonical input digest/producer attempt. Derive closed hook/unit from the independently retained complete/target envelope, snapshot plan/envelope and inspect read-only input bytes/metadata/inodes before and after independent validation export freeze. Reject disappearance/substitution/drift; always quiesce admitted validator. Genuine protected execution/source provenance remains required across privilege transition; constructible values, private copies or a matching receipt never establish native/API/upload/status authority alone. On late failure a private freeze copy may remain; do not consume it or upload after failure.
 
 ## `mod_base.build_ci.policy`
@@ -2138,6 +2122,7 @@ stage authenticated copies or complete the worker lifecycle; required Linux evid
   * fields: `home: str, uid: int, gid: int, device: int, inode: int, original_mode: int`
 * `def protect_worker_host(*, runner_environment: str, runner_home: str, workspace: str, runner_temp: str) -> HostBoundary`: Authenticate the initial runner-owned hosted layout and close home traversal to 0700. Failures after chmod keep it private.
 * `def authenticate_host_boundary(boundary: HostBoundary) -> None`: Recheck the exact private runner-home inode before admitting either disposable UID.
+* `def privileged_runner_identity() -> tuple[int, int]`: Root-only. The `(uid, gid)` of the passwd account that owns the fixed runner home, derived from the filesystem and passwd and never from a request. It names an account; it is not a host fence receipt.
 * `def authenticate_privileged_host_boundary(boundary: HostBoundary) -> None`: Recheck a bounded nonprivileged runner receipt against actual passwd/home identity from protected Linux root setup; never admits a worker or selects arbitrary owner identities.
 * `def execute_isolated_worker(account: WorkerAccount, *, boundary: HostBoundary, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Recheck the host fence before dispatching the bounded worker; failed admission terminates/locks the UID without launching.
 
@@ -2151,106 +2136,42 @@ or compiler semantics. Protected setup and actual hosted Linux evidence remain r
 * `TOOL_LINK_PREFIXES = ('/opt/hostedtoolcache', '/usr/lib/jvm', '/usr', '/lib', '/lib64', '/etc')`
 * `class ToolTreeProof`: Immutable metadata receipt; not a content digest or build authority.
   * fields: `roots: tuple[str, ...], metadata_sha256: str, files: int, entries: int, total_bytes: int`
-* `class ToolBytesProof`: Frozen full selected-closure byte digest bound to retained tool metadata; independently approved installer/source digest remains a caller prerequisite.
-  * fields: `tools: ToolTreeProof, digest: str`
-* `def authenticate_toolchain_bytes(proof: ToolTreeProof, *, boundary: HostBoundary, expected_digest: str, privileged: bool = False) -> ToolBytesProof`: Authenticate the explicit runner/root host role, retained permission/identity closure and independently approved full tool byte digest. Stream every single-link regular file with no-follow stable descriptors, preserve empty files, bind roots/paths/modes/link targets, and reinspect metadata after bytes. Never execute/install a tool, approve an observed digest or discover a complete interpreter/import/ELF closure.
 * `def inspect_worker_toolchains(*, boundary: HostBoundary, roots: tuple[str, ...]) -> ToolTreeProof`: Inspect every selected root, link target and ancestor under global limits, rejecting foreign owners, writable directories/files and special entries.
 * `def authenticate_toolchains(proof: ToolTreeProof, *, boundary: HostBoundary) -> None`: Reinspect the full closure and reject metadata/permission drift.
 * `def execute_tool_fenced_worker(account: WorkerAccount, *, boundary: HostBoundary, tools: ToolTreeProof, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Bind Python/JDK paths and their resolved destinations to explicitly admitted roots, require a nonempty worker-executable regular Python file and worker-traversable JAVA_HOME directory, recheck tool and host fences, and terminate/lock without dispatch on failed admission.
-* `def execute_byte_fenced_worker(account: WorkerAccount, *, boundary: HostBoundary, tools: ToolBytesProof, expected_digest: str, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Additive MB11 `mod_base.build_ci.toolchain` route. Authenticate the actual runner fence/disposable account; require a retained byte receipt matching separately approved digest; reauthenticate every selected tool byte before metadata/path/host-fenced execution and again after successful whole-UID termination. Reject drift or invalid admission and terminate/lock the admitted account. Original caller/runtime, complete import/system enrollment, prepared source/cache/overlay, excluded writers and native request remain caller prerequisites; no observed hash approval, export/upload authority, production wiring or full Linux lifecycle proof.
-
-## `mod_base.build_ci.installation`
-
-Owner: MB11. Inactive root-owned kit import copy. Independent caller pin/digest admission,
-trusted interpreter/stdlib/installer enrollment and independent root-program admission remain prerequisites.
-It imports no copied Python and confers no execution, release, native-validity or App authority.
-
-* `PRIVILEGED_KIT_ROOT`: Fixed `WORKER_ROOT / 'privileged-kit'` POSIX directory.
-* `class KitInstallation`: Frozen digest/count/root-inode data, not a pin authorization.
-  * fields: `kit_sha: str, kit_version: str, digest: str, files: int, total_bytes: int, device: int, inode: int`
-* `def install_privileged_kit(invocation: Invocation, *, boundary: HostBoundary, expected_digest: str) -> KitInstallation`: Require root role and fenced runner-home source, independently approved kit digest, bounded no-follow discovery and a new fixed private root-owned copy of exactly the three kit-digest roots. Preserve empty source leaves; reject links, executable/special files, bytecode and .pth files. Reinspect copy/source/root identity before exclusive publication. No Git metadata or other kit roots are installed.
-* `def authenticate_privileged_kit(installation: KitInstallation, *, boundary: HostBoundary) -> None`: Recheck fixed layout, original root identity, exact three-root shape, root-owned 0700 directories/0600 single-link files with no ACLs, complete digest/counts and root stability. A constructed receipt is not source/pin/import provenance.
-
-## `mod_base.build_ci.bootstrap_installation`
-
-Owner: MB11. Private fixed program bytes bound to the already admitted executing kit tools lock.
-Independent pin/source/program execution provenance and interpreter/stdlib enrollment remain
-caller obligations. No copied code executes here; constructed installation data is not authority.
-
-* `PRIVILEGED_BOOTSTRAP_ROOT`: Fixed WORKER_ROOT / 'privileged-bootstrap' POSIX directory.
-* `class BootstrapInstallation`: Frozen program hash/size/original root data.
-  * fields: `sha256: str, size: int, device: int, inode: int`
-* `def install_privileged_bootstrap(invocation: Invocation, *, boundary: HostBoundary, installation: KitInstallation) -> BootstrapInstallation`: Require protected root role, actual admitted kit reauthentication and matching validated invocation. Read the fixed program from fenced source, require its SHA-256 in the copied kit's sorted unique staged tools lock, exclusively publish root-private bytes and independently recheck source/stage/kit/lock/root identity. Never overwrite or execute a program.
-* `def authenticate_privileged_bootstrap(program: BootstrapInstallation, *, boundary: HostBoundary, installation: KitInstallation) -> None`: Reauthenticate the actual admitted kit and lock, fixed original program root, exact private metadata/ACLs and bounded no-follow program bytes/hash/size, with bytes and root rechecks around kit admission. No path or program is selected by data.
 
 ## `mod_base.build_ci.root_request_schema`
 
-Owner: MB11. Local closed metadata-only request for fixed Build validation sealing. Structure
-cannot establish source, account, pin or successful execution provenance; physical channel
-publication/admission and fixed production operation integration remain required.
+Owner: MB11. The closed `mod-base.ci.root-request` v1 document: one private request of one root
+operation. Its `operation` is a member of `grammar.CI_ROOT_OPERATIONS` and its `arguments` are a
+closed object per operation; no field holds a program, a hook or a destination path. Validation
+proves shape and internal consistency only.
 
-* `def validate_root_request(document: Any, *, path: str = "$") -> dict[str, Any]`: Strict new local v1 kind with separate entry/execution nonces, retained boundary and validator identity, source file metadata, existing plan/envelope and producer attempt. Enforce source/count/byte caps, no Git internals, controller/producer/plan cross-binding and runner/validator separation. No program/command/permissions or selected import/upload path exists.
-
-## `mod_base.build_ci.runtime_root_request_schema`
-
-Owner: MB11. Initial closed runtime Root context data, separate from unchanged Build request v1.
-
-* `def validate_runtime_root_request(document: Any, *, path: str = '$') -> dict[str, Any]`: validates the bounded original plan, complete owning Build, exact runtime lane/producing attempt, closed source/account metadata and distinct entry/execution nonces. Cross-run owning Build is preserved. Structural data never admit physical provenance, executable code, native reports or independent Root enrollment.
-
-## `mod_base.build_ci.runtime_root_request`
-
-Owner: MB11. Separate fixed private runtime context channel and Root sealing composition.
-Original protected source/API/execution provenance, independent program/interpreter/caller enrollment
-and actual native/hosted/workflow admission remain prerequisites. No request selects code or paths.
-
-* `RUNTIME_ROOT_REQUEST_ROOT`: fixed private runtime Root request directory under WORKER_ROOT.
-* `class RuntimeRootFreezeContext` (frozen dataclass)
-  * fields: `sources: ControllerSources, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int, execution_nonce: str`
-* `def record_runtime_root_freeze_request(invocation: Invocation, *, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int, execution_nonce: str) -> str`: runner-only exclusive publication of original bounded three-input snapshots/source metadata with a fresh distinct entry nonce; closes source/input identities, original caller and staged bytes before atomic publication.
-* `def read_runtime_root_freeze_request(invocation: Invocation, *, boundary: HostBoundary, validator: WorkerAccount, nonce: str) -> RuntimeRootFreezeContext`: Root-only fixed physical channel admission, canonical/nonce/host/validator/invocation/installed-kit checks and actual protected source reconstruction; rechecks original source and all three input identities/bytes before return.
-* `def freeze_root_requested_runtime_validation(invocation: Invocation, *, boundary: HostBoundary, validator: WorkerAccount, nonce: str) -> dict[str, Any]`: fixed runtime receipt composition using the original execution nonce; re-admits the request and compares retained byte signatures after sealing, rejects caller drift and always terminates the admitted validator. Failed private receipts must never be consumed/uploaded.
+* `def validate_root_request(document: Any, *, path: str = "$") -> dict[str, Any]`: Require the kind, version, a closed operation, a 64-hex nonce, the runner's host boundary and exactly that operation's arguments. An account named in the arguments must differ from the runner in uid and gid. `freeze-build-validation` carries the validator, controller source metadata, plan, Build envelope, producing run/attempt and the execution nonce (distinct from the request nonce); `freeze-runtime-validation` carries the same with the complete owning Build, the lane's runtime envelope and the lane id. Source, plan and envelope caps of the existing kinds apply unchanged.
 
 ## `mod_base.build_ci.root_request`
 
-Owner: MB11. Fixed private runner-origin context channel and Build sealing operation.
-Genuine original API/source/plan/execution provenance, independent bootstrap/interpreter
-enrollment and production command/workflow integration remain caller obligations.
+Owner: MB11. The private runner-to-root channel (D3 of the Build/E2E architecture). The runner
+publishes one canonical request per operation in its own directory below the worker root (0700
+directory, 0600 single-link file, never replaced) and starts the kit's root bootstrap for it. Root
+derives the runner from the host, re-reads the request through the private record reader and
+admits the live host fence before any operation runs. A request is data: it selects no code and
+proves no provenance. Root never calls the GitHub API.
 
-* `ROOT_REQUEST_ROOT`: Fixed WORKER_ROOT / 'root-request' POSIX directory.
-* `def build_root_freeze_invocation(*, boundary: HostBoundary, controller_root: str, repository: str, controller_sha: str, kit_sha: str) -> Invocation`: Closed composition root after independent package loading. Authenticate root host, canonical runner-owned checkout behind the fixed home fence, admitted kit SHA/version and bounded no-follow default configuration. Use the existing Invocation factory with only explicit identity environment, copied kit root and no repository code execution. Recheck config bytes and named checkout identity; independent original checkout/pin/controller provenance remains the protected caller's obligation.
-* `class RootFreezeContext`: Frozen retained context data reconstructed from the actual protected copy; not authority from its constructor.
-  * fields: `sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int, execution_nonce: str`
-* `def record_root_freeze_request(invocation: Invocation, *, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int, execution_nonce: str) -> str`: Runner-only bind genuine retained sources/plan/envelope/attempt to matching validated controller/kit invocation, actual accounts and fixed read-only copies. Publish one canonical private fixed record atomically without replacement, with input/source/role/bytes rechecks; return a separate fresh entry nonce.
-* `def read_root_freeze_request(invocation: Invocation, *, boundary: HostBoundary, validator: WorkerAccount, nonce: str) -> RootFreezeContext`: Root-only admit fixed runner-owned private canonical request and exact external nonce, matching host/validator/invocation/actual kit installation. Reconstruct source bytes only from fixed protected controller copy, validate Git/SHA hashes/native config/complete inventory, recheck source/input root identities and record bytes, and return data without importing domain code.
-* `def freeze_root_requested_build_validation(invocation: Invocation, *, boundary: HostBoundary, validator: WorkerAccount, nonce: str) -> dict[str, Any]`: Fixed root operation admits physical context, delegates the original execution-nonce-bound independent receipt sealing and repeats complete context admission around it. Terminates the authenticated validator on every operation exit. No context selects a program/hook/upload root.
+* `ROOT_PROGRAM = 'tools/ci_privileged_bootstrap.py'`
+* `def root_request_path(operation: str) -> PurePosixPath`: The fixed `WORKER_ROOT / 'root-request-<operation>'` directory of one closed operation; any other name is rejected.
+* `def request_build_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int, execution_nonce: str) -> str`: Runner-only. Publish the `freeze-build-validation` request for the retained source receipt, plan, frozen Build and the nonce of the published execution record; the controller copy and both read-only inputs are inspected before and inside publication. Returns the request nonce.
+* `def request_runtime_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int, execution_nonce: str) -> str`: Runner-only. Publish the `freeze-runtime-validation` request for one lane, keeping the complete owning Build's own cross-run identity; the caller's three documents are canonicalised once and compared again inside publication together with all three input roots. Returns the request nonce.
+* `def run_root_operation(operation: str, *, python: str, kit_root: Path, kit_digest: str, nonce: str) -> None`: Runner-only. Run `/usr/bin/sudo -n -- <python> -I -B -S <kit_root>/tools/ci_privileged_bootstrap.py --operation <operation> --kit <kit_root> --kit-digest <kit_digest> --nonce <nonce>` with a fixed environment, the worker root as working directory and no inherited descriptors, bounded by `CI_ROOT_OPERATION_TIMEOUT_SECONDS`. `kit_root` and `kit_digest` are the checkout and digest the job prologue verified. A non-zero exit, a timeout or a signal raises with the child's first bounded stderr line.
+* `def read_root_request(operation: str, *, nonce: str) -> tuple[HostBoundary, dict[str, Any], bytes]`: Root-only. Derive the runner from the fixed home, read the private canonical request of exactly this operation and nonce, require its boundary to name that runner and to be the live fenced home, and check the worker root layout. Returns the boundary, the closed arguments and the record bytes.
 
-## `mod_base.build_ci.privileged_launch`
+## `mod_base.build_ci.root_request_operations`
 
-Owner: MB11. Fixed root process launch after independently approved original caller,
-installer and complete interpreter/import/system closure; proof constructors do not approve them.
+Owner: MB11. The closed set of root operations behind the request channel; the only kit entry of
+`tools/ci_privileged_bootstrap.py`. Operations rebuild their inputs from the request's closed data
+and from protected copies on disk.
 
-* `PRIVILEGED_FREEZE_FLAGS`: Exact ordered flag contract mirrored by the standalone installed guard; no operation, command or argument passthrough.
-* `PRIVILEGED_RUNTIME_FREEZE_FLAGS`: Separate exact runtime flag contract, adding only leading `--operation runtime-validation-v1`; legacy Build pairs are unchanged. Unknown operation/version/flag/order rejects before kit loading.
-* `def execute_privileged_runtime_freeze_request(invocation: Invocation, *, boundary: HostBoundary, installation: KitInstallation, program: BootstrapInstallation, tools: ToolBytesProof, python: str, nonce: str) -> dict[str, Any]`: explicit Root runtime process with fixed -I/-B/-S bootstrap, independent original request/source/three-input byte signatures and domain-separated input digest. Re-admit program/tools/context after process and during parent receipt reading; independently read exact private runtime receipt twice, retain original root identity and always quiesce the admitted validator. Constructors/exit/observed hashes confer no native or process approval.
-* `def execute_installed_python_runtime_freeze_request(invocation: Invocation, *, boundary: HostBoundary, installation: KitInstallation, program: BootstrapInstallation, tools: ToolBytesProof, python: PythonInstallation, nonce: str) -> dict[str, Any]`: explicit fixed copied-SDK runtime route with repeated source-derived SDK admission in addition to independently approved complete tool byte closure. Unsupported receipts reject before account lookup; genuine original installer/caller/program/interpreter/system provenance and actual hosted/native/workflow validity remain mandatory.
-* `def execute_installed_python_freeze_request(invocation: Invocation, *, boundary: HostBoundary, installation: KitInstallation, program: BootstrapInstallation, tools: ToolBytesProof, python: PythonInstallation, nonce: str) -> dict[str, Any]`: Additive fixed copied-SDK route. Reconstruct source-derived SDK admission around the fixed sealing process in addition to independently approved complete tool byte closure, program/context/receipt checks and validator cleanup. No alternate executable path, constructor/observed hash approval, native/App authority or completion of original caller/runtime provenance.
-* `def execute_privileged_freeze_request(invocation: Invocation, *, boundary: HostBoundary, installation: KitInstallation, program: BootstrapInstallation, tools: ToolBytesProof, python: str, nonce: str) -> dict[str, Any]`: Require actual root host/accounts, matching genuine invocation/configuration, installed lock-bound private program, retained independently approved tool bytes and enrolled executable destination before fixed -I/-B/-S launch. Use the existing bounded administrative process controller with fixed private cwd and clean host environment. Reinspect program/tool/request after successful silent exit, then independently admit exact private sealed receipt/context/report bytes and original sealed root identity. Always terminate the authenticated validator; no process exit alone establishes receipt/native/App authority. Real Linux lifecycle, installer/complete-runtime provenance and workflow integration remain prerequisites.
-
-## `mod_base.build_ci.installation_schema`
-
-Owner: MB11. Closed local-only installation record v1; no path/program/permission/status field.
-
-* `def validate_kit_installation(document: Any, *, path: str = '$') -> dict[str, Any]`: Validate fixed kit repository/ref, digest, bounded counts and unsigned 64-bit device/inode data; no physical provenance or pin authority follows from validation.
-
-## `mod_base.build_ci.installation_record`
-
-Owner: MB11. Inactive root-owned protected-caller record. Genuine retained installation/pin
-provenance and a separately enrolled interpreter/program remain mandatory. This is not a
-pre-import bootstrap; the executing caller has already admitted its kit before entering this API.
-
-* `PRIVILEGED_KIT_RECORD_ROOT`: Fixed `WORKER_ROOT / 'privileged-kit-record'` POSIX directory.
-* `def record_privileged_kit_installation(installation: KitInstallation, *, boundary: HostBoundary) -> dict[str, Any]`: Reauthenticate the actual copy before/inside new exclusive root-owned private publication of its canonical fixed-name record; never overwrite an existing record.
-* `def read_privileged_kit_installation(*, boundary: HostBoundary) -> KitInstallation`: Admit root role/layout/private single-leaf metadata, bounded stable no-follow bytes and canonical strict record, reconstruct data, reauthenticate the actual installed copy and reread the record around admission. No new pin/execution/release authority is granted.
+* `def execute_root_operation(operation: str, *, kit_root: str, kit_digest: str, nonce: str) -> None`: Require real Linux root; require the importing package to be `kit_root`'s, its kit-digest-v1 to equal `kit_digest` and its `template/`, `tools/` and `actions/` to match the staged-file locks; admit the request and the live host fence; run the one fixed operation; re-read the request unchanged. `freeze-build-validation` and `freeze-runtime-validation` require the plan to name this kit's version and digest, rebuild the source receipt from the validator's protected controller copy, authenticate the read-only inputs before and after, seal the verifier receipt bound to the published execution record and always terminate the validator.
 
 ## `mod_base.build_ci.selection`
 
@@ -2302,32 +2223,6 @@ Owner: MB11. Fixed private runner-origin execution data channel; no native/statu
 Owner: MB11. Local stored ZIP encoding of sealed exports, not upload/native/status authority.
 
 * `def encode_build_export(root: Path, output: Path, *, plan: dict[str, Any]) -> dict[str, Any]`: Verify canonical source export, stream sorted exact payload/envelope bytes through no-follow child reads into one exclusive private stored ZIP with fixed metadata and the existing 512 MiB compressed cap applied before every physical write including ZIP metadata. Independently extract/reverify the archive, recheck complete source and hash the bounded ZIP before atomic directory publication. Return local path/size/SHA-256; protect ancestry/quiescence separately. Never upload this file as an extra nested GitHub artifact or infer actual server ZIP size/digest.
-
-## `mod_base.build_ci.python_archive`
-
-Owner: MB11. Inert compressed-lock-first installer inventory; no extraction or runtime approval.
-
-* `class PythonInstallerMember`: Frozen member path/kind/source permission mode/size/content SHA-256 or link target. The explicit root directory has an empty path. File hashes include empty files; owner/mode normalization belongs to the subsequent approved installation operation.
-* `def inspect_python_installer(archive: BinaryIO, *, expected_size: int, expected_digest: str) -> tuple[PythonInstallerMember, ...]`: Require independently supplied exact compressed size/SHA-256 before decoding bounded GNU TAR/GZIP. Admit regular files, explicit directories and internal regular-file-resolving symlinks only; bound long names, depth, link hops, raw headers, expanded bytes and padding; reject aliases/traversal/duplicate paths, checksum/CRC failures, unsupported metadata/special/hard-link types and missing parents. Rehash the complete compressed stream after inventory and return sorted immutable members. Caller owns stable no-follow input identity and protected publisher/profile enrollment. No archive script executes, no source mode is applied, and no installed/runtime/system closure is approved.
-
-## `mod_base.build_ci.python_installation`
-
-Owner: MB11. Fixed archive-derived read-only installation; not runtime launch enrollment.
-
-* `PYTHON_INSTALL_ROOT`: Fixed hosted tool-cache Python parent; selected exact versions install exclusively at their compiled `x64` prefix.
-* `class PythonInstallation`: Frozen selected version/archive digest/derived manifest digest, entry/file/byte counts and retained original installation device/inode. Construction alone grants no installation, interpreter or process authority.
-* `def install_privileged_python_archive(archive: Path, *, boundary: HostBoundary, installation: KitInstallation, version: str) -> PythonInstallation`: Require root host role and a genuine byte-authenticated private kit whose bounded archive lock matches the fixed profiles. Read a stable no-follow single-link protected-home archive, authenticate its exact profile bytes, filter setup/bytecode/.pth, stream regular-file bytes into an exclusive stage, retain only contained file-resolving links and normalize root ownership and read-only public tool modes. Recheck source, kit, parent, complete actual inventory/bytes and original root identity around publication. Refuse existing destinations, execute no archive program and return no full interpreter/import/system closure approval. Original protected caller/interpreter and publisher/profile enrollment, complete runtime provenance, real Linux lifecycle and workflow integration remain prerequisites.
-
-## `mod_base.build_ci.python_transport`
-
-* `def download_python_installer(api: GitHubApi, *, version: str) -> bytes`: Fixed reviewed actions/python-versions release/asset/tag/commit/latest attempt and exact successful producer identity, checked before and after numeric-ID download and independent locked-byte inert GNU inspection. Only the three fixed Ubuntu 24.04 x64 profiles are accepted. API errors, missing digests and duplicate membership reject. Protected caller/kit/profile admission is a prerequisite; no cache publication, installation, program execution, attestation or complete runtime enrollment is established.
-
-## `mod_base.build_ci.python_setup`
-
-* `PYTHON_ARCHIVE_CACHE`: Fixed `/home/runner/.mod-base-python` root-private archive handoff directory; no shared/mutable cache reuse.
-* `def cache_privileged_python_installer(api: GitHubApi, *, boundary: HostBoundary, installation: KitInstallation, version: str) -> Path`: Require actual root fenced-home role and genuine admitted kit archive lock before network/files; admit the pinned publisher archive and publish one exclusive root-private version directory containing only root-owned mode-0600 `installer.tar.gz`. Recheck source bytes, exact file/root/parent identity, private kit/host and API producer around publication. Existing outputs reject; failures return no authority even if detected after publication. Original caller/program/runtime provenance remains an independent prerequisite.
-* `def authenticate_privileged_python_installation(proof: PythonInstallation, *, boundary: HostBoundary, installation: KitInstallation) -> str`: Read-only Root revalidation of fixed cached source and retained SDK identity. Reconstruct exact transformed inventory/manifest/counts from independently locked archive bytes, compare receipt fields and actual complete installed tree, bracket stable cache/source/prefix/SDK bindings and private host/kit. Returns only the fixed versioned executable path; constructor/observed digest alone grants nothing and complete caller/import/system closure remains independent.
-* `def install_privileged_python_from_publisher(api: GitHubApi, *, boundary: HostBoundary, installation: KitInstallation, version: str) -> PythonInstallation`: Connect numeric-ID publisher admission and private archive publication to fixed exclusive source-only Python installation, then recheck publisher/kit/host before returning. No interpreter/script execution or system-library/runtime enrollment; real Linux and production startup integration remain mandatory.
 
 ## `mod_base.build_ci.gradle_cache`
 
@@ -2474,4 +2369,4 @@ Owner: MB11. Fixed frozen inputs around the enrolled native lane verifier.
 * `class RuntimeValidationExecution`
   * fields: `execution: WorkerResult, input_sha256: str`
 * `def freeze_frozen_runtime_validation(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, bound: RuntimeValidationExecution, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int) -> dict[str, Any]`: Root-only receipt freeze bound to genuinely retained successful lane execution and the exact original canonical plan/complete owning Build/runtime context. Derive fixed verify_runtime/unit from the retained lane, quiesce the admitted validator, inspect all three fixed roots/metadata/byte inventories before and after the existing independent validation export freeze, reject directory or original caller drift and reauthenticate Root before returning. Always terminate the admitted validator; failed closing checks may leave a private copy which must not be consumed or uploaded. Bounded diagnostic truncation alone remains permitted. Constructible bound values confer no protected execution/source/native/API provenance or upload/status authority; complete independent original admission remains mandatory across privilege transition.
-* `def execute_byte_fenced_frozen_runtime_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolBytesProof, expected_digest: str, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, python: str, java_home: str | None, run_id: int, run_attempt: int) -> RuntimeValidationExecution`: Require the exact enrolled lane and current runtime producer attempt, with the complete actual owning Build bound to its whole descriptor. Snapshot bounded canonical original plan/Build/runtime data, verify all three fixed read-only roots and byte inventories before and after byte-fenced verify_runtime execution, reject directory or original caller drift and always terminate the admitted validator. Retain execution and a domain-separated context digest, including both envelopes and plan identity. Independently admitted source/API/native/tool/runtime and private writer-excluded root provenance remain mandatory. Returned constructible data confer no receipt, success, upload or status authority; downstream freezing still requires genuinely successful native execution. Diagnostic log truncation alone is not native validation failure.
+* `def execute_frozen_runtime_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolTreeProof, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, python: str, java_home: str | None, run_id: int, run_attempt: int) -> RuntimeValidationExecution`: Run the protected `verify_runtime` hook for one frozen lane through the same tool-fenced second-account route as Build verification. Requires the exact lane, its complete owning Build and the producing attempt; canonicalises the caller's plan/Build/runtime once and rejects any later change; authenticates the three read-only input roots before and after the hook and always terminates the validator. The result is execution data, not a receipt.

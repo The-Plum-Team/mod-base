@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from mod_base.build_ci import gradle_cache as cache
 from mod_base.build_ci.worker import WorkerAccount, WorkerError
-from tests.test_ci_python_installation import BOUNDARY, info
+from tests.helpers import ci_stat as info
+from tests.test_ci_host import BOUNDARY
 
 
 ACCOUNT = WorkerAccount("worker", 2001, 2001, "/tmp/mod-base-sandbox-boundary/mod-base-worker/worker-home")

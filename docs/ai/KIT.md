@@ -96,7 +96,8 @@ required before runtime transport or success. No second authored scenario catalo
 copies it through existing MB1 no-follow/atomic primitives. Recheck source and stage after final
 internal transport admission. Generic byte equality remains separate from native E2E authority.
 
-MB11 runtime_inputs binds the existing byte-fenced verify_runtime hook to three fixed frozen
+MB11 runtime_inputs binds the tool-fenced verify_runtime hook (`execute_frozen_runtime_validator`,
+the same second-account route as Build verification) to three fixed frozen
 roots and retained canonical plan/complete owning Build/exact lane bytes. Recheck metadata,
 inventories, directory identities and original caller snapshots; always terminate the admitted
 validator. Context/execution data grant no native validity, Root receipt or status authority.
@@ -116,8 +117,7 @@ Required hosted Linux runtime candidate-copy/read-grant cases preserve actual em
 data, source/owning Build binding, distinct inode/private transfer, validator-only reads and
 candidate original ownership. Real hardlinks reject before publication. Keep fresh hosted/sudo/
 account prerequisites; never execute these account tests on Windows or fake hosted environment
-flags. These synthetic physical fixtures neither enroll complete tools/runtime nor replace the
-mandatory byte-fenced runtime validator with the older metadata-only Build route.
+flags. These synthetic physical fixtures do not enroll complete tools or a native runtime.
 
 MB11 runtime_freeze binds Root-only candidate runtime copying to original successful execution,
 complete tracked-source witnesses, independently selected whole owning Build and actual lane bytes.
@@ -135,52 +135,34 @@ rereads the private original record afterward. No record chooses a program/path/
 protected provenance and independently enrolled runtime Root process/request remain required;
 constructible channel data grant no native/status authority and failed receipts are never consumed.
 
-MB11 runtime_root_request_schema owns the separate initial mod-base.ci.runtime-root-request v1
-data contract. Preserve original plan/complete cross-run owning Build/exact runtime lane and
-current producing attempt, closed source/account metadata and distinct entry/execution nonces.
-Existing Build root-request v1 is unchanged; no added field or relabeled runtime attempt is
-accepted there. runtime_root_request publishes exclusively at its separate fixed private root,
-reconstructs actual protected source bytes and three original frozen inputs under Root, and
-re-admits that request around fixed runtime receipt sealing. Close original caller snapshots and
-staged bytes before publication; reject original context changes after freezing and never consume
-a failed private receipt. Independently enrolled original program/runtime/caller and actual
-hosted/native proof remain required.
-
 MB1 bounded_zip.extract_runtime is the fixed runtime-only empty-data ZIP route. Closed lane/
 complete scope derives native payload caps centrally, with bounded central directory before
 allocation, file count before inflation, compressed cap and shared hostile ZIP validation.
 Pages/Build stay nonempty. Exact runtime envelope/native mapping/API admission is still required.
 
-`tools/ci_privileged_bootstrap.py` is the MB11 independent stdlib pre-import byte guard for the
-fixed private kit. Never add kit imports to it. Its mirrored constants/record contract require
-conformance with central grammar/limits; its own protected program/interpreter enrollment and
-production workflow admission remain separate prerequisites documented in BUILD-PROTOCOL.md.
-`build_ci.bootstrap_installation` installs/rechecks that fixed program against the already
-admitted copied kit's tools lock. It never executes the program or enrolls an interpreter.
-The independent program's `load_fixed_kit` admits bytes before explicit fixed-root package
-loading, rejects preloaded kit modules and rechecks origin/version/bytes without editing
-sys.path. Its closed process entry accepts only approved scalar identity/host observations,
-a fenced controller configuration data root and nonce, then dispatches fixed request sealing.
-Legacy Build pairs remain unchanged; the separate explicit runtime route adds only leading
---operation runtime-validation-v1. Reject unsupported selector/version/order before loading,
-import its fixed target only after byte admission and before account lookup, and never select
-code from request data. Central capability and mirrored parser/launcher contract stay tested.
-Independent program/interpreter/stdlib enrollment and production workflow integration remain open.
-`build_ci.root_request_schema` owns that entry's initial local metadata-only data contract;
-accepting it is not physical source/UID/execution admission or permission to invoke code.
-`build_ci.root_request` owns exclusive private runner publication, root-only fixed-copy
-reconstruction and the fixed receipt-sealing library operation. Its context/kit/input checks
-do not replace independent program/interpreter enrollment or production workflow admission.
-`build_ci.toolchain` keeps metadata and byte proofs separate. Byte admission requires an
-independently approved complete selected-closure digest; never promote a locally observed
-digest to installer approval or describe selected roots as complete runtime enrollment.
-`build_ci.privileged_launch` binds retained program/tool/context admission to a fixed sealing
-process and independent parent receipt reading. It requires independently approved original
-caller and complete runtime provenance; real Linux lifecycle and workflow wiring remain open.
-Runtime parent launch additionally retains original three-input byte signatures, re-admits
-request/program/tools/SDK around parent receipt reading and verifies original private receipt
-bytes twice under the existing runtime context digest. Preserve cross-run owning Build and reject
-late caller/receipt/root changes; no successful exit or observed hash confers native authority.
+Root work has one process model. Each workflow step runs one `ci` command as the runner; work
+that needs root runs in a child started as `/usr/bin/sudo -n -- <python> -I -B -S
+<kit>/tools/ci_privileged_bootstrap.py --operation <name> --kit <kit> --kit-digest <digest>
+--nonce <nonce>` (`build_ci.root_request.run_root_operation`). The bootstrap is stdlib-only until
+it has re-computed kit-digest-v1 of that prologue-verified checkout and compared it with the
+digest it was given; it then loads `mod_base` from the checkout's exact files, without editing
+`sys.path`, and calls `build_ci.root_request_operations.execute_root_operation`. Never add a kit
+import above that point, and keep its mirrored constants equal to `model/grammar.py` and
+`model/limits.py` (`tests/test_ci_privileged_bootstrap.py`). There is no private kit copy, no
+private interpreter and no byte digest of the tool trees: the prologue establishes kit integrity
+and the host fence plus the metadata scan protect the tools.
+
+Parent and child exchange data only through `mod-base.ci.root-request` records: one canonical
+request per operation in its own runner-owned 0700 directory below the worker root (0600
+single-link file, never replaced), read with the private record reader. The operation is one of
+`grammar.CI_ROOT_OPERATIONS`; the request's closed `arguments` never select code, a hook or a
+destination. Root derives the runner from the fixed home and passwd, admits the live host fence,
+rebuilds controller sources from the protected copy on disk and re-reads the request after the
+operation. Root never calls the GitHub API: anything that needs it happens in the runner before
+the request is written. Adding an operation means adding it to `CI_ROOT_OPERATIONS`, the
+bootstrap's mirror, `root_request_schema` (closed arguments), `root_request` (the runner's typed
+request function) and `root_request_operations` (the handler), with a hosted test in
+`tests/ci_linux_worker.py` that runs it through the real bootstrap.
 
 ## What a kit change reaches
 

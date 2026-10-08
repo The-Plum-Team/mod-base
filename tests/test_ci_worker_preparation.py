@@ -11,7 +11,8 @@ from mod_base.build_ci.source import GitSourceEntry
 from mod_base.errors import MbError
 from mod_base.pin import Pin
 from tests.test_ci_gradle_cache import ACCOUNT
-from tests.test_ci_python_installation import BOUNDARY, info
+from tests.helpers import ci_stat as info
+from tests.test_ci_host import BOUNDARY
 
 
 SOURCE=Path('/home/runner/candidate')

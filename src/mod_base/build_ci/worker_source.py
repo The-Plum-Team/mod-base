@@ -7,9 +7,8 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from mod_base.build_ci.gradle_cache import _quiet
+from mod_base.build_ci.gradle_cache import _quiet, _stamp
 from mod_base.build_ci.host import HostBoundary, _canonical_path, _open_directory, authenticate_privileged_host_boundary
-from mod_base.build_ci.installation import _stamp
 from mod_base.build_ci.source import GitSourceEntry, materialize_source_copy, verify_source_copy
 from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, authenticate_worker_account, terminate_worker
 from mod_base.io.tree import privatize_source_copy

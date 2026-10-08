@@ -1,0 +1,157 @@
+"""The closed set of root operations behind the private request channel (MB11).
+
+``execute_root_operation`` is the only kit entry of ``tools/ci_privileged_bootstrap.py``. It binds
+the importing kit to the checkout and digest the bootstrap verified, admits the runner's request
+and the live host fence, runs the one fixed operation the request names and re-admits the request
+afterwards. Operations reconstruct their inputs from the request's closed data and from protected
+copies on disk; nothing in a request selects code, and no operation calls the GitHub API.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import mod_base
+from mod_base.build_ci.controller import CONTROLLER_VALIDATION_ROOT, ControllerSources
+from mod_base.build_ci.handoff import _context, freeze_handed_off_build_validation
+from mod_base.build_ci.host import HostBoundary, _canonical_path, authenticate_privileged_host_boundary
+from mod_base.build_ci.inputs import _accounts, _inspect_inputs
+from mod_base.build_ci.root_request import (_inspect_sources, _restore_sources, _source_root_identity,
+                                          read_root_request)
+from mod_base.build_ci.runtime_handoff import _context as _runtime_context, freeze_handed_off_runtime_validation
+from mod_base.build_ci.runtime_inputs import _inspect_inputs as _inspect_runtime_inputs
+from mod_base.build_ci.worker import WorkerAccount, WorkerError, authenticate_worker_account, terminate_worker
+from mod_base.io.tree import authenticate_tree_read_access
+from mod_base.model import grammar, limits
+from mod_base.model.canonical import canonical_json
+from mod_base.model.validators import check
+from mod_base.pin import kit_tree_digest, verify_staged_files
+
+
+@dataclass(frozen=True)
+class _Kit:
+    root: Path
+    digest: str
+
+
+def _authenticate_kit(kit_root: str, kit_digest: str) -> _Kit:
+    """Bind the importing package to the verified checkout: same files, same digest, same locks."""
+    grammar.require(grammar.DIGEST, kit_digest, "kit digest")
+    root = Path(str(_canonical_path(kit_root)))
+    check(Path(mod_base.__file__) == root / "src" / "mod_base" / "__init__.py",
+          "$.kit", "root operation was not imported from the verified kit checkout")
+    check(kit_tree_digest(root) == kit_digest, "$.kit", "kit checkout differs from the verified digest")
+    verify_staged_files(root)
+    return _Kit(root, kit_digest)
+
+
+def _account(role: str, boundary: HostBoundary, arguments: dict[str, Any]) -> WorkerAccount:
+    """The live fixed account must be the one the runner named; the peer account must exist too."""
+    account = authenticate_worker_account(role)
+    check({"uid": account.uid, "gid": account.gid} == arguments[role],
+          f"$.request.{role}", "root request names another disposable account")
+    _accounts(boundary, account if role == "validator" else authenticate_worker_account("validator"))
+    return account
+
+
+def _kit_binding(plan: dict[str, Any], kit: _Kit) -> None:
+    bound = plan["identity"]["kit"]
+    check(bound["tree_digest"] == kit.digest and bound["version"] == mod_base.__version__,
+          "$.kit", "root request plan names another kit than the verified executing checkout")
+
+
+def _controller_sources(boundary: HostBoundary, validator: WorkerAccount, metadata: dict[str, Any],
+                        plan: dict[str, Any]) -> tuple[ControllerSources, tuple[int, int]]:
+    initial = _source_root_identity()
+    authenticate_tree_read_access(CONTROLLER_VALIDATION_ROOT, owner_uid=boundary.uid,
+                                  reader_gid=validator.gid, max_entries=limits.MAX_CI_SOURCE_ENTRIES)
+    sources = _restore_sources(metadata, plan["identity"])
+    check(_inspect_sources(boundary, validator, sources, plan) == initial,
+          "$.sources", "controller copy root replaced during reconstruction")
+    return sources, initial
+
+
+def _freeze_build_validation(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    validator = authenticate_worker_account("validator")
+    try:
+        def admit() -> tuple[Any, ...]:
+            check(_account("validator", boundary, arguments) == validator,
+                  "$.request.validator", "validator identity changed during the root operation")
+            plan, envelope = arguments["plan"], arguments["envelope"]
+            _kit_binding(plan, kit)
+            sources, initial = _controller_sources(boundary, validator, arguments["sources"], plan)
+            inputs = _inspect_inputs(boundary, validator, plan, envelope)
+            _context(sources, plan, envelope, arguments["run_id"], arguments["run_attempt"])
+            check(_inspect_sources(boundary, validator, sources, plan) == initial
+                  and _inspect_inputs(boundary, validator, plan, envelope) == inputs,
+                  "$.request", "root context changed during physical admission")
+            authenticate_privileged_host_boundary(boundary)
+            return sources, initial, inputs
+
+        context = admit()
+        freeze_handed_off_build_validation(boundary=boundary, validator=validator, sources=context[0],
+            plan=arguments["plan"], envelope=arguments["envelope"], run_id=arguments["run_id"],
+            run_attempt=arguments["run_attempt"], nonce=arguments["execution_nonce"])
+        check(admit() == context, "$.request", "root context changed during receipt sealing")
+    finally:
+        terminate_worker(validator)
+
+
+def _freeze_runtime_validation(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    validator = authenticate_worker_account("validator")
+    try:
+        plan, build, runtime = arguments["plan"], arguments["build"], arguments["runtime"]
+        lane = {"lane_id": arguments["lane_id"], "run_id": arguments["run_id"],
+                "run_attempt": arguments["run_attempt"]}
+        original = tuple(canonical_json(value) for value in (plan, build, runtime))
+
+        def admit() -> tuple[Any, ...]:
+            check(_account("validator", boundary, arguments) == validator,
+                  "$.request.validator", "validator identity changed during the root operation")
+            _kit_binding(plan, kit)
+            sources, initial = _controller_sources(boundary, validator, arguments["sources"], plan)
+            inputs = _inspect_runtime_inputs(boundary, validator, plan, build, runtime)
+            _runtime_context(sources, plan, build, runtime, **lane)
+            check(_inspect_sources(boundary, validator, sources, plan) == initial
+                  and _inspect_runtime_inputs(boundary, validator, plan, build, runtime) == inputs,
+                  "$.request", "runtime root context changed during physical admission")
+            authenticate_privileged_host_boundary(boundary)
+            return sources, initial, inputs
+
+        context = admit()
+        freeze_handed_off_runtime_validation(boundary=boundary, validator=validator, sources=context[0],
+            plan=plan, build=build, runtime=runtime, nonce=arguments["execution_nonce"], **lane)
+        check(admit() == context
+              and tuple(canonical_json(value) for value in (plan, build, runtime)) == original,
+              "$.request", "runtime root context changed during receipt sealing")
+    finally:
+        terminate_worker(validator)
+
+
+_OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
+    "freeze-build-validation": _freeze_build_validation,
+    "freeze-runtime-validation": _freeze_runtime_validation,
+}
+
+
+def execute_root_operation(operation: str, *, kit_root: str, kit_digest: str, nonce: str) -> None:
+    """Run one closed root operation for the runner's private request (the bootstrap's only entry).
+
+    Requires real root on Linux. The kit must be the checkout the bootstrap verified. The request
+    of exactly this operation and nonce is admitted together with the live host fence before the
+    operation and re-read unchanged after it. Every rejection is an ``MbError``.
+    """
+    if sys.platform != "linux" or os.getuid() != 0 or os.geteuid() != 0 or os.getgid() != 0:
+        raise WorkerError("root operations require protected Linux root")
+    check(type(operation) is str and operation in _OPERATIONS, "$.operation", "unknown root operation")
+    kit = _authenticate_kit(kit_root, kit_digest)
+    boundary, arguments, raw = read_root_request(operation, nonce=nonce)
+    _OPERATIONS[operation](boundary, arguments, kit)
+    check(read_root_request(operation, nonce=nonce) == (boundary, arguments, raw),
+          "$.request", "root request changed during its operation")
+    authenticate_privileged_host_boundary(boundary)

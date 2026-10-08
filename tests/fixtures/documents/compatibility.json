@@ -45,11 +45,6 @@
       "decision": "new-kind",
       "previous_version": null
     },
-    "mod-base.ci.kit-installation": {
-      "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
-    },
     "mod-base.ci.reuse": {
       "current_version": 1,
       "decision": "new-kind",
@@ -61,11 +56,6 @@
       "previous_version": null
     },
     "mod-base.ci.runtime-envelope": {
-      "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
-    },
-    "mod-base.ci.runtime-root-request": {
       "current_version": 1,
       "decision": "new-kind",
       "previous_version": null

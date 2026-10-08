@@ -53,7 +53,7 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   synthetic tested commit. Keep separate original PR/current subject and producer bindings,
   direct coherent source seals and all independent K6 admission requirements.
 
-- Bind inactive byte-fenced native lane verification to retained frozen plan, exact complete
+- Bind inactive tool-fenced native lane verification to retained frozen plan, exact complete
   owning Build and runtime bytes, with pre/post metadata/inventory/directory checks and original
   caller drift rejection. Execution/context data confer no receipt or native success authority;
   Add Root-only receipt binding to genuinely retained successful execution and that exact
@@ -74,22 +74,9 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   writer also rereads staged bytes after closing admission. Fixed runtime Root process/request
   enrollment, genuine provenance and real hosted/native/workflow authority remain required.
 
-- Add separate initial runtime Root request v1 data with closed original plan/complete owning
-  Build/runtime lane binding, cross-run producer identity and original native caps. Preserve
-  Build root-request v1 compatibility. Add exclusive private publication and Root protected
-  source/input reconstruction plus original request re-admission around runtime sealing.
-  Process/bootstrap enrollment and actual hosted/native authority remain pending.
-
-- Add explicit runtime-validation-v1 bootstrap process routing while preserving legacy Build
-  argument pairs. Admit the fixed target before account lookup, after original kit byte admission.
-  Runtime parent launch retains original context and rechecks program/tools/SDK/request around
-  two independent receipt reads. Original complete runtime/caller enrollment and real hosted
-  native/workflow authority remain required; no status or consumer is activated.
-
 - Add required hosted Linux runtime candidate-copy/read-grant cases with actual source/private
   ownership, empty data, independent inodes, validator-only reads and hardlink rejection before
-  copying. These are unexecuted on Windows; full byte-fenced/runtime process/native proof remains
-  required and existing hosted prerequisites are unchanged.
+  copying. Existing hosted prerequisites are unchanged.
 
 - Add inactive closed mod-base.ci.runtime-envelope v1 inventory data with original Build/plan
   bindings, ordered lane contracts and role/path validation. Preserve per-lane limits inside
@@ -145,31 +132,22 @@ the release change. Pages formats, `ADAPTER_API` and `pixel_metrics_version` rem
 - Bind selected worker Python/JDK destinations to explicitly enrolled tool roots before
   dispatch, rejecting external aliases and unusable executable/home types without launch.
   Protected installer provenance and complete import enrollment remain required.
-- Add separate complete selected-tool byte admission against an independently approved digest,
-  with root/path/mode/link binding, stable bounded single-link streaming and bracketed metadata
-  reinspection. Installer provenance and complete actual runtime closure remain prerequisites.
-- Add an inactive fixed privileged sealing launcher that reauthenticates installed program,
-  selected tool bytes, executable destination and physical context before execution; rechecks
-  them afterward and independently reads the sealed receipt. Keep the 20-second process bound
-  separate from native hooks; installer/runtime provenance and real Linux lifecycle remain open.
-- Add an inactive independent stdlib pre-import guard for the fixed private kit record and
-  copied bytes. It binds explicit approved identity/digest, private metadata, bounded hashes
-  and retained root identity; program/interpreter enrollment and production entry remain pending.
-- Install/reinspect that fixed guard as private root-owned bytes bound to the admitted kit's
-  staged tools lock, with source/stage/hash/original-root checks and exclusive publication.
-  Executing program provenance, interpreter/stdlib enrollment and production dispatch stay open.
-- Add local-only `mod-base.ci.root-request` v1 closed metadata for fixed Build receipt sealing,
-  with separate entry/execution nonces and existing source/plan/envelope bounds. Its physical
-  channel now has exclusive private publication, fixed-copy root reconstruction and a fixed
-  sealing library operation. Add a closed installed-program entry with explicit identity/fence
-  observations and nonce, a fenced configuration-data composition root and no command passthrough.
-  Interpreter/stdlib enrollment, workflow integration and real Linux evidence remain pending.
-- Add an inactive root-only, fixed private kit copy for privileged imports, bound to the
-  separately approved kit digest, independent bytes, whole-tree bounds and root identity.
-  It does not install tools, authorize a pin or provide the privileged runtime entry.
-- Add a local-only kit-installation record v1 with fixed root-owned private publication and
-  strict canonical reading bound to the actual copy's digest/counts/root identity. This is
-  protected-caller data, not a pre-import bootstrap or pin authorization.
+- Run root work in one process model. `tools/ci_privileged_bootstrap.py`, started by the runner
+  as `sudo -n -- <python> -I -B -S <kit>/tools/ci_privileged_bootstrap.py --operation <name>
+  --kit <kit> --kit-digest <digest> --nonce <nonce>`, re-computes kit-digest-v1 of the
+  prologue-verified kit checkout before importing from it and dispatches a closed set of
+  operations. Parent and child exchange data only through the local-only
+  `mod-base.ci.root-request` v1 kind: one private canonical request per operation with a closed
+  argument object, read by root with the private record reader after it has derived the runner
+  from the host. Root never calls the GitHub API.
+- Remove the private interpreter and kit-copy tower, which no design requirement asked for and
+  which could not work on a hosted image: the root-owned kit copy with its record and installed
+  guard, the privileged launcher, the Python archive download, inspection and installation, the
+  byte digest of tool trees with its byte-fenced worker and validator routes, the release-asset
+  download of the GitHub client, `requirements/python-ubuntu24-x64.sha256`,
+  `docs/PYTHON-INSTALLER.md` and the unreleased `mod-base.ci.kit-installation` and
+  `mod-base.ci.runtime-root-request` kinds. Runtime lane verification now uses the same
+  tool-fenced second-account route as Build verification.
 - Add a local-only execution handoff v1 kind and private runner-to-root Build result data
   channel, with strict binary-log/context/nonce binding and independent receipt freeze.
   Genuine execution/native validity and enrolled root-program/import provenance remain required.

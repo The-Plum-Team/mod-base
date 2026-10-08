@@ -15,14 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from mod_base.build_ci.controller import (ControllerFile, ControllerSources, _write_controller_files,
-                                          execute_byte_fenced_controller_validator, execute_controller_validator)
+                                          execute_controller_validator)
 from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, verify_build_export
 from mod_base.build_ci.host import (HostBoundary, _open_directory, authenticate_host_boundary,
                                     authenticate_privileged_host_boundary)
 from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.records import validate_build_envelope
 from mod_base.build_ci.validation import freeze_validation_export
-from mod_base.build_ci.toolchain import ToolBytesProof, ToolTreeProof
+from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.build_ci.worker import (WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult,
                                       authenticate_worker_account, terminate_worker)
 from mod_base.io.atomic_directory import atomic_directory
@@ -212,47 +212,13 @@ def execute_frozen_target_validator(*, boundary: HostBoundary, validator: Worker
                 python=python, java_home=java_home, run_id=run_id, run_attempt=run_attempt)
 
 
-
-def execute_byte_fenced_build_validator(*, boundary: HostBoundary, validator: WorkerAccount,
-                                        sources: ControllerSources, tools: ToolBytesProof,
-                                        expected_digest: str, plan: dict[str, Any], envelope: dict[str, Any],
-                                        python: str, java_home: str | None, run_id: int,
-                                        run_attempt: int) -> BuildValidationExecution:
-    """Bind complete same-producer frozen inputs to byte-fenced protected Build verification.
-
-    Retain fixed input identities and canonical envelope digest, with no metadata fallback.
-    Native semantics and original caller/runtime/source/API provenance remain prerequisites.
-    """
-    return _execute_frozen_build_hook(boundary=boundary, validator=validator, sources=sources,
-        tools=tools, plan=plan, envelope=envelope, hook="verify_build", unit_id=None,
-        python=python, java_home=java_home, run_id=run_id, run_attempt=run_attempt,
-        byte_fenced=True, expected_digest=expected_digest)
-
-
-def execute_byte_fenced_target_validator(*, boundary: HostBoundary, validator: WorkerAccount,
-                                         sources: ControllerSources, tools: ToolBytesProof,
-                                         expected_digest: str, plan: dict[str, Any], envelope: dict[str, Any],
-                                         target_id: str, python: str, java_home: str | None,
-                                         run_id: int, run_attempt: int) -> BuildValidationExecution:
-    """Bind the exact same-producer frozen target partition to byte-fenced verification."""
-    return _execute_frozen_build_hook(boundary=boundary, validator=validator, sources=sources,
-        tools=tools, plan=plan, envelope=envelope, hook="verify_target", unit_id=target_id,
-        python=python, java_home=java_home, run_id=run_id, run_attempt=run_attempt,
-        byte_fenced=True, expected_digest=expected_digest)
-
-
 def _execute_frozen_build_hook(*, boundary: HostBoundary, validator: WorkerAccount,
-                               sources: ControllerSources, tools: ToolTreeProof | ToolBytesProof,
+                               sources: ControllerSources, tools: ToolTreeProof,
                                plan: dict[str, Any], envelope: dict[str, Any], hook: str,
                                unit_id: str | None, python: str, java_home: str | None,
-                               run_id: int, run_attempt: int, byte_fenced: bool = False,
-                               expected_digest: str | None = None) -> BuildValidationExecution:
+                               run_id: int, run_attempt: int) -> BuildValidationExecution:
     _accounts(boundary, validator)
     try:
-        if byte_fenced:
-            grammar.require(grammar.DIGEST, expected_digest, "approved tool byte digest")
-            if type(tools) is not ToolBytesProof or tools.digest != expected_digest:
-                raise WorkerError("frozen verifier tool receipt differs from approved bytes")
         _plan_bytes(plan)
         validate_build_envelope(envelope, plan=plan)
         Int(1, limits.MAX_RUN_ID)(run_id, "$.run_id")
@@ -269,10 +235,8 @@ def _execute_frozen_build_hook(*, boundary: HostBoundary, validator: WorkerAccou
         check((envelope["producer"]["run_id"], envelope["producer"]["run_attempt"]) == (run_id, run_attempt),
               "$.input", "Build verifier differs from its producing run/attempt")
         initial = _read_inputs(boundary, validator, plan, envelope)
-        execute = execute_byte_fenced_controller_validator if byte_fenced else execute_controller_validator
-        byte_arguments = {"expected_digest": expected_digest} if byte_fenced else {}
-        result = execute(boundary=boundary, validator=validator, sources=sources,
-                    tools=tools, **byte_arguments, plan=plan, hook=hook, unit_id=unit_id, python=python,
+        result = execute_controller_validator(boundary=boundary, validator=validator, sources=sources,
+                    tools=tools, plan=plan, hook=hook, unit_id=unit_id, python=python,
                     java_home=java_home, run_id=run_id, run_attempt=run_attempt)
         if _read_inputs(boundary, validator, plan, envelope) != initial:
             raise WorkerError("validation input directory identities changed during execution")

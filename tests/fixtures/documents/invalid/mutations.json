@@ -3191,18 +3191,6 @@
     {
       "error": "has unknown keys",
       "expect": "invalid",
-      "fixture": "ci-kit-installation",
-      "name": "ci-kit-installation-has-no-program-path",
-      "set": [
-        [
-          "/program",
-          "candidate program"
-        ]
-      ]
-    },
-    {
-      "error": "has unknown keys",
-      "expect": "invalid",
       "fixture": "ci-root-request",
       "name": "ci-root-request-no-program",
       "set": [
@@ -3301,7 +3289,7 @@
     },
     {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-runtime-envelope",
      "name":"runtime-cannot-approve-native-result", "set":[["/approval",true]]},
-    {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-runtime-root-request",
-     "name":"runtime-root-request-cannot-select-program", "set":[["/program","unsafe"]]}
+    {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-root-request-runtime",
+     "name":"runtime-root-request-cannot-select-program", "set":[["/arguments/program","unsafe"]]}
   ]
 }

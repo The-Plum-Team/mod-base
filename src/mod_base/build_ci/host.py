@@ -166,6 +166,33 @@ def authenticate_host_boundary(boundary: HostBoundary) -> None:
     _authenticate_home_receipt(boundary)
 
 
+def privileged_runner_identity() -> tuple[int, int]:
+    """Root-only: the passwd identity that owns the fixed runner home, derived from the host.
+
+    A root operation learns who the runner is from the filesystem and passwd, never from its
+    request. The result names an account; it is not a host fence receipt.
+    """
+
+    if sys.platform != "linux" or os.getuid() != 0 or os.geteuid() != 0 or os.getgid() != 0:
+        raise WorkerError("runner identity lookup requires protected root setup")
+    import pwd
+
+    descriptor = None
+    try:
+        descriptor = _open_directory(("home", "runner"))
+        info = os.fstat(descriptor)
+        account = pwd.getpwuid(info.st_uid)
+        if ((account.pw_uid, account.pw_gid, account.pw_dir) != (info.st_uid, info.st_gid, HOST_RUNNER_HOME)
+                or not 1 <= info.st_uid <= limits.MAX_CI_UNIX_ID or not 1 <= info.st_gid <= limits.MAX_CI_UNIX_ID):
+            raise WorkerError("runner home does not belong to one nonprivileged passwd identity")
+        return info.st_uid, info.st_gid
+    except (OSError, KeyError) as error:
+        raise WorkerError("cannot derive the runner identity from the fixed home") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def authenticate_privileged_host_boundary(boundary: HostBoundary) -> None:
     """Bind the existing runner fence from protected root setup without granting worker authority."""
 

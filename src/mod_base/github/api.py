@@ -535,49 +535,28 @@ class GitHubApi:
         followed exactly once to an https URL with the ``Authorization`` header stripped; the
         body is read to at most ``max_bytes``."""
 
-        return self._download(path, max_bytes=max_bytes, release=False)
-
-    def download_release_asset(self, repository: str, asset_id: int, *, max_bytes: int) -> bytes:
-        """Read a numeric release asset, directly or through one credential-free redirect.
-
-        Producer metadata and independent byte approval remain the caller's responsibility.
-        """
-
-        grammar.require(grammar.REPOSITORY, repository, "repository")
-        _positive(asset_id, "asset_id", limits.MAX_RUN_ID)
-        return self._download(f"/repos/{repository}/releases/assets/{asset_id}",
-                              max_bytes=max_bytes, release=True)
-
-    def _download(self, path: str, *, max_bytes: int, release: bool) -> bytes:
         path = _validate_path(path)
         _positive(max_bytes, "max_bytes", MAX_DOWNLOAD_BYTES)
         url = self._base_url + path
         api_headers = self._api_headers()
-        if release:
-            api_headers["Accept"] = "application/octet-stream"
 
         def attempt_once() -> bytes | _Failure:
             self._spend()
             try:
-                status, data = self._open("GET", url, api_headers, None, max_bytes if release else 0)
+                status, _ = self._open("GET", url, api_headers, None, 0)
             except urllib.error.HTTPError as exc:
-                if exc.code not in ({302} if release else REDIRECT_STATUSES):
+                if exc.code not in REDIRECT_STATUSES:
                     return self._http_failure("GET", path, exc)
                 location = _header(exc.headers, "Location")
                 if getattr(exc, "fp", None) is not None:
                     exc.close()
                 target = _redirect_target(location, path)
             except _TooLarge as exc:
-                if release:
-                    raise ApiError(f"release download for {path} exceeds its {max_bytes}-byte bound",
-                                   status=exc.status, method="GET", path=path) from None
                 raise ApiError(f"GitHub API GET {path} answered HTTP {exc.status} instead of a redirect",
                                status=exc.status, method="GET", path=path) from None
             except (OSError, http.client.HTTPException) as exc:
                 return self._transport_failure("GET", path, exc)
             else:
-                if release and status == 200:
-                    return data
                 raise ApiError(f"GitHub API GET {path} answered HTTP {status} instead of a redirect",
                                status=status, method="GET", path=path)
             # The one redirect: a fresh request carrying no credential and no API headers.

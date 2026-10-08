@@ -2,29 +2,80 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import stat
 from pathlib import Path
 from typing import Any
 
-from mod_base.build_ci.gradle_cache import _quiet
+from mod_base.build_ci.gradle_cache import _quiet, _stamp
 from mod_base.build_ci.host import HostBoundary, _canonical_path, _open_directory, authenticate_privileged_host_boundary
-from mod_base.build_ci.installation import _paths, _stamp
 from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, authenticate_worker_account, terminate_worker
 from mod_base.github.api import GitHubApi
 from mod_base.io.atomic_directory import atomic_directory
 from mod_base.io.tree import copy_regular_data_files, grant_regular_data_read_access, regular_data_records, validate_tree_entries
 from mod_base.model import grammar, limits
-from mod_base.pin import (DIGESTED_DIRS, OVERLAY_PATH, STAMP_NAME, Pin, kit_tree_digest, read_stamp,
-                          stamp_document, verify_released, verify_staged_files)
+from mod_base.pin import (DIGESTED_DIRS, KIT_PATH_NAME, OVERLAY_PATH, STAMP_NAME, Pin, kit_tree_digest,
+                          read_stamp, stamp_document, verify_released, verify_staged_files)
 
 
 _BOUNDS = {"max_files": limits.MAX_CI_KIT_INSTALL_FILES, "max_entries": limits.MAX_CI_KIT_INSTALL_ENTRIES,
            "max_total_bytes": limits.MAX_CI_KIT_INSTALL_BYTES, "max_file_bytes": limits.MAX_CI_KIT_INSTALL_BYTES}
 
 
+def _paths(root: Path) -> tuple[str, ...]:
+    """Bound discovery before hashing or copying; bytecode, links and executables never stage."""
+    descriptor = _open_directory(tuple(_canonical_path(root.as_posix()).parts[1:]))
+    paths: list[str] = []
+    entries = 0
+    try:
+        initial = _stamp(os.fstat(descriptor))
+
+        def walk(parent: int, prefix: str, depth: int) -> None:
+            nonlocal entries
+            if depth > limits.MAX_CI_TOOL_TREE_DEPTH:
+                raise WorkerError("worker kit overlay exceeds its depth cap")
+            before = _stamp(os.fstat(parent))
+            with os.scandir(parent) as listing:
+                names = [item.name for item in itertools.islice(listing, _BOUNDS["max_entries"] - entries + 1)]
+            if len(names) > _BOUNDS["max_entries"] - entries:
+                raise WorkerError("worker kit overlay exceeds its entry cap")
+            entries += len(names)
+            for name in sorted(names):
+                path = prefix + name
+                if (name == "__pycache__" or name.endswith((".pyc", ".pyo", ".pth"))
+                        or not KIT_PATH_NAME.fullmatch(path)):
+                    raise WorkerError("worker kit overlay contains bytecode or a noncanonical path")
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    child = _open_directory((name,), root=parent)
+                    try:
+                        if _stamp(os.fstat(child)) != _stamp(info):
+                            raise WorkerError("worker kit overlay directory changed while opened")
+                        walk(child, path + "/", depth + 1)
+                    finally:
+                        os.close(child)
+                elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and not info.st_mode & 0o111:
+                    paths.append(path)
+                else:
+                    raise WorkerError("worker kit overlay contains a link, executable or special file")
+            if _stamp(os.fstat(parent)) != before:
+                raise WorkerError("worker kit overlay directory changed during discovery")
+
+        walk(descriptor, "", 0)
+        named = _open_directory(tuple(root.parts[1:]))
+        try:
+            if _stamp(os.fstat(named)) != initial or _stamp(os.fstat(descriptor)) != initial:
+                raise WorkerError("worker kit overlay root changed during discovery")
+        finally:
+            os.close(named)
+        return tuple(sorted(paths))
+    finally:
+        os.close(descriptor)
+
+
 def _admit(root: Path, pin: Pin, digest: str) -> list[dict[str, Any]]:
-    paths, _ = _paths(root, remaining_entries=_BOUNDS["max_entries"])
+    paths = _paths(root)
     if len(paths) > _BOUNDS["max_files"] or any(path.endswith(".pyd") for path in paths):
         raise WorkerError("worker kit overlay contains excessive files or bytecode")
     descriptor = _open_directory(tuple(root.parts[1:]))

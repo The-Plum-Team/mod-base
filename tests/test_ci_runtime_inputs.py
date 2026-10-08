@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from mod_base.build_ci import inputs, runtime_inputs
-from mod_base.build_ci.toolchain import ToolBytesProof, ToolTreeProof
+from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.build_ci.worker import WorkerResult
 from mod_base.errors import MbError
 from tests import test_ci_inputs as input_fixture
@@ -25,15 +25,14 @@ class RuntimeInputTests(unittest.TestCase):
     boundary = input_fixture.InputExecutionTests.boundary
     validator = input_fixture.InputExecutionTests.validator
     candidate = input_fixture.InputExecutionTests.candidate
-    digest = 'sha256:' + 'b' * 64
     identities = ((1, 20), (1, 30), (1, 40))
 
     def exercise(self, *, documents=None, lane_id='lane-a', run_id=43, run_attempt=2,
-                 digest=None, tools=None, reads=None, mutate=None, failure=None,
+                 tools=None, reads=None, mutate=None, failure=None,
                  preflight=False, result=None):
         plan, build, runtime = fixture() if documents is None else documents
         original = copy.deepcopy((plan, build, runtime))
-        proof = ToolBytesProof(ToolTreeProof(('/opt/python',), 'a' * 64, 1, 2, 100), self.digest)
+        proof = ToolTreeProof(('/opt/python',), 'a' * 64, 1, 2, 100)
         execution = WorkerResult(0, b'opaque native output', False) if result is None else result
         events = []
         def read(*args):
@@ -57,12 +56,12 @@ class RuntimeInputTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(patch.object(inputs, 'authenticate_worker_account', side_effect=[self.validator, self.candidate]))
             checking = stack.enter_context(patch.object(runtime_inputs, '_read_inputs', side_effect=read))
-            execute = stack.enter_context(patch.object(runtime_inputs, 'execute_byte_fenced_controller_validator', side_effect=launch))
+            execute = stack.enter_context(patch.object(runtime_inputs, 'execute_controller_validator', side_effect=launch))
             terminate = stack.enter_context(patch.object(runtime_inputs, 'terminate_worker'))
             try:
-                observed = runtime_inputs.execute_byte_fenced_frozen_runtime_validator(
+                observed = runtime_inputs.execute_frozen_runtime_validator(
                     boundary=self.boundary, validator=self.validator, sources=None,
-                    tools=proof if tools is None else tools, expected_digest=self.digest if digest is None else digest,
+                    tools=proof if tools is None else tools,
                     plan=plan, build=build, runtime=runtime, lane_id=lane_id,
                     python='/opt/python/bin/python', java_home=None, run_id=run_id, run_attempt=run_attempt)
                 self.assertEqual(observed.execution, execution)
@@ -82,7 +81,7 @@ class RuntimeInputTests(unittest.TestCase):
         # Execution is data: downstream receipt freezing still requires successful native admission.
         self.exercise(result=WorkerResult(1, b'failed native output', True))
 
-    def test_wrong_scope_owner_lane_attempt_and_unapproved_tools_fail_before_input_reads(self):
+    def test_wrong_scope_owner_lane_attempt_and_unadmitted_tools_fail_before_input_reads(self):
         for change in ('aggregate', 'target', 'owner', 'plan'):
             documents = fixture()
             if change == 'aggregate':
@@ -95,8 +94,8 @@ class RuntimeInputTests(unittest.TestCase):
                 documents[0]['unknown'] = True
             with self.subTest(change=change), self.assertRaises(MbError):
                 self.exercise(documents=documents, preflight=True)
-        for args in ({'lane_id': 'lane-b'}, {'run_id': 42}, {'run_attempt': True},
-                     {'digest': 'sha256:' + 'f' * 64}, {'digest': ''}, {'tools': object()}):
+        for args in ({'lane_id': 'lane-b'}, {'run_id': 42}, {'run_attempt': True}, {'tools': object()},
+                     {'tools': ('/opt/python',)}):
             with self.subTest(args=args), self.assertRaises(MbError):
                 self.exercise(**args, preflight=True)
 

@@ -8,9 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from mod_base.build_ci.authenticate import authenticate_source_identity
-from mod_base.build_ci.gradle_cache import _BOUNDS as CACHE_BOUNDS, _quiet, stage_privileged_gradle_cache
+from mod_base.build_ci.gradle_cache import _BOUNDS as CACHE_BOUNDS, _quiet, _stamp, stage_privileged_gradle_cache
 from mod_base.build_ci.host import HostBoundary, _canonical_path, _open_directory, authenticate_privileged_host_boundary
-from mod_base.build_ci.installation import _stamp
 from mod_base.build_ci.source import authenticate_source_inventory, verify_source_copy
 from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, authenticate_worker_account, terminate_worker
 from mod_base.build_ci.worker_git import _BOUNDS as GIT_BOUNDS, stage_privileged_worker_git

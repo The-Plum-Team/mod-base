@@ -1,4 +1,4 @@
-"""Fixed frozen plan/Build/runtime inputs for byte-fenced native lane validation (MB11)."""
+"""Fixed frozen plan/Build/runtime inputs for tool-fenced native lane validation (MB11)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import stat
 from dataclasses import dataclass
 from typing import Any
 
-from mod_base.build_ci.controller import ControllerSources, execute_byte_fenced_controller_validator
+from mod_base.build_ci.controller import ControllerSources, execute_controller_validator
 from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, verify_build_export
 from mod_base.build_ci.host import (HostBoundary, _open_directory, authenticate_host_boundary,
                                    authenticate_privileged_host_boundary)
@@ -17,7 +17,7 @@ from mod_base.build_ci.inputs import (VALIDATOR_INPUT_ROOT, _accounts, _inspect_
 from mod_base.build_ci.records import bind_build_envelope, validate_build_envelope
 from mod_base.build_ci.runtime_exports import _bounds, verify_runtime_export
 from mod_base.build_ci.runtime_schema import validate_runtime_envelope
-from mod_base.build_ci.toolchain import ToolBytesProof
+from mod_base.build_ci.toolchain import ToolTreeProof
 from mod_base.build_ci.validation import freeze_validation_export
 from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult, terminate_worker
 from mod_base.io.tree import (authenticate_tree_private_access, authenticate_tree_read_access,
@@ -156,29 +156,27 @@ def prepare_runtime_validation(*, boundary: HostBoundary, validator: WorkerAccou
             terminate_worker(validator)
 
 
-def execute_byte_fenced_frozen_runtime_validator(*, boundary: HostBoundary, validator: WorkerAccount,
-                                                 sources: ControllerSources, tools: ToolBytesProof,
-                                                 expected_digest: str, plan: dict[str, Any],
-                                                 build: dict[str, Any], runtime: dict[str, Any], lane_id: str,
-                                                 python: str, java_home: str | None,
-                                                 run_id: int, run_attempt: int) -> RuntimeValidationExecution:
-    """Bind the existing protected verify_runtime hook to original frozen lane/owning Build bytes.
+def execute_frozen_runtime_validator(*, boundary: HostBoundary, validator: WorkerAccount,
+                                     sources: ControllerSources, tools: ToolTreeProof,
+                                     plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any],
+                                     lane_id: str, python: str, java_home: str | None,
+                                     run_id: int, run_attempt: int) -> RuntimeValidationExecution:
+    """Bind the protected verify_runtime hook to the frozen lane and its complete owning Build.
 
-    Caller retains actual protected source/plan/API provenance, private reclaimed inputs with
-    validator-only reads, independent program/runtime/installer approval and excludes writers.
-    Native closed report/capture/JDK/package validation belongs to the enrolled mod dispatcher.
-    Returned execution/context data are not a frozen receipt, success or upload/status authority.
+    The same tool-fenced second-account route as Build verification: the selected tool roots are
+    re-inspected and the interpreter/JDK bound to them before dispatch, and the three read-only
+    input roots are authenticated before and after the hook. Caller retains protected source,
+    plan and API provenance and excludes writers. Native report/capture/JDK/package validation
+    belongs to the enrolled mod dispatcher. The returned execution is not a frozen receipt.
     """
     _accounts(boundary, validator)
     try:
-        grammar.require(grammar.DIGEST, expected_digest, 'independently approved tool byte digest')
-        check(type(tools) is ToolBytesProof and tools.digest == expected_digest,
-              '$.tools', 'runtime verifier tool receipt differs from independently approved bytes')
+        check(type(tools) is ToolTreeProof, '$.tools', 'runtime verifier requires the admitted tool closure')
         digest, raw = _context(plan, build, runtime, lane_id=lane_id, run_id=run_id, run_attempt=run_attempt)
         retained = _retained(raw)
         initial = _read_inputs(boundary, validator, *retained)
-        result = execute_byte_fenced_controller_validator(boundary=boundary, validator=validator, sources=sources,
-            tools=tools, expected_digest=expected_digest, plan=retained[0], hook='verify_runtime', unit_id=lane_id,
+        result = execute_controller_validator(boundary=boundary, validator=validator, sources=sources,
+            tools=tools, plan=retained[0], hook='verify_runtime', unit_id=lane_id,
             python=python, java_home=java_home, run_id=run_id, run_attempt=run_attempt)
         check(_read_inputs(boundary, validator, *retained) == initial,
               '$.input', 'runtime validation input directory identities changed during execution')

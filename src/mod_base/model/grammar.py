@@ -42,11 +42,10 @@ CI_GATE_NAME = "ci-gate.json"
 CI_PLAN_NAME = "ci-plan.json"
 CI_VALIDATION_NAME = "ci-validation.json"
 CI_EXECUTION_NAME = "ci-execution.json"
-CI_KIT_INSTALLATION_NAME = "ci-kit-installation.json"
-CI_BOOTSTRAP_PROGRAM_NAME = "ci_privileged_bootstrap.py"
 CI_ROOT_REQUEST_NAME = "ci-root-request.json"
-CI_RUNTIME_ROOT_REQUEST_NAME = "ci-runtime-root-request.json"
-CI_RUNTIME_FREEZE_OPERATION = "runtime-validation-v1"
+#: The closed set of operations the root bootstrap dispatches (``tools/ci_privileged_bootstrap.py``
+#: mirrors it without importing the kit). A request never selects code outside this set.
+CI_ROOT_OPERATIONS = ("freeze-build-validation", "freeze-runtime-validation")
 MINECRAFT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$")
 LOADER = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SCENARIO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")

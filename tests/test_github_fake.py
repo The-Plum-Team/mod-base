@@ -39,18 +39,6 @@ def artifact(artifact_id: int, name: str, run_id: int = 1, **changes: object) ->
 
 
 class SurfaceTests(unittest.TestCase):
-    def test_release_download_is_direct_bounded_and_independent_of_metadata(self) -> None:
-        api = FakeGitHub(repository=REPOSITORY, max_requests=3)
-        api.add_release_asset(REPOSITORY, 7, b"known")
-        self.assertEqual(b"known", api.download_release_asset(REPOSITORY, 7, max_bytes=5))
-        with self.assertRaises(ApiError):
-            api.download_release_asset(REPOSITORY, 7, max_bytes=4)
-        with self.assertRaises(ApiNotFound):
-            api.download_release_asset("foreign/repo", 7, max_bytes=5)
-        self.assertEqual(3, api.request_count)
-        with self.assertRaises(RequestBudgetExhausted):
-            api.download_release_asset(REPOSITORY, 7, max_bytes=5)
-
     def test_public_surface_matches_the_real_client(self) -> None:
         for name, member in inspect.getmembers(GitHubApi):
             if name.startswith("_"):

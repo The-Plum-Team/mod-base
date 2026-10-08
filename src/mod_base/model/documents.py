@@ -31,9 +31,7 @@ from mod_base.build_ci.batch_schema import validate_batch_manifest
 from mod_base.build_ci.runtime_schema import validate_runtime_envelope
 from mod_base.build_ci.validation import validate_validation_receipt
 from mod_base.build_ci.handoff import validate_execution_handoff
-from mod_base.build_ci.installation_schema import validate_kit_installation
 from mod_base.build_ci.root_request_schema import validate_root_request
-from mod_base.build_ci.runtime_root_request_schema import validate_runtime_root_request
 from mod_base.build_ci.records import (validate_build_envelope, validate_gate_receipt,
                                        validate_reuse_reference, validate_source_selection)
 from mod_base.errors import MbError
@@ -2122,9 +2120,7 @@ VALIDATORS: dict[str, Callable[..., dict[str, Any]]] = {
     "mod-base.ci.reuse": validate_reuse_reference,
     "mod-base.ci.validation": validate_validation_receipt,
     "mod-base.ci.execution": validate_execution_handoff,
-    "mod-base.ci.kit-installation": validate_kit_installation,
     "mod-base.ci.root-request": validate_root_request,
-    "mod-base.ci.runtime-root-request": validate_runtime_root_request,
     "mod-base.ci.activation": validate_activation,
     "mod-base.ci.batch": validate_batch_manifest,
     "mod-base.ci.runtime-envelope": validate_runtime_envelope,
@@ -2153,9 +2149,7 @@ MAX_DOCUMENT_BYTES: dict[str, int] = {
     "mod-base.ci.reuse": lim.MAX_CI_RECORD_BYTES,
     "mod-base.ci.validation": lim.MAX_CI_RECORD_BYTES,
     "mod-base.ci.execution": lim.MAX_CI_EXECUTION_BYTES,
-    "mod-base.ci.kit-installation": lim.MAX_CI_KIT_INSTALL_RECORD_BYTES,
     "mod-base.ci.root-request": lim.MAX_CI_ROOT_REQUEST_BYTES,
-    "mod-base.ci.runtime-root-request": lim.MAX_CI_RUNTIME_ROOT_REQUEST_BYTES,
     "mod-base.ci.activation": lim.MAX_CI_ACTIVATION_BYTES,
     "mod-base.ci.batch": lim.MAX_CI_BATCH_DOCUMENT_BYTES,
     "mod-base.ci.runtime-envelope": lim.MAX_CI_RUNTIME_ENVELOPE_BYTES,

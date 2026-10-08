@@ -583,53 +583,6 @@ class DownloadTests(ClientTestCase):
                 client.download(self.ZIP, max_bytes=bound)
 
 
-class ReleaseDownloadTests(ClientTestCase):
-    STORAGE = DownloadTests.STORAGE
-    redirect = DownloadTests.redirect
-
-    def test_release_direct_and_redirected_bytes(self) -> None:
-        for responses in ([Response(body=b"archive")], [self.redirect(), Response(body=b"archive")]):
-            with self.subTest(redirected=len(responses) == 2):
-                client, opener, _ = self.client(responses)
-                self.assertEqual(b"archive", client.download_release_asset(REPOSITORY, 7, max_bytes=7))
-                self.assertEqual(BASE + f"/repos/{REPOSITORY}/releases/assets/7", opener.requests[0].full_url)
-                self.assertEqual("application/octet-stream", opener.requests[0].get_header("Accept"))
-                self.assertEqual("Bearer fixture-token", opener.requests[0].get_header("Authorization"))
-                self.assertEqual(len(responses), client.request_count)
-                if len(responses) == 2:
-                    self.assertEqual({"User-agent": api.USER_AGENT}, dict(opener.requests[1].header_items()))
-
-    def test_release_rejects_oversize_and_redirect_chains(self) -> None:
-        for responses in ([Response(body=b"12345678")],
-                          [Response(body=b"x", header_values={"Content-Length": "8"})],
-                          [self.redirect(), Response(body=b"12345678")],
-                          [self.redirect(), self.redirect()], [self.redirect("http://unsafe.test")],
-                          [self.redirect(code=301)]):
-            with self.subTest(responses=responses):
-                client, _, sleeps = self.client(responses)
-                with self.assertRaises(ApiError):
-                    client.download_release_asset(REPOSITORY, 7, max_bytes=7)
-                self.assertEqual([], sleeps)
-
-    def test_release_validation_precedes_network(self) -> None:
-        client, opener, _ = self.client([])
-        for asset_id in (0, -1, True, "7", 2**63):
-            with self.subTest(asset_id=asset_id), self.assertRaises(MbError):
-                client.download_release_asset(REPOSITORY, asset_id, max_bytes=7)
-        for repository in ("bad", "owner/repo/extra", "../repo"):
-            with self.subTest(repository=repository), self.assertRaises(MbError):
-                client.download_release_asset(repository, 7, max_bytes=7)
-        for bound in (0, True, api.MAX_DOWNLOAD_BYTES + 1):
-            with self.subTest(bound=bound), self.assertRaises(MbError):
-                client.download_release_asset(REPOSITORY, 7, max_bytes=bound)
-        self.assertEqual([], opener.requests)
-
-    def test_release_retries_the_whole_exchange_and_spends_budget(self) -> None:
-        client, opener, sleeps = self.client([self.redirect(), http_error(503), Response(body=b"ok")])
-        self.assertEqual(b"ok", client.download_release_asset(REPOSITORY, 7, max_bytes=7))
-        self.assertEqual((3, 1), (len(opener.requests), len(sleeps)))
-
-
 class RateLimitAndEnvironmentTests(ClientTestCase):
     CORE = {"limit": 5000, "used": 12, "remaining": 4988, "reset": 1_900_000_000}
 

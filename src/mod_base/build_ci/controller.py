@@ -18,8 +18,7 @@ from mod_base.build_ci.protocol import check_output_paths, validate_identity, va
 from mod_base.build_ci.source import GitSourceEntry, SourceError, verify_source_copy
 from mod_base.build_ci.worker import (WORKER_ROOT, WorkerAccount, WorkerError, WorkerResult,
                                       authenticate_worker_account, terminate_worker)
-from mod_base.build_ci.toolchain import (ToolBytesProof, ToolTreeProof, execute_byte_fenced_worker,
-                                         execute_tool_fenced_worker)
+from mod_base.build_ci.toolchain import ToolTreeProof, execute_tool_fenced_worker
 from mod_base.github.api import GitHubApi
 from mod_base.github.contents import blob, commit_tree, exact_tree
 from mod_base.io.atomic_directory import atomic_directory
@@ -410,42 +409,11 @@ def execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAcc
     command/environment is accepted. Exit zero/logs do not authorize receipts, upload or status.
     """
 
-    return _execute_controller_validator(boundary=boundary, validator=validator, sources=sources,
-        tools=tools, plan=plan, hook=hook, unit_id=unit_id, python=python, java_home=java_home,
-        run_id=run_id, run_attempt=run_attempt, byte_fenced=False, expected_digest=None)
-
-
-def execute_byte_fenced_controller_validator(*, boundary: HostBoundary, validator: WorkerAccount,
-                                             sources: ControllerSources, tools: ToolBytesProof,
-                                             expected_digest: str, plan: dict[str, Any], hook: str,
-                                             unit_id: str | None, python: str, java_home: str | None,
-                                             run_id: int, run_attempt: int) -> WorkerResult:
-    """Bind closed protected verification hooks to independently approved tool bytes.
-
-    Retain the original source/config/account/plan/hook admission and pre/post source checks.
-    Full selected tool bytes are checked around execution and whole-UID termination. Original
-    caller/runtime, complete import/system enrollment and immutable native inputs remain caller
-    prerequisites. Results do not authorize receipts, uploads or statuses.
-    """
-    return _execute_controller_validator(boundary=boundary, validator=validator, sources=sources,
-        tools=tools, plan=plan, hook=hook, unit_id=unit_id, python=python, java_home=java_home,
-        run_id=run_id, run_attempt=run_attempt, byte_fenced=True, expected_digest=expected_digest)
-
-
-def _execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAccount,
-                                  sources: ControllerSources, tools: ToolTreeProof | ToolBytesProof,
-                                  plan: dict[str, Any], hook: str, unit_id: str | None,
-                                  python: str, java_home: str | None, run_id: int, run_attempt: int,
-                                  byte_fenced: bool, expected_digest: str | None) -> WorkerResult:
     if type(validator) is not WorkerAccount or validator.role != "validator":
         raise WorkerError("controller execution requires the fixed validator identity")
     if authenticate_worker_account("validator") != validator:
         raise WorkerError("controller execution validator identity changed")
     try:
-        if byte_fenced:
-            grammar.require(grammar.DIGEST, expected_digest, "approved tool byte digest")
-            if type(tools) is not ToolBytesProof or tools.digest != expected_digest:
-                raise WorkerError("validator tool receipt differs from independently approved bytes")
         validate_plan(plan)
         config = _validate_sources(sources, plan["identity"])
         if config["profile"] != plan["profile"] or type(hook) is not str or hook not in VALIDATOR_HOOKS:
@@ -468,9 +436,7 @@ def _execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAc
         if observed != config:
             raise WorkerError("controller pre-execution config changed")
         dispatcher = str(CONTROLLER_VALIDATION_ROOT / config["adapter"]["dispatcher"])
-        execute = execute_byte_fenced_worker if byte_fenced else execute_tool_fenced_worker
-        byte_arguments = {"expected_digest": expected_digest} if byte_fenced else {}
-        result = execute(validator, boundary=boundary, tools=tools, **byte_arguments,
+        result = execute_tool_fenced_worker(validator, boundary=boundary, tools=tools,
                     command=(python, "-I", "-B", dispatcher, "--hook", hook), python=python,
                     java_home=java_home, identity=plan["identity"], run_id=run_id,
                     run_attempt=run_attempt, values=values,

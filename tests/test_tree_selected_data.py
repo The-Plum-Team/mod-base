@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from mod_base.errors import MbError
 from mod_base.io import tree
-from tests.test_ci_python_installation import info
+from tests.helpers import ci_stat as info
 
 
 BOUNDS = dict(max_files=4, max_entries=10, max_total_bytes=100, max_file_bytes=100)

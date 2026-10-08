@@ -12,7 +12,8 @@ from mod_base.build_ci import worker_git as git
 from mod_base.build_ci.worker import WorkerError
 from mod_base.errors import MbError
 from tests.test_ci_gradle_cache import ACCOUNT
-from tests.test_ci_python_installation import BOUNDARY, info
+from tests.helpers import ci_stat as info
+from tests.test_ci_host import BOUNDARY
 
 
 ROOT = Path('/home/runner/metadata')

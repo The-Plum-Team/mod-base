@@ -1,6 +1,6 @@
 # Schemas (v1)
 
-The inactive Build config/plan/envelope and CI selection/gate/reuse/validation/execution/kit-installation/root-request/runtime-root-request/activation/batch/runtime-envelope v1 kinds have their exact
+The inactive Build config/plan/envelope and CI selection/gate/reuse/validation/execution/root-request/activation/batch/runtime-envelope v1 kinds have their exact
 field/reference rules in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md). They are separate from `mod-base.build`, the Pages publication
 record. The exhaustive per-kind compatibility ledger and immutable predecessor-reader fixtures
 are described there. Existing Pages document shapes remain unchanged.

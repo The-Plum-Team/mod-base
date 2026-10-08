@@ -15,7 +15,9 @@ import copy
 import hashlib
 import io
 import json
+import stat
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from mod_base.model import grammar
@@ -1006,27 +1008,38 @@ def ci_execution() -> dict[str, Any]:
             "returncode": 0, "truncated": False, "log_base64": base64.b64encode(b"fixture log").decode("ascii")}
 
 
-def ci_kit_installation() -> dict[str, Any]:
-    """Inert local root-record data, never physical installation or pin provenance."""
-    return {"kind": "mod-base.ci.kit-installation", "schema_version": 1,
-            "kit": {"repository": "The-Plum-Team/mod-base", "sha": "a" * 40, "version": "1.0.3"},
-            "tree_digest": "sha256:" + "b" * 64, "files": 3, "total_bytes": 3, "device": 1, "inode": 11}
+def ci_stat(*, inode: int = 99, size: int = 0, mode: int = stat.S_IFDIR | 0o755, uid: int = 0, gid: int = 0,
+            links: int = 1) -> SimpleNamespace:
+    """A synthetic ``os.stat_result`` for tests of metadata rules that need no real file."""
+    return SimpleNamespace(st_dev=1, st_ino=inode, st_size=size, st_mode=mode, st_uid=uid,
+                           st_gid=gid, st_nlink=links, st_mtime_ns=1, st_ctime_ns=1)
 
 
-def ci_root_request() -> dict[str, Any]:
-    """Inert local root-freeze metadata; no physical source, UID or execution authority."""
+def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any]:
+    """Inert root-operation request data; no physical source, UID or execution authority."""
     plan = ci_plan()
-    return {"kind": "mod-base.ci.root-request", "schema_version": 1,
-            "nonce": h("root-request-nonce"), "execution_nonce": h("execution-nonce"),
+    sources = {"controller_sha": plan["identity"]["controller_sha"], "controller_tree": "b" * 40,
+               "config": {"path": "scripts/ci/mod-base-build.json", "mode": "100644",
+                          "git_blob": "c" * 40, "sha256": h("configbytes"), "size": 1000},
+               "files": [{"path": file["path"], "mode": "100644", "git_blob": "d" * 40,
+                          "sha256": file["sha256"], "size": 1} for file in ci_config()["adapter"]["files"]]}
+    validator = {"uid": 2001, "gid": 2001}
+    if operation == "freeze-build-validation":
+        arguments = {"validator": validator, "sources": sources, "plan": plan, "envelope": ci_envelope(),
+                     "run_id": 42, "run_attempt": 2, "execution_nonce": h("execution-nonce")}
+    elif operation == "freeze-runtime-validation":
+        runtime = ci_runtime_envelope()
+        runtime.update(scope="lane", lane_id="lane-a")
+        arguments = {"validator": validator, "sources": sources, "plan": plan, "build": ci_envelope(),
+                     "runtime": runtime, "lane_id": "lane-a", "run_id": 43, "run_attempt": 2,
+                     "execution_nonce": h("execution-nonce")}
+    else:
+        raise ValueError(f"no sample root request for {operation!r}")
+    return {"kind": "mod-base.ci.root-request", "schema_version": 1, "operation": operation,
+            "nonce": h("root-request-nonce"),
             "boundary": {"home": "/home/runner", "uid": 1001, "gid": 121,
                          "device": 1, "inode": 10, "original_mode": 0o755},
-            "validator": {"uid": 2001, "gid": 2001},
-            "sources": {"controller_sha": plan["identity"]["controller_sha"], "controller_tree": "b" * 40,
-                        "config": {"path": "scripts/ci/mod-base-build.json", "mode": "100644",
-                                   "git_blob": "c" * 40, "sha256": h("configbytes"), "size": 1000},
-                        "files": [{"path": file["path"], "mode": "100644", "git_blob": "d" * 40,
-                                   "sha256": file["sha256"], "size": 1} for file in ci_config()["adapter"]["files"]]},
-            "plan": plan, "envelope": ci_envelope(), "run_id": 42, "run_attempt": 2}
+            "arguments": arguments}
 
 
 def ci_activation(mode: str = "disabled", rollback_from: str | None = None) -> dict[str, Any]:
@@ -1070,17 +1083,6 @@ def ci_runtime_envelope() -> dict[str, Any]:
                        'role': 'native-report', 'size': 128, 'sha256': h('runtime-report')}]}
 
 
-def ci_runtime_root_request() -> dict[str, Any]:
-    """Inert cross-run runtime Root context; no physical or execution authority."""
-    document = ci_root_request()
-    document['kind'] = 'mod-base.ci.runtime-root-request'
-    document['build'] = document.pop('envelope')
-    document['runtime'] = ci_runtime_envelope()
-    document['runtime'].update(scope='lane', lane_id='lane-a')
-    document.update(lane_id='lane-a', run_id=43)
-    return document
-
-
 def sample_documents() -> dict[str, dict[str, Any]]:
     """Fixture name -> a coherent, valid document (see ``VALID_FIXTURE_KINDS``)."""
 
@@ -1097,9 +1099,8 @@ def sample_documents() -> dict[str, dict[str, Any]]:
         "ci-reuse": ci_reuse(),
         "ci-validation": ci_validation(),
         "ci-execution": ci_execution(),
-        "ci-kit-installation": ci_kit_installation(),
         "ci-root-request": ci_root_request(),
-        "ci-runtime-root-request": ci_runtime_root_request(),
+        "ci-root-request-runtime": ci_root_request("freeze-runtime-validation"),
         "expectation": expectation(),
         "handoff": handoff(),
         "compact": compact(),
@@ -1131,9 +1132,8 @@ VALID_FIXTURE_KINDS = {
     "ci-reuse": "mod-base.ci.reuse",
     "ci-validation": "mod-base.ci.validation",
     "ci-execution": "mod-base.ci.execution",
-    "ci-kit-installation": "mod-base.ci.kit-installation",
     "ci-root-request": "mod-base.ci.root-request",
-    "ci-runtime-root-request": "mod-base.ci.runtime-root-request",
+    "ci-root-request-runtime": "mod-base.ci.root-request",
     "expectation": "mod-base.evidence.expectation",
     "handoff": "mod-base.evidence.handoff",
     "compact": "mod-base.evidence.compact",

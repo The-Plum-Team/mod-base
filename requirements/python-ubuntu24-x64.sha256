@@ -1,5 +1,0 @@
-# Inactive installer candidates; identities and admission requirements: docs/PYTHON-INSTALLER.md.
-# Digests published in actions/python-versions release-asset metadata before any local download.
-ae713815fe406a06f1691856f697a0b1e58b3e986f44e62f0cd0bca2424f1aac  python-3.11.17-linux-24.04-x64.tar.gz
-fcb672b0437c2d8df5565b7cc250b2b0d7455e2b8d6a4a107cfa6f2efe4f7ed8  python-3.12.15-linux-24.04-x64.tar.gz
-d6f5f504043400592e9dcf368ba262c64d998608646cc22281b5a75beecbc872  python-3.13.16-linux-24.04-x64.tar.gz

@@ -179,136 +179,64 @@ class LinuxWorkerTests(unittest.TestCase):
         result = self.run_dispatcher("print('readonly tools admitted',flush=True)\n", tools=proof)
         self.assertIn(b"readonly tools admitted", result.log)
 
-    def test_privileged_kit_copy_is_private_digest_bound_and_imports_without_path_changes(self):
-        # The authenticated release/pin guard is separate: this fixture proves actual byte,
-        # ownership and isolated-import mechanics of the trusted CI checkout, not release authority.
+    def test_root_bootstrap_admits_only_this_protected_checkout_at_its_exact_digest(self):
         from mod_base.pin import kit_tree_digest
-        from mod_base.build_ci.installation import PRIVILEGED_KIT_ROOT
         kit = Path(__file__).resolve().parents[1]
         digest = kit_tree_digest(kit)
-        body = ("import importlib.util,json,os,pathlib,sys\n"
-                "original=tuple(sys.path)\n"
-                "assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode\n"
-                "def load(root):\n"
-                "    spec=importlib.util.spec_from_file_location('mod_base',root/'__init__.py',"
-                "submodule_search_locations=[str(root)])\n"
-                "    module=importlib.util.module_from_spec(spec)\n"
-                "    sys.modules['mod_base']=module\n    spec.loader.exec_module(module)\n"
-                f"kit=pathlib.Path({str(kit)!r})\n"
-                "guard_spec=importlib.util.spec_from_file_location('private_kit_guard',kit/'tools/ci_privileged_bootstrap.py')\n"
-                "guard=importlib.util.module_from_spec(guard_spec)\nguard_spec.loader.exec_module(guard)\n"
-                "assert not any(n=='mod_base' or n.startswith('mod_base.') for n in sys.modules)\n"
-                "assert tuple(sys.path)==original\nload(kit/'src/mod_base')\n"
-                "from mod_base.build_ci.host import HostBoundary\n"
-                "from mod_base.build_ci.installation import install_privileged_kit,authenticate_privileged_kit\n"
-                "from mod_base.build_ci.installation_record import record_privileged_kit_installation,read_privileged_kit_installation\n"
-                "from mod_base.build_ci.bootstrap_installation import install_privileged_bootstrap,authenticate_privileged_bootstrap,PRIVILEGED_BOOTSTRAP_ROOT\n"
-                "from mod_base.runtime import build_invocation\n"
-                "from mod_base.errors import MbError\n"
-                "inv=build_invocation(kit/'tests/fixtures/mods/qs_like',None,"
-                "{'MOD_BASE_KIT_SHA':'a'*40},check_repository=False,root=kit)\n"
-                f"boundary={self.host_boundary!r}\n"
-                f"installed=install_privileged_kit(inv,boundary=boundary,expected_digest={digest!r})\n"
-                "try:\n"
-                f"    install_privileged_kit(inv,boundary=boundary,expected_digest={digest!r})\n"
-                "except MbError:\n    pass\n"
-                "else:\n    raise AssertionError('existing private installation was reused')\n"
-                "authenticate_privileged_kit(installed,boundary=boundary)\n"
-                f"previous=pathlib.Path({str(PRIVILEGED_KIT_ROOT)!r})\n"
-                "previous.rename(previous.with_name('privileged-kit-original'))\n"
-                f"replacement=install_privileged_kit(inv,boundary=boundary,expected_digest={digest!r})\n"
-                "assert replacement.digest==installed.digest and replacement.inode!=installed.inode\n"
-                "try:\n    authenticate_privileged_kit(installed,boundary=boundary)\n"
-                "except MbError as error:\n    assert 'root identity changed' in str(error)\n"
-                "else:\n    raise AssertionError('identical-byte root replacement retained stale authority')\n"
-                "authenticate_privileged_kit(replacement,boundary=boundary)\n"
-                "program=install_privileged_bootstrap(inv,boundary=boundary,installation=replacement)\n"
-                "authenticate_privileged_bootstrap(program,boundary=boundary,installation=replacement)\n"
-                "try:\n    install_privileged_bootstrap(inv,boundary=boundary,installation=replacement)\n"
-                "except MbError:\n    pass\n"
-                "else:\n    raise AssertionError('private program was replaced')\n"
-                "record_privileged_kit_installation(replacement,boundary=boundary)\n"
-                "assert read_privileged_kit_installation(boundary=boundary)==replacement\n"
-                "try:\n    record_privileged_kit_installation(replacement,boundary=boundary)\n"
-                "except MbError:\n    pass\n"
-                "else:\n    raise AssertionError('existing installation record was overwritten')\n"
-                "from mod_base.build_ci.installation_record import PRIVILEGED_KIT_RECORD_ROOT\n"
-                "from mod_base.model import grammar,limits\n"
-                "from mod_base.model.canonical import canonical_json\n"
-                "record_root=pathlib.Path(str(PRIVILEGED_KIT_RECORD_ROOT))\n"
-                "leaf=record_root/grammar.CI_KIT_INSTALLATION_NAME\n"
-                "saved=leaf.read_bytes()\n"
-                "approved=dict(expected_sha=replacement.kit_sha,expected_version=replacement.kit_version,"
-                "expected_digest=replacement.digest)\n"
-                "def denied(label):\n"
-                "    try:\n        read_privileged_kit_installation(boundary=boundary)\n"
-                "    except MbError:\n        pass\n"
-                "    else:\n        raise AssertionError('altered installation record admitted: '+label)\n"
-                "    try:\n        guard.authenticate_fixed_kit(**approved)\n"
-                "    except guard.BootstrapError:\n        pass\n"
-                "    else:\n        raise AssertionError('independent guard admitted altered record: '+label)\n"
-                "for mode in (0o644,0o400):\n"
-                "    leaf.chmod(mode)\n"
-                "    try:\n        denied('leaf mode')\n"
-                "    finally:\n        leaf.chmod(0o600)\n"
-                "record_root.chmod(0o755)\n"
-                "try:\n    denied('directory mode')\n"
-                "finally:\n    record_root.chmod(0o700)\n"
-                "os.chown(leaf,boundary.uid,boundary.gid)\n"
-                "try:\n    denied('runner-owned leaf')\n"
-                "finally:\n    os.chown(leaf,0,0)\n"
-                "extra=record_root/'unexpected'\nextra.write_bytes(b'inert')\n"
-                "try:\n    denied('extra entry')\n"
-                "finally:\n    extra.unlink()\n"
-                "held=record_root.with_name('held-installation-record')\nleaf.rename(held)\n"
-                "try:\n"
-                "    denied('missing leaf')\n"
-                "    for kind in ('symlink','hardlink','fifo'):\n"
-                "        if kind=='symlink':\n            leaf.symlink_to(held)\n"
-                "        elif kind=='hardlink':\n            os.link(held,leaf)\n"
-                "        else:\n            os.mkfifo(leaf,0o600)\n"
-                "        try:\n            denied(kind)\n"
-                "        finally:\n            leaf.unlink()\n"
-                "finally:\n    held.rename(leaf)\n"
-                "changed=json.loads(saved)\nchanged['inode']+=1\n"
-                "for raw in (saved+b' ',b'{\"kind\":1,\"kind\":2}',b'{\"value\":NaN}',"
-                "b'\\xff',b' '*(limits.MAX_CI_KIT_INSTALL_RECORD_BYTES+1),canonical_json(changed)):\n"
-                "    leaf.write_bytes(raw)\n"
-                "    try:\n        denied('record bytes or root identity')\n"
-                "    finally:\n        leaf.write_bytes(saved)\n"
-                "assert read_privileged_kit_installation(boundary=boundary)==replacement\n"
-                "for name in list(sys.modules):\n"
-                "    if name=='mod_base' or name.startswith('mod_base.'):\n        del sys.modules[name]\n"
-                "program_path=pathlib.Path(str(PRIVILEGED_BOOTSTRAP_ROOT))/grammar.CI_BOOTSTRAP_PROGRAM_NAME\n"
-                "guard_spec=importlib.util.spec_from_file_location('installed_private_kit_guard',program_path)\n"
-                "guard=importlib.util.module_from_spec(guard_spec)\nguard_spec.loader.exec_module(guard)\n"
-                "guard.load_fixed_kit(**approved)\n"
-                "assert 'mod_base' in sys.modules\n"
-                f"root=pathlib.Path({str(PRIVILEGED_KIT_ROOT)!r})/'src/mod_base'\n"
-                "from mod_base.build_ci.handoff import freeze_handed_off_build_validation\n"
-                "assert callable(freeze_handed_off_build_validation) and tuple(sys.path)==original\n"
-                "assert 'PIL' not in sys.modules\n"
-                "for name,module in sys.modules.items():\n"
-                "    if name=='mod_base' or name.startswith('mod_base.'):\n"
-                "        assert pathlib.Path(module.__file__).is_relative_to(root)\n"
-                "print('private isolated kit admitted',flush=True)\n")
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", body, cwd=self.root)
-        self.assertIn(b"private isolated kit admitted", result.stdout)
-        root = Path(str(PRIVILEGED_KIT_ROOT))
-        from mod_base.build_ci.installation_record import PRIVILEGED_KIT_RECORD_ROOT
-        record_root = Path(str(PRIVILEGED_KIT_RECORD_ROOT))
-        from mod_base.build_ci.bootstrap_installation import PRIVILEGED_BOOTSTRAP_ROOT
-        program_root = Path(str(PRIVILEGED_BOOTSTRAP_ROOT))
-        self.assertEqual((program_root.stat().st_uid, program_root.stat().st_gid, stat.S_IMODE(program_root.stat().st_mode)),
-                         (0, 0, 0o700))
-        self.assertEqual((record_root.stat().st_uid, record_root.stat().st_gid, stat.S_IMODE(record_root.stat().st_mode)),
-                         (0, 0, 0o700))
-        self.assertEqual((root.stat().st_uid, root.stat().st_gid, stat.S_IMODE(root.stat().st_mode)), (0, 0, 0o700))
-        for role in WORKER_ACCOUNTS:
-            for path in (root, root / "src/mod_base/__init__.py", record_root,
-                         record_root / grammar.CI_KIT_INSTALLATION_NAME, program_root,
-                         program_root / grammar.CI_BOOTSTRAP_PROGRAM_NAME):
-                self.assertEqual(self.as_worker(role, "/usr/bin/test", "-r", str(path), accepted=(0, 1)).returncode, 1)
+        program = kit / "tools/ci_privileged_bootstrap.py"
+        nonce = "0" * 64
+
+        def root(*arguments, flags=("-I", "-B", "-S"), script=program, accepted=(2,)):
+            return command("/usr/bin/sudo", "-n", "--", sys.executable, *flags, str(script), *arguments,
+                           accepted=accepted, cwd=self.root)
+
+        def entry(kit_root=kit, kit_digest=digest, operation="freeze-build-validation"):
+            return ("--operation", operation, "--kit", str(kit_root), "--kit-digest", kit_digest, "--nonce", nonce)
+
+        def rejected_before_import(result):
+            self.assertEqual((result.stdout, result.stderr), (b"", b"mod-base: root bootstrap rejected\n"))
+
+        rejected_before_import(root(*entry(kit_digest="sha256:" + "0" * 64)))
+        rejected_before_import(root(*entry(), flags=("-B",)))
+        rejected_before_import(root(*entry(), flags=("-I", "-S")))
+        rejected_before_import(root(*entry(operation="shell")))
+        rejected_before_import(root(*entry()[:-2]))
+        with tempfile.TemporaryDirectory(prefix="mod-base-kit-copy-", dir=os.environ["RUNNER_TEMP"]) as directory:
+            base = Path(directory)
+            base.chmod(0o755)
+
+            def copy(name):
+                target = base / name
+                for top in ("src", "site", "requirements", "tools", "template", "actions"):
+                    shutil.copytree(kit / top, target / top)
+                self.assertEqual(kit_tree_digest(target), digest)
+                return target
+
+            # An identical copy is another checkout: it runs its own program, never this one's.
+            foreign = copy("foreign")
+            rejected_before_import(root(*entry(), script=foreign / "tools/ci_privileged_bootstrap.py"))
+            rejected_before_import(root(*entry(kit_root=foreign)))
+            writable = copy("writable")
+            (writable / "src/mod_base/build_ci").chmod(0o775)
+            rejected_before_import(root(*entry(kit_root=writable), script=writable / "tools/ci_privileged_bootstrap.py"))
+            loose = copy("loose")
+            (loose / "src/mod_base/errors.py").chmod(0o666)
+            rejected_before_import(root(*entry(kit_root=loose), script=loose / "tools/ci_privileged_bootstrap.py"))
+            cached = copy("cached")
+            (cached / "src/mod_base/__pycache__").mkdir()
+            rejected_before_import(root(*entry(kit_root=cached), script=cached / "tools/ci_privileged_bootstrap.py"))
+            changed = copy("changed")
+            (changed / "src/mod_base/errors.py").write_bytes(b"raise SystemExit(0)\n")
+            rejected_before_import(root(*entry(kit_root=changed), script=changed / "tools/ci_privileged_bootstrap.py"))
+            alias = base / "alias"
+            alias.symlink_to(foreign, target_is_directory=True)
+            rejected_before_import(root(*entry(kit_root=alias), script=alias / "tools/ci_privileged_bootstrap.py"))
+            # The admitted copy loads and then fails closed in kit code: no request names this nonce.
+            result = root(*entry(kit_root=foreign), script=foreign / "tools/ci_privileged_bootstrap.py")
+            self.assertEqual(result.stdout, b"")
+            self.assertRegex(result.stderr, rb"\Amod_base: [^\n]+\n\Z")
+            self.assertFalse(any(base.rglob("__pycache__/*")))
+        self.assertFalse(any((kit / "src").rglob("__pycache__")))
 
     def test_other_uid_cannot_read_host_process_environment_memory_or_ptrace(self):
         probe = subprocess.Popen((sys.executable, "-I", "-B", "-c", "import time;time.sleep(120)"),
@@ -551,15 +479,6 @@ class LinuxWorkerTests(unittest.TestCase):
                  "from mod_base.build_ci.controller import ControllerFile,ControllerSources,prepare_controller_validation\n"
                  "from mod_base.build_ci.exports import prepare_build_validation\n"
                  "from mod_base.build_ci.inputs import prepare_validation_plan\n"
-                 "from mod_base.runtime import build_invocation\n"
-                 "from mod_base.build_ci.installation import install_privileged_kit\n"
-                 "from mod_base.build_ci.installation_record import record_privileged_kit_installation\n"
-                 "from mod_base.build_ci.bootstrap_installation import install_privileged_bootstrap\n"
-                 f"inv=build_invocation(Path({str(kit / 'tests/fixtures/mods/qs_like')!r}),None,"
-                 f"{{'MOD_BASE_KIT_SHA':{plan['identity']['kit']['sha']!r}}},check_repository=False,root=Path({str(kit)!r}))\n"
-                 f"installed=install_privileged_kit(inv,boundary={self.host_boundary!r},expected_digest={digest!r})\n"
-                 f"record_privileged_kit_installation(installed,boundary={self.host_boundary!r})\n"
-                 f"install_privileged_bootstrap(inv,boundary={self.host_boundary!r},installation=installed)\n"
                  f"prepare_controller_validation(boundary={self.host_boundary!r},validator={validator!r},"
                  f"sources={sources!r},identity={plan['identity']!r})\n"
                  f"prepare_build_validation(boundary={self.host_boundary!r},validator={validator!r},plan={plan!r})\n"
@@ -576,13 +495,14 @@ class LinuxWorkerTests(unittest.TestCase):
         from mod_base.build_ci.handoff import EXECUTION_HANDOFF_ROOT, record_build_validation_execution
         nonce = record_build_validation_execution(boundary=self.host_boundary, sources=sources,
                     bound=bound, plan=plan, envelope=envelope, run_id=42, run_attempt=2)
-        from mod_base.build_ci.root_request import ROOT_REQUEST_ROOT, record_root_freeze_request
-        from mod_base.runtime import build_invocation
-        invocation = build_invocation(kit / "tests/fixtures/mods/qs_like", None,
-            {"MOD_BASE_KIT_SHA":plan["identity"]["kit"]["sha"], "GITHUB_REPOSITORY":plan["identity"]["repository"],
-             "GITHUB_SHA":plan["identity"]["controller_sha"]},check_repository=False,root=kit)
-        entry_nonce = record_root_freeze_request(invocation,boundary=self.host_boundary,validator=validator,
-            sources=sources,plan=plan,envelope=envelope,run_id=42,run_attempt=2,execution_nonce=nonce)
+        from mod_base.build_ci.root_request import (request_build_validation_freeze, root_request_path,
+                                                    run_root_operation)
+        operation = "freeze-build-validation"
+        entry_nonce = request_build_validation_freeze(boundary=self.host_boundary, validator=validator,
+            sources=sources, plan=plan, envelope=envelope, run_id=42, run_attempt=2, execution_nonce=nonce)
+        with self.assertRaises(MbError):  # One request per operation: an existing channel is never reused.
+            request_build_validation_freeze(boundary=self.host_boundary, validator=validator,
+                sources=sources, plan=plan, envelope=envelope, run_id=42, run_attempt=2, execution_nonce=nonce)
         execution_root = Path(str(EXECUTION_HANDOFF_ROOT))
         self.assertEqual(stat.S_IMODE(execution_root.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((execution_root / grammar.CI_EXECUTION_NAME).stat().st_mode), 0o600)
@@ -596,20 +516,16 @@ class LinuxWorkerTests(unittest.TestCase):
         self.assertTrue(shadow[1].startswith(b"!"))
         self.assertEqual(shadow[7], b"1")
         self.assertFalse(any(Path(str(CONTROLLER_VALIDATION_ROOT)).rglob("*.pyc")))
-        program_path = WORKER_ROOT / "privileged-bootstrap" / grammar.CI_BOOTSTRAP_PROGRAM_NAME
-        # Exercise the installed closed process entry, not generated root code. Configuration
-        # is data from the protected checkout; only the admitted copied kit is imported.
-        entry_arguments = (
-            "--kit-sha", plan["identity"]["kit"]["sha"],
-            "--kit-version", plan["identity"]["kit"]["version"], "--kit-digest", digest,
-            "--repository", plan["identity"]["repository"], "--controller-sha", plan["identity"]["controller_sha"],
-            "--controller-root", str(kit / "tests/fixtures/mods/qs_like"),
-            "--runner-uid", str(self.host_boundary.uid), "--runner-gid", str(self.host_boundary.gid),
-            "--home-device", str(self.host_boundary.device), "--home-inode", str(self.host_boundary.inode),
-            "--home-original-mode", str(self.host_boundary.original_mode), "--nonce", entry_nonce)
-        command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", str(program_path),
-                *entry_arguments, cwd=self.root)
+        # The real root entry: the bootstrap of this verified checkout re-computes the kit digest,
+        # imports only from it and seals the receipt named by the runner's private request.
         frozen = Path(str(SEALED_VALIDATION_ROOT))
+        for wrong in ({"nonce": "0" * 64}, {"kit_digest": "sha256:" + "0" * 64},
+                      {"operation": "freeze-runtime-validation"}):
+            with self.subTest(wrong=wrong), self.assertRaises(MbError):
+                run_root_operation(**{"operation": operation, "python": sys.executable, "kit_root": kit,
+                                      "kit_digest": digest, "nonce": entry_nonce, **wrong})
+            self.assertFalse(frozen.exists())
+        run_root_operation(operation, python=sys.executable, kit_root=kit, kit_digest=digest, nonce=entry_nonce)
         original = Path(str(VALIDATOR_OUTPUT_ROOT))
         expected = {**receipt, "source_config_sha256": sources.config.sha256}
         context = {"plan": plan, **{key: expected[key] for key in
@@ -630,7 +546,8 @@ class LinuxWorkerTests(unittest.TestCase):
             self.assertEqual(probe("/usr/bin/id", "-u").stdout.strip(), str(account.uid).encode())
             self.assertEqual(probe("/usr/bin/test", "-r", str(execution_root / grammar.CI_EXECUTION_NAME),
                                    accepted=(0, 1)).returncode, 1)
-            self.assertEqual(probe("/usr/bin/test", "-r", str(ROOT_REQUEST_ROOT / grammar.CI_ROOT_REQUEST_NAME),
+            self.assertEqual(probe("/usr/bin/test", "-r",
+                                   str(root_request_path(operation) / grammar.CI_ROOT_REQUEST_NAME),
                                    accepted=(0, 1)).returncode, 1)
             for flag in ("-r", "-w"):
                 self.assertEqual(probe("/usr/bin/test", flag, str(frozen), accepted=(0, 1)).returncode, 1)
@@ -1286,118 +1203,6 @@ class LinuxControllerSourceTests(unittest.TestCase):
         self.assertEqual(set(self.root.iterdir()), before)
 
 
-class LinuxToolBytesTests(unittest.TestCase):
-    """Real descriptor byte checks only; temporary fixtures do not enroll an interpreter."""
-
-    def setUp(self):
-        if sys.platform != "linux":
-            raise AssertionError("real tool byte descriptor tests require Linux")
-        directory=tempfile.TemporaryDirectory(prefix="mod-base-tool-bytes-")
-        self.addCleanup(directory.cleanup)
-        self.root=Path(directory.name)
-        self.leaf=self.root/"tool"
-
-    def digest(self):
-        from mod_base.build_ci.toolchain import _stamp, _tool_file_digest
-        return _tool_file_digest(str(self.leaf),_stamp(self.leaf.lstat()))
-
-    def test_real_empty_and_multichunk_tool_bytes_have_exact_digest_without_descriptor_leaks(self):
-        before=set(os.listdir("/proc/self/fd"))
-        for data in (b"",b"inert tool bytes"*(limits.CI_PROCESS_READ_BYTES//8)):
-            self.leaf.write_bytes(data)
-            self.assertEqual(self.digest(),hashlib.sha256(data).hexdigest())
-        self.assertEqual(set(os.listdir("/proc/self/fd")),before)
-
-    def test_real_symlink_hardlink_and_fifo_are_rejected_without_blocking_or_leaking(self):
-        from mod_base.build_ci.toolchain import _stamp, _tool_file_digest
-        target=self.root/"target";target.write_bytes(b"inert")
-        before=set(os.listdir("/proc/self/fd"))
-        for kind in ("symlink","hardlink","fifo"):
-            if kind=="symlink":self.leaf.symlink_to(target)
-            elif kind=="hardlink":os.link(target,self.leaf)
-            else:os.mkfifo(self.leaf)
-            try:
-                with self.subTest(kind=kind),self.assertRaises(MbError):
-                    _tool_file_digest(str(self.leaf),_stamp(self.leaf.lstat()))
-            finally:self.leaf.unlink()
-        self.assertEqual(set(os.listdir("/proc/self/fd")),before)
-
-    def test_real_named_replacement_and_open_file_mutation_during_read_are_rejected(self):
-        from mod_base.build_ci import toolchain
-        original_read=os.read
-        for kind in ("replace","mutate"):
-            self.leaf.write_bytes(b"inert original")
-            expected=toolchain._stamp(self.leaf.stat())
-            changed=False
-            def reading(descriptor,size):
-                nonlocal changed
-                data=original_read(descriptor,size)
-                if data and not changed:
-                    changed=True
-                    if kind=="replace":
-                        replacement=self.root/"replacement"
-                        replacement.write_bytes(b"inert original")
-                        os.replace(replacement,self.leaf)
-                    else:self.leaf.write_bytes(b"other modified")
-                return data
-            before=set(os.listdir("/proc/self/fd"))
-            with self.subTest(kind=kind),patch.object(toolchain.os,"read",side_effect=reading),self.assertRaises(MbError):
-                toolchain._tool_file_digest(str(self.leaf),expected)
-            self.assertTrue(changed)
-            self.assertEqual(set(os.listdir("/proc/self/fd")),before)
-
-
-    def test_real_full_byte_fence_rejects_changes_around_mocked_dispatch(self):
-        from mod_base.build_ci import toolchain
-        from mod_base.build_ci.worker import WorkerAccount, WorkerResult
-        from types import SimpleNamespace
-        from contextlib import ExitStack
-        if os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or Path.home() != Path("/home/runner"):
-            raise AssertionError("full byte fence component requires hosted runner home")
-        # No actual dispatcher or account lifecycle: those outer admissions are explicit seams.
-        # Authored data supplies expected file hashes before any tool-file inspection.
-        data={"python":b"inert fixture executable", "module.py":b"inert fixture import"}
-        with tempfile.TemporaryDirectory(prefix="mod-base-byte-fence-",dir=Path.home()) as directory:
-            base=Path(directory);root=base/"tools";root.mkdir(mode=0o755)
-            for name,content in data.items():
-                (root/name).write_bytes(content);(root/name).chmod(0o755 if name=="python" else 0o644)
-            paths=sorted({str(path) for path in (root,*root.parents)}|{str(root/name) for name in data})
-            digest=hashlib.sha256(canonical_json({"format":"mod-base.tool-bytes-v1","roots":[str(root)]}))
-            for path in paths:
-                mode=stat.S_IMODE(Path(path).lstat().st_mode)
-                row={"path":path,"mode":mode}
-                if Path(path).name in data and Path(path).parent==root:
-                    content=data[Path(path).name]
-                    row.update(type="file",size=len(content),sha256=hashlib.sha256(content).hexdigest())
-                else:
-                    # Ubuntu 24.04 creates the runner home 0750 (HOME_MODE); no fence is applied here.
-                    self.assertIn(mode,(0o700,0o750,0o755));row.update(type="directory")
-                digest.update(canonical_json(row))
-            expected="sha256:"+digest.hexdigest()
-            boundary=SimpleNamespace(uid=os.getuid());account=WorkerAccount("worker",2001,2001,"/fixture/private")
-            with ExitStack() as stack:
-                stack.enter_context(patch.object(toolchain,"TOOL_INSTALL_PREFIXES",(str(base),)))
-                stack.enter_context(patch.object(toolchain,"authenticate_host_boundary"))
-                stack.enter_context(patch.object(toolchain,"authenticate_worker_account",return_value=account))
-                terminate=stack.enter_context(patch.object(toolchain,"terminate_worker"))
-                launch=stack.enter_context(patch.object(toolchain,"execute_isolated_worker",return_value=WorkerResult(0,b"",False)))
-                metadata=toolchain.inspect_worker_toolchains(boundary=boundary,roots=(str(root),))
-                proof=toolchain.authenticate_toolchain_bytes(metadata,boundary=boundary,expected_digest=expected)
-                def execute():
-                    return toolchain.execute_byte_fenced_worker(account,boundary=boundary,tools=proof,
-                        expected_digest=expected,command=(),python=str(root/"python"),java_home=None,
-                        identity={},run_id=1,run_attempt=1,values={},timeout_seconds=60)
-                before=set(os.listdir("/proc/self/fd"))
-                self.assertEqual(execute(),WorkerResult(0,b"",False));launch.assert_called_once();terminate.assert_not_called()
-                def mutate(*args,**kwargs):
-                    (root/"module.py").write_bytes(b"changed fixture data")
-                    return WorkerResult(0,b"",False)
-                launch.side_effect=mutate
-                with self.assertRaises(MbError):execute()
-                terminate.assert_called_once_with(account)
-                self.assertEqual(set(os.listdir("/proc/self/fd")),before)
-
-
 class LinuxValidationPlanTests(unittest.TestCase):
     def setUp(self):
         if sys.platform != "linux":
@@ -1932,195 +1737,6 @@ class LinuxBuildArchiveTests(unittest.TestCase):
             os.link(root / "payload", root / "hard")
             with self.assertRaises(MbError):
                 stream_child_file(root, "payload", max_bytes=len(data), consume=lambda _: self.fail("hard link read"))
-
-
-class LinuxPythonInstallationCopyTests(unittest.TestCase):
-    """Real root-owned temporary byte copying, not complete installed-runtime enrollment."""
-
-    def run_copy_probe(self, failing: bool) -> bytes:
-        if sys.platform != "linux" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-            raise AssertionError("Python installation copying requires the hosted Linux fixture")
-        root = Path(__file__).resolve().parents[1]
-        program = (
-            "import importlib.util,sys,pathlib,os,io,tempfile,stat,gzip\n"
-            f"root=pathlib.Path({str(root)!r})\n"
-            "package=root/'src/mod_base'\n"
-            "spec=importlib.util.spec_from_file_location('mod_base',package/'__init__.py',submodule_search_locations=[str(package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['mod_base']=module;spec.loader.exec_module(module)\n"
-            "from mod_base.build_ci import python_installation as install\n"
-            "from mod_base.io.atomic_directory import atomic_directory\n"
-            "from mod_base.errors import MbError\n"
-            "import importlib.util\n"
-            "spec=importlib.util.spec_from_file_location('copy_fixture',root/'tests/test_ci_python_installation.py')\n"
-            # Load the fixture's imports explicitly from this trusted checkout too.
-            "test_package=root/'tests'\n"
-            "test_spec=importlib.util.spec_from_file_location('tests',test_package/'__init__.py',submodule_search_locations=[str(test_package)])\n"
-            "test_module=importlib.util.module_from_spec(test_spec);sys.modules['tests']=test_module;test_spec.loader.exec_module(test_module)\n"
-            "fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)\n"
-            "assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0\n"
-            "compressed,digest,members=fixture.fixture();selected=install._selected(members,'3.11.17')\n"
-            "with tempfile.TemporaryDirectory(prefix='mod-base-python-copy-') as directory:\n"
-            " base=pathlib.Path(directory);output=base/'python'\n"
-            f" failing={failing!r}\n"
-            " data=gzip.compress(gzip.decompress(compressed).replace(b'known binary',b'changed data'),mtime=0) if failing else compressed\n"
-            " def fill(path,fd): install._copy(io.BytesIO(data),fd,members,selected,len(data))\n"
-            " if failing:\n"
-            "  try: atomic_directory(output,fill)\n"
-            "  except MbError: pass\n"
-            "  else: raise AssertionError('changed archive copied')\n"
-            "  assert list(base.iterdir())==[]\n"
-            " else:\n"
-            "  atomic_directory(output,fill)\n"
-            "  assert (output/'bin/python3.11').read_bytes()==b'known binary'\n"
-            "  assert (output/'empty.py').read_bytes()==b''\n"
-            "  assert (output/'bin/python3').readlink()==pathlib.Path('python3.11')\n"
-            "  assert stat.S_IMODE((output/'bin/python3.11').stat().st_mode)==0o755\n"
-            "  assert stat.S_IMODE((output/'empty.py').stat().st_mode)==0o644\n"
-            "  assert not (output/'setup.sh').exists() and not (output/'site.pth').exists() and not (output/'__pycache__').exists()\n"
-            "  fd=os.open(output,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)\n"
-            "  try:\n"
-            "   install._verify(fd,selected)\n"
-            "   os.link(output/'empty.py',output/'hardlink')\n"
-            "   try: install._verify(fd,selected)\n"
-            "   except MbError: pass\n"
-            "   else: raise AssertionError('hardlinked installed file accepted')\n"
-            "   (output/'hardlink').unlink()\n"
-            "   (output/'empty.py').unlink();(output/'empty.py').symlink_to('bin/python3.11')\n"
-            "   try: install._verify(fd,selected)\n"
-            "   except MbError: pass\n"
-            "   else: raise AssertionError('substituted installed symlink accepted')\n"
-            "  finally: os.close(fd)\n"
-            "print('root-owned inert Python copy probe passed')\n"
-        )
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", program, cwd=root)
-        return result.stdout
-
-    def test_real_root_owned_normalized_copy_and_tampering_rejection(self):
-        self.assertEqual(self.run_copy_probe(False).strip(), b"root-owned inert Python copy probe passed")
-
-    def test_real_failed_copy_cleans_the_unpublished_directory(self):
-        self.assertEqual(self.run_copy_probe(True).strip(), b"root-owned inert Python copy probe passed")
-
-
-class LinuxPythonArchiveCacheTests(unittest.TestCase):
-    """Actual root-private temporary publication; no global cache or SDK mutation."""
-
-    def run_cache_probe(self, failing: bool) -> bytes:
-        if sys.platform != "linux" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-            raise AssertionError("Python archive cache requires the hosted Linux fixture")
-        root = Path(__file__).resolve().parents[1]
-        program = (
-            "import importlib.util,sys,pathlib,os,tempfile,stat,hashlib\n"
-            f"root=pathlib.Path({str(root)!r})\n"
-            "package=root/'src/mod_base'\n"
-            "spec=importlib.util.spec_from_file_location('mod_base',package/'__init__.py',submodule_search_locations=[str(package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['mod_base']=module;spec.loader.exec_module(module)\n"
-            "from mod_base.build_ci import python_setup as setup\n"
-            "from mod_base.io.atomic_directory import atomic_directory\n"
-            "from mod_base.errors import MbError\n"
-            "assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0\n"
-            "data=b'independently authored cache fixture';digest='sha256:'+hashlib.sha256(data).hexdigest()\n"
-            "with tempfile.TemporaryDirectory(prefix='mod-base-python-cache-') as directory:\n"
-            " base=pathlib.Path(directory);output=base/'cache'\n"
-            f" failing={failing!r}\n"
-            " def fill(path,fd):\n"
-            "  setup._write(fd,data[:-1]+b'!' if failing else data)\n"
-            "  setup._verify(fd,len(data),digest)\n"
-            " if failing:\n"
-            "  try: atomic_directory(output,fill)\n"
-            "  except MbError: pass\n"
-            "  else: raise AssertionError('altered archive published')\n"
-            "  assert list(base.iterdir())==[]\n"
-            " else:\n"
-            "  atomic_directory(output,fill)\n"
-            "  archive=output/'installer.tar.gz'\n"
-            "  assert archive.read_bytes()==data\n"
-            "  assert stat.S_IMODE(output.stat().st_mode)==0o700 and stat.S_IMODE(archive.stat().st_mode)==0o600\n"
-            "  assert archive.stat().st_uid==archive.stat().st_gid==0\n"
-            "  fd=os.open(output,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)\n"
-            "  try:\n"
-            "   setup._verify(fd,len(data),digest)\n"
-            "   os.link(archive,base/'hardlink')\n"
-            "   try: setup._verify(fd,len(data),digest)\n"
-            "   except MbError: pass\n"
-            "   else: raise AssertionError('hardlinked archive accepted')\n"
-            "   (base/'hardlink').unlink()\n"
-            "   archive.chmod(0o644)\n"
-            "   try: setup._verify(fd,len(data),digest)\n"
-            "   except MbError: pass\n"
-            "   else: raise AssertionError('public archive permissions accepted')\n"
-            "   archive.chmod(0o600);archive.unlink();archive.symlink_to('../external')\n"
-            "   try: setup._verify(fd,len(data),digest)\n"
-            "   except MbError: pass\n"
-            "   else: raise AssertionError('symlink archive accepted')\n"
-            "   archive.unlink();os.mkfifo(archive,0o600)\n"
-            "   try: setup._verify(fd,len(data),digest)\n"
-            "   except MbError: pass\n"
-            "   else: raise AssertionError('FIFO archive accepted')\n"
-            "  finally: os.close(fd)\n"
-            "  try: atomic_directory(output,fill)\n"
-            "  except MbError: pass\n"
-            "  else: raise AssertionError('existing cache replaced')\n"
-            "print('root-private inert Python archive cache probe passed')\n"
-        )
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", program, cwd=root)
-        return result.stdout
-
-    def test_real_root_private_archive_copy_and_metadata_rejection(self):
-        self.assertEqual(self.run_cache_probe(False).strip(), b"root-private inert Python archive cache probe passed")
-
-    def test_changed_archive_cleans_unpublished_stage(self):
-        self.assertEqual(self.run_cache_probe(True).strip(), b"root-private inert Python archive cache probe passed")
-
-
-class LinuxPythonAuthenticationTests(unittest.TestCase):
-    """Real temporary cache/SDK revalidation with explicit outer setup-location seams."""
-
-    def test_source_derived_actual_sdk_admission_and_payload_mutation(self):
-        if sys.platform != "linux" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-            raise AssertionError("Python authentication requires the hosted Linux fixture")
-        root = Path(__file__).resolve().parents[1]
-        program = (
-            "import importlib.util,sys,pathlib,os,tempfile,io\n"
-            f"root=pathlib.Path({str(root)!r})\n"
-            "package=root/'src/mod_base'\n"
-            "spec=importlib.util.spec_from_file_location('mod_base',package/'__init__.py',submodule_search_locations=[str(package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['mod_base']=module;spec.loader.exec_module(module)\n"
-            "test_package=root/'tests'\n"
-            "spec=importlib.util.spec_from_file_location('tests',test_package/'__init__.py',submodule_search_locations=[str(test_package)])\n"
-            "module=importlib.util.module_from_spec(spec);sys.modules['tests']=module;spec.loader.exec_module(module)\n"
-            "from tests.test_ci_python_installation import fixture,BOUNDARY,KIT\n"
-            "from mod_base.build_ci import python_setup as setup,python_installation as install\n"
-            "from mod_base.io.atomic_directory import atomic_directory\n"
-            "from mod_base.errors import MbError\n"
-            "from unittest.mock import patch\n"
-            "assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0\n"
-            "data,digest,members=fixture();selected=install._selected(members,'3.11.17')\n"
-            "with tempfile.TemporaryDirectory(prefix='mod-base-python-auth-') as directory:\n"
-            " base=pathlib.Path(directory);cache_parent=base/'cache';prefix=base/'sdk'\n"
-            " cache_parent.mkdir(mode=0o700);prefix.mkdir(mode=0o755)\n"
-            " def fill_cache(path,fd): setup._write(fd,data);setup._verify(fd,len(data),digest)\n"
-            " atomic_directory(cache_parent/'3.11.17',fill_cache)\n"
-            " def fill_sdk(path,fd): install._copy(io.BytesIO(data),fd,members,selected,len(data))\n"
-            " atomic_directory(prefix/'x64',fill_sdk)\n"
-            " original=(prefix/'x64').stat()\n"
-            " proof=install.PythonInstallation('3.11.17',digest,install._manifest(selected,'3.11.17',digest),len(selected),\n"
-            "  sum(item.kind=='file' for item in selected),sum(item.size for item in selected),original.st_dev,original.st_ino)\n"
-            " def parent(path): return os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)\n"
-            " def role(boundary): assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0\n"
-            " with patch.object(setup,'authenticate_privileged_host_boundary',role),patch.object(setup,'_admit_lock'),\\\n"
-            "      patch.object(setup,'_PROFILES',{'3.11.17':(len(data),digest[7:])}),\\\n"
-            "      patch.object(setup,'_parent',side_effect=lambda **kwargs:parent(cache_parent)),\\\n"
-            "      patch.object(setup,'_installation_parent',side_effect=lambda *args,**kwargs:parent(prefix)):\n"
-            "  assert setup.authenticate_privileged_python_installation(proof,boundary=BOUNDARY,installation=KIT)=='/opt/hostedtoolcache/Python/3.11.17/x64/bin/python3.11'\n"
-            "  (prefix/'x64/bin/python3.11').write_bytes(b'changed data')\n"
-            "  try: setup.authenticate_privileged_python_installation(proof,boundary=BOUNDARY,installation=KIT)\n"
-            "  except MbError: pass\n"
-            "  else: raise AssertionError('mutated SDK authenticated')\n"
-            "print('source-derived actual Python SDK authentication probe passed')\n"
-        )
-        result = command("/usr/bin/sudo", "-n", "--", sys.executable, "-I", "-B", "-S", "-c", program, cwd=root)
-        self.assertEqual(result.stdout.strip(), b"source-derived actual Python SDK authentication probe passed")
 
 
 class LinuxGradleCacheCopyTests(unittest.TestCase):

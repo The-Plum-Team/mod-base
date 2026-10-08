@@ -11,7 +11,8 @@ from mod_base.build_ci import worker_overlay as overlay
 from mod_base.build_ci.worker import WorkerError
 from mod_base.pin import Pin
 from tests.test_ci_gradle_cache import ACCOUNT
-from tests.test_ci_python_installation import BOUNDARY, info
+from tests.helpers import ci_stat as info
+from tests.test_ci_host import BOUNDARY
 
 
 PIN = Pin("a" * 40, "v1.0.3", ())
@@ -99,7 +100,7 @@ class WorkerOverlayTests(unittest.TestCase):
     def test_admission_binds_stamp_digest_locks_and_non_executable_source(self):
         names = [*overlay.DIGESTED_DIRS, overlay.STAMP_NAME]
         with ExitStack() as stack:
-            stack.enter_context(patch.object(overlay, "_paths", return_value=((RECORDS[0]["path"],), 4)))
+            stack.enter_context(patch.object(overlay, "_paths", return_value=(RECORDS[0]["path"],)))
             stack.enter_context(patch.object(overlay, "_open_directory", return_value=7))
             stack.enter_context(patch.object(overlay.os, "close"))
             stack.enter_context(patch.object(overlay.os, "scandir", side_effect=lambda fd: nullcontext(iter(SimpleNamespace(name=name) for name in names))))

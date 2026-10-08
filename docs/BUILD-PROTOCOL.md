@@ -63,210 +63,64 @@ distinguishes rejection from the expected drift list, without new CLI flags or d
 Actual writing still revalidates and can fail; this is not atomic rollback, protected activation
 transition admission or support for active caller profiles. The copied bootstrap remains stdlib-only.
 
+## Root operations
+
+Each workflow step runs one `ci` command as the runner. Work that needs root runs in one child
+process started by `build_ci.root_request.run_root_operation`:
+
+```
+/usr/bin/sudo -n -- <python> -I -B -S <kit>/tools/ci_privileged_bootstrap.py \
+    --operation <name> --kit <kit> --kit-digest sha256:<hex> --nonce <hex>
+```
+
+`<kit>` is the kit checkout the job prologue verified against the pinned digest literal, and
+`<python>` the interpreter the job runs on. The four flag/value pairs are exact and ordered; an
+unknown operation, a malformed or oversized value, a checkout outside the runner home or any
+extra argument is rejected with one fixed line before a kit byte is read. The bootstrap then
+requires real root and an isolated, site-less, bytecode-free interpreter, derives the runner from
+the owner of `/home/runner`, opens the checkout through directories that only root or the runner
+own and nobody else can write, requires the running program to be that checkout's own
+`tools/ci_privileged_bootstrap.py`, and re-computes kit-digest-v1 over `src/`, `site/` and
+`requirements/` (regular single-link non-executable files only; no bytecode, `.pth`, link or
+special entry). Only when that digest equals `--kit-digest` does it load `mod_base` from the
+checkout's exact files, without editing `sys.path`; it then re-computes the digest once more.
+Every failure up to here prints `mod-base: root bootstrap rejected` and exits 2. The bootstrap
+sets umask 077 and a 1800-second alarm on itself and calls
+`build_ci.root_request_operations.execute_root_operation`, which again checks the kit digest with
+the kit's own implementation and the staged-file locks that bind `tools/`, `template/` and
+`actions/`. There is no private copy of the kit and no private interpreter: the prologue
+establishes kit integrity, and the host fence plus the tool-root scan protect the tools.
+
+Parent and child exchange data only through `mod-base.ci.root-request` v1, a local kind that is
+never uploaded. The runner publishes one canonical request per operation, exclusively, at
+`mod-base-worker/root-request-<operation>/ci-root-request.json` (runner-owned 0700 directory,
+0600 single-link file). It has exactly `kind`, `schema_version`, `operation`, `nonce`, `boundary`
+(the fenced home: fixed path, uid, gid, device, inode, original mode) and `arguments`, a closed
+object per operation. Nothing in it names a program, a hook, a command or a destination path.
+Root reads it with the private record reader (no-follow directories, exact owner, group and mode,
+single link, stable identity and timestamps, canonical bytes), requires the nonce and operation
+it was started with, requires the boundary to name the derived runner and to be the live 0700
+home, and re-reads the request unchanged after the operation. A request is data from the
+sudo-capable runner: it proves no provenance, so every operation re-admits what it touches. Root
+never calls the GitHub API; whatever needs it happens in the runner before the request exists.
+
+The operations are the closed tuple `grammar.CI_ROOT_OPERATIONS`, mirrored by the bootstrap:
+
+| Operation | Arguments | Effect |
+|---|---|---|
+| `freeze-build-validation` | `validator`, `sources`, `plan`, `envelope`, `run_id`, `run_attempt`, `execution_nonce` | Seals the Build or target verifier's receipt into `sealed-validation/` |
+| `freeze-runtime-validation` | `validator`, `sources`, `plan`, `build`, `runtime`, `lane_id`, `run_id`, `run_attempt`, `execution_nonce` | Seals one runtime lane verifier's receipt into `sealed-validation/` |
+
+`validator` is the uid and gid of the live fixed account and must differ from the runner's.
+`sources` is controller source metadata only (controller SHA and tree, the config and each
+import file with path, mode, Git blob, SHA-256 and size); root rebuilds the bytes from the
+validator's protected controller copy and verifies the whole copy. `plan`, `envelope`, `build`
+and `runtime` are the existing kinds under their existing caps; the plan must name the executing
+kit's version and digest. `execution_nonce` names the `mod-base.ci.execution` record of the
+verifier run and must differ from the request nonce. Both operations authenticate the read-only
+inputs before and after sealing and always terminate the validator.
+
 ## Plan v1
-
-Tool byte enrollment is separate from permission/identity admission. `ToolTreeProof` remains
-unchanged and does not approve executable bytes. `authenticate_toolchain_bytes` requires that
-retained proof and an independently approved `sha256:` digest, then authenticates the explicit
-runner or root host role and reinspects the complete selected closure before reading bytes.
-No program executes and no observed digest is promoted into an approval.
-
-The new internal `mod-base.tool-bytes-v1` hash contract is SHA-256 over canonical JSON lines:
-first `{format, roots}` with the exact ordered selected roots, then every scanned ancestor,
-directory, link and regular file ordered by absolute path. Each row has `path`, permission
-`mode` and `type`; links additionally have their exact `target`, regular files their exact
-`size` and content `sha256`. Directory rows contain no extra fields. Thus aliases, paths,
-modes, empty files and root selection remain bound while transient inode/timestamp/owner
-observations stay in the separately retained metadata proof.
-
-Every regular file is streamed through stable no-follow/nonblocking descriptors, requires one
-link, preserves empty files, and is rechecked against the exact retained metadata and named
-leaf after EOF. Existing tool/source entry/file/byte/depth/link bounds and 64 KiB streaming
-chunks remain unchanged. Whole metadata/role reinspection brackets byte admission. The returned
-`ToolBytesProof` binds the original metadata proof and the approved matching digest. Root role
-selection is an exact boolean and never grants privileges. This is not a new artifact/document
-kind, installation command or success receipt. Protected installer provenance, complete actual
-interpreter/stdlib/ELF/import-root selection, program launch integration and real Linux results
-remain required; a digest of an incomplete selected tree cannot prove a complete runtime.
-
-The new local-only `mod-base.ci.root-request` v1 is the closed metadata contract for a fixed
-Build validation freeze operation. It contains exactly kind/schema_version, an entry nonce,
-separate execution nonce, retained host boundary (fixed home, UID/GID/device/inode/original
-mode observations), retained validator UID/GID, protected source metadata (controller SHA/tree,
-config and files: path/mode/Git blob/SHA-256/size), existing plan/envelope, run ID and attempt.
-No program, command, permission grant, source bytes, arbitrary import/upload root or operation
-selector exists. Source paths are inert metadata inside the fixed protected copy; observed
-modes and IDs never allocate accounts or apply permissions. Source/config/native byte caps
-remain unchanged. Its separate local JSON cap is plan plus envelope caps, 2 MiB metadata and
-64 KiB framing; it enlarges no artifact or native document limit.
-
-Validation rejects unknown/inexact fields, wrong controller/producer/plan, config path,
-over-cap source/config/plan/envelope, Git internals, duplicate/colliding sources, overlapping
-runner/validator identities and reused entry/execution nonce. The exhaustive compatibility
-ledger advertises new kind/current 1/previous null and explicit old-reader rejection. The
-fixture is inert structural metadata, not an authenticated source or execution assertion.
-Accepting this schema cannot authorize privileged code, a native success, upload or an App status.
-
-`build_ci.root_request` publishes the retained context exclusively at fixed `root-request`,
-runner-owned 0700 with one 0600 canonical leaf. Runner/account/Invocation binding precedes
-publication; protected controller bytes and read-only plan/Build input identities are checked
-before and inside atomic publication. A fresh entry nonce is separate from the execution nonce.
-No source bytes or program cross this request channel.
-
-The root reader requires the original host/account observations, actual fixed private kit record
-and matching executing Invocation. It reconstructs source bytes from the fixed protected copy,
-validates native configuration and source hashes, and rechecks exact whole-copy metadata,
-root identity, read-only plan/Build bytes and the request around admission. Empty Python modules
-remain authenticated inventory entries. Root/account admission precedes reads.
-`freeze_root_requested_build_validation` performs the fixed library operation using the
-reconstructed context and retained execution nonce, rechecks the complete request after sealing,
-and terminates the admitted validator on success or failure. It imports no domain code.
-Production workflow integration, independently retained Invocation/source/pin provenance,
-interpreter/stdlib enrollment, exclusion of competing trusted writers and real Linux evidence
-remain required. These APIs do not authenticate their own executing provenance.
-
-### Separate original runtime Root request
-
-Initial local-only `mod-base.ci.runtime-root-request` v1 preserves the existing Build request
-kind/version unchanged. Its exact fields are kind/schema_version, nonce/execution_nonce,
-boundary/validator/sources with the existing closed metadata shapes, plan, build, runtime,
-lane_id, run_id and run_attempt. There is no operation/program/hook/command/path/permission
-selector. Existing plan, complete Build and runtime envelope schemas/caps apply independently;
-the local whole-record cap is the existing Build request allowance plus 4 MiB runtime envelope.
-Native/file/archive limits are unchanged. Require exact runtime lane/current producing attempt,
-complete Build bound to the whole original owning descriptor, matching plan/profile/identity and
-closed source/account metadata. Legitimate different Build/runtime producer runs are preserved.
-Distinct entry/execution nonces remain mandatory. Registry/ledger/current writer fixture advertise
-new kind, initial 1, previous null; predecessor readers reject it. No old-kind fields are added.
-
-`runtime_root_request` publishes only to fixed WORKER_ROOT/runtime-root-request with one fixed
-ci-runtime-root-request.json, runner-private 0700/0600, canonical bounded snapshots and a fresh
-entry nonce. Runner/account/invocation admission precedes publication. Independently retain three
-original inputs; inspect actual protected source and all input bytes/root identities before and
-inside atomic publication. Close original caller/source metadata and invocation, reauthenticate
-runner/accounts, then reread staged bytes after closing admission before publication. No caller
-can choose a pathname, callback, program or native operation through the record.
-
-Root-only reading uses the existing no-follow/single-link/private owner/group/mode/identity
-physical reader at that separate fixed channel. Reject noncanonical/ambiguous JSON, wrong nonce,
-host/validator/invocation/installed kit, source reconstruction/hash/config mismatch or three-input
-byte/root drift. Reconstruct actual source bytes only from the fixed protected copy, preserving
-empty source inventory entries; import no domain code. Recheck request/source/input admission
-before returning context. Fixed freeze_root_requested_runtime_validation invokes the existing
-original runtime execution handoff using its retained execution nonce, re-admits the complete
-request afterward and compares original source/scalar/canonical input byte signatures, including
-the original caller context. Always quiesce the admitted validator; reject before cleanup when
-Root/account admission fails. Never consume/upload a private receipt left by closing failure.
-
-These library tests use explicit syscall/metadata/source-copy/physical-reader/freeze seams and
-actual generic context/schemas. They prove no real Linux UID/channel, native reports, complete
-program/runtime provenance or workflow authority. The independent bootstrap process entry is
-now offers the explicit fixed runtime route described below. Original caller/program/interpreter
-enrollment, actual hosted lifecycle and final native/API/policy/writer admission remain required.
-
-The installed guard now has a closed process entry under isolated/no-site/no-bytecode Python.
-The unchanged Build route accepts exactly these ordered flag/value pairs: `--kit-sha`, `--kit-version`, `--kit-digest`,
-`--repository`, `--controller-sha`, `--controller-root`, `--runner-uid`, `--runner-gid`,
-`--home-device`, `--home-inode`, `--home-original-mode`, `--nonce`. Numeric observations use
-canonical unsigned decimal and existing OS bounds. Arguments have the existing 4 KiB path cap;
-unknown/duplicate/missing/extra/inexact/control-containing values fail before package loading.
-The separate runtime route adds exactly the leading pair `--operation runtime-validation-v1`,
-then the same ordered original pairs. This explicit versioned process capability is centrally
-owned by grammar.CI_RUNTIME_FREEZE_OPERATION and independently mirrored in the guard; it is not
-an optional field added to a document or a request-selected function. Unknown operation/version,
-wrong pair position, duplicate or malformed values fail before kit loading. Both targets are
-fixed post-byte-admission imports. Runtime target import occurs before account lookup, so import
-failure cannot strand an admitted validator. Legacy argument shape/signatures/dispatch are retained.
-The independently approved kit is byte-admitted and loaded before any kit import. Pre-dispatch
-failure emits one fixed line and a nonzero exit, including a package attempting SystemExit(0).
-There is no operation selector, shell program, arbitrary import/upload root or argument passthrough.
-
-`build_root_freeze_invocation` authenticates the retained host fence and runner-owned canonical
-controller checkout below that fence, then reads only the bounded no-follow default
-`site/mod-base.json` as data. The existing Invocation factory receives exactly the three explicit
-controller/kit identity variables and the fixed copied kit root; repository adapter execution and
-ambient environment are excluded. Installed kit SHA/version, config bytes and named checkout
-identity are rechecked. The entry obtains the actual fixed validator account and calls only
-the fixed request sealing API. Composition failure terminates that admitted validator; the
-sealing API owns termination once dispatched. The original protected caller must still admit
-the configuration checkout/controller provenance and enroll the program/interpreter/stdlib.
-Data path ownership alone cannot approve those inputs. This entry is not a released/enabled service.
-
-`build_ci.privileged_launch.execute_privileged_freeze_request` connects retained approval to
-one fixed root process. Actual host/account admission precedes installed lock-bound program
-reauthentication, matching Invocation/configuration, independently approved selected tool bytes,
-enrolled Python destination and physical request reconstruction. It passes only the exact
-closed flags to the fixed installed script under `-I -B -S`, with the existing clean bounded
-administrative process controller and fixed private kit cwd. The separate process deadline is
-20 seconds, preserving the fixture's original bound and changing no worker/domain hook timeout.
-The administrative controller's default cwd/behavior remains unchanged for existing callers.
-
-Before and after launch, program/tool/request observations are rechecked. A successful exit must
-be silent; it cannot replace the receipt. The parent independently authenticates fixed private
-sealed ownership, original root identity, exact canonical receipt/native report bytes and the
-protected source/plan/producer/input context. The admitted validator is terminated on success or
-failure, including rejected pre-launch admission. Caller code/pin and actual installer/complete
-interpreter/import/system closure approval remain mandatory before invoking this API. Proof
-constructors supply no authority. Real Linux process/cancellation/timeout/descendant behavior,
-whole native lifecycle, approved installer profile and production workflow wiring are still open.
-
-The additive execute_privileged_runtime_freeze_request and fixed copied-SDK companion
-execute_installed_python_runtime_freeze_request share the original private program/tool/host/
-Invocation admission and bounded clean administrative launcher, selecting only that fixed runtime
-flag route from protected code. Admit the original typed runtime Root request, retain complete
-source/scalar/canonical three-input byte signatures and derive the existing domain-separated
-input digest. Preserve cross-run complete owning Build rather than replacing it with the runtime
-producer. No public callback, raw command, alternate operation or request sniffing exists.
-
-After silent successful child exit, re-admit program and tools (plus source-derived SDK where
-selected), reread the original runtime request and compare the retained original signature and
-caller context. Independently verify the fixed private sealed runtime receipt/report bytes under
-exact verify_runtime/enrolled lane/current producing attempt/source-config/input digest. Reread
-the original request after receipt reading, re-admit program/tools/SDK again and independently
-verify the receipt bytes a second time. Reject self-consistent receipt replacement during closing
-admission, original context mutation, private metadata or named receipt-root inode changes.
-Reauthenticate Root and always quiesce the admitted validator; reject unadmitted accounts/roles
-before cleanup. SDK versions/paths/caps/worker and 20-second entry timeout remain unchanged.
-Constructed proofs, local digests and exit 0 never approve the original caller/program/runtime,
-native reports, uploads or App statuses. Windows tests use explicit physical/admission/process/
-receipt seams plus actual generic schemas; required real hosted Linux/native lifecycle and full
-original interpreter/stdlib/system/installer enrollment remain open.
-
-The independent pre-import byte guard is `tools/ci_privileged_bootstrap.py` (MB11). Its
-`authenticate_fixed_kit` receives only the independently approved executing SHA, version and
-digest; it opens the fixed private installation/record paths and imports no kit code. It
-requires Linux root and isolated/no-site/no-bytecode Python, strict canonical closed record
-bytes matching those approved scalars, exact private root metadata without ACLs, bounded
-no-follow regular-file reads, complete kit-digest-v1/count parity and original root identity.
-Record and named roots are rechecked around byte admission. Bytecode and `.pth` are rejected.
-
-This deliberately duplicates only the pre-import constants/closed record contract; conformance
-tests bind their values to central grammar/limits and the current v1 schema. BootstrapError is
-independent of MbError because importing kit errors before admission would defeat the check.
-The staged tools lock binds these program bytes inside the approved kit digest. The protected
-caller must verify that lock and independently install/enroll the program, interpreter and
-stdlib before executing it; the guard cannot authenticate its own executing provenance.
-`load_fixed_kit` rejects any preloaded mod_base module, admits the fixed copy's bytes, explicitly
-loads only its package with a fixed submodule search root and never edits sys.path. Package
-version/repository and every loaded mod_base module's origin must match that root; byte
-reauthentication follows loading. A failed import or reinspection removes partial mod_base
-modules. The loader itself does not dispatch a native operation. Root-owned metadata is not
-pin/release approval. Host fence, complete import/tool/installer closure, genuine retained
-source/execution context and production workflow integration remain required.
-
-`build_ci.bootstrap_installation` connects program bytes to the already admitted private kit.
-The root caller reauthenticates its genuine kit installation, requires the validated invocation
-to name that executing kit and a runner-home-fenced source, then reads the fixed tools program.
-The copied kit's bounded staged lock must be ASCII canonical sorted unique template/tools
-paths and enroll that exact program hash. A separate 256 KiB program cap and 1 MiB lock cap
-change no native/artifact bound. Independent source/stage/lock/kit checks bracket exclusive
-atomic publication into fixed `privileged-bootstrap`, root-owned 0700 with one 0600 leaf.
-Retained program hash/size/device/inode data supports later fixed-path reauthentication,
-including exact private metadata, stable bounded no-follow bytes and original root identity.
-This API imports/executes no copied program. No new document kind or CLI is introduced.
-The old independently admitted caller remains responsible for genuine source/pin provenance;
-neither constructing the dataclass nor reading root-owned bytes approves an interpreter or
-the current executing program. Production interpreter/stdlib enrollment and workflow wiring are open.
 
 `mod-base.build.plan` has exactly `kind`, `schema_version`, `build_adapter_api`, `identity`,
 `profile`, `targets`, `lanes`, `plan_sha256`. The profile is `quick-skin` or `block-pops`, not an
@@ -1123,56 +977,6 @@ installer hashes and native compiler observations remain separate protected requ
 The Linux fixture now admits the real complete Python prefix before a fenced synthetic dispatch;
 that case remains unexecuted and its hosted cost has not been measured.
 
-`build_ci.installation` provides the inactive root-only private kit copy needed before privileged
-imports. Its caller supplies a validated Invocation and an independently approved kit-digest-v1
-literal after authenticating the executing pin. Source must be behind the authenticated runner
-home fence. Bounded no-follow discovery precedes hashing/copying: at most 20,000 files and
-512 MiB across all three digested roots, matching existing kit digest limits, plus a new
-additional 40,000-entry cap and the existing tool-tree depth cap. Links, special/executable files,
-bytecode and .pth files reject. Empty source files remain valid. Only src/site/requirements
-leaves and their parents enter the new fixed privileged-kit directory; Git metadata, workflows,
-tools, actions and other checkout roots never enter it. Undeclared empty subdirectories reject
-under the clean source-copy contract; the digest itself continues to bind file bytes only.
-
-The private stage requires root ownership, 0700 directories, 0600 single-link files and no ACLs.
-Independent copy hashing, retained-source reinspection and stage/parent role/layout checks precede
-exclusive atomic publication, which never replaces an existing installation. A retained receipt
-binds kit SHA/version/digest, total files/bytes and the original root device/inode. Reauthentication
-requires exact three-root shape, private metadata before/after independent digest reads, exact
-counts, retained root identity and a stable named root throughout. This is copy admission,
-not independent pin/main/tag approval, installer/interpreter/stdlib enrollment, a fixed privileged
-program, genuine native execution or status authority. The required Linux fixture copies the
-actual trusted test checkout, denies both worker UIDs access and explicitly loads copied kit
-modules under -I -B -S without changing sys.path or importing Pillow. Its metadata-only synthetic
-kit SHA does not claim a released pin. That fixture remains unexecuted; no Linux success or
-production launcher is inferred from local seams or the Windows feasibility probe.
-
-The companion local-only `mod-base.ci.kit-installation` v1 kind has exactly `kind`,
-`schema_version`, `kit` (fixed repository, SHA, version), `tree_digest`, `files`, `total_bytes`,
-`device` and `inode`. Its separate local JSON limit is 4 KiB; file/byte counts retain the
-installation bounds and device/inode are unsigned 64-bit values (inode nonzero). It is a new
-kind with current 1/previous null and explicit predecessor rejection, not a modification to
-the released kit-stamp or an artifact/tested record. No field selects a path, program, hook,
-permissions, secret or status. The protected root caller must retain the genuine returned
-installation and independently authenticated executing pin; constructed metadata is not proof.
-
-`build_ci.installation_record` exclusively publishes a new fixed root-owned 0700 directory
-with one 0600 single-link `ci-kit-installation.json` leaf after actual-copy reauthentication,
-and repeats that admission inside publication. Metadata/ACL and independent byte checks
-surround the write. A protected caller read admits exact private metadata, bounded no-follow
-descriptor/named-file/root stability, strict canonical JSON and closed fields, reconstructs
-data and reauthenticates the actual fixed copy's digest/counts/original inode. A second private
-record read around that check rejects record drift. The shared reader inspects at most two
-directory entries; it cannot silently accept missing/extra leaves. It retains the execution
-channel's original independent cap and physical checks.
-
-This API already runs from an admitted kit. It is not the independent pre-import bootstrap
-that a fixed privileged program still requires, and root file ownership alone does not grant
-new pin/source/installer/interpreter/native/App authority. The required Linux copy fixture now
-also round-trips the actual private root record, rejects reuse and denies worker reads of both
-record directory/leaf. Generated harness code has been compiled; all physical Linux cases
-remain unexecuted. No receipt or record is uploaded or turned into a passing required status.
-
 The inactive protected-root `freeze_build_export` composes candidate termination/locking,
 fixed account/layout admission, and tracked-source verification both before and after an
 independent export copy. Original exports require exact candidate-owned private metadata and
@@ -1377,40 +1181,6 @@ startup, complete runtime/credential boundary, post-execution lifecycle, hosted 
 native adapters and production workflow wiring remain mandatory incomplete work. The required
 Linux composition fixture uses real temporary data helpers with explicit outer admission seams;
 compiling its body locally does not establish Linux execution or the full boundary.
-
-### Inactive byte-fenced disposable execution
-
-`build_ci.toolchain.execute_byte_fenced_worker` requires an independently approved digest in
-addition to a retained selected-closure byte receipt. Actual runner host and exact disposable
-account admission precede tool inspection and cleanup authority. Full bytes are authenticated
-before the existing metadata/path/host-fenced dispatcher execution and again after it returns
-with its UID terminated/locked. Failure or final drift terminates/locks the admitted account and
-returns no success. The expected digest cannot be inferred as authority from the receipt or an
-observed installation. Original caller/runtime, complete import/system enrollment, independently
-prepared source/Git/cache/overlay, native request/policy and excluded writers remain mandatory.
-
-The existing metadata-only route remains a frozen interface with its documented caller byte
-provenance prerequisite; production integration must select the stronger byte route with an
-independently approved complete closure. The additive component is inactive. Temporary Linux
-fixture byte checks with mocked dispatch do not prove worker execution, native conformance,
-physical credential/runtime isolation or the complete execute/freeze/second-validator lifecycle.
-
-### Inactive byte-fenced controller validation
-
-`build_ci.controller.execute_byte_fenced_controller_validator` shares the existing closed
-Build/target/runtime hook admission, protected retained source/config/profile, enrolled unit,
-account separation and controller read-copy rechecks. Explicit byte mode requires a separately
-approved digest and byte receipt; a missing digest cannot select metadata fallback. Execution
-uses the new tool byte fence while preserving fixed argv, native validator timeout/environment
-and final whole-UID cleanup. Post-execution source drift rejects even after tool byte success.
-The metadata interface remains frozen. Original caller/runtime, complete import/system enrollment
-and immutable native inputs remain prerequisites. The additive inputs.execute_byte_fenced_build_validator/execute_byte_fenced_target_validator
-routes now retain complete/exact-target frozen input scope, same producer run/attempt, canonical
-input digest, read-only input admission and original directory identities around byte-fenced
-controller execution. Missing digest cannot downgrade either input entry to metadata execution.
-Existing metadata and receipt-freeze interfaces remain unchanged. Production workflow wiring,
-complete native/runtime inputs and hosted Linux execution remain pending; returned results do
-not authorize receipts, uploads or App statuses.
 
 ### Closed caller rendering foundation
 
@@ -1741,7 +1511,8 @@ This adds no API runtime download route, native success, status, reuse or consum
 
 ### Frozen inputs around native lane verification
 
-MB11 runtime_inputs adds the byte-fenced frozen runtime lane execution binding. Require the
+MB11 runtime_inputs adds the frozen runtime lane execution binding
+(`execute_frozen_runtime_validator`), tool-fenced like Build verification. Require the
 independently admitted plan, exact lane scope/identity and runtime producing run/attempt. Bind
 the complete retained Build envelope to the runtime's whole owning Build descriptor; that Build
 may legitimately be from a different run. Snapshot bounded canonical plan/Build/runtime inputs
@@ -1847,10 +1618,8 @@ must fail private metadata admission before sealed-runtime appears. No primitive
 
 These cases are authored and unexecuted on this Windows host. Their existing fresh GitHub-hosted
 Linux/sudo/account prerequisites remain mandatory and are never simulated. They prove no native
-report/JAR/API semantics or complete SDK/program/caller enrollment. In particular they do not
-substitute the older metadata-only Build validator route for runtime's mandatory byte-fenced
-execution. Full original three-input byte-fenced second-UID/runtime execution handoff/request/
-Root process integration and actual hosted outcomes remain pending.
+report/JAR/API semantics. Runtime verification uses the same tool-fenced second-account route
+as Build verification.
 
 MB11 runtime_freeze.freeze_runtime_export requires retained successful candidate execution,
 original protected tested-tree inventory/native generated-root policy, exact enrolled lane/current
