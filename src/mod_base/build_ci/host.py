@@ -285,21 +285,28 @@ def authenticate_privileged_host_boundary(boundary: HostBoundary) -> None:
     _authenticate_home_receipt(boundary)
 
 
-def _fence_command(command: tuple[str, ...]) -> tuple[bytes, bool]:
+def _fence_command(command: tuple[str, ...], *, phase: str = "administrative") -> tuple[bytes, bool]:
     """Run one fixed administrative command; return its bounded stdout and whether all of it fit.
 
     A command that cannot start, exits non-zero or outlives its bound is a rejection. A non-zero
-    exit carries the start of what the command, or a program it ran, wrote to stderr.
+    exit carries the start of what the command, or a program it ran, wrote to stderr. Every
+    failure names the fixed phase and its elapsed time, without printing the command arguments.
     """
 
     process = None
     output, diagnostic = bytearray(), bytearray()
     complete = True
+    started = time.monotonic()
+
+    def failure(message: str) -> WorkerError:
+        return WorkerError(f"host fence command {message} "
+                           f"(phase={phase}; elapsed={time.monotonic() - started:.2f}s)")
+
     try:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, env=dict(_FENCE_ENV), cwd="/", close_fds=True)
         if process.stdout is None or process.stderr is None:
-            raise WorkerError("host fence command pipes unavailable")
+            raise failure("pipes unavailable")
         deadline = time.monotonic() + limits.CI_HOST_FENCE_TIMEOUT_SECONDS
         with selectors.DefaultSelector() as selector:
             for stream, kept in ((process.stdout, output), (process.stderr, diagnostic)):
@@ -309,7 +316,7 @@ def _fence_command(command: tuple[str, ...]) -> tuple[bytes, bool]:
                 remaining = deadline - time.monotonic()
                 ready = selector.select(remaining) if remaining > 0 else []
                 if not ready:
-                    raise WorkerError("host fence command timed out")
+                    raise failure("timed out")
                 for key, _ in ready:
                     chunk = os.read(key.fd, limits.CI_PROCESS_READ_BYTES)
                     if not chunk:
@@ -321,13 +328,12 @@ def _fence_command(command: tuple[str, ...]) -> tuple[bytes, bool]:
                     complete = complete and (key.data is diagnostic or len(chunk) <= room)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise WorkerError("host fence command timed out")
+            raise failure("timed out")
         if process.wait(timeout=remaining) != 0:
-            raise WorkerError("host fence command failed: "
-                              + single_line(diagnostic.decode("utf-8", "replace"), limit=300))
+            raise failure("failed: " + single_line(diagnostic.decode("utf-8", "replace"), limit=300))
         return bytes(output), complete
     except (OSError, subprocess.SubprocessError) as error:
-        raise WorkerError("host fence command could not complete") from error
+        raise failure("could not complete") from error
     finally:
         if process is not None:
             try:
@@ -335,7 +341,7 @@ def _fence_command(command: tuple[str, ...]) -> tuple[bytes, bool]:
                     process.kill()
                 process.wait(timeout=limits.CI_TERMINATION_GRACE_SECONDS)
             except (OSError, subprocess.SubprocessError) as error:
-                raise WorkerError("host fence command did not reap") from error
+                raise failure("did not reap") from error
             finally:
                 for stream in (process.stdout, process.stderr):
                     if stream is not None:
@@ -353,7 +359,7 @@ def _close_writable_trees(trees: tuple[str, ...]) -> None:
     _fence_command(("/usr/bin/find", *trees, "-xdev", "-ignore_readdir_race",
                     "(", "(", "-type", "d", "-o", "-type", "f", ")", "-perm", "/0022",
                     "-exec", "/usr/bin/chmod", "go-w", "--", "{}", "+", ")", ",",
-                    "(", "-type", "d", "-exec", "/usr/bin/setfacl", "-k", "--", "{}", "+", ")"))
+                    "(", "-type", "d", "-exec", "/usr/bin/setfacl", "-k", "--", "{}", "+", ")"), phase="repair")
 
 
 def _reachable_writable_entries(root: str, *, skip: str) -> tuple[list[str], bool]:
@@ -370,7 +376,7 @@ def _reachable_writable_entries(root: str, *, skip: str) -> tuple[list[str], boo
         "/usr/bin/find", root, "-xdev", "-ignore_readdir_race", "-path", skip, "-prune", "-o",
         "(", "-type", "d", "!", "-perm", "/0011", "!", "-nouser", "-prune", ")", "-o",
         "(", "(", "-type", "d", "-perm", "-0002", "!", "-perm", "-1000", "-o", "-type", "f", "-perm", "-0002", ")",
-        "-printf", "%D %p\\0", ")"))
+        "-printf", "%D %p\\0", ")"), phase="verification")
     records = output.split(b"\0")[:-1]  # A cut-off last record has no terminator and is dropped.
     entries = []
     for record in records:

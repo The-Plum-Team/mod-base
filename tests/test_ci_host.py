@@ -316,11 +316,13 @@ class HostFenceCommandTests(unittest.TestCase):
         self.assertTrue(all(name.startswith(str(wide) + "/entry-") and name.endswith("x" * 100) for name in found))
 
     def test_failed_or_missing_command_is_a_rejection_with_its_first_diagnostic(self):
-        with self.assertRaisesRegex(MbError, r"command failed: \(no message\)$"):
+        with self.assertRaisesRegex(MbError, r"command failed: \(no message\) "
+                                            r"\(phase=administrative; elapsed=\d+\.\d{2}s\)$"):
             host._fence_command(("/usr/bin/false",))
         with self.assertRaisesRegex(MbError, "could not complete"):
             host._fence_command(("/usr/bin/mod-base-no-such-command",))
-        with self.assertRaisesRegex(MbError, r"command failed: \S*find: .*missing.*No such file or directory"):
+        with self.assertRaisesRegex(MbError, r"command failed: \S*find: .*missing.*No such file or directory "
+                                            r"\(phase=repair; elapsed=\d+\.\d{2}s\)$"):
             host._close_writable_trees((str(self.base / "missing"),))
         self.assertEqual(host._fence_command(("/usr/bin/printf", "kept")), (b"kept", True))
         # A program the walk runs fails the walk, and both streams are drained while only stdout
@@ -336,9 +338,21 @@ class HostFenceCommandTests(unittest.TestCase):
                              (b"0123456789abcdef", False))
 
     def test_command_that_outlives_its_bound_is_killed_and_rejected(self):
-        with patch.object(limits, "CI_HOST_FENCE_TIMEOUT_SECONDS", 0.3), \
-                self.assertRaisesRegex(MbError, "timed out"):
-            host._fence_command(("/usr/bin/sleep", "30"))
+        for phase in ("repair", "verification"):
+            with self.subTest(phase=phase), patch.object(limits, "CI_HOST_FENCE_TIMEOUT_SECONDS", 0.3), \
+                    self.assertRaisesRegex(MbError, rf"timed out \(phase={phase}; elapsed=\d+\.\d{{2}}s\)$"):
+                host._fence_command(("/usr/bin/sleep", "30"), phase=phase)
+
+    def test_verification_command_failure_identifies_its_phase_and_elapsed_time(self):
+        unreadable = self.base / "unreadable"
+        unreadable.mkdir()
+        unreadable.chmod(0o111)  # Reachable by a future account, but find cannot list it.
+        try:
+            with self.assertRaisesRegex(MbError, r"command failed: .*Permission denied "
+                                                r"\(phase=verification; elapsed=\d+\.\d{2}s\)$"):
+                host._reachable_writable_entries(str(unreadable), skip=self.skip)
+        finally:
+            unreadable.chmod(0o700)
 
     def test_root_only_fence_refuses_the_unprivileged_runner_before_any_command(self):
         with self.assertRaisesRegex(MbError, "requires protected root setup"):
