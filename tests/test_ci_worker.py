@@ -349,19 +349,26 @@ class AccountTests(unittest.TestCase):
 
 
 class TerminationTests(unittest.TestCase):
+    """Legacy command-shape checks; real revocation is tests.ci_linux_deferred."""
+
+    @staticmethod
+    def inactive(command):
+        return b"inactive\ninactive\ninactive\n" if "--property=ActiveState" in command else b""
+
     def test_double_real_effective_sweeps_retry_then_lock_and_expire(self):
         queries = iter([b"123\n", b"", b"", b"", b"", b""])
         def control(command, **kwargs):
-            return next(queries) if command[0] == "/usr/bin/pgrep" else b""
+            return next(queries) if command[0] == "/usr/bin/pgrep" else self.inactive(command)
         with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
              patch.object(worker, "_control", side_effect=control) as run, patch.object(worker.time, "sleep"):
             worker.terminate_worker(ACCOUNT)
         commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(commands[:4], [
+        kills = [command for command in commands if "/usr/bin/pkill" in command]
+        self.assertEqual(kills[:4], [
             ("/usr/bin/sudo", "-n", "/usr/bin/pkill", "-KILL", flag, "2000") for _ in range(2) for flag in ("-u", "-U")])
         self.assertEqual(sum(command[0] == "/usr/bin/pgrep" for command in commands), 6)
-        self.assertEqual(commands[-7], ("/usr/bin/sudo", "-n", "/usr/sbin/usermod", "--lock", "--expiredate",
-                                         "1970-01-02", "modbase_candidate"))
+        self.assertIn(("/usr/bin/sudo", "-n", "/usr/sbin/usermod", "--lock", "--expiredate",
+                       "1970-01-02", "modbase_candidate"), commands)
         self.assertEqual(commands[-2:], [("/usr/bin/pgrep", flag, "2000") for flag in ("-u", "-U")])
 
     def test_process_appearing_during_lock_is_killed_before_return(self):
@@ -374,7 +381,7 @@ class TerminationTests(unittest.TestCase):
                 state["post_lock_kills"] += 1
             elif command[0] == "/usr/bin/pgrep":
                 return b"123\n" if state["alive"] else b""
-            return b""
+            return self.inactive(command)
         with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
                 patch.object(worker, "_control", side_effect=control):
             worker.terminate_worker(ACCOUNT)
@@ -388,7 +395,7 @@ class TerminationTests(unittest.TestCase):
                 raise worker.WorkerError("post-lock observation failed")
             if "--lock" in command:
                 control.locked = True
-            return b""
+            return self.inactive(command)
         control.locked = False
         with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
                 patch.object(worker, "_control", side_effect=control), self.assertRaises(MbError):
@@ -398,7 +405,7 @@ class TerminationTests(unittest.TestCase):
     def test_surviving_uid_is_fatal_but_still_locked(self):
         clock = [0.0]
         def control(command, **kwargs):
-            return b"123\n" if command[0] == "/usr/bin/pgrep" else b""
+            return b"123\n" if command[0] == "/usr/bin/pgrep" else self.inactive(command)
         def sleep(duration):
             clock[0] += duration
         with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
@@ -406,17 +413,21 @@ class TerminationTests(unittest.TestCase):
              patch.object(worker.time, "monotonic", side_effect=lambda: clock[0]), \
              patch.object(worker.time, "sleep", side_effect=sleep), self.assertRaises(MbError):
             worker.terminate_worker(ACCOUNT)
-        self.assertIn("--lock", run.call_args.args[0])
-        self.assertLessEqual(clock[0], limits.CI_TERMINATION_GRACE_SECONDS)
+        self.assertTrue(any("--lock" in call.args[0] for call in run.call_args_list))
+        self.assertLessEqual(clock[0], 2 * limits.CI_TERMINATION_GRACE_SECONDS)
 
     def test_control_failure_still_locks_and_failed_lock_is_fatal(self):
         with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
-             patch.object(worker, "_control", side_effect=[worker.WorkerError("kill failed"), b""]) as run, \
+             patch.object(worker, "_control", side_effect=[worker.WorkerError("kill failed"), b""] + [b""] * 30) as run, \
              self.assertRaises(MbError):
             worker.terminate_worker(ACCOUNT)
-        self.assertIn("--lock", run.call_args.args[0])
+        self.assertTrue(any("--lock" in call.args[0] for call in run.call_args_list))
+        def lock_failure(command, **kwargs):
+            if "--lock" in command:
+                raise worker.WorkerError("lock failed")
+            return self.inactive(command)
         with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
-             patch.object(worker, "_control", side_effect=[b""] * 6 + [worker.WorkerError("lock failed")]), \
+             patch.object(worker, "_control", side_effect=lock_failure), \
              self.assertRaises(MbError):
             worker.terminate_worker(ACCOUNT)
 

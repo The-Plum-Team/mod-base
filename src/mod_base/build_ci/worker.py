@@ -440,7 +440,7 @@ def _control(command: tuple[str, ...], *, timeout: float, accepted: frozenset[in
 
 
 def terminate_worker(account: WorkerAccount) -> None:
-    """Repeat UID kill sweeps, lock/expire the user, then verify post-lock quiescence.
+    """Revoke deferred user execution, sweep the UID, expire it, then prove quiescence.
 
     A surviving process or control failure is fatal and forbids sealing/upload. This preserves
     native BP's double sweep and bounded asynchronous JVM teardown behavior.
@@ -450,6 +450,58 @@ def terminate_worker(account: WorkerAccount) -> None:
     check(authenticate_worker_account(account.role) == account, "$.account", "worker account identity changed")
     uid = str(account.uid)
     deadline = time.monotonic() + lim.CI_TERMINATION_GRACE_SECONDS
+
+    def administrative(*arguments: str, accepted: frozenset[int] = frozenset({0})) -> bytes:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise WorkerError("worker termination grace expired")
+        return _control(("/usr/bin/sudo", "-n", *arguments), timeout=remaining, accepted=accepted)
+
+    def revoke_user_manager() -> None:
+        # sudo's noninteractive PAM stack does not start a user session, but logind lets
+        # an unprivileged uid enable its own linger even with no-new-privileges. Killing
+        # its current processes or expiring its password does not revoke that permission.
+        if not Path("/run/systemd/system").is_dir():
+            return
+
+        administrative("/usr/bin/loginctl", "disable-linger", WORKER_ACCOUNTS[account.role])
+        units = (f"user@{uid}.service", f"user-runtime-dir@{uid}.service", f"user-{uid}.slice")
+        administrative("/usr/bin/systemctl", "stop", *units)
+        state = administrative("/usr/bin/systemctl", "show", "--property=ActiveState", "--value", *units)
+        # An emergency UID kill can leave the stopped manager in systemd's failed
+        # state. Clear only those dead units, then independently observe them again.
+        failed = [unit for unit, value in zip(units, state.split()) if value == b"failed"]
+        if failed:
+            administrative("/usr/bin/systemctl", "reset-failed", *failed)
+            state = administrative("/usr/bin/systemctl", "show", "--property=ActiveState", "--value", *units)
+        if state.split() != [b"inactive"] * len(units):
+            raise WorkerError("worker user manager or session survived termination")
+        administrative("/usr/bin/test", "!", "-e", f"/var/lib/systemd/linger/{WORKER_ACCOUNTS[account.role]}")
+        administrative("/usr/bin/test", "!", "-e", f"/run/user/{uid}")
+
+    def revoke_spool_jobs() -> None:
+        name = WORKER_ACCOUNTS[account.role]
+        if Path("/usr/bin/crontab").is_file():
+            # Status 1 also means there was no crontab. The independent path observation
+            # below requires absence; a failed deletion can never authorise the export.
+            administrative("/usr/bin/crontab", "-u", name, "-r", accepted=frozenset({0, 1}))
+        administrative("/usr/bin/test", "!", "-e", f"/var/spool/cron/crontabs/{name}")
+        if Path("/usr/bin/atq").is_file():
+            def jobs() -> list[str]:
+                rows = administrative("/usr/bin/atq").splitlines()
+                result = []
+                for row in rows:
+                    fields = row.split()
+                    if len(fields) < 3 or not fields[0].isdigit():
+                        raise WorkerError("cannot authenticate scheduled at jobs")
+                    if fields[-1] == name.encode("ascii"):
+                        result.append(fields[0].decode("ascii"))
+                return result
+
+            for job in jobs():
+                administrative("/usr/bin/atrm", job)
+            if jobs():
+                raise WorkerError("worker at jobs survived termination")
 
     def sweep() -> None:
         while True:
@@ -471,13 +523,32 @@ def terminate_worker(account: WorkerAccount) -> None:
                 raise WorkerError("worker processes survived termination")
             time.sleep(min(lim.CI_TERMINATION_POLL_SECONDS, remaining))
 
-    try:
-        sweep()
-    finally:
-        lock_worker_account(account.role)
+    failures: list[BaseException] = []
+
+    def attempt(operation: Any, *, mandatory_sweep: bool = False) -> None:
+        nonlocal deadline
+        # A timed-out revocation must not consume the opportunity to signal the UID.
+        # Reserve the existing grace again for emergency cleanup only; the original
+        # failure is retained, so even successful cleanup cannot authorise an export.
+        if mandatory_sweep and failures and time.monotonic() >= deadline:
+            deadline = time.monotonic() + lim.CI_TERMINATION_GRACE_SECONDS
+        try:
+            operation()
+        except BaseException as error:
+            failures.append(error)
+
+    attempt(revoke_user_manager)
+    attempt(sweep, mandatory_sweep=True)
+    attempt(lambda: lock_worker_account(account.role))
+    # The hook could have re-enabled linger while the first revocation was running.
+    # It has now been swept and expired; revoke again before observing final state.
+    attempt(revoke_user_manager)
+    attempt(revoke_spool_jobs)
     # Locking is not proof of quiescence. A process may have appeared after the last pre-lock
     # observation; kill/check again while retaining the original whole-sweep deadline.
-    sweep()
+    attempt(sweep, mandatory_sweep=True)
+    if failures:
+        raise failures[0]
 
 
 def worker_processes(account: WorkerAccount) -> bool:

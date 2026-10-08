@@ -1128,8 +1128,24 @@ class KitCiWorkflowTest(unittest.TestCase):
         names = {job["name"] for job in document["jobs"].values()}
         self.assertTrue({"Test", "Workflow policy", "Front end", "Conformance (informational)"} <= names)
         self.assertEqual(document["jobs"]["test"]["strategy"]["matrix"]["python"], ["3.11", "3.12", "3.13"])
-        self.assertEqual(document["jobs"]["test-gate"]["needs"], "test")
+        self.assertEqual(document["jobs"]["test-gate"]["needs"], ["test", "hosted-worker", "hosted-deferred"])
         self.assertEqual(document["jobs"]["conformance"]["continue-on-error"], "true")
+
+    def test_account_modules_have_separate_required_python_matrices(self) -> None:
+        jobs = self.document["jobs"]
+        self.assertEqual({job_id: jobs[job_id]["timeout-minutes"] for job_id in
+                          ("test", "hosted-worker", "hosted-deferred")},
+                         {"test": "30", "hosted-worker": "60", "hosted-deferred": "15"})
+        for job_id, module in (("hosted-worker", "ci_linux_worker"),
+                               ("hosted-deferred", "ci_linux_deferred")):
+            with self.subTest(job=job_id):
+                job = jobs[job_id]
+                self.assertEqual(job["strategy"]["matrix"]["python"], ["3.11", "3.12", "3.13"])
+                self.assertNotIn("continue-on-error", job)
+                self.assertIn(f"python3 -m unittest -v tests.{module}", job["steps"][-1]["run"])
+                self.assertTrue((ROOT / "tests" / f"{module}.py").is_file())
+                self.assertIn(f"needs.{job_id}.result", str(jobs["test-gate"]["steps"]))
+        self.assertNotIn("tests.ci_linux_", str(jobs["test"]["steps"]))
 
     def test_every_job_reads_only_and_every_action_is_pinned(self) -> None:
         self.assertEqual(self.document["permissions"], {})

@@ -854,7 +854,10 @@ class LinuxWorkerTests(HostedWorkerCase):
             ("/usr/bin/sudo", "-n", "/usr/bin/pkill", "-KILL", flag, str(account.uid))
             for _ in range(2) for flag in ("-u", "-U")
         ] + [("/usr/bin/pgrep", flag, str(account.uid)) for flag in ("-u", "-U")]
-        post_lock = calls[locked + 1:]
+        # Deferred-execution revocation also runs after the lock. Keep observing the
+        # complete real kill/query pattern without mistaking those controls for sweeps.
+        post_lock = [args for args in calls[locked + 1:]
+                     if "/usr/bin/pkill" in args or args[0] == "/usr/bin/pgrep"]
         self.assertGreaterEqual(len(post_lock), len(expected_sweep))
         self.assertEqual(len(post_lock) % len(expected_sweep), 0)
         for offset in range(0, len(post_lock), len(expected_sweep)):

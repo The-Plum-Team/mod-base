@@ -18,7 +18,7 @@ jobs:
   test:
     name: Test on Python ${{ matrix.python }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -68,8 +68,27 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=src python3 tools/parallel_unittest.py -v -t . tests
+  hosted-worker:
+    name: Hosted worker on Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    # Real accounts and repeated host/tool admission exceed the former 30-minute budget.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out the kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
       - name: Require real disposable-account termination on Linux
-        if: always()
         shell: bash
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -77,9 +96,36 @@ jobs:
           set -euo pipefail
           PYTHONPATH=src python3 -m unittest -v tests.ci_linux_worker
 
+  hosted-deferred:
+    name: Hosted deferred execution on Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out the kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Require deferred execution to be refused or neutralised
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python3 -m unittest -v tests.ci_linux_deferred
+
   test-gate:
     name: Test
-    needs: test
+    needs: [test, hosted-worker, hosted-deferred]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -88,10 +134,14 @@ jobs:
       - name: Require every Python version to pass
         shell: bash
         env:
-          RESULT: ${{ needs.test.result }}
+          SUITE_RESULT: ${{ needs.test.result }}
+          WORKER_RESULT: ${{ needs.hosted-worker.result }}
+          DEFERRED_RESULT: ${{ needs.hosted-deferred.result }}
         run: |
           set -euo pipefail
-          [[ "$RESULT" == success ]] || { printf 'The test matrix finished with %s.\n' "$RESULT" >&2; exit 1; }
+          for result in "$SUITE_RESULT" "$WORKER_RESULT" "$DEFERRED_RESULT"; do
+            [[ "$result" == success ]] || { printf 'A test matrix finished with %s.\n' "$result" >&2; exit 1; }
+          done
 
   workflow-policy:
     name: Workflow policy

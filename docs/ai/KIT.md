@@ -34,10 +34,12 @@ These rules are specific to this code and add to the sections below:
 - Root work goes through the closed operations only: one entry of `grammar.CI_ROOT_OPERATIONS`,
   requested by a private `mod-base.ci.root-request` and run by `tools/ci_privileged_bootstrap.py`,
   which mirrors the list without importing the kit. The only other `sudo` command lines are the
-  fixed ones in `build_ci.worker` that create, lock, kill and enter an account. Root never calls
+  fixed ones in `build_ci.worker` that create, lock, kill and enter an account, revoke its
+  systemd user manager/linger and remove its cron/at jobs. Root never calls
   the GitHub API, and a request never names a program, a hook or a destination.
-- Account, `sudo` and root behaviour is tested only in `tests/ci_linux_worker.py`, which the suite
-  does not collect and CI runs on a GitHub-hosted runner in every Python leg. Its account classes
+- Account, `sudo` and root behaviour is tested in `tests/ci_linux_worker.py` and deferred execution
+  in `tests/ci_linux_deferred.py`; the suite collects neither. CI runs each module in its own
+  GitHub-hosted job in every Python leg and the `Test` gate requires them all. Their account classes
   refuse any other host (`GITHUB_ACTIONS`, `RUNNER_ENVIRONMENT=github-hosted`, passwordless `sudo`,
   `/home/runner`), create real accounts and change the modes of system trees for good: run it in
   CI or on a disposable Linux machine laid out like a hosted runner, never on a workstation. A

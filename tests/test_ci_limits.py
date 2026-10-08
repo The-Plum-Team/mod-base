@@ -54,7 +54,8 @@ NATIVE: dict[str, tuple[Any, str]] = {
     "MAX_CI_LOG_BYTES": (16 * MIB, "BP:scripts/ci/untrusted_runner.py:50 MAX_LOG_BYTES; "
                                    "BP:e2e/packaged_runtime.py:182 and :185; QS:e2e/packaged_runtime.py:203 and :206"),
     "MAX_CI_ENV_BYTES": (256 * KIB, "BP:scripts/ci/untrusted_runner.py:44 MAX_ENV_BYTES"),
-    "CI_TERMINATION_GRACE_SECONDS": (15.0, "BP:scripts/ci/untrusted_runner.py:42 TERMINATION_GRACE_SECONDS"),
+    "CI_TERMINATION_GRACE_SECONDS": (15.0, "BP:scripts/ci/untrusted_runner.py:42; normal termination and each "
+                                          "mandatory emergency sweep after an exhausted failed phase"),
     "CI_TERMINATION_POLL_SECONDS": (0.25, "BP:scripts/ci/untrusted_runner.py:718"),
     # Its Gradle cache seed, which is also the largest tree the kit copies for a worker.
     "MAX_CI_SOURCE_ENTRIES": (250_000, "BP:scripts/ci/untrusted_runner.py:491"),
