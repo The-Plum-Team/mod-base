@@ -2,9 +2,10 @@
 
 The first step of every Build and packaged job. ``--pr`` is the pull request number of a
 ``pull_request_target`` run and empty for a protected push, dispatch or schedule; ``--producer``
-says which gate the job belongs to. The command creates ``--state`` and writes
-``identity.json`` there (:mod:`mod_base.build_ci.identity`), then outputs ``tested_sha`` (the commit
-to check out as the candidate) and ``pr_number`` (empty for a protected subject).
+says which gate the job belongs to. ``--producer status`` is the status callee's job, which names
+the pull request it evaluates on every event that starts it. The command creates ``--state`` and
+writes ``identity.json`` there (:mod:`mod_base.build_ci.identity`), then outputs ``tested_sha`` (the
+commit to check out as the candidate) and ``pr_number`` (empty for a protected subject).
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ import argparse
 
 from mod_base import cli, runtime
 from mod_base.build_ci import commands, identity
-from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.model import grammar, limits
 
 
@@ -31,7 +31,7 @@ PULL_REQUEST = cli.typed(_pull_request, "pull request number")
 def add_verbs(verbs: argparse._SubParsersAction) -> None:
     subject = verbs.add_parser("subject", help="authenticate the tested subject and write its identity record")
     commands.add_job_arguments(subject)
-    subject.add_argument("--producer", choices=PRODUCERS, required=True)
+    subject.add_argument("--producer", choices=identity.SUBJECT_PRODUCERS, required=True)
     subject.add_argument("--pr", type=PULL_REQUEST, required=True, metavar="N",
                          help="the pull request number; empty for a protected push, dispatch or schedule")
     subject.add_argument("--github-output", type=cli.PATH, required=True, metavar="F")

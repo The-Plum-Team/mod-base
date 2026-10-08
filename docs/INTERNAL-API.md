@@ -2004,17 +2004,25 @@ writes. It imports no worker module; `tests/test_ci_adapter.py` pins its directo
 
 Owner: MB11. What `ci subject` does: authenticate the tested subject through the API and keep it in
 the job's private state directory. Mutable state (default branch, pull request) is read at the
-start and again before the record is written; the commit object is read once.
+start and again before the record is written; the commit object is read once. Besides the two
+gates there is a third producer, `status`: the status caller's evaluation job, whose subject is
+always the pull request `--pr` names, on every event that starts that caller. Its controller is
+the default-branch commit the run executes, so it derives the identity (and the plan) the Build
+and the packaged run of the generation derived.
 
 * `IDENTITY_NAME = 'identity.json'`
 * `PULL_REQUEST_EVENT = 'pull_request_target'`
 * `PROTECTED_EVENTS = ('push', 'workflow_dispatch', 'schedule')`
+* `STATUS_PRODUCER = 'status'`: the producer of the status caller's evaluation job; never a `protocol.PRODUCERS` gate.
+* `STATUS_EVENTS = ('workflow_run', 'pull_request_target', 'schedule', 'workflow_dispatch')`: the events that start a run of the status caller.
+* `SUBJECT_PRODUCERS = ('build', 'packaged', 'status')`: what `ci subject --producer` accepts.
 * `POLICY_FORMAT = 'mod-base.build.policy-v1'`
 * `class SubjectError(MbError)`: The subject of this job cannot be authenticated (reason `ci-subject`; `draft`, `no-test-merge` and `controller-moved` for those three cases).
 * `class StateError(MbError)`: The job's private state directory or one of its records cannot be trusted (reason `ci-state`).
-* `def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The managed callers a job of `producer` may run from: its own, and for Build jobs of a protected subject also the packaged caller (its `rebuild` job).
-* `def validate_subject_record(document: Any, path: str = '$') -> dict[str, Any]`: The closed identity record `{producer, event, workflow_path, controller_tree, subject}`; `subject` is `protocol.validate_subject` and always names the Build caller as `controller_workflow`.
-* `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None) -> dict[str, Any]`: Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. The environment's claims are checked before the first request; 4 requests for a pull request, 5 otherwise; nothing is written.
+* `def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The managed callers a job of `producer` may run from: its own, and for Build jobs of a protected subject also the packaged caller (its `rebuild` job). A `status` job runs from the status caller alone and only for a pull request (no caller otherwise).
+* `def run_events(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The events a job of `producer` may run on: `pull_request_target` for a gate's pull request and `PROTECTED_EVENTS` for its protected subject; `STATUS_EVENTS` for the pull request of a `status` job, which has no protected subject (no event).
+* `def validate_subject_record(document: Any, path: str = '$') -> dict[str, Any]`: The closed identity record `{producer, event, workflow_path, controller_tree, subject}`; `subject` is `protocol.validate_subject` and always names the Build caller as `controller_workflow`. The producer is one of `SUBJECT_PRODUCERS`, and its event and caller are those `run_events` and `run_workflows` admit for the subject.
+* `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None) -> dict[str, Any]`: Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. For the `status` producer `pr_number` is the pull request under evaluation on any of `STATUS_EVENTS`, authenticated like a gate's (the live default branch must be the executing commit and the pull request's base), never None. The environment's claims are checked before the first request; 4 requests for a pull request, 5 otherwise; nothing is written.
 * `def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str`: The closed protected-policy digest: canonical SHA-256 of `{format: POLICY_FORMAT, build_adapter_api, graph_versions: {build, packaged}, kit: subject.kit, config_sha256, adapter_files: [{path, sha256}]}`. It changes with the protected Build config bytes, any source of the adapter closure, the kit pin or tree digest, the adapter API or a graph version, and with nothing else.
 * `def create_state(state: Path) -> None`: Create the job's private state directory (mode 0700); an existing path is never adopted.
 * `def write_state_record(state: Path, name: str, raw: bytes) -> None`: Create `<state>/<name>` (mode 0600) in an existing private state directory; never replaces a record.

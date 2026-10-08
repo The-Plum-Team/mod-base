@@ -113,11 +113,43 @@ class SubjectCommandTests(unittest.TestCase):
             with self.subTest(pr=pr):
                 self.assertEqual(code, 2)
                 self.assertTrue(stderr.startswith("mod_base: usage: "), stderr)
-        code, stderr = self.run_subject(producer="status")
-        self.assertEqual(code, 2)
-        self.assertTrue(stderr.startswith("mod_base: usage: "), stderr)
+        for producer in ("release", "gate", ""):
+            code, stderr = self.run_subject(producer=producer)
+            with self.subTest(producer=producer):
+                self.assertEqual(code, 2)
+                self.assertTrue(stderr.startswith("mod_base: usage: "), stderr)
         self.assertEqual((self.api.request_count, self.budgets), (0, []))
         self.assertFalse(self.state.exists())
+
+    def test_the_status_producer_writes_the_subject_of_the_gates_on_every_event_of_its_caller(self) -> None:
+        self.assertEqual(self.run_subject(), (0, ""))
+        build = identity.read_subject(self.state)
+        for event in identity.STATUS_EVENTS:
+            self.api, _ = h.github(max_requests=limits.MAX_CI_SUBJECT_REQUESTS)
+            state = self.temporary / f"status-{event}"
+            self.output.unlink()
+            with self.subTest(event=event):
+                self.assertEqual(self.run_subject(producer="status", state=state,
+                                                  environment=h.environment(event=event, caller="status")), (0, ""))
+                record = identity.read_subject(state)
+                self.assertEqual((record["producer"], record["event"], record["workflow_path"]),
+                                 ("status", event, CI_CALLER_WORKFLOWS["status"]))
+                self.assertEqual(record["subject"], build["subject"], "the plan it derives is the plan of the gates")
+                self.assertEqual((self.api.request_count, self.api.mutations), (4, []))
+                self.assertEqual(self.output.read_text(encoding="utf-8"), f"tested_sha={h.TESTED_SHA}\npr_number=7\n")
+
+    def test_a_status_job_without_a_pull_request_or_outside_its_caller_is_refused_before_any_request(self) -> None:
+        cases = {"no pull request": {"pr": "", "environment": h.environment(event="schedule", caller="status")},
+                 "the Build caller": {"environment": h.environment()},
+                 "a push": {"environment": h.environment(event="push", caller="status")}}
+        for label, options in cases.items():
+            code, stderr = self.run_subject(producer="status", **options)
+            with self.subTest(case=label):
+                self.assertEqual(code, 2)
+                self.assertFalse(stderr.startswith("mod_base: usage: "), stderr)
+                self.assertEqual(self.api.request_count, 0)
+                self.assertFalse(self.state.exists())
+                self.assertFalse(self.output.exists())
 
 
 if __name__ == "__main__":

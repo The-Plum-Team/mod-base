@@ -142,10 +142,11 @@ class PullRequestSubjectTests(unittest.TestCase):
             with self.subTest(case=label), self.assertRaises(MbError):
                 authenticate(api, environment=environment)
             self.assertEqual(api.request_count, 0, label)
-        api, _ = h.github()
-        with self.assertRaises(MbError):
-            authenticate(api, producer="status")
-        self.assertEqual(api.request_count, 0)
+        for producer in ("release", "", "Build", None):
+            api, _ = h.github()
+            with self.subTest(producer=producer), self.assertRaises(MbError):
+                authenticate(api, producer=producer)
+            self.assertEqual(api.request_count, 0)
 
     def test_the_run_its_caller_and_the_canonical_branch_must_be_the_default_branch(self) -> None:
         for name, value in (("GITHUB_REF", "refs/heads/feature/synthetic"), ("GITHUB_REF", "refs/pull/7/merge"),
@@ -215,17 +216,150 @@ class ProtectedSubjectTests(unittest.TestCase):
             authenticate(api, pr_number=None, environment=h.environment(event="push"))
 
 
+def status_environment(event: str = "workflow_run") -> dict[str, str]:
+    """The environment of the status callee's job: the status caller on the default branch."""
+
+    return h.environment(event=event, caller="status")
+
+
+class StatusSubjectTests(unittest.TestCase):
+    """The status caller's evaluation: always a pull request, on every event that starts the caller."""
+
+    def test_every_event_of_the_status_caller_yields_the_identity_of_the_gates_in_four_requests(self) -> None:
+        build = authenticate(h.github()[0])
+        self.assertEqual(identity.STATUS_EVENTS,
+                         ("workflow_run", "pull_request_target", "schedule", "workflow_dispatch"))
+        for event in identity.STATUS_EVENTS:
+            api, _ = h.github()
+            record = authenticate(api, producer="status", environment=status_environment(event))
+            with self.subTest(event=event):
+                # The same subject as the Build and the packaged job of the generation, so the
+                # same plan: only the producer, the event and the caller of this run differ.
+                self.assertEqual(record, {"producer": "status", "event": event,
+                                          "workflow_path": CI_CALLER_WORKFLOWS["status"],
+                                          "controller_tree": h.CONTROLLER_TREE, "subject": build["subject"]})
+                self.assertEqual(record["subject"]["controller_workflow"], CI_CALLER_WORKFLOWS["build"])
+                self.assertEqual((record["subject"]["pr_number"], record["subject"]["controller_sha"]),
+                                 (7, h.CONTROLLER_SHA))
+                self.assertIs(identity.validate_subject_record(record), record)
+                self.assertEqual((api.request_count, api.mutations), (4, []))
+
+    def test_the_controller_is_the_default_branch_commit_the_run_executes(self) -> None:
+        for event in identity.STATUS_EVENTS:
+            # The default branch moved after the run started: the generation the gates ran for is gone.
+            api, _ = h.github()
+            api.set_branch(h.BRANCH, "9" * 40, "8" * 40)
+            with self.subTest(event=event, case="moved default branch"), self.assertRaises(MbError) as caught:
+                authenticate(api, producer="status", environment=status_environment(event))
+            self.assertIn("controller has moved", str(caught.exception))
+            # The run executes a commit that is not the base the pull request was tested on.
+            api, pull = h.github()
+            api.set_branch(h.BRANCH, "9" * 40, "8" * 40)
+            with self.subTest(event=event, case="stale base"), self.assertRaises(MbError) as caught:
+                authenticate(api, producer="status", environment={**status_environment(event), "GITHUB_SHA": "9" * 40})
+            self.assertIn("PR base differs from the protected executing controller", str(caught.exception))
+            # A base that moved with the default branch is the generation of that commit.
+            h.seed_pull_request(api, {**pull, "base": {**pull["base"], "sha": "9" * 40}, "merge_commit_sha": "7" * 40})
+            api.add_commit("7" * 40, "5" * 40, parents=["9" * 40, h.HEAD_SHA])
+            record = authenticate(api, producer="status",
+                                  environment={**status_environment(event), "GITHUB_SHA": "9" * 40})
+            with self.subTest(event=event, case="current base"):
+                self.assertEqual((record["subject"]["controller_sha"], record["subject"]["base_sha"],
+                                  record["subject"]["tested_sha"], record["controller_tree"]),
+                                 ("9" * 40, "9" * 40, "7" * 40, "8" * 40))
+
+    def test_a_status_evaluation_always_names_a_pull_request(self) -> None:
+        for event in (*identity.STATUS_EVENTS, "push"):
+            api, _ = h.github()
+            with self.subTest(event=event), self.assertRaises(MbError):
+                authenticate(api, producer="status", pr_number=None, environment=status_environment(event))
+            self.assertEqual(api.request_count, 0)
+
+    def test_a_draft_and_a_pull_request_without_a_test_merge_are_rejections(self) -> None:
+        for change, reason in (({"draft": True}, "draft"), ({"merge_commit_sha": None}, "no-test-merge")):
+            for event in identity.STATUS_EVENTS:
+                api, pull = h.github()
+                h.seed_pull_request(api, {**pull, **change})
+                with self.subTest(reason=reason, event=event), self.assertRaises(identity.SubjectError) as caught:
+                    authenticate(api, producer="status", environment=status_environment(event))
+                self.assertEqual(caught.exception.reason, reason)
+
+    def test_only_the_status_caller_runs_a_status_job_and_it_runs_no_gate(self) -> None:
+        workflow = "GITHUB_WORKFLOW_REF"
+        cases = {
+            "a status job in the Build caller": ("status", h.environment()),
+            "a status job in the packaged caller": ("status", h.environment(caller="packaged")),
+            "a Build job in the status caller": ("build", status_environment("pull_request_target")),
+            "a packaged job in the status caller": ("packaged", status_environment("pull_request_target")),
+            "a Build job on a workflow_run": ("build", h.environment(event="workflow_run")),
+            "a packaged job on a workflow_run": ("packaged", h.environment(event="workflow_run", caller="packaged")),
+            "a status job on a push": ("status", status_environment("push")),
+            "a status job on a pull_request": ("status", status_environment("pull_request")),
+            "a status job on a comment": ("status", status_environment("issue_comment")),
+            "the status caller of another branch": ("status", {
+                **status_environment(),
+                workflow: f"{h.REPOSITORY}/{CI_CALLER_WORKFLOWS['status']}@refs/heads/release"}),
+            "the status caller of another repository": ("status", {
+                **status_environment(), workflow: f"other/mod/{CI_CALLER_WORKFLOWS['status']}@refs/heads/main"}),
+        }
+        for label, (producer, environment) in cases.items():
+            api, _ = h.github()
+            with self.subTest(case=label), self.assertRaises(MbError):
+                authenticate(api, producer=producer, environment=environment)
+            if "another branch" not in label:  # the branch of the caller is compared with the live default branch
+                self.assertEqual(api.request_count, 0, label)
+
+    def test_the_tables_of_callers_and_events(self) -> None:
+        status = CI_CALLER_WORKFLOWS["status"]
+        self.assertEqual(identity.SUBJECT_PRODUCERS, ("build", "packaged", "status"))
+        self.assertEqual((identity.run_workflows("status", pull_request=True),
+                          identity.run_workflows("status", pull_request=False)), ((status,), ()))
+        self.assertEqual((identity.run_events("status", pull_request=True),
+                          identity.run_events("status", pull_request=False)), (identity.STATUS_EVENTS, ()))
+        for producer in ("build", "packaged"):
+            self.assertEqual((identity.run_events(producer, pull_request=True),
+                              identity.run_events(producer, pull_request=False)),
+                             (("pull_request_target",), identity.PROTECTED_EVENTS))
+            self.assertNotIn(status, identity.run_workflows(producer, pull_request=True))
+            self.assertNotIn(status, identity.run_workflows(producer, pull_request=False))
+        self.assertNotIn("workflow_run", identity.PROTECTED_EVENTS)
+
+
 class RecordTests(unittest.TestCase):
     def record(self, *, pull_request: bool = True) -> dict:
         return {"producer": "build", "event": "pull_request_target" if pull_request else "push",
                 "workflow_path": CI_CALLER_WORKFLOWS["build"],
                 "controller_tree": h.CONTROLLER_TREE, "subject": h.subject(pull_request=pull_request)}
 
+    def status_record(self, event: str = "workflow_run") -> dict:
+        return {**self.record(), "producer": "status", "event": event, "workflow_path": CI_CALLER_WORKFLOWS["status"]}
+
     def test_both_kinds_of_subject_are_valid_records(self) -> None:
         for pull_request in (True, False):
             record = self.record(pull_request=pull_request)
             self.assertIs(identity.validate_subject_record(record), record)
             validate_subject(record["subject"])
+
+    def test_a_status_record_is_a_pull_request_on_an_event_of_the_status_caller(self) -> None:
+        for event in identity.STATUS_EVENTS:
+            record = self.status_record(event)
+            self.assertIs(identity.validate_subject_record(record), record)
+        hostile = {
+            "another event": self.status_record("push"),
+            "the Build caller": {**self.status_record(), "workflow_path": CI_CALLER_WORKFLOWS["build"]},
+            "a protected subject": {**self.status_record(), "subject": h.subject(pull_request=False)},
+            "a protected subject on a schedule": {**self.status_record("schedule"),
+                                                  "subject": h.subject(pull_request=False)},
+            "a Build job on a workflow_run": {**self.record(), "event": "workflow_run"},
+            "a protected Build job on a workflow_run": {**self.record(pull_request=False), "event": "workflow_run"},
+            "a Build job in the status caller": {**self.record(), "workflow_path": CI_CALLER_WORKFLOWS["status"]},
+            "a packaged job on a schedule for a pull request": {
+                **self.record(), "producer": "packaged", "workflow_path": CI_CALLER_WORKFLOWS["packaged"],
+                "event": "schedule"},
+        }
+        for label, record in hostile.items():
+            with self.subTest(case=label), self.assertRaises(MbError):
+                identity.validate_subject_record(record)
 
     def test_hostile_records_are_rejected(self) -> None:
         mutations = [

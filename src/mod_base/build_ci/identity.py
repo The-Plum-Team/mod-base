@@ -1,7 +1,8 @@
-"""The authenticated subject of one Build or packaged job and its private state record.
+"""The authenticated subject of one Build, packaged or status job and its private state record.
 
-``ci subject`` runs first in every job. It learns what is tested from the API, never from the run's
-own ``head_sha`` or from a caller input alone:
+``ci subject`` runs first in every Build and packaged job, and in a status job as soon as its
+evaluation needs the plan. It learns what is tested from the API, never from the run's own
+``head_sha`` or from a caller input alone:
 
 * a pull request: its live head, base and draft state (a draft is a rejection), and the synthetic
   merge commit GitHub tests, whose parents must be exactly ``[base, head]``;
@@ -14,6 +15,17 @@ The identity always names the Build caller as its controller workflow, so a Buil
 packaged run of one generation derive the same identity and therefore the same plan. The hashes
 that depend on the protected policy and on the candidate bytes are bound later
 (:func:`mod_base.build_ci.planning.build_plan`).
+
+The third producer, ``status``, is the status caller's evaluation (``gate-status.yml``). It tests
+nothing: it derives the plan of a generation in order to verify the runs that tested it. Its
+subject is always the pull request ``--pr`` names, whatever started the run: a finished or
+requested gate run (``workflow_run``), an event of the pull request itself
+(``pull_request_target``), the hourly reconciliation (``schedule``) or a manual request
+(``workflow_dispatch``). Every one of those runs executes the default branch, so the controller is
+again the executing commit, and the pull request is authenticated exactly like a Build job's: the
+live default branch must still be that commit and the pull request's base, or the generation the
+gates ran for is gone. The identity is therefore the one the Build and the packaged run derived,
+and so is the plan.
 
 Mutable state (the default branch, the pull request) is read at the start and again before the
 record is written; the commit object, which never changes, is read once.
@@ -47,6 +59,12 @@ from mod_base.workflow import CI_CALLER_WORKFLOWS
 IDENTITY_NAME = "identity.json"
 PULL_REQUEST_EVENT = "pull_request_target"
 PROTECTED_EVENTS = ("push", "workflow_dispatch", "schedule")
+#: The producer of the status caller's evaluation job; never a ``protocol.PRODUCERS`` gate.
+STATUS_PRODUCER = "status"
+#: The events that start a run of the status caller. Its subject is a pull request on every one.
+STATUS_EVENTS = ("workflow_run", PULL_REQUEST_EVENT, "schedule", "workflow_dispatch")
+#: What ``ci subject --producer`` accepts: the two gates and the status evaluation.
+SUBJECT_PRODUCERS = (*PRODUCERS, STATUS_PRODUCER)
 #: The domain of :func:`policy_sha256`; a change of what the digest covers changes this label.
 POLICY_FORMAT = "mod-base.build.policy-v1"
 
@@ -66,16 +84,31 @@ class StateError(MbError):
 def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]:
     """The managed callers a job of ``producer`` may run from. Build jobs also run inside the
     packaged caller, whose ``rebuild`` job calls the Build workflow when a protected (never a
-    pull-request) subject has no Build to select."""
+    pull-request) subject has no Build to select. A status job runs from the status caller alone
+    and only for a pull request."""
 
+    if producer == STATUS_PRODUCER:
+        return (CI_CALLER_WORKFLOWS[STATUS_PRODUCER],) if pull_request else ()
     if producer == "build" and not pull_request:
         return (CI_CALLER_WORKFLOWS["build"], CI_CALLER_WORKFLOWS["packaged"])
     return (CI_CALLER_WORKFLOWS[producer],)
 
 
+def run_events(producer: str, *, pull_request: bool) -> tuple[str, ...]:
+    """The events a job of ``producer`` may run on for a pull request subject or a protected one.
+
+    A gate tests a pull request on ``pull_request_target`` alone and a protected subject on a
+    push, a dispatch or a schedule. A status job evaluates a pull request on each event that
+    starts the status caller (:data:`STATUS_EVENTS`) and never anything else."""
+
+    if producer == STATUS_PRODUCER:
+        return STATUS_EVENTS if pull_request else ()
+    return (PULL_REQUEST_EVENT,) if pull_request else PROTECTED_EVENTS
+
+
 _RECORD = Obj({
-    "producer": Str(choices=PRODUCERS),
-    "event": Str(choices=(PULL_REQUEST_EVENT, *PROTECTED_EVENTS)),
+    "producer": Str(choices=SUBJECT_PRODUCERS),
+    "event": Str(choices=(PULL_REQUEST_EVENT, *PROTECTED_EVENTS, "workflow_run")),
     "workflow_path": WORKFLOW,
     "controller_tree": SHA1,
     "subject": validate_subject,
@@ -89,8 +122,9 @@ def validate_subject_record(document: Any, path: str = "$") -> dict[str, Any]:
     _RECORD(document, path)
     subject = document["subject"]
     pull_request = bool(subject["pr_number"])
-    check((document["event"] == PULL_REQUEST_EVENT) == pull_request, f"{path}.event",
-          "a pull request subject needs the pull_request_target event and no other subject may use it")
+    check(document["event"] in run_events(document["producer"], pull_request=pull_request), f"{path}.event",
+          "a pull request subject needs the pull_request_target event and no other subject may use it; "
+          "only a status evaluation, always of a pull request, runs on the events of the status caller")
     check(document["workflow_path"] in run_workflows(document["producer"], pull_request=pull_request),
           f"{path}.workflow_path", "the producer does not run from this managed caller")
     check(subject["controller_workflow"] == CI_CALLER_WORKFLOWS["build"], f"{path}.subject.controller_workflow",
@@ -125,17 +159,20 @@ def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: st
     """Authenticate what this job tests and return its identity record (:func:`validate_subject_record`).
 
     ``pr_number`` is the pull request of a ``pull_request_target`` run and ``None`` for a protected
-    push, dispatch or schedule. Everything the environment claims is checked before the first
-    request; nothing is written here."""
+    push, dispatch or schedule. For the ``status`` producer it is the pull request under
+    evaluation, on any event of the status caller (:func:`run_events`), and never ``None``.
+    Everything the environment claims is checked before the first request; nothing is written
+    here."""
 
-    check(producer in PRODUCERS, "$.producer", "must be build or packaged")
+    check(producer in SUBJECT_PRODUCERS, "$.producer", "must be build, packaged or status")
     pull_request = pr_number is not None
     repository = invocation.repository
     controller = invocation.implementation_sha
     check(api.repository == repository, "$.repository", "the API client serves another repository")
     event = _environment(invocation, "GITHUB_EVENT_NAME")
-    check(event == PULL_REQUEST_EVENT if pull_request else event in PROTECTED_EVENTS, "$.event",
-          "a pull request subject needs the pull_request_target event and no other subject may use it")
+    check(event in run_events(producer, pull_request=pull_request), "$.event",
+          "a pull request subject needs the pull_request_target event and no other subject may use it; "
+          "only a status evaluation, always of a pull request, runs on the events of the status caller")
     caller = grammar.parse_workflow_ref(_environment(invocation, "GITHUB_WORKFLOW_REF"))
     check(caller.repository == repository and caller.path in run_workflows(producer, pull_request=pull_request),
           "$.workflow_ref", "the run is not this repository's managed caller of the producer")

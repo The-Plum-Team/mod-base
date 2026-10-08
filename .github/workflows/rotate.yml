@@ -23,7 +23,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:d9c0c0b15a6ba8741b3d2765d763515f30c194e7a79ce2464478c467c6ba3274"
+  MB_KIT_TREE_DIGEST: "sha256:91582781ff5485eb7b3346fbc147e7de0a13845f3897cd82bb692133b3a3b9fd"
 
 jobs:
   rotate:
