@@ -11,7 +11,7 @@ from unittest import mock
 
 from mod_base import cli
 from mod_base.build_ci import commands, identity
-from mod_base.build_ci.protocol import CALLER_WORKFLOWS
+from mod_base.workflow import CI_CALLER_WORKFLOWS
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json
 from tests import ci_mod_harness as h
@@ -58,7 +58,7 @@ class SubjectCommandTests(unittest.TestCase):
         self.assertEqual(self.api.mutations, [])
         record = identity.read_subject(self.state)
         self.assertEqual((record["producer"], record["event"], record["workflow_path"]),
-                         ("build", "pull_request_target", CALLER_WORKFLOWS["build"]))
+                         ("build", "pull_request_target", CI_CALLER_WORKFLOWS["build"]))
         self.assertEqual(record["subject"]["pr_number"], 7)
         self.assertEqual((self.state / identity.IDENTITY_NAME).read_bytes(), canonical_json(record))
         self.assertEqual(self.output.read_text(encoding="utf-8"), f"tested_sha={h.TESTED_SHA}\npr_number=7\n")

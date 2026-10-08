@@ -19,10 +19,9 @@ BUILD_GRAPH_VERSION = 1
 PACKAGED_GRAPH_VERSION = 1
 #: The native profiles a protected Build config may name.
 PROFILES = ("quick-skin", "block-pops")
-#: The two producers of gate evidence, and the managed caller workflow a mod runs each one from.
+#: The two producers of gate evidence. The managed caller workflow a mod runs each one from is
+#: ``workflow.CI_CALLER_WORKFLOWS[producer]``: workflow names and paths live in one module.
 PRODUCERS = ("build", "packaged")
-CALLER_WORKFLOWS = {"build": ".github/workflows/mod-base-build.yml",
-                    "packaged": ".github/workflows/mod-base-packaged-e2e.yml"}
 OUTPUT_ROLES = ("production", "harness", "sbom", "native-report", "build-log")
 #: The two JARs every lane has exactly once. Neither can stand for a target as a whole.
 LANE_OUTPUT_ROLES = ("production", "harness")

@@ -9,8 +9,8 @@ from __future__ import annotations
 from typing import Any
 
 from mod_base import readable_schema_versions
-from mod_base.build_ci.protocol import (OUTPUT_ROLES, check_output_paths, check_output_scope, validate_identity,
-                                        validate_plan)
+from mod_base.build_ci.protocol import (OUTPUT_ROLES, PROFILES, check_output_paths, check_output_scope,
+                                        validate_identity, validate_plan)
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check, fail
@@ -22,7 +22,7 @@ SHA256 = Str(g.SHA256, max_len=64)
 UNIT = Str(g.CI_UNIT_ID, max_len=80)
 RUN = Int(1, lim.MAX_RUN_ID)
 ATTEMPT = Int(1, lim.MAX_RUN_ATTEMPT)
-PROFILE = Str(choices=("quick-skin", "block-pops"))
+PROFILE = Str(choices=PROFILES)
 #: Gate -> producer (the managed caller whose run sealed it) -> the modes of that run which end in
 #: this gate's receipt. A deferred run seals nothing and a reuse run seals a reuse reference instead.
 GATE_MODES = {"build": {"build": ("full",), "packaged": ("rebuilt",)},

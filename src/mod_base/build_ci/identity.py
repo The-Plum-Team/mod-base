@@ -31,8 +31,8 @@ from typing import Any
 
 from mod_base.build_ci.authenticate import read_pr_generation
 from mod_base.build_ci.config import BuildConfig
-from mod_base.build_ci.protocol import (BUILD_ADAPTER_API, BUILD_GRAPH_VERSION, CALLER_WORKFLOWS,
-                                        PACKAGED_GRAPH_VERSION, PRODUCERS, SHA1, WORKFLOW, validate_subject)
+from mod_base.build_ci.protocol import (BUILD_ADAPTER_API, BUILD_GRAPH_VERSION, PACKAGED_GRAPH_VERSION, PRODUCERS,
+                                        SHA1, WORKFLOW, validate_subject)
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.contents import branch_head, default_branch
@@ -42,6 +42,7 @@ from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.model.validators import Obj, Str, check
 from mod_base.pin import kit_tree_digest
 from mod_base.runtime import Invocation
+from mod_base.workflow import CI_CALLER_WORKFLOWS
 
 IDENTITY_NAME = "identity.json"
 PULL_REQUEST_EVENT = "pull_request_target"
@@ -68,8 +69,8 @@ def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]:
     pull-request) subject has no Build to select."""
 
     if producer == "build" and not pull_request:
-        return (CALLER_WORKFLOWS["build"], CALLER_WORKFLOWS["packaged"])
-    return (CALLER_WORKFLOWS[producer],)
+        return (CI_CALLER_WORKFLOWS["build"], CI_CALLER_WORKFLOWS["packaged"])
+    return (CI_CALLER_WORKFLOWS[producer],)
 
 
 _RECORD = Obj({
@@ -92,7 +93,7 @@ def validate_subject_record(document: Any, path: str = "$") -> dict[str, Any]:
           "a pull request subject needs the pull_request_target event and no other subject may use it")
     check(document["workflow_path"] in run_workflows(document["producer"], pull_request=pull_request),
           f"{path}.workflow_path", "the producer does not run from this managed caller")
-    check(subject["controller_workflow"] == CALLER_WORKFLOWS["build"], f"{path}.subject.controller_workflow",
+    check(subject["controller_workflow"] == CI_CALLER_WORKFLOWS["build"], f"{path}.subject.controller_workflow",
           "must name the managed Build caller")
     check(pull_request or document["controller_tree"] == subject["tested_tree"], f"{path}.controller_tree",
           "a protected subject is its own controller")
@@ -171,8 +172,8 @@ def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: st
     subject = {
         "repository": repository, "source_repository": repository, "pr_number": pr_number or 0,
         "head_sha": head_sha, "head_branch": head_branch, "base_sha": base_sha, "base_branch": branch,
-        "controller_sha": controller, "controller_workflow": CALLER_WORKFLOWS["build"],
-        "controller_ref": grammar.workflow_ref(repository, CALLER_WORKFLOWS["build"], branch),
+        "controller_sha": controller, "controller_workflow": CI_CALLER_WORKFLOWS["build"],
+        "controller_ref": grammar.workflow_ref(repository, CI_CALLER_WORKFLOWS["build"], branch),
         "kit": kit, "tested_sha": tested, "tested_tree": tree, "tested_parents": list(parents),
         "graph_version": BUILD_GRAPH_VERSION,
     }

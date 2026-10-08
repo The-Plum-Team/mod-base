@@ -1785,8 +1785,7 @@ BUILD-PROTOCOL.md. The hook contract itself is `mod_base.build_ci.adapter`.
 * `BUILD_GRAPH_VERSION = 1`
 * `PACKAGED_GRAPH_VERSION = 1`
 * `PROFILES = ('quick-skin', 'block-pops')`
-* `PRODUCERS = ('build', 'packaged')`
-* `CALLER_WORKFLOWS = {'build': '.github/workflows/mod-base-build.yml', 'packaged': '.github/workflows/mod-base-packaged-e2e.yml'}`
+* `PRODUCERS = ('build', 'packaged')`: the two producers; the managed caller of each is `workflow.CI_CALLER_WORKFLOWS[producer]`.
 * `OUTPUT_ROLES`: production, harness, SBOM, native reports and retained build logs.
 * `LANE_OUTPUT_ROLES = ('production', 'harness')`: the two JARs every lane has exactly once; never target-scoped.
 * `SINGLE_OUTPUT_ROLES = ('production', 'harness', 'sbom')`: roles one lane, or one target as a whole, holds at most once.

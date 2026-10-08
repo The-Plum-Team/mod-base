@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from mod_base import readable_schema_versions
-from mod_base.build_ci.protocol import check_output_paths, export_path, validate_identity, validate_plan
+from mod_base.build_ci.protocol import PROFILES, check_output_paths, export_path, validate_identity, validate_plan
 from mod_base.build_ci.records import _PRODUCER_IDENTITY, _producer_binding, validate_descriptor
 from mod_base.model import grammar as g, limits as lim
 from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check
@@ -22,7 +22,7 @@ _ENVELOPE = Obj({'kind': Const('mod-base.ci.runtime-envelope'),
                  'schema_version': Int(min(readable_schema_versions('mod-base.ci.runtime-envelope')),
                                        max(readable_schema_versions('mod-base.ci.runtime-envelope'))),
                  'identity': validate_identity, 'plan_sha256': _SHA,
-                 'profile': Str(choices=('quick-skin', 'block-pops')), 'producer': _PRODUCER_IDENTITY,
+                 'profile': Str(choices=PROFILES), 'producer': _PRODUCER_IDENTITY,
                  'scope': Str(choices=('lane', 'complete')), 'lane_id': Nullable(_ID),
                  'owning_build': validate_descriptor,
                  'lanes': List(_LANE, min_items=1, max_items=lim.MAX_CI_LANES, unique_by=lambda lane: lane['id']),

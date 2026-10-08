@@ -13,11 +13,12 @@ from pathlib import Path
 from mod_base import runtime
 from mod_base.build_ci import identity
 from mod_base.build_ci.config import load_build_config
-from mod_base.build_ci.protocol import CALLER_WORKFLOWS, validate_subject
+from mod_base.build_ci.protocol import validate_subject
 from mod_base.errors import MbError
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.pin import kit_tree_digest
+from mod_base.workflow import CI_CALLER_WORKFLOWS
 from tests import ci_mod_harness as h
 
 
@@ -42,7 +43,7 @@ class PullRequestSubjectTests(unittest.TestCase):
         api, _ = h.github()
         record = authenticate(api)
         self.assertEqual(record, {"producer": "build", "event": "pull_request_target",
-                                  "workflow_path": CALLER_WORKFLOWS["build"], "controller_tree": h.CONTROLLER_TREE,
+                                  "workflow_path": CI_CALLER_WORKFLOWS["build"], "controller_tree": h.CONTROLLER_TREE,
                                   "subject": expected_subject()})
         self.assertEqual(record["subject"]["tested_parents"], [h.CONTROLLER_SHA, h.HEAD_SHA])
         self.assertEqual((record["subject"]["tested_sha"], record["subject"]["tested_tree"]), (h.TESTED_SHA, h.TESTED_TREE))
@@ -53,8 +54,8 @@ class PullRequestSubjectTests(unittest.TestCase):
         build = authenticate(h.github()[0])
         packaged = authenticate(h.github()[0], producer="packaged", environment=h.environment(caller="packaged"))
         self.assertEqual(packaged["subject"], build["subject"])
-        self.assertEqual(packaged["subject"]["controller_workflow"], CALLER_WORKFLOWS["build"])
-        self.assertEqual((packaged["producer"], packaged["workflow_path"]), ("packaged", CALLER_WORKFLOWS["packaged"]))
+        self.assertEqual(packaged["subject"]["controller_workflow"], CI_CALLER_WORKFLOWS["build"])
+        self.assertEqual((packaged["producer"], packaged["workflow_path"]), ("packaged", CI_CALLER_WORKFLOWS["packaged"]))
 
     def test_a_draft_is_a_rejection(self) -> None:
         api, pull = h.github()
@@ -129,8 +130,8 @@ class PullRequestSubjectTests(unittest.TestCase):
             "no event": without("GITHUB_EVENT_NAME"),
             "packaged caller": h.environment(caller="packaged"),
             "unmanaged caller": {**h.environment(), workflow: f"{h.REPOSITORY}/.github/workflows/ci.yml@refs/heads/main"},
-            "foreign caller": {**h.environment(), workflow: f"other/mod/{CALLER_WORKFLOWS['build']}@refs/heads/main"},
-            "tag ref": {**h.environment(), workflow: f"{h.REPOSITORY}/{CALLER_WORKFLOWS['build']}@refs/tags/v1"},
+            "foreign caller": {**h.environment(), workflow: f"other/mod/{CI_CALLER_WORKFLOWS['build']}@refs/heads/main"},
+            "tag ref": {**h.environment(), workflow: f"{h.REPOSITORY}/{CI_CALLER_WORKFLOWS['build']}@refs/tags/v1"},
             "no workflow ref": without(workflow),
             "no kit": without("MOD_BASE_KIT_SHA"),
             "no controller": without("GITHUB_SHA"),
@@ -148,7 +149,7 @@ class PullRequestSubjectTests(unittest.TestCase):
 
     def test_the_run_its_caller_and_the_canonical_branch_must_be_the_default_branch(self) -> None:
         for name, value in (("GITHUB_REF", "refs/heads/feature/synthetic"), ("GITHUB_REF", "refs/pull/7/merge"),
-                            ("GITHUB_WORKFLOW_REF", f"{h.REPOSITORY}/{CALLER_WORKFLOWS['build']}@refs/heads/release")):
+                            ("GITHUB_WORKFLOW_REF", f"{h.REPOSITORY}/{CI_CALLER_WORKFLOWS['build']}@refs/heads/release")):
             with self.subTest(name=name, value=value), self.assertRaises(MbError):
                 authenticate(h.github()[0], environment={**h.environment(), name: value})
         with tempfile.TemporaryDirectory() as directory:
@@ -165,7 +166,7 @@ class ProtectedSubjectTests(unittest.TestCase):
             api, _ = h.github()
             record = authenticate(api, pr_number=None, environment=h.environment(event=event))
             with self.subTest(event=event):
-                self.assertEqual(record, {"producer": "build", "event": event, "workflow_path": CALLER_WORKFLOWS["build"],
+                self.assertEqual(record, {"producer": "build", "event": event, "workflow_path": CI_CALLER_WORKFLOWS["build"],
                                           "controller_tree": h.CONTROLLER_TREE,
                                           "subject": expected_subject(pull_request=False)})
                 subject = record["subject"]
@@ -177,7 +178,7 @@ class ProtectedSubjectTests(unittest.TestCase):
     def test_build_jobs_also_run_inside_the_packaged_caller_but_never_for_a_pull_request(self) -> None:
         environment = h.environment(event="workflow_dispatch", caller="packaged")
         rebuilt = authenticate(h.github()[0], pr_number=None, environment=environment)
-        self.assertEqual((rebuilt["producer"], rebuilt["workflow_path"]), ("build", CALLER_WORKFLOWS["packaged"]))
+        self.assertEqual((rebuilt["producer"], rebuilt["workflow_path"]), ("build", CI_CALLER_WORKFLOWS["packaged"]))
         self.assertEqual(rebuilt["subject"], expected_subject(pull_request=False))
         with self.assertRaises(MbError):
             authenticate(h.github()[0], environment=h.environment(caller="packaged"))
@@ -217,7 +218,7 @@ class ProtectedSubjectTests(unittest.TestCase):
 class RecordTests(unittest.TestCase):
     def record(self, *, pull_request: bool = True) -> dict:
         return {"producer": "build", "event": "pull_request_target" if pull_request else "push",
-                "workflow_path": CALLER_WORKFLOWS["build"],
+                "workflow_path": CI_CALLER_WORKFLOWS["build"],
                 "controller_tree": h.CONTROLLER_TREE, "subject": h.subject(pull_request=pull_request)}
 
     def test_both_kinds_of_subject_are_valid_records(self) -> None:
@@ -233,10 +234,10 @@ class RecordTests(unittest.TestCase):
             lambda r: r.update(producer="status"),
             lambda r: r.update(event="pull_request"),
             lambda r: r.update(event="push"),
-            lambda r: r.update(workflow_path=CALLER_WORKFLOWS["packaged"]),
+            lambda r: r.update(workflow_path=CI_CALLER_WORKFLOWS["packaged"]),
             lambda r: r.update(workflow_path=".github/workflows/ci.yml"),
             lambda r: r.update(controller_tree="tree"),
-            lambda r: r["subject"].update(controller_workflow=CALLER_WORKFLOWS["packaged"]),
+            lambda r: r["subject"].update(controller_workflow=CI_CALLER_WORKFLOWS["packaged"]),
             lambda r: r["subject"].update(policy_sha256="0" * 64),
             lambda r: r["subject"].pop("kit"),
             lambda r: r["subject"].update(pr_number=True),

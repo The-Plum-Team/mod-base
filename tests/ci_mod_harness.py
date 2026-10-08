@@ -31,11 +31,12 @@ from typing import Any
 import mod_base
 from mod_base.build_ci import adapter, planning
 from mod_base.build_ci.config import BUILD_CONFIG_PATH, BuildConfig, load_build_config
-from mod_base.build_ci.protocol import BUILD_GRAPH_VERSION, CALLER_WORKFLOWS
+from mod_base.build_ci.protocol import BUILD_GRAPH_VERSION
 from mod_base.build_ci.worker import WORKER_ROOT, worker_environment
 from mod_base.github.fake import FakeGitHub
 from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json
+from mod_base.workflow import CI_CALLER_WORKFLOWS
 
 MOD = Path(__file__).resolve().parent / "fixtures" / "ci_mod"
 REPOSITORY = "example/synthetic-mod"
@@ -99,8 +100,8 @@ def subject(*, pull_request: bool = True) -> dict[str, Any]:
         "repository": REPOSITORY, "source_repository": REPOSITORY, "pr_number": 7 if pull_request else 0,
         "head_sha": head, "head_branch": "feature/synthetic" if pull_request else BRANCH,
         "base_sha": CONTROLLER_SHA, "base_branch": BRANCH,
-        "controller_sha": CONTROLLER_SHA, "controller_workflow": CALLER_WORKFLOWS["build"],
-        "controller_ref": grammar.workflow_ref(REPOSITORY, CALLER_WORKFLOWS["build"], BRANCH),
+        "controller_sha": CONTROLLER_SHA, "controller_workflow": CI_CALLER_WORKFLOWS["build"],
+        "controller_ref": grammar.workflow_ref(REPOSITORY, CI_CALLER_WORKFLOWS["build"], BRANCH),
         "kit": {"repository": mod_base.KIT_REPOSITORY, "sha": KIT_SHA, "version": mod_base.__version__,
                 "tree_digest": "sha256:" + "4" * 64},
         "tested_sha": tested, "tested_tree": TESTED_TREE if pull_request else CONTROLLER_TREE,
@@ -115,7 +116,7 @@ def environment(*, event: str = "pull_request_target", caller: str = "build") ->
     return {
         "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_SHA": CONTROLLER_SHA, "GITHUB_EVENT_NAME": event,
         "GITHUB_REF": f"refs/heads/{BRANCH}", "GITHUB_REF_NAME": BRANCH,
-        "GITHUB_WORKFLOW_REF": grammar.workflow_ref(REPOSITORY, CALLER_WORKFLOWS[caller], BRANCH),
+        "GITHUB_WORKFLOW_REF": grammar.workflow_ref(REPOSITORY, CI_CALLER_WORKFLOWS[caller], BRANCH),
         "GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "1", "MOD_BASE_KIT_SHA": KIT_SHA, "GH_TOKEN": "fixture-token",
     }
 
