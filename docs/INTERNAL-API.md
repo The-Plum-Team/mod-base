@@ -324,6 +324,7 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.root_request_operations`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff` |
 | MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
 | MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
+| MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -756,6 +757,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
   Block Pops 8 MiB, Quick Skin 4 MiB; independent of validator-output `MAX_CI_REPORT_BYTES`.
 * `MAX_CI_SBOM_BYTES`: 16 MiB for one `sbom` output of a Build export (Quick Skin's own SBOM reader cap; an SBOM is optional and Block Pops stages none).
 * `MAX_CI_PNG_BYTES`, `MAX_CI_JAR_BYTES`
+* `MAX_CI_STATUS_DESCRIPTION_CHARS`: 140 characters for the description of one status intent, GitHub's own bound for a commit status.
 
 ## `mod_base.model.canonical`
 
