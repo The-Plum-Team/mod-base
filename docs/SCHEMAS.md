@@ -658,6 +658,28 @@ Repository facts (skipped only by rotation's data-only load): the adapter, fixtu
 and family producer workflows exist as regular files, every `python_path` entry is a real
 directory, no checked path crosses a symlink, and the icon rules hold.
 
+## `mod-base.build.config` (`scripts/ci/mod-base-build.json`, <= 1 MiB)
+
+The protected Build configuration (new kind, schema 1, unreleased). Validated by
+`mod_base.build_ci.config.validate_build_config`; `load_build_config` also requires every listed
+source in the protected checkout to have its configured hash.
+
+| Field | Rule |
+|---|---|
+| `repository` | `REPOSITORY`; must be the repository that runs |
+| `profile` | `quick-skin` or `block-pops` (`build_ci.protocol.PROFILES`) |
+| `build_adapter_api` | `1` |
+| `adapter` | `{path, dispatcher, policy, files}`: three distinct `scripts/ci/*.py` entry points and the sorted, alias-free import closure `files: [{path, sha256}]` (3..256) that lists all three |
+| `inventory.path`, `scenario_contract.path` | canonical repository paths of the two candidate files a plan is derived from |
+| `bundle.path` | canonical repository path of the directory where a lane's checkout expects the staged Build |
+| `contexts.build`, `contexts.packaged` | the two required status contexts: trimmed printable ASCII without `<`, `>`, `{{`, `}}`, 1..100 characters, distinct ignoring case |
+| `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
+
+The config path, every adapter source, the two candidate files and the bundle directory are
+checked as one tree: none may equal another (ignoring case), differ from one only by the case of a
+component, or lie inside another. No other key is accepted: no command, runner, permission, secret,
+matrix or scenario catalog. [BUILD-ADAPTER.md](BUILD-ADAPTER.md) describes what each field is used for.
+
 ## Batch manifest data v1
 
 `mod-base.ci.batch` writes/reads 1. This is a new kind (previous null); the archived v1.0.3

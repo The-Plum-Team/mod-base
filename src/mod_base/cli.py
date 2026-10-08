@@ -48,6 +48,7 @@ COMMANDS: dict[str, str] = {
     "pin": "mod_base.pin_commands",
     "digest": "mod_base.pin_commands",
     "conformance": "mod_base.conformance.commands",
+    "ci": "mod_base.build_ci.commands",
 }
 
 OUTPUT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")

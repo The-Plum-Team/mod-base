@@ -2941,6 +2941,230 @@
       ]
     },
     {
+      "expect": "valid",
+      "fixture": "ci-config",
+      "name": "ci-config-bare-context-names",
+      "set": [
+        [
+          "/contexts/build",
+          "Build and verify"
+        ],
+        [
+          "/contexts/packaged",
+          "Packaged E2E gate"
+        ]
+      ]
+    },
+    {
+      "error": "$.inventory.path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-inventory-traversal",
+      "set": [
+        [
+          "/inventory/path",
+          "../release/release-matrix.json"
+        ]
+      ]
+    },
+    {
+      "error": "$.inventory: has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-inventory-cannot-carry-a-catalog",
+      "set": [
+        [
+          "/inventory/targets",
+          []
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/scenario_contract"
+      ],
+      "error": "is missing required keys ['scenario_contract']",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-scenario-contract-missing"
+    },
+    {
+      "error": "$.scenario_contract.path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-scenario-contract-absolute",
+      "set": [
+        [
+          "/scenario_contract/path",
+          "/e2e/scenario-contract.json"
+        ]
+      ]
+    },
+    {
+      "error": "$: output inventory has a case-insensitive alias",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-inventory-is-a-protected-source",
+      "set": [
+        [
+          "/inventory/path",
+          "scripts/ci/PR_GATE.py"
+        ]
+      ]
+    },
+    {
+      "error": "$: output inventory has a case-insensitive alias",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-scenario-contract-is-the-inventory",
+      "set": [
+        [
+          "/scenario_contract/path",
+          "release/release-matrix.json"
+        ]
+      ]
+    },
+    {
+      "error": "$.bundle.path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-bundle-in-git-metadata",
+      "set": [
+        [
+          "/bundle/path",
+          ".git/build"
+        ]
+      ]
+    },
+    {
+      "error": "$: a file is also an inventory directory",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-bundle-contains-the-inventory",
+      "set": [
+        [
+          "/bundle/path",
+          "release"
+        ]
+      ]
+    },
+    {
+      "error": "$: a file is also an inventory directory",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-bundle-inside-the-scenario-contract",
+      "set": [
+        [
+          "/bundle/path",
+          "e2e/scenario-contract.json/release"
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts: Build and packaged contexts must be distinct",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-contexts-differ-only-by-case",
+      "set": [
+        [
+          "/contexts/packaged",
+          "TRUSTED PR / BUILD AND VERIFY"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/contexts/packaged"
+      ],
+      "error": "$.contexts: is missing required keys ['packaged']",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-missing"
+    },
+    {
+      "error": "$.contexts.build: must be printable ASCII",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-lookalike-letter",
+      "set": [
+        [
+          "/contexts/build",
+          "Trusted PR / Build and ver\u0456fy"
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts.build: must be trimmed printable text without markup or template syntax",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-control-character",
+      "set": [
+        [
+          "/contexts/build",
+          "Build\u0007and verify"
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts.packaged: must be trimmed printable text without markup or template syntax",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-untrimmed",
+      "set": [
+        [
+          "/contexts/packaged",
+          "Packaged E2E gate "
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-100",
+      "set": [
+        [
+          "/contexts/build",
+          {
+            "$repeat": [
+              "x",
+              100
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts.build: length must be between 1 and 100 characters",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-101",
+      "set": [
+        [
+          "/contexts/build",
+          {
+            "$repeat": [
+              "x",
+              101
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts.build: must be a string, not array",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-list",
+      "set": [
+        [
+          "/contexts/build",
+          [
+            "Build and verify"
+          ]
+        ]
+      ]
+    },
+    {
       "error": "has unknown keys",
       "expect": "invalid",
       "fixture": "ci-validation",

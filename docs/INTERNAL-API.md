@@ -321,6 +321,7 @@ Integration-round amendments:
 | MB9 | `mod_base.pin`, `mod_base.pin_commands`, `mod_base.template.tool`, `mod_base.template.commands`, `mod_base.template.lock` |
 | MB10 | `mod_base.conformance.run`, `mod_base.conformance.commands` |
 | MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.installation`, `mod_base.build_ci.installation_schema`, `mod_base.build_ci.installation_record`, `mod_base.build_ci.bootstrap_installation`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.privileged_launch`, `mod_base.build_ci.python_archive`, `mod_base.build_ci.python_installation`, `mod_base.build_ci.python_transport`, `mod_base.build_ci.python_setup`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff`, `mod_base.build_ci.runtime_root_request_schema`, `mod_base.build_ci.runtime_root_request` |
+| MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -571,6 +572,7 @@ Compiled full-match patterns (use `is_match`/`require`; the grammar is SCHEMAS.m
 * `def require_positive_int(value: object, label: str, *, maximum: int = 9223372036854775807) -> int`: Return a positive ``int`` (never ``bool``) no larger than ``maximum``.
 * `def is_bundle_path(value: object) -> bool`: True for a canonical bundle-relative POSIX path (no absolute, ``..``, ``.``, ``\`` or NUL).
 * `def is_repo_path(value: object) -> bool`: True for a repository-relative path: a bundle path none of whose components is ``.git`` (compared case-insensitively, for case-insensitive filesystems).
+* `def is_export_path(value: object) -> bool`: True for a canonical path of a file a Build or runtime export holds: the length, depth and traversal rules of a bundle path, with components of ASCII letters, digits, `.`, `_`, `-`, `+` and single inner spaces that neither start nor end with a space or a dot (`Quick Skin - Fabric - 1.20.1-3.1.0.jar`).
 * `def parse_timestamp(value: object, label: str = 'timestamp') -> datetime`: Parse a GitHub ``YYYY-MM-DDTHH:MM:SSZ`` timestamp into an aware UTC datetime.
 * `class WorkflowRef`: A parsed ``GITHUB_WORKFLOW_REF`` (``owner/repo/.github/workflows/f.yml@refs/heads/b``).
   * fields: `repository: str, path: str, branch: str`
@@ -663,6 +665,10 @@ Adapter host, config and retention:
 Protected Build/runtime (independent ceilings, no change to Pages budgets):
 
 * `MAX_CI_PLAN_BYTES`, `MAX_CI_TARGETS`, `MAX_CI_BUILD_RUNS`, `MAX_CI_LANES`, `MAX_CI_OUTPUTS_PER_TARGET`
+* `MAX_CI_PLAN_SOURCE_BYTES`: 4 MiB for each candidate file a plan is derived from (the release inventory, the scenario contract).
+* `MAX_CI_IDENTITY_BYTES`: 16 KiB for the private `identity.json` state record.
+* `MAX_CI_SUBJECT_REQUESTS`: the 16-request budget of one `ci subject` (a pull request costs 7, a protected subject 5).
+* `MAX_CI_STATUS_CONTEXT_CHARS`: 100 characters for one status context of the protected Build config.
 * `CI_BUILD_POLL_SECONDS`, `MAX_CI_BUILD_POLLS`: Protected 60-second polling cadence and independent 91-observation ceiling within the existing 5400-second admission budget.
 * `MAX_CI_PLAN_INPUT_FILES`, `MAX_CI_PLAN_INPUT_ENTRIES`: Exact single-file plan input tree budgets.
 * `MAX_CI_PRIVATE_RECORD_ENTRIES`: Exact entry budget of a fixed single-leaf private record directory. MB1 entry caps count the root, so the directory plus its one leaf; an empty stage stays 1.
@@ -1727,16 +1733,25 @@ Owner: MB10 (register() implemented by MB0; handlers dispatch to the entry point
 
 ## `mod_base.build_ci.protocol`
 
-Owner: MB11. Inactive protected Build adapter and plan protocol; see BUILD-PROTOCOL.md.
+Owner: MB11. The Build adapter API version and pure identity and plan validation; see
+BUILD-PROTOCOL.md. The hook contract itself is `mod_base.build_ci.adapter`.
 
 * `BUILD_ADAPTER_API = 1`
 * `BUILD_GRAPH_VERSION = 1`
 * `PACKAGED_GRAPH_VERSION = 1`
-* `BUILD_HOOKS`: closed native hook names.
+* `PROFILES = ('quick-skin', 'block-pops')`
+* `PRODUCERS = ('build', 'packaged')`
+* `CALLER_WORKFLOWS = {'build': '.github/workflows/mod-base-build.yml', 'packaged': '.github/workflows/mod-base-packaged-e2e.yml'}`
 * `OUTPUT_ROLES`: production, harness, SBOM, native reports and retained build logs.
+* `SHA1`, `SHA256`, `REPO`, `BRANCH`, `ID`, `WORKFLOW`: the field validators of an identity and a plan (commit, digest, repository, branch, unit id, workflow path).
+* `def repo_path(value: Any, path: str) -> str`: a canonical repository-relative path (`grammar.is_repo_path`).
+* `def export_path(value: Any, path: str) -> str`: a canonical export path (`grammar.is_export_path`); every planned output is one.
+* `def validate_subject(value: Any, path: str = '$') -> dict[str, Any]`: An identity before planning: every field of `validate_identity` except `policy_sha256`, `inventory_blob`, `inventory_sha256`, `scenario_sha256` and `runtime_selection_sha256`, with the same cross-field rules.
 * `def validate_identity(value: Any, path: str = '$') -> dict[str, Any]`
+* `def subject_of(identity: dict[str, Any]) -> dict[str, Any]`: The subject part of a complete identity.
 * `def plan_sha256(document: dict[str, Any]) -> str`
 * `def check_output_paths(paths: list[str], path: str) -> None`
+* `def validate_plan_units(value: Any, path: str = '$') -> dict[str, Any]`: Exactly `{targets, lanes}` in the plan's shape with every plan rule that needs no identity: what a protected adapter derives.
 * `def validate_plan(document: Any, *, path: str = '$') -> dict[str, Any]`
 
 ## `mod_base.build_ci.graph`
@@ -1787,7 +1802,104 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 Owner: MB11. Closed data at scripts/ci/mod-base-build.json. Protected policy must authenticate
 every source hash/path before import and confirm native timeout parity before activation.
 
-* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`
+* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `bundle.path`, the two `contexts` and the timeouts; no named path may alias or contain another.
+* `class BuildConfigError(MbError)`: The protected Build configuration or a source it lists cannot be trusted (reason `ci-config`).
+* `class AdapterFile`: One source of the protected adapter import closure, as read from the protected checkout.
+  * fields: `path: str, sha256: str, data: bytes`
+* `class BuildConfig`: A validated protected Build config with the exact bytes of everything it lists; `files` is the closure in the config's order.
+  * fields: `data: dict[str, Any], raw: bytes, sha256: str, files: tuple[AdapterFile, ...]`
+* `def load_build_config(repo_root: Path, *, repository: str) -> BuildConfig`: Read the config of `repository` from the protected mod checkout and every source it lists, without crossing a symlink; each source must have its configured SHA-256, within the per-file and whole-closure byte caps. The result is the input of `identity.policy_sha256` and of the validator's adapter copy.
+
+## `mod_base.build_ci.adapter`
+
+Owner: MB11. The Build adapter contract (`BUILD_ADAPTER_API = 1`, docs/BUILD-ADAPTER.md): the closed
+hooks, their argv and extra environment, the fixed file names and the strict parsers of what a hook
+writes. It imports no worker module; `tests/test_ci_adapter.py` pins its directories to theirs.
+
+* `class AdapterError(MbError)`: A hook was requested outside the closed adapter contract (reason `ci-adapter`).
+* `class Hook`: One hook of the contract: the worker account that runs it (`validator` hooks are the protected ones), the plan unit a run is for (`target`, `lane` or `None`) and the key of the config's `timeouts`.
+  * fields: `name: str, role: str, unit: str | None, timeout: str`
+* `HOOKS`: hook name -> `Hook`, all eight: `derive_plan`, `policy`, `build_target`, `verify_target`, `verify_build`, `derive_runtime`, `run_lane`, `verify_runtime`.
+* `PROTECTED_HOOKS = ('derive_plan', 'verify_target', 'verify_build', 'derive_runtime', 'verify_runtime')`
+* `CANDIDATE_HOOKS = ('policy', 'build_target', 'run_lane')`
+* `UNIT_ENVIRONMENT = {'target': 'MB_TARGET_ID', 'lane': 'MB_LANE_ID'}`
+* `RUNTIME_VALUES = ('E2E_ROW_JSON', 'E2E_SCENARIOS')`
+* `INVENTORY_INPUT = 'inventory'`
+* `SCENARIO_INPUT = 'scenario-contract'`
+* `PLAN_INPUT = 'ci-plan.json'`
+* `PLAN_OUTPUT = 'plan.json'`
+* `RUNTIME_OUTPUT = 'runtime.json'`
+* `REPORT_SUFFIX = '.json'`
+* `RESERVED_UNIT_IDS = frozenset({'plan', 'runtime', 'ci-validation'})`
+* `CHECKOUT_DIRECTORY = {'validator': 'controller', 'candidate': 'repository'}`
+* `HOME_DIRECTORY = {'validator': 'validator-home', 'candidate': 'candidate-home'}`
+* `INPUT_DIRECTORY = 'validation-input'`
+* `SEALED_BUILD_DIRECTORY = 'sealed-build'`
+* `SEALED_RUNTIME_DIRECTORY = 'sealed-runtime'`
+* `OUTPUT_DIRECTORY = 'validation'`
+* `EXPORT_DIRECTORY = 'export'`
+* `def hook_command(hook: str, *, python: str, checkout: str, dispatcher: str) -> tuple[str, ...]`: The fixed argv `(python, '-I', '-B', '<checkout>/<dispatcher>', '--hook', hook)`; `checkout` is the role's checkout directory and `dispatcher` the config's `adapter.dispatcher`.
+* `def hook_values(hook: str, *, unit_id: str | None = None, runtime: Mapping[str, str] | None = None) -> dict[str, str]`: The extra environment of one hook run beyond `worker.worker_environment`'s fixed names: the unit id under `UNIT_ENVIRONMENT`, and for `run_lane` only the parsed `derive_runtime` values.
+* `def hook_timeout_seconds(hook: str, config: Mapping[str, Any]) -> int`: The timeout the validated protected config sets for the hook.
+* `def plan_unit(plan: dict[str, Any], hook: str, unit_id: str | None) -> dict[str, Any] | None`: The target or lane of the protected plan a hook run is for; a unit outside the plan is a rejection.
+* `def hook_inputs(hook: str) -> tuple[str, ...]`: The files of `validation-input/` a protected hook may read: the two candidate files, and for every hook after `derive_plan` the plan.
+* `def hook_outputs(hook: str, *, plan: dict[str, Any] | None = None, unit_id: str | None = None) -> tuple[str, ...]`: The exact files a protected hook must leave in `validation/`: `plan.json`, `runtime.json`, or `<unit id>.json` per verified unit (for `verify_build` every target, in plan order).
+* `def target_outputs(plan: dict[str, Any], target_id: str) -> tuple[str, ...]`: The exact files `build_target` must leave below `export/` for one target, sorted.
+* `def parse_derived_plan(data: bytes) -> dict[str, Any]`: Strictly decode `derive_plan`'s `plan.json` (at most `MAX_CI_PLAN_BYTES`): `protocol.validate_plan_units` and no reserved unit id.
+* `def parse_runtime_values(data: bytes) -> dict[str, str]`: Strictly decode `derive_runtime`'s `runtime.json` (at most `MAX_CI_REPORT_BYTES`): `{"values": {...}}` holding exactly `RUNTIME_VALUES`, each non-blank text without control characters of at most `MAX_CI_ENV_VALUE_BYTES` bytes.
+
+## `mod_base.build_ci.identity`
+
+Owner: MB11. What `ci subject` does: authenticate the tested subject through the API and keep it in
+the job's private state directory. Mutable state (default branch, pull request) is read at the
+start and again before the record is written; the commit object is read once.
+
+* `IDENTITY_NAME = 'identity.json'`
+* `PULL_REQUEST_EVENT = 'pull_request_target'`
+* `PROTECTED_EVENTS = ('push', 'workflow_dispatch', 'schedule')`
+* `POLICY_FORMAT = 'mod-base.build.policy-v1'`
+* `class SubjectError(MbError)`: The subject of this job cannot be authenticated (reason `ci-subject`; `draft`, `no-test-merge` and `controller-moved` for those three cases).
+* `class StateError(MbError)`: The job's private state directory or one of its records cannot be trusted (reason `ci-state`).
+* `def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The managed callers a job of `producer` may run from: its own, and for Build jobs of a protected subject also the packaged caller (its `rebuild` job).
+* `def validate_subject_record(document: Any, path: str = '$') -> dict[str, Any]`: The closed identity record `{producer, event, workflow_path, controller_tree, subject}`; `subject` is `protocol.validate_subject` and always names the Build caller as `controller_workflow`.
+* `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None) -> dict[str, Any]`: Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. The environment's claims are checked before the first request; 7 requests for a pull request, 5 otherwise; nothing is written.
+* `def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str`: The closed protected-policy digest: canonical SHA-256 of `{format: POLICY_FORMAT, build_adapter_api, graph_versions: {build, packaged}, kit: subject.kit, config_sha256, adapter_files: [{path, sha256}]}`. It changes with the protected Build config bytes, any source of the adapter closure, the kit pin or tree digest, the adapter API or a graph version, and with nothing else.
+* `def create_state(state: Path) -> None`: Create the job's private state directory (mode 0700); an existing path is never adopted.
+* `def write_state_record(state: Path, name: str, raw: bytes) -> None`: Create `<state>/<name>` (mode 0600) in an existing private state directory; never replaces a record.
+* `def read_state_record(state: Path, name: str, *, max_bytes: int) -> bytes`: Bytes of `<state>/<name>`. The directory is this user's with mode 0700, the record a single-link regular file of this user with mode 0600 and 1..`max_bytes` bytes, unchanged while read.
+* `def write_subject(state: Path, record: dict[str, Any]) -> None`: Create the state directory and write the validated record as canonical JSON to `<state>/identity.json`.
+* `def read_subject(state: Path) -> dict[str, Any]`: The identity record, strictly decoded, validated and required to be canonical.
+
+## `mod_base.build_ci.planning`
+
+Owner: MB11. Pure functions that turn a subject, the protected config and one `derive_plan` result
+into the protected plan. Running the hook belongs to the job (`ci plan`).
+
+* `class PlanError(MbError)`: A plan is not the one this job must work on (reason `ci-plan`; `plan-mismatch` for another hash than the expected one).
+* `def runtime_selection_sha256(profile: str, lanes: list[dict[str, Any]]) -> str`: Canonical SHA-256 of `{profile, lanes}`, that is every derived lane with its native contract and ordered obligations.
+* `def build_plan(*, subject: dict[str, Any], config: BuildConfig, inventory: bytes, scenario_contract: bytes, derived: bytes) -> dict[str, Any]`: The complete validated `mod-base.build.plan`, built from the subject plus `policy_sha256` (`identity.policy_sha256`), the inventory's Git blob id and SHA-256, the scenario contract's SHA-256 and `runtime_selection_sha256`; the config's profile; the parsed `derive_plan` units; `plan_sha256`. `inventory` and `scenario_contract` are the candidate Git blobs at the tested tree (1..`MAX_CI_PLAN_SOURCE_BYTES` bytes each), exactly what the hook was given.
+* `def require_plan(plan: dict[str, Any], *, subject: dict[str, Any], expected_sha256: str | None = None) -> dict[str, Any]`: Require a valid plan of exactly this subject and, when given, the expected `plan_sha256` (`ci plan --expect-sha256`).
+* `def matrices(plan: dict[str, Any]) -> dict[str, list[str]]`: The ids of `{targets, lanes}` in plan order.
+* `def plan_outputs(plan: dict[str, Any]) -> dict[str, str]`: The workflow outputs `plan_sha256`, `targets` and `lanes` (single-line JSON arrays of ids).
+
+## `mod_base.build_ci.commands`
+
+Owner: MB11. The top-level `ci` command. Each work area lists its verb module in `VERB_MODULES`.
+
+* `VERB_MODULES`: the modules whose `add_verbs(verbs)` adds verbs to `ci`, one line per work area.
+* `def register(subparsers: argparse._SubParsersAction) -> None`
+* `def add_job_arguments(parser: argparse.ArgumentParser) -> None`: Add what every verb takes: `--repo`, `--config` and the required `--state DIR`.
+* `def api_client(invocation: runtime.Invocation, *, max_requests: int) -> github_api.GitHubApi`: The read-only API client of one command, bounded to `max_requests` requests in all.
+
+## `mod_base.build_ci.commands_subject`
+
+Owner: MB11. `ci subject --repo DIR --config F --state DIR --producer build|packaged --pr N --github-output F`:
+authenticates the subject, creates `--state` with `identity.json` and outputs `tested_sha` and
+`pr_number` (`--pr` and the output are empty for a protected subject).
+
+* `PULL_REQUEST`: the argparse type of `--pr`, a positive decimal as `int` or the empty string as `None`.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`
+* `def run_subject(args: argparse.Namespace) -> int`
 
 ## `mod_base.build_ci.controller`
 

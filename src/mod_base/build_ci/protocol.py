@@ -1,4 +1,4 @@
-"""Closed Build adapter API and pure, bounded v1 plan validation.
+"""Closed Build adapter API and pure, bounded v1 identity and plan validation.
 
 Structural validity is not admission: protected Git/API authentication, native witnesses,
 sealed bytes and a complete graph are independently required before a gate can pass.
@@ -17,7 +17,12 @@ from mod_base.model.validators import Const, Int, List, Obj, Str, check, fail
 BUILD_ADAPTER_API = 1
 BUILD_GRAPH_VERSION = 1
 PACKAGED_GRAPH_VERSION = 1
-BUILD_HOOKS = frozenset({"derive_plan", "verify_target", "verify_build", "derive_runtime", "verify_runtime"})
+#: The native profiles a protected Build config may name.
+PROFILES = ("quick-skin", "block-pops")
+#: The two producers of gate evidence, and the managed caller workflow a mod runs each one from.
+PRODUCERS = ("build", "packaged")
+CALLER_WORKFLOWS = {"build": ".github/workflows/mod-base-build.yml",
+                    "packaged": ".github/workflows/mod-base-packaged-e2e.yml"}
 OUTPUT_ROLES = ("production", "harness", "sbom", "native-report", "build-log")
 
 SHA1 = Str(g.SHA1, max_len=40)
@@ -26,8 +31,6 @@ REPO = Str(g.REPOSITORY, max_len=201)
 BRANCH = Str(g.BRANCH, max_len=200)
 ID = Str(g.CI_UNIT_ID, max_len=80)
 WORKFLOW = Str(g.WORKFLOW_PATH, max_len=130)
-RUN = Int(1, lim.MAX_RUN_ID)
-ATTEMPT = Int(1, lim.MAX_RUN_ATTEMPT)
 
 
 def repo_path(value: Any, path: str) -> str:
@@ -36,7 +39,14 @@ def repo_path(value: Any, path: str) -> str:
     return value
 
 
-_IDENTITY = Obj({
+def export_path(value: Any, path: str) -> str:
+    if not g.is_export_path(value):
+        raise fail(path, "must be a canonical export path")
+    return value
+
+
+#: What ``ci subject`` authenticates: the tested commit, its protected controller and the kit.
+_SUBJECT_FIELDS = {
     "repository": REPO,
     "source_repository": REPO,
     "pr_number": Int(0, lim.MAX_RUN_ID),
@@ -48,16 +58,18 @@ _IDENTITY = Obj({
                 "version": Str(g.VERSION, max_len=20), "tree_digest": Str(g.DIGEST, max_len=71)}),
     "tested_sha": SHA1, "tested_tree": SHA1,
     "tested_parents": List(SHA1, max_items=2, unique=True),
+    "graph_version": Const(BUILD_GRAPH_VERSION),
+}
+#: What planning binds to the protected policy and to the candidate bytes a plan is derived from.
+_PLAN_FIELDS = {
     "policy_sha256": SHA256, "inventory_blob": SHA1, "inventory_sha256": SHA256,
     "scenario_sha256": SHA256, "runtime_selection_sha256": SHA256,
-    "graph_version": Const(BUILD_GRAPH_VERSION),
-})
+}
+_SUBJECT = Obj(_SUBJECT_FIELDS)
+_IDENTITY = Obj({**_SUBJECT_FIELDS, **_PLAN_FIELDS})
 
 
-def validate_identity(value: Any, path: str = "$") -> dict[str, Any]:
-    """Require distinct protected-controller and exact-tested-subject identities."""
-
-    _IDENTITY(value, path)
+def _subject_rules(value: dict[str, Any], path: str) -> None:
     ref = g.WORKFLOW_REF.fullmatch(value["controller_ref"])
     check(ref is not None and ref["repository"] == value["repository"]
           and ref["path"] == value["controller_workflow"] and ref["branch"] == value["base_branch"],
@@ -70,10 +82,31 @@ def validate_identity(value: Any, path: str = "$") -> dict[str, Any]:
     else:
         check(value["source_repository"] == value["repository"] and value["tested_sha"] == value["head_sha"],
               path, "non-PR subjects must name the exact protected repository and commit")
+
+
+def validate_subject(value: Any, path: str = "$") -> dict[str, Any]:
+    """An identity before planning: every field but the hashes a plan binds."""
+
+    _SUBJECT(value, path)
+    _subject_rules(value, path)
     return value
 
 
-_OUTPUT = Obj({"path": repo_path, "lane_id": ID,
+def validate_identity(value: Any, path: str = "$") -> dict[str, Any]:
+    """Require distinct protected-controller and exact-tested-subject identities."""
+
+    _IDENTITY(value, path)
+    _subject_rules(value, path)
+    return value
+
+
+def subject_of(identity: dict[str, Any]) -> dict[str, Any]:
+    """The subject part of a complete identity (what :func:`validate_subject` accepts)."""
+
+    return {key: identity[key] for key in _SUBJECT_FIELDS}
+
+
+_OUTPUT = Obj({"path": export_path, "lane_id": ID,
                "role": Str(choices=OUTPUT_ROLES)})
 _TARGET = Obj({
     "id": ID, "java": Int(8, 99), "native_contract_sha256": SHA256,
@@ -85,6 +118,11 @@ _LANE = Obj({
     "obligations": List(Str(g.IDENT, max_len=200), min_items=1,
                         max_items=lim.MAX_CI_OBLIGATIONS_PER_LANE, unique=True),
 })
+_UNIT_FIELDS = {
+    "targets": List(_TARGET, min_items=1, max_items=lim.MAX_CI_TARGETS, unique_by=lambda item: item["id"]),
+    "lanes": List(_LANE, min_items=1, max_items=lim.MAX_CI_LANES, unique_by=lambda item: item["id"]),
+}
+_UNITS = Obj(_UNIT_FIELDS)
 
 
 def _header(kind: str) -> dict[str, Any]:
@@ -94,9 +132,8 @@ def _header(kind: str) -> dict[str, Any]:
 
 _PLAN = Obj({
     **_header("mod-base.build.plan"), "build_adapter_api": Const(BUILD_ADAPTER_API),
-    "identity": validate_identity, "profile": Str(choices=("quick-skin", "block-pops")),
-    "targets": List(_TARGET, min_items=1, max_items=lim.MAX_CI_TARGETS, unique_by=lambda item: item["id"]),
-    "lanes": List(_LANE, min_items=1, max_items=lim.MAX_CI_LANES, unique_by=lambda item: item["id"]),
+    "identity": validate_identity, "profile": Str(choices=PROFILES),
+    **_UNIT_FIELDS,
     "plan_sha256": SHA256,
 })
 
@@ -114,7 +151,8 @@ def check_output_paths(paths: list[str], path: str) -> None:
     folded: set[str] = set()
     components: dict[str, str] = {}
     for name in paths:
-        check(g.is_repo_path(name) and name.casefold() != g.CI_ENVELOPE_NAME.casefold(), path,
+        check((g.is_repo_path(name) or g.is_export_path(name))
+              and name.casefold() != g.CI_ENVELOPE_NAME.casefold(), path,
               "unsafe output path or reserved outer envelope name")
         check(name.casefold() not in folded, path, "output inventory has a case-insensitive alias")
         folded.add(name.casefold())
@@ -129,21 +167,16 @@ def check_output_paths(paths: list[str], path: str) -> None:
               path, "a file is also an inventory directory")
 
 
-def validate_plan(document: Any, *, path: str = "$") -> dict[str, Any]:
-    _PLAN(document, path)
-    check(document["plan_sha256"] == plan_sha256(document), f"{path}.plan_sha256", "does not bind this plan")
+def _unit_rules(document: dict[str, Any], path: str) -> None:
     check_output_paths([output["path"] for target in document["targets"] for output in target["outputs"]],
                        f"{path}.targets")
     targets = {item["id"] for item in document["targets"]}
     lanes = {item["id"]: item["target_id"] for item in document["lanes"]}
     check(set(lanes.values()) == targets, f"{path}.lanes", "must cover every target exactly through declared lanes")
-    paths: set[str] = set()
     for target in document["targets"]:
         roles: dict[str, set[str]] = {}
         for output in target["outputs"]:
             check(lanes.get(output["lane_id"]) == target["id"], f"{path}.targets", "output names another target's lane")
-            check(output["path"] not in paths, f"{path}.targets", "output path is shared across targets")
-            paths.add(output["path"])
             lane_roles = roles.setdefault(output["lane_id"], set())
             check(output["role"] in {"native-report", "build-log"} or output["role"] not in lane_roles,
                   f"{path}.targets", "lane repeats a production, harness or SBOM output role")
@@ -152,4 +185,18 @@ def validate_plan(document: Any, *, path: str = "$") -> dict[str, Any]:
             if owner == target["id"]:
                 check({"production", "harness", "sbom", "native-report"} <= roles.get(lane, set()),
                       f"{path}.targets", "every lane requires separate production, harness, SBOM and native reports")
+
+
+def validate_plan_units(value: Any, path: str = "$") -> dict[str, Any]:
+    """The targets and lanes of a plan, as a protected adapter derives them (no identity)."""
+
+    _UNITS(value, path)
+    _unit_rules(value, path)
+    return value
+
+
+def validate_plan(document: Any, *, path: str = "$") -> dict[str, Any]:
+    _PLAN(document, path)
+    check(document["plan_sha256"] == plan_sha256(document), f"{path}.plan_sha256", "does not bind this plan")
+    _unit_rules(document, path)
     return document

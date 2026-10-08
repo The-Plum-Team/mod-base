@@ -777,6 +777,10 @@ def ci_config() -> dict[str, Any]:
             "profile": "block-pops", "build_adapter_api": 1,
             "adapter": {"path": files[0], "dispatcher": files[1], "policy": files[2],
                         "files": [{"path": name, "sha256": h(name)} for name in sorted(files)]},
+            "inventory": {"path": "release/release-matrix.json"},
+            "scenario_contract": {"path": "e2e/scenario-contract.json"},
+            "bundle": {"path": "build/release"},
+            "contexts": {"build": "Trusted PR / Build and verify", "packaged": "Trusted PR / Packaged E2E gate"},
             "timeouts": {"policy_seconds": 3600, "target_seconds": 7200,
                          "runtime_seconds": 1800, "validator_seconds": 600}}
 

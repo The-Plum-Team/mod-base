@@ -7,6 +7,15 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 
 ## Unreleased (planned v1.1.0)
 
+- Define the Build adapter contract in code (`build_ci.adapter`: eight hooks, argv, environment,
+  file names, strict parsers of `plan.json` and `runtime.json`) and for mod authors
+  (`docs/BUILD-ADAPTER.md`). The unreleased `mod-base.build.config` gains the required fields
+  `inventory.path`, `scenario_contract.path`, `bundle.path`, `contexts.build` and
+  `contexts.packaged`. Add the `ci` command with `ci subject`, which authenticates the tested
+  subject and writes the private identity record, pure plan construction with the policy digest,
+  and a synthetic mod (`tests/fixtures/ci_mod`) that implements every hook. Planned output paths
+  accept the mods' real file names (single inner spaces and `+`).
+
 - Add inactive historical PR Build selection/revalidation preserving original controller,
   newest run/attempt, complete graph and immutable bundle metadata after actual merged-source
   admission. Retain original plan bytes in live/historical selection and descriptor bytes during

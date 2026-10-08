@@ -19,9 +19,22 @@
     "policy": "scripts/ci/pr_gate.py"
   },
   "build_adapter_api": 1,
+  "bundle": {
+    "path": "build/release"
+  },
+  "contexts": {
+    "build": "Trusted PR / Build and verify",
+    "packaged": "Trusted PR / Packaged E2E gate"
+  },
+  "inventory": {
+    "path": "release/release-matrix.json"
+  },
   "kind": "mod-base.build.config",
   "profile": "block-pops",
   "repository": "example/mod",
+  "scenario_contract": {
+    "path": "e2e/scenario-contract.json"
+  },
   "schema_version": 1,
   "timeouts": {
     "policy_seconds": 3600,

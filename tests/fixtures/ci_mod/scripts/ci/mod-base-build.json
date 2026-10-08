@@ -1,0 +1,45 @@
+{
+  "adapter": {
+    "dispatcher": "scripts/ci/mod_base_build_dispatch.py",
+    "files": [
+      {
+        "path": "scripts/ci/mod_base_build_adapter.py",
+        "sha256": "2a3ab33d134c14abe3f07fd3d40be14b1fea6e916e711830a4aed4194ae939d4"
+      },
+      {
+        "path": "scripts/ci/mod_base_build_dispatch.py",
+        "sha256": "e501cb74f86c2bc18ce8c33234db49cdd8d39b02cae401bb19615d03440199e9"
+      },
+      {
+        "path": "scripts/ci/policy_suite.py",
+        "sha256": "d64e698307598745f1b34524a6bddb88bea15e1504bba6a7f7dd9b5b6ee97ed6"
+      }
+    ],
+    "path": "scripts/ci/mod_base_build_adapter.py",
+    "policy": "scripts/ci/policy_suite.py"
+  },
+  "build_adapter_api": 1,
+  "bundle": {
+    "path": "build/release"
+  },
+  "contexts": {
+    "build": "Synthetic / Build and verify",
+    "packaged": "Synthetic / Packaged E2E gate"
+  },
+  "inventory": {
+    "path": "release/inventory.json"
+  },
+  "kind": "mod-base.build.config",
+  "profile": "quick-skin",
+  "repository": "example/synthetic-mod",
+  "scenario_contract": {
+    "path": "e2e/scenario-contract.json"
+  },
+  "schema_version": 1,
+  "timeouts": {
+    "policy_seconds": 300,
+    "runtime_seconds": 600,
+    "target_seconds": 600,
+    "validator_seconds": 300
+  }
+}

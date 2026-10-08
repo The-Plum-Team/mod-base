@@ -185,6 +185,13 @@ MAX_TEMPLATE_PATHS = 32
 
 # -- Protected Build/packaged runtime (independent from Pages budgets) -----------------------------
 MAX_CI_PLAN_BYTES = 4 * MIB
+#: One candidate file a plan is derived from (the release inventory, the scenario contract).
+MAX_CI_PLAN_SOURCE_BYTES = 4 * MIB
+#: The private ``identity.json`` state record ``ci subject`` writes.
+MAX_CI_IDENTITY_BYTES = 16 * KIB
+#: API requests of one ``ci subject``: a pull request costs 7, a protected subject 5; the rest is
+#: room for retried attempts.
+MAX_CI_SUBJECT_REQUESTS = 16
 MAX_CI_PLAN_INPUT_FILES = 1
 MAX_CI_PLAN_INPUT_ENTRIES = 2
 MAX_CI_PRIVATE_RECORD_ENTRIES = 2  # MB1 entry caps count the root: the directory plus its one leaf.
@@ -194,6 +201,8 @@ MAX_CI_ENVELOPE_BYTES = 4 * MIB
 MAX_CI_RECORD_BYTES = 4 * MIB
 MAX_CI_ARTIFACTS_PER_GATE = MAX_JOBS_PER_ATTEMPT
 MAX_CI_CONFIG_BYTES = 1 * MIB
+#: Characters of one required status context a protected Build config names.
+MAX_CI_STATUS_CONTEXT_CHARS = 100
 MAX_CI_ACTIVATION_BYTES = 8 * KIB
 MAX_CI_ADAPTER_FILE_BYTES = 4 * MIB
 MAX_CI_ADAPTER_TREE_BYTES = 64 * MIB

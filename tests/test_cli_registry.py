@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import importlib
 import io
 import sys
 import tempfile
@@ -74,6 +76,12 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                     {"keys": ("mc1.20.1", "mc26.3"), "families": True}),
     "conformance all": (["conformance", "--repo", "mod", "--all"], {"all_keys": True, "keys": None}),
     "budget": (["budget"], {}),
+    "ci subject": (["ci", "subject", *REPO, "--state", "state", "--producer", "build", "--pr", "7",
+                    "--github-output", "out"],
+                   {"ci_command": "subject", "state": Path("state"), "producer": "build", "pr": 7,
+                    "github_output": Path("out")}),
+    "ci subject protected": (["ci", "subject", *REPO, "--state", "state", "--producer", "packaged", "--pr", "",
+                              "--github-output", "out"], {"producer": "packaged", "pr": None}),
 }
 
 
@@ -93,7 +101,9 @@ class SurfaceTest(unittest.TestCase):
         self.assertEqual(set(cli.COMMANDS), {
             "pin", "digest", "template", "expect", "prepare", "anchor", "family", "admit", "select", "download",
             "authenticate", "compose", "compact", "validate", "build", "refresh", "rotate", "conformance", "budget",
+            "ci",
         })
+        self.assertEqual(cli.COMMANDS["ci"], "mod_base.build_ci.commands")
         self.assertEqual(cli.COMMANDS["download"], "mod_base.github.commands")
         self.assertEqual(cli.COMMANDS["admit"], "mod_base.pages.commands_control")
         self.assertEqual(cli.COMMANDS["build"], "mod_base.pages.commands_build")
@@ -134,6 +144,15 @@ class SurfaceTest(unittest.TestCase):
              "--expected-coverage-sha", SHA, "--output", "o"],
             ["prepare", "--repo", "m"],
             ["compose", *REPO, "--key", "k1", "--selected", "d", "--output", "o"],
+            ["ci"],
+            ["ci", "deploy"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "status", "--pr", "7", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "0", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "seven", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--producer", "build", "--pr", "7", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "7"],
+            ["ci", "subject", "--state", "s", "--producer", "build", "--pr", "7", "--github-output", "o"],
         ]
         for argv in bad:
             with self.subTest(argv=argv), self.assertRaises(MbError) as caught:
@@ -160,6 +179,53 @@ class SurfaceTest(unittest.TestCase):
         code, _, stderr = run(["deploy"])
         self.assertEqual(code, 2)
         self.assertIn("unknown command 'deploy'", stderr)
+
+
+class CiVerbsTest(unittest.TestCase):
+    """``ci`` gathers its verbs from the modules ``build_ci.commands.VERB_MODULES`` lists."""
+
+    @staticmethod
+    def verbs() -> dict[str, argparse.ArgumentParser]:
+        def choices(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
+            (action,) = [action for action in parser._actions if isinstance(action, argparse._SubParsersAction)]
+            return dict(action.choices)
+
+        return choices(choices(cli.build_parser("ci"))["ci"])
+
+    def test_every_listed_module_adds_verbs_that_take_the_job_arguments(self) -> None:
+        from mod_base.build_ci import commands
+
+        self.assertIn("mod_base.build_ci.commands_subject", commands.VERB_MODULES)
+        self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
+        for name in commands.VERB_MODULES:
+            with self.subTest(module=name):
+                self.assertTrue(callable(importlib.import_module(name).add_verbs))
+        verbs = self.verbs()
+        self.assertIn("subject", verbs)
+        for name, parser in verbs.items():
+            options = {option for action in parser._actions for option in action.option_strings}
+            with self.subTest(verb=name):
+                self.assertTrue(callable(parser.get_default("handler")))
+                self.assertLessEqual({"--repo", "--config", "--state"}, options)
+                self.assertIs(type(parser), cli.KitArgumentParser)
+
+    def test_the_verbs_of_a_module_come_from_its_add_verbs(self) -> None:
+        from mod_base.build_ci import commands
+
+        module = types.ModuleType("fake_verbs")
+
+        def add_verbs(verbs) -> None:
+            parser = verbs.add_parser("probe")
+            commands.add_job_arguments(parser)
+            parser.set_defaults(handler=lambda args: 0)
+
+        module.add_verbs = add_verbs  # type: ignore[attr-defined]
+        with mock.patch.dict(sys.modules, {"fake_verbs": module}), \
+                mock.patch.object(commands, "VERB_MODULES", (*commands.VERB_MODULES, "fake_verbs")):
+            self.assertLessEqual({"subject", "probe"}, set(self.verbs()))
+            namespace = parse(["ci", "probe", "--repo", "mod", "--state", "state"])
+            self.assertEqual((namespace.ci_command, namespace.state, namespace.config), ("probe", Path("state"), None))
+            self.assertEqual(run(["ci", "probe", "--repo", "mod"])[0], 2)
 
 
 class UnavailableGroupTest(unittest.TestCase):

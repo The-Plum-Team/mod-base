@@ -186,6 +186,26 @@ def is_repo_path(value: object) -> bool:
     return all(part.lower() != ".git" for part in value.split("/"))  # type: ignore[union-attr]
 
 
+#: One component of an export path: ASCII letters, digits, ``.``, ``_``, ``-``, ``+`` and single inner
+#: spaces. It neither starts nor ends with a space or a dot.
+_EXPORT_COMPONENT = re.compile(r"^[A-Za-z0-9_+-](?:(?:[A-Za-z0-9._+-]| (?! )){0,126}[A-Za-z0-9_+-])?$")
+
+
+def is_export_path(value: object) -> bool:
+    """True for a canonical path of a file a Build or runtime export holds.
+
+    The length, depth and traversal rules are those of a bundle path; the component grammar is the
+    wider one the mods' real file names need (``Quick Skin - Fabric - 1.20.1-3.1.0.jar``). No
+    component can start with a dot, so no hidden file and no ``.git`` directory is ever named."""
+
+    if not isinstance(value, str) or not value or len(value) > limits.MAX_BUNDLE_PATH_CHARS:
+        return False
+    parts = value.split("/")
+    if len(parts) > limits.MAX_BUNDLE_PATH_DEPTH:
+        return False
+    return all(_EXPORT_COMPONENT.fullmatch(part) is not None for part in parts)
+
+
 def parse_timestamp(value: object, label: str = "timestamp") -> datetime:
     """Parse a GitHub ``YYYY-MM-DDTHH:MM:SSZ`` timestamp into an aware UTC datetime."""
 

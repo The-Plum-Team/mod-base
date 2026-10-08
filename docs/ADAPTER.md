@@ -1,9 +1,8 @@
 # Adapter interface (`ADAPTER_API = 1`)
 
-This is the Pages adapter. The inactive protected Build adapter foundation independently declares
-`BUILD_ADAPTER_API = 1` in `mod_base.build_ci.protocol`; see [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md).
-Its closed hook names do not add candidate execution authority to this host. Worker dispatch and
-the separate validation-account lifecycle remain required implementation work.
+This is the Pages adapter. The protected Build adapter is a separate contract with its own version,
+`BUILD_ADAPTER_API = 1`: eight hooks behind one dispatcher, described for mod authors in
+[BUILD-ADAPTER.md](BUILD-ADAPTER.md). Its hooks never run in this host and add no authority to it.
 
 A mod connects to the kit with two protected files (both under Block Pops protected roots):
 
