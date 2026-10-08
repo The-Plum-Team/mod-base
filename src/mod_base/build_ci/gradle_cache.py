@@ -13,13 +13,17 @@ from typing import Any
 
 from mod_base.build_ci.host import HostBoundary, _canonical_path, _open_directory, authenticate_privileged_host_boundary
 from mod_base.build_ci.worker import WORKER_ROOT, WorkerAccount, WorkerError, _control, authenticate_worker_account, terminate_worker
-from mod_base.io.tree import (authenticate_tree_private_access, copy_regular_data_files, regular_data_records,
+from mod_base.io.tree import (SEED_PATHS, authenticate_tree_private_access, copy_regular_data_files, regular_data_records,
                               privatize_regular_data_copy, validate_tree_entries)
 from mod_base.model import limits
 
 
+#: Caps and path rule of every seed and cache inventory. A real cache names its entries freely
+#: (``1.20.1+build.10``) and nests them deeply, so only its structure is checked: no link, no
+#: special file, no traversal, within these counts and sizes.
 _BOUNDS = {"max_files": limits.MAX_CI_SOURCE_FILES, "max_entries": limits.MAX_CI_SOURCE_ENTRIES,
-           "max_total_bytes": limits.MAX_CI_SOURCE_TREE_BYTES, "max_file_bytes": limits.MAX_CI_SOURCE_FILE_BYTES}
+           "max_total_bytes": limits.MAX_CI_SOURCE_TREE_BYTES, "max_file_bytes": limits.MAX_CI_SOURCE_FILE_BYTES,
+           "rule": SEED_PATHS}
 
 
 def _stamp(info: os.stat_result) -> tuple[int, ...]:

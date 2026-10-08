@@ -23,8 +23,8 @@ from mod_base.build_ci.source import GitSourceEntry, verify_source_copy
 from mod_base.build_ci.records import bind_build_envelope, validate_build_envelope, validate_descriptor
 from mod_base.io.secure_json import loads
 from mod_base.io.atomic_directory import atomic_directory, write_new
-from mod_base.io.tree import (authenticate_tree_private_access, copy_regular_files, copy_selected_regular_files, file_records,
-                              grant_tree_read_access, privatize_tree_copy, read_child_file, validate_tree_entries)
+from mod_base.io.tree import (EXPORT_PATHS, authenticate_tree_private_access, copy_regular_files, copy_selected_regular_files,
+                              file_records, grant_tree_read_access, privatize_tree_copy, read_child_file, validate_tree_entries)
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json
@@ -86,7 +86,9 @@ def verify_build_export(root: Path, *, plan: dict[str, Any]) -> dict[str, Any]:
     """Read the bounded canonical outer envelope and match every frozen file's size/hash.
 
     Uses MB1 descriptor-relative no-follow traversal and single-link regular-file streaming.
-    Extra files, missing files, links, empty files and unsafe path components fail closed.
+    Extra files, missing files, links, empty files and unsafe path components fail closed: every
+    entry must be an export path (``grammar.is_export_path``, the mod's own file names) and no two
+    may differ only in case.
     Native domain validation and authenticated transport must additionally pass before upload.
     """
 
@@ -99,7 +101,7 @@ def verify_build_export(root: Path, *, plan: dict[str, Any]) -> dict[str, Any]:
     observed = file_records(root, exclude=(g.CI_ENVELOPE_NAME,),
                             max_files=lim.MAX_CI_EXPORT_FILES + 1,
                             max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES + len(raw),
-                            max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES)
+                            max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS)
     expected = [{key: file[key] for key in ("path", "sha256", "size")} for file in envelope["files"]]
     check(observed == expected, "$.files", "frozen export differs from its exact file inventory")
     check(read_child_file(root, g.CI_ENVELOPE_NAME, max_bytes=lim.MAX_CI_ENVELOPE_BYTES) == raw,
@@ -158,7 +160,7 @@ def assemble_build_export(inputs: Path, *, partitions: list[dict[str, Any]], pla
                     paths=tuple(file["path"] for file in envelope["files"]),
                     max_files=lim.MAX_CI_EXPORT_FILES + 1, max_entries=lim.MAX_CI_EXPORT_ENTRIES,
                     max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES + lim.MAX_CI_ENVELOPE_BYTES,
-                    max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES)
+                    max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS)
                 wanted = [{key: file[key] for key in ("path", "size", "sha256")} for file in envelope["files"]]
                 check(records == wanted, "$.files", "copied target differs from exact admitted payload")
                 copied.extend(records)
@@ -201,7 +203,7 @@ def _materialize_build_export(root: Path, output: Path, *, plan: dict[str, Any],
         copied = copy_regular_files(root, stage_fd, max_files=lim.MAX_CI_EXPORT_FILES + 1,
                                     max_entries=lim.MAX_CI_EXPORT_ENTRIES,
                                     max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES + len(raw),
-                                    max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES)
+                                    max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS)
         check(copied == inventory, "$.files", "copied export differs from protected admission")
         observed = verify_build_export(stage, plan=plan)
         check(observed == expected, "$.envelope", "staged export differs from protected admission")
@@ -256,7 +258,7 @@ def prepare_build_validation(*, boundary: HostBoundary, validator: WorkerAccount
                                owner_uid=boundary.uid, reader_gid=validator.gid,
                                max_files=lim.MAX_CI_EXPORT_FILES + 1, max_entries=lim.MAX_CI_EXPORT_ENTRIES,
                                max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES + len(raw),
-                               max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES)
+                               max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS)
         final = os.fstat(descriptor)
         if ((final.st_dev, final.st_ino) != (initial.st_dev, initial.st_ino)
                 or (final.st_uid, final.st_gid, stat.S_IMODE(final.st_mode)) != (boundary.uid, validator.gid, 0o750)):
@@ -340,7 +342,7 @@ def freeze_build_export(*, boundary: HostBoundary, candidate: WorkerAccount, exe
                              owner_gid=boundary.gid, max_files=lim.MAX_CI_EXPORT_FILES + 1,
                              max_entries=lim.MAX_CI_EXPORT_ENTRIES,
                              max_total_bytes=lim.MAX_CI_EXPORT_TREE_BYTES + len(raw),
-                             max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES)
+                             max_file_bytes=lim.MAX_CI_EXPORT_FILE_BYTES, rule=EXPORT_PATHS)
         final = os.fstat(descriptor)
         if ((final.st_dev, final.st_ino) != (initial.st_dev, initial.st_ino)
                 or (final.st_uid, final.st_gid, stat.S_IMODE(final.st_mode)) != (boundary.uid, boundary.gid, 0o700)):

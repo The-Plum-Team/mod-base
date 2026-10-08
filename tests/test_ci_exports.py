@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 import stat
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +19,7 @@ from mod_base.build_ci.worker import WorkerAccount, WorkerError, WorkerResult
 from mod_base.build_ci.exports import materialize_build_export, validate_target_partitions, verify_build_export
 from mod_base.build_ci.protocol import plan_sha256
 from mod_base.errors import MbError
+from mod_base.io.tree import EXPORT_PATHS
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from tests.helpers import ci_descriptor, ci_envelope, ci_plan
@@ -119,6 +122,7 @@ class FrozenInventoryTests(unittest.TestCase):
             result = verify_build_export(Path("frozen"), plan=ci_plan())
             self.assertEqual(inventory.call_args.kwargs["max_files"], limits.MAX_CI_EXPORT_FILES + 1)
             self.assertEqual(inventory.call_args.kwargs["max_total_bytes"], limits.MAX_CI_EXPORT_TREE_BYTES + len(raw))
+            self.assertIs(inventory.call_args.kwargs["rule"], EXPORT_PATHS)
             return result
 
     def test_exact_inventory_is_accepted(self):
@@ -170,6 +174,7 @@ class ExportMaterializationTests(unittest.TestCase):
                 if success:
                     self.assertEqual(materialize_build_export(Path("reclaimed"), Path("sealed"), plan=ci_plan()), expected)
                     self.assertEqual(copying.call_args.kwargs["max_entries"], limits.MAX_CI_EXPORT_ENTRIES)
+                    self.assertIs(copying.call_args.kwargs["rule"], EXPORT_PATHS)
                 else:
                     with self.assertRaises(MbError):
                         materialize_build_export(Path("reclaimed"), Path("sealed"), plan=ci_plan())
@@ -179,6 +184,90 @@ class ExportMaterializationTests(unittest.TestCase):
                 patch("mod_base.build_ci.exports.atomic_directory") as atomic, self.assertRaises(MbError):
             materialize_build_export(Path("reclaimed"), Path("sealed"), plan=ci_plan())
         atomic.assert_not_called()
+
+
+class FrozenExportTreeTests(unittest.TestCase):
+    """Real temporary trees through verification, assembly and the atomic private copy (no seams).
+
+    Declared files come from the synthetic plan; the walk holds every entry of the tree, declared
+    or not, to the export path rule.
+    """
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.root, self.output = self.base / "export", self.base / "sealed"
+        self.plan, self.envelope = ci_plan(), ci_envelope()
+        self.payloads = self.write(self.root, self.envelope)
+
+    @staticmethod
+    def write(root, envelope):
+        """Give every declared file real bytes, then freeze the envelope that now describes them."""
+        payloads = {}
+        for file in envelope["files"]:
+            data = f"bytes of {file['path']}".encode()
+            file.update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
+            payloads[file["path"]] = data
+            (root / file["path"]).parent.mkdir(parents=True, exist_ok=True)
+            (root / file["path"]).write_bytes(data)
+        (root / grammar.CI_ENVELOPE_NAME).write_bytes(canonical_json(envelope))
+        return payloads
+
+    def test_exact_tree_is_verified_and_copied_into_a_new_private_directory(self):
+        self.assertEqual(verify_build_export(self.root, plan=self.plan), self.envelope)
+        self.assertEqual(materialize_build_export(self.root, self.output, plan=self.plan), self.envelope)
+        self.assertEqual(verify_build_export(self.output, plan=self.plan), self.envelope)
+        for name, data in self.payloads.items():
+            self.assertEqual((self.output / name).read_bytes(), data)
+            self.assertNotEqual(os.stat(self.output / name).st_ino, os.stat(self.root / name).st_ino)
+
+    def test_a_directory_named_like_the_mods_files_is_an_export_path(self):
+        (self.root / "staged" / "Quick Skin - Fabric - 1.21.4+build.1").mkdir()
+        self.assertEqual(verify_build_export(self.root, plan=self.plan), self.envelope)
+        self.assertEqual(materialize_build_export(self.root, self.output, plan=self.plan), self.envelope)
+        self.assertEqual(sorted(os.listdir(self.output / "staged")), ["lane-a"])  # an empty directory is not copied
+
+    def test_hostile_entries_never_verify_or_publish(self):
+        report = Path("staged") / "lane-a" / "native-report.json"
+        mutations = {
+            "hidden directory": lambda: (self.root / ".gradle").mkdir(),
+            "case alias directory": lambda: (self.root / "Staged").mkdir(),
+            "case alias file": lambda: (self.root / "staged" / "lane-a" / "SBOM.json").write_bytes(b"{}"),
+            "trailing dot": lambda: (self.root / "staged" / "notes.").mkdir(),
+            "double space": lambda: (self.root / "staged" / "a  b").mkdir(),
+            "non-ASCII": lambda: (self.root / "staged" / "caf\xe9").mkdir(),
+            "undeclared file": lambda: (self.root / "staged" / "lane-a" / "extra.jar").write_bytes(b"extra"),
+            "empty file": lambda: (self.root / report).write_bytes(b""),
+            "symlink": lambda: (self.root / "staged" / "link.jar").symlink_to(self.root / report),
+            "hard link": lambda: os.link(self.root / report, self.base / "alias"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                self.setUp()
+                mutate()
+                with self.assertRaises(MbError):
+                    verify_build_export(self.root, plan=self.plan)
+                with self.assertRaises(MbError):
+                    materialize_build_export(self.root, self.output, plan=self.plan)
+                self.assertFalse(self.output.exists())
+
+    def test_target_inputs_assemble_into_one_complete_export(self):
+        plan, partitions = partitions_fixture()
+        payloads = {}
+        for index, partition in enumerate(partitions):
+            payloads.update(self.write(self.base / "inputs" / f"target-{index}", partition["envelope"]))
+        complete = exports.assemble_build_export(self.base / "inputs", partitions=partitions, plan=plan,
+                                                 run_id=42, run_attempt=2, output=self.output)
+        self.assertEqual((complete["scope"], [file["path"] for file in complete["files"]]), ("complete", sorted(payloads)))
+        self.assertEqual(verify_build_export(self.output, plan=plan), complete)
+        for name, data in payloads.items():
+            self.assertEqual((self.output / name).read_bytes(), data)
+        (self.base / "inputs" / "target-1" / "Staged").mkdir()
+        with self.assertRaises(MbError):
+            exports.assemble_build_export(self.base / "inputs", partitions=partitions, plan=plan,
+                                          run_id=42, run_attempt=2, output=self.base / "second")
+        self.assertFalse((self.base / "second").exists())
 
 
 class BuildReadHandoffTests(unittest.TestCase):
@@ -203,6 +292,7 @@ class BuildReadHandoffTests(unittest.TestCase):
             self.assertEqual(args[0], exports.BUILD_VALIDATION_ROOT)
             self.assertEqual(kwargs["owner_uid"], self.boundary.uid)
             self.assertEqual(kwargs["reader_gid"], self.validator.gid)
+            self.assertIs(kwargs["rule"], EXPORT_PATHS)
             if grant_error:
                 raise grant_error
         def terminate(account):
@@ -307,6 +397,7 @@ class CandidateFreezeTests(unittest.TestCase):
             events.append("transfer")
             self.assertEqual(root, exports.BUILD_VALIDATION_ROOT)
             self.assertEqual((kwargs["source_owner_uid"], kwargs["owner_uid"], kwargs["owner_gid"]), (0, 1001, 121))
+            self.assertIs(kwargs["rule"], EXPORT_PATHS)
             if transfer_error:
                 raise transfer_error
         def verify(root, **kwargs):

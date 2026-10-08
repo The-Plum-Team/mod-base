@@ -38,7 +38,7 @@ class SelectedCopyTests(unittest.TestCase):
             stack.enter_context(patch.object(tree, "file_records", side_effect=[records, after]))
             stack.enter_context(patch.object(tree, "_open_root", return_value=10))
             stack.enter_context(patch.object(tree, "_parent_descriptor", return_value=11))
-            opened = stack.enter_context(patch.object(tree, "_open_new_file", return_value=12))
+            opened = stack.enter_context(patch.object(tree, "_create_file", return_value=12))
             stack.enter_context(patch.object(tree, "_stream_regular", side_effect=stream))
             stack.enter_context(patch.object(tree.os, "fstat", return_value=stage))
             stack.enter_context(patch.object(tree.os, "geteuid", return_value=1001, create=True))

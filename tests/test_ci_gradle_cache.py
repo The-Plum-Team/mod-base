@@ -1,6 +1,9 @@
 """Private Gradle handoff orchestration; OS/data seams do not establish hosted isolation."""
 
+import hashlib
+import os
 import stat
+import tempfile
 import unittest
 from contextlib import ExitStack, nullcontext
 from pathlib import Path
@@ -9,6 +12,9 @@ from unittest.mock import patch
 
 from mod_base.build_ci import gradle_cache as cache
 from mod_base.build_ci.worker import WorkerAccount, WorkerError
+from mod_base.errors import MbError
+from mod_base.io import tree
+from mod_base.model import limits
 from tests.helpers import ci_stat as info
 from tests.test_ci_host import BOUNDARY
 
@@ -117,3 +123,73 @@ class GradleCacheTests(unittest.TestCase):
                 cache.stage_privileged_gradle_cache(SEED, boundary=BOUNDARY, account=ACCOUNT)
             private.assert_not_called()
             terminate.assert_called_once_with(ACCOUNT)
+
+
+class SeedInventoryTests(unittest.TestCase):
+    """The module's own caps and path rule over real temporary caches (no seams).
+
+    The ownership handoff needs root and stays with the Linux fixture; what a seed may hold is
+    decided by the inventory and the copy exercised here.
+    """
+
+    FILES = {
+        "caches/modules-2/files-2.1/net.fabricmc/yarn/1.20.1+build.10/2d1f/yarn-1.20.1+build.10-v2.jar": b"yarn",
+        "caches/modules-2/modules-2.lock": b"",
+        "caches/8.8/kotlin-dsl/~tmp@1%20x/a b.class": b"scratch",
+        "caches/transforms-4/4d/" + "/".join(f"pkg{index}" for index in range(40)) + "/Deep.class": b"deep",
+        "wrapper/dists/gradle-8.8-bin/5e/gradle-8.8/lib/gradle-launcher-8.8.jar": b"wrapper",
+    }
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.seed = self.base / "seed"
+        for name, data in self.FILES.items():
+            (self.seed / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.seed / name).write_bytes(data)
+
+    def refused(self):
+        with self.assertRaises(MbError):
+            cache._records(self.seed)
+        stage = Path(tempfile.mkdtemp(dir=self.base))
+        descriptor = os.open(stage, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with self.assertRaises(MbError):
+                tree.copy_regular_data_files(self.seed, descriptor, **cache._BOUNDS)
+        finally:
+            os.close(descriptor)
+        self.assertEqual(os.listdir(stage), [])
+
+    def test_a_real_cache_is_inventoried_and_copied_exactly(self):
+        expected = [{"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                    for name, data in sorted(self.FILES.items())]
+        self.assertIs(cache._BOUNDS["rule"], tree.SEED_PATHS)
+        self.assertEqual(cache._records(self.seed), expected)
+        stage = Path(tempfile.mkdtemp(dir=self.base))
+        descriptor = os.open(stage, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            self.assertEqual(tree.copy_regular_data_files(self.seed, descriptor, **cache._BOUNDS), expected)
+        finally:
+            os.close(descriptor)
+        self.assertEqual(cache._records(stage), expected)
+        for name, data in self.FILES.items():
+            self.assertEqual((stage / name).read_bytes(), data)
+            self.assertNotEqual(os.stat(stage / name).st_ino, os.stat(self.seed / name).st_ino)
+
+    def test_links_special_files_and_an_oversized_file_are_refused(self):
+        lock = Path("caches") / "modules-2" / "modules-2.lock"
+        self.assertEqual(len(cache._records(self.seed)), len(self.FILES))
+        mutations = {
+            "symlink": lambda: (self.seed / "caches" / "link.jar").symlink_to(self.seed / lock),
+            "directory symlink": lambda: (self.seed / "wrapper" / "linked").symlink_to(self.seed / "caches"),
+            "hard link": lambda: os.link(self.seed / lock, self.seed / "wrapper" / "second-name"),
+            "fifo": lambda: os.mkfifo(self.seed / "caches" / "fifo"),
+            # Sparse: one byte past the per-file cap without writing two gibibytes.
+            "oversized file": lambda: os.truncate(self.seed / lock, limits.MAX_CI_SOURCE_FILE_BYTES + 1),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                self.setUp()
+                mutate()
+                self.refused()

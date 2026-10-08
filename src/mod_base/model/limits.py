@@ -66,6 +66,8 @@ MAX_IMAGE_PIXELS = 20_000_000
 MAX_IMAGE_DIMENSION = 16_384
 MAX_SITE_BYTES = 1 * GIB
 MAX_SITE_FILES = 8192
+#: Characters and components of one bundle path. A sealed CI export path keeps both bounds and
+#: only widens the component grammar (``grammar.is_export_path``).
 MAX_BUNDLE_PATH_CHARS = 300
 MAX_BUNDLE_PATH_DEPTH = 16
 
@@ -236,6 +238,12 @@ MAX_CI_SOURCE_ENTRIES = 250_000
 MAX_CI_SOURCE_FILE_BYTES = 2 * GIB
 MAX_CI_SOURCE_TREE_BYTES = 20 * GIB
 MAX_CI_SOURCE_LINK_BYTES = 4 * KIB
+#: Components of one Gradle seed path (``grammar.is_seed_path``). A cache carries no name grammar,
+#: so ``MAX_BUNDLE_PATH_DEPTH`` does not apply: a dependency is already eight components deep
+#: (``caches/modules-2/files-2.1/<group>/<module>/<version>/<hash>/<file>``) and an unpacked
+#: transform output can add a whole package tree. No MB1 walk descends further
+#: (``io.tree.MAX_WALK_DEPTH``).
+MAX_CI_SEED_PATH_DEPTH = 64
 MAX_CI_GIT_METADATA_FILES = MAX_CI_SOURCE_FILES
 MAX_CI_GIT_METADATA_ENTRIES = MAX_CI_SOURCE_ENTRIES
 MAX_CI_GIT_METADATA_FILE_BYTES = MAX_CI_SOURCE_FILE_BYTES

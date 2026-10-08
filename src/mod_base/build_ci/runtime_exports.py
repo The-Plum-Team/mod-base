@@ -11,18 +11,21 @@ from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.runtime_schema import validate_runtime_envelope
 from mod_base.io.atomic_directory import atomic_directory
 from mod_base.io.secure_json import loads
-from mod_base.io.tree import copy_regular_data_files, read_child_file, regular_data_records, validate_tree_entries
+from mod_base.io.tree import (EXPORT_PATHS, copy_regular_data_files, read_child_file, regular_data_records,
+                              validate_tree_entries)
 from mod_base.model import grammar as g, limits as lim
 from mod_base.model.canonical import canonical_json
 from mod_base.model.validators import check
 
 
-def _bounds(envelope: dict[str, Any], raw_size: int) -> dict[str, int]:
+def _bounds(envelope: dict[str, Any], raw_size: int) -> dict[str, Any]:
+    """Caps of one scope and the path rule of every sealed export (the mod's own file names)."""
     lane = envelope['scope'] == 'lane'
     return {'max_files': (lim.MAX_CI_RUNTIME_FILES if lane else lim.MAX_CI_RUNTIME_AGGREGATE_FILES) + 1,
             'max_entries': lim.MAX_CI_RUNTIME_ENTRIES,
             'max_total_bytes': (lim.MAX_CI_RUNTIME_BYTES if lane else lim.MAX_CI_RUNTIME_AGGREGATE_BYTES) + raw_size,
-            'max_file_bytes': max(lim.MAX_CI_PNG_BYTES, lim.MAX_CI_RUNTIME_ENVELOPE_BYTES)}
+            'max_file_bytes': max(lim.MAX_CI_PNG_BYTES, lim.MAX_CI_RUNTIME_ENVELOPE_BYTES),
+            'rule': EXPORT_PATHS}
 
 
 def verify_runtime_export(root: Path, *, plan: dict[str, Any]) -> dict[str, Any]:

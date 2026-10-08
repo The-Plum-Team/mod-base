@@ -4,9 +4,9 @@ import re
 import unittest
 
 from mod_base.errors import MbError
-from mod_base.model import grammar
+from mod_base.model import grammar, limits
 
-SHA = "0123456789abcdef0123456789abcdef01234567"
+SHA ="0123456789abcdef0123456789abcdef01234567"
 
 
 class IdentifierGrammarTest(unittest.TestCase):
@@ -96,6 +96,42 @@ class PathGrammarTest(unittest.TestCase):
         for bad in (".git/config", "a/.git/hooks/x", ".GIT/config", "../x"):
             with self.subTest(bad=bad):
                 self.assertFalse(grammar.is_repo_path(bad))
+
+    def test_export_paths_keep_the_real_file_names_of_the_mods(self) -> None:
+        real = ("BlockPops - Fabric - 1.20.1-1.2.3.jar", "BlockPops E2E - Fabric - 1.20.1-0.0.0.jar",
+                "Quick Skin - Fabric - 1.21.4-1.0.0.jar", "Quick Skin E2E - Fabric - 1.21.4-0.0.0.jar",
+                "sbom/quick-skin.cdx.json")
+        for good in (*real, "libs/yarn-1.20.1+build.10-v2.jar", "ci-envelope.json", "a", "a b", "a b c", "a.b..c",
+                     "_a", "-a-", "+", "x" * 128, "/".join(["a"] * 16), "/".join(["x" * 74] * 4) + "y"):
+            with self.subTest(good=good):
+                self.assertTrue(grammar.is_export_path(good))
+        for bad in ("", " a", "a ", "a/ b", "a /b", ".a", "a.", "a/.b", "a./b", ".", "..", "a/../b", "./a", "a/./b",
+                    "a//b", "/abs", "a/", "a  b", "a\tb", "a\nb", "a\n", "a\rb", "a\x00b", "a\x1f", "a\x7f", "a\\b",
+                    "a:b", "C:/a", "\u00e9", "a\u00a0b", "\uff41", "\u0661", "a~b", "a@b", "a%b", "a*b", "a?b", 'a"b',
+                    "a<b", "a>b", "a|b", "a,b", "a;b", "a'b", "a(b)", "a[b]", "a{b}", "a=b", "a&b", "a#b", "a$b",
+                    "a!b", "a`b", "a^b", ".git/config", "a/.git/x", ".gitignore", "x" * 129, "/".join(["a"] * 17),
+                    "/".join(["x" * 74] * 4) + "yy", None, 1, b"a", ["a"]):
+            with self.subTest(bad=bad):
+                self.assertFalse(grammar.is_export_path(bad))
+        # Pages bundles and repository paths keep their own, narrower grammar.
+        for name in (*real[:4], "libs/yarn-1.20.1+build.10-v2.jar", "a b"):
+            with self.subTest(name=name):
+                self.assertFalse(grammar.is_bundle_path(name))
+                self.assertFalse(grammar.is_repo_path(name))
+        for name in ("sbom/quick-skin.cdx.json", ".nojekyll", "trailing."):
+            self.assertTrue(grammar.is_bundle_path(name), name)
+
+    def test_seed_paths_are_only_structurally_safe(self) -> None:
+        self.assertEqual(limits.MAX_CI_SEED_PATH_DEPTH, 64)
+        for good in ("caches/modules-2/files-2.1/net.fabricmc/yarn/1.20.1+build.10/2d1f/yarn-1.20.1+build.10-v2.jar",
+                     "a~b/c@d/e%20f/ g /.h/..i/j:k/l\\m/\u00e9/\n", ".git/config", "A/a", "x" * 255,
+                     "/".join(["d"] * limits.MAX_CI_SEED_PATH_DEPTH)):
+            with self.subTest(good=good):
+                self.assertTrue(grammar.is_seed_path(good))
+        for bad in ("", "/abs", "a//b", "a/", "..", "a/../b", "../a", ".", "a/./b", "a\x00b",
+                    "/".join(["d"] * (limits.MAX_CI_SEED_PATH_DEPTH + 1)), "/" * 100_000, None, 1, b"a", ["a"]):
+            with self.subTest(bad=str(bad)[:40]):
+                self.assertFalse(grammar.is_seed_path(bad))
 
 
 class RunIdentityTest(unittest.TestCase):

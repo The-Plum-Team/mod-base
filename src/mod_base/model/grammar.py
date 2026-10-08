@@ -74,6 +74,11 @@ WORKFLOW_REF = re.compile(
 )
 #: A bundle-relative path: ASCII components, no ".", "..", empty or hidden-traversal component.
 _PATH_COMPONENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$|^\.[A-Za-z0-9_][A-Za-z0-9._-]{0,126}$")
+#: A component of a sealed CI export path, which keeps the mod's own file names
+#: (``Quick Skin - Fabric - 1.21.4-1.0.0.jar``): at most 128 characters like a bundle component,
+#: also "+" and single inner spaces, never a space or a dot at either end. So none is ".", "..",
+#: hidden (".git") or a name Windows would trim.
+_EXPORT_COMPONENT = re.compile(r"^[A-Za-z0-9_+-](?:(?:[A-Za-z0-9._+-]| (?! )){0,126}[A-Za-z0-9_+-])?$")
 
 ARTIFACT_PREFIX = "mb-"
 PROMOTION_NAME = "mb-promotion"
@@ -154,15 +159,19 @@ def require_positive_int(value: object, label: str, *, maximum: int = limits.MAX
     return value
 
 
-def is_bundle_path(value: object) -> bool:
-    """True for a canonical bundle-relative POSIX path (no absolute, ``..``, ``.``, ``\\`` or NUL)."""
-
+def _is_bounded_path(value: object, component: re.Pattern[str]) -> bool:
     if not isinstance(value, str) or not value or len(value) > limits.MAX_BUNDLE_PATH_CHARS:
         return False
     parts = value.split("/")
     if len(parts) > limits.MAX_BUNDLE_PATH_DEPTH:
         return False
-    return all(_PATH_COMPONENT.fullmatch(part) is not None for part in parts)
+    return all(component.fullmatch(part) is not None for part in parts)
+
+
+def is_bundle_path(value: object) -> bool:
+    """True for a canonical bundle-relative POSIX path (no absolute, ``..``, ``.``, ``\\`` or NUL)."""
+
+    return _is_bounded_path(value, _PATH_COMPONENT)
 
 
 CI_BATCH_BRANCH_PREFIX = 'batch/'
@@ -186,24 +195,25 @@ def is_repo_path(value: object) -> bool:
     return all(part.lower() != ".git" for part in value.split("/"))  # type: ignore[union-attr]
 
 
-#: One component of an export path: ASCII letters, digits, ``.``, ``_``, ``-``, ``+`` and single inner
-#: spaces. It neither starts nor ends with a space or a dot.
-_EXPORT_COMPONENT = re.compile(r"^[A-Za-z0-9_+-](?:(?:[A-Za-z0-9._+-]| (?! )){0,126}[A-Za-z0-9_+-])?$")
-
-
 def is_export_path(value: object) -> bool:
-    """True for a canonical path of a file a Build or runtime export holds.
+    """True for a canonical path inside a sealed CI export: the length and depth bounds of a bundle
+    path, components of ASCII letters, digits, ``._-+`` and single inner spaces, none starting or
+    ending with a space or a dot. A Pages bundle path stays narrower (:func:`is_bundle_path`), and
+    names that differ only in case are for the inventory holding them to refuse."""
 
-    The length, depth and traversal rules are those of a bundle path; the component grammar is the
-    wider one the mods' real file names need (``Quick Skin - Fabric - 1.20.1-3.1.0.jar``). No
-    component can start with a dot, so no hidden file and no ``.git`` directory is ever named."""
+    return _is_bounded_path(value, _EXPORT_COMPONENT)
 
-    if not isinstance(value, str) or not value or len(value) > limits.MAX_BUNDLE_PATH_CHARS:
+
+def is_seed_path(value: object) -> bool:
+    """True for a structurally safe relative path inside a Gradle seed: no NUL, no empty, ``.`` or
+    ``..`` component, at most ``limits.MAX_CI_SEED_PATH_DEPTH`` of them. A cache names its entries
+    freely (``1.20.1+build.10``, ``~``, ``@``, ``%``, spaces, any case), so there is no name grammar:
+    links, special files, counts and sizes are for the tree walk to refuse."""
+
+    if not isinstance(value, str) or "\x00" in value:
         return False
-    parts = value.split("/")
-    if len(parts) > limits.MAX_BUNDLE_PATH_DEPTH:
-        return False
-    return all(_EXPORT_COMPONENT.fullmatch(part) is not None for part in parts)
+    parts = value.split("/", limits.MAX_CI_SEED_PATH_DEPTH)
+    return len(parts) <= limits.MAX_CI_SEED_PATH_DEPTH and all(part not in ("", ".", "..") for part in parts)
 
 
 def parse_timestamp(value: object, label: str = "timestamp") -> datetime:

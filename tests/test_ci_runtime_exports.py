@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import os
 import shutil
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from mod_base.build_ci import runtime_exports
 from mod_base.build_ci.runtime_schema import bind_runtime_envelope
 from mod_base.errors import MbError
+from mod_base.io.tree import EXPORT_PATHS
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from tests.helpers import ci_descriptor, ci_plan, ci_runtime_envelope
@@ -174,6 +176,15 @@ class RuntimeExportsTest(unittest.TestCase):
                 runtime_exports.materialize_runtime_export(root, output, plan=ci_plan())
             self.assertEqual((output/'keep').read_bytes(), b'original')
 
+    def test_every_inventory_and_copy_applies_the_export_path_rule(self):
+        with fixture() as (root, output, envelope):
+            runtime_exports.materialize_runtime_export(root, output, plan=ci_plan())
+            calls = (runtime_exports.regular_data_records.call_args_list
+                     + runtime_exports.copy_regular_data_files.call_args_list)
+            self.assertGreater(len(calls), 4)
+            for call in calls:
+                self.assertIs(call.kwargs['rule'], EXPORT_PATHS)
+
     def test_descriptor_scope_attempt_producer_and_exact_owning_build(self):
         for scope in ('lane', 'complete'):
             envelope = ci_runtime_envelope()
@@ -194,3 +205,63 @@ class RuntimeExportsTest(unittest.TestCase):
                     owner['artifact']['digest'] = 'sha256:'+'f'*64
                 with self.assertRaises(MbError):
                     bind_runtime_envelope(envelope, descriptor=changed, owning_build=owner, plan=ci_plan())
+
+
+class FrozenRuntimeTreeTests(unittest.TestCase):
+    """Real temporary trees through verification and the atomic private copy (no seams).
+
+    Declared files come from the synthetic envelope; the walk holds every entry of the tree,
+    declared or not, to the export path rule.
+    """
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.root, self.output = self.base/'runtime', self.base/'sealed'
+        self.payloads = {'lanes/lane-a/result.json': b'{"authored":"opaque fixture"}\n', 'lanes/lane-a/runtime.log': b''}
+        self.envelope = ci_runtime_envelope()
+        self.envelope['files'] = [{'path': name, 'lane_id': 'lane-a',
+                                   'role': 'runtime-log' if name.endswith('.log') else 'native-report',
+                                   'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+                                  for name, data in sorted(self.payloads.items())]
+        for name, data in self.payloads.items():
+            (self.root/name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root/name).write_bytes(data)
+        (self.root/grammar.CI_RUNTIME_ENVELOPE_NAME).write_bytes(canonical_json(self.envelope))
+
+    def test_exact_tree_with_an_empty_log_is_verified_and_copied(self):
+        self.assertEqual(runtime_exports.verify_runtime_export(self.root, plan=ci_plan()), self.envelope)
+        self.assertEqual(runtime_exports.materialize_runtime_export(self.root, self.output, plan=ci_plan()), self.envelope)
+        self.assertEqual(runtime_exports.verify_runtime_export(self.output, plan=ci_plan()), self.envelope)
+        for name, data in self.payloads.items():
+            self.assertEqual((self.output/name).read_bytes(), data)
+            self.assertNotEqual(os.stat(self.output/name).st_ino, os.stat(self.root/name).st_ino)
+
+    def test_a_directory_named_like_the_mods_files_is_an_export_path(self):
+        (self.root/'lanes'/'Quick Skin - Fabric - 1.21.4+build.1').mkdir()
+        self.assertEqual(runtime_exports.materialize_runtime_export(self.root, self.output, plan=ci_plan()), self.envelope)
+        self.assertEqual(sorted(os.listdir(self.output/'lanes')), ['lane-a'])  # an empty directory is not copied
+
+    def test_hostile_entries_never_verify_or_publish(self):
+        log = Path('lanes')/'lane-a'/'runtime.log'
+        mutations = {
+            'hidden directory': lambda: (self.root/'.minecraft').mkdir(),
+            'case alias directory': lambda: (self.root/'Lanes').mkdir(),
+            'case alias file': lambda: (self.root/'lanes'/'lane-a'/'Runtime.log').write_bytes(b''),
+            'trailing dot': lambda: (self.root/'lanes'/'notes.').mkdir(),
+            'double space': lambda: (self.root/'lanes'/'a  b').mkdir(),
+            'non-ASCII': lambda: (self.root/'lanes'/'caf\xe9').mkdir(),
+            'undeclared file': lambda: (self.root/'lanes'/'lane-a'/'extra.log').write_bytes(b''),
+            'symlink': lambda: (self.root/'lanes'/'link.log').symlink_to(self.root/log),
+            'hard link': lambda: os.link(self.root/log, self.base/'alias'),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                self.setUp()
+                mutate()
+                with self.assertRaises(MbError):
+                    runtime_exports.verify_runtime_export(self.root, plan=ci_plan())
+                with self.assertRaises(MbError):
+                    runtime_exports.materialize_runtime_export(self.root, self.output, plan=ci_plan())
+                self.assertFalse(self.output.exists())

@@ -1,9 +1,9 @@
 """Bounded regular-file walks and descriptor-relative child reads (MB1).
 
 Union of Quick Skin ``evidence._bounded_entries``/``reject_symlinks`` and Block Pops
-``_child_file``: every walk refuses symlinks, special files, hard-linked files and paths that are
-not canonical bundle paths (:func:`mod_base.model.grammar.is_bundle_path`), and enforces count
-and byte bounds before reading any content.
+``_child_file``: every walk refuses symlinks, special files, hard-linked files and paths outside
+its :class:`PathRule` (canonical bundle paths, :func:`mod_base.model.grammar.is_bundle_path`,
+unless the caller names another), and enforces count and byte bounds before reading any content.
 
 Walks and reads go through directory descriptors opened with ``O_NOFOLLOW``, so a component that
 is (or becomes) a symlink is refused instead of followed; every file read is stat-stable (same
@@ -20,16 +20,17 @@ import os
 import stat
 import sys
 from collections.abc import Callable, Collection
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from mod_base.errors import MbError
-from mod_base.io.atomic_directory import _open_new_file
 from mod_base.model import grammar, limits
 
 OWNER = "MB1"
 
-#: ``reject_symlinks`` bounds (it takes no caller bounds): entries visited and directory depth.
+#: Entries ``reject_symlinks`` visits (it takes no caller bounds) and the directory depth at which
+#: every walk stops.
 MAX_WALK_ENTRIES = 1_000_000
 MAX_WALK_DEPTH = 64
 _READ_CHUNK = 1 << 16
@@ -41,6 +42,47 @@ class TreeError(MbError):
     """A directory tree is not a bounded tree of regular files (exit 2)."""
 
     default_reason = "unsafe-tree"
+
+
+@dataclass(frozen=True)
+class PathRule:
+    """The entry paths one tree may hold, relative to its root (never a link or a special file)."""
+
+    name: str
+    is_safe: Callable[[object], bool]
+    #: Whether two entries may differ only in case.
+    aliases: bool = False
+
+
+#: Pages bundles and every other kit-named tree: the default of the nonempty-file functions, whose
+#: walks have no case-alias check of their own.
+BUNDLE_PATHS = PathRule("bundle", grammar.is_bundle_path, aliases=True)
+#: Repository-shaped data without ``.git``: the default of the ``regular_data`` functions.
+REPO_PATHS = PathRule("repository", grammar.is_repo_path)
+#: Sealed CI exports, which keep the mod's own file names (spaces, ``+``) and may be unpacked where
+#: case is folded.
+EXPORT_PATHS = PathRule("export", grammar.is_export_path)
+#: Gradle seeds: structural safety only. A cache is opaque data that names its entries freely, so
+#: neither a name grammar nor a case-alias check applies.
+SEED_PATHS = PathRule("seed", grammar.is_seed_path, aliases=True)
+
+
+def _admission(rule: PathRule) -> Callable[[str], bool]:
+    """``admit(relative)`` of one walk: the rule's grammar and, unless the rule tolerates them, no
+    entry that differs from an earlier one only in case."""
+
+    spellings: set[str] = set()
+
+    def admit(relative: str) -> bool:
+        if not rule.is_safe(relative):
+            return False
+        if not rule.aliases:
+            folded = relative.casefold()
+            if folded in spellings:
+                return False
+            spellings.add(folded)
+        return True
+    return admit
 
 
 def _identity(info: os.stat_result) -> tuple[int, int]:
@@ -112,11 +154,12 @@ def _walk(directory: int, parent: str, *, depth: int, budget: list[int],
 
 
 def regular_files(root: Path, *, max_files: int, max_total_bytes: int, max_file_bytes: int,
-                  suffixes: Collection[str] | None = None) -> dict[str, int]:
+                  suffixes: Collection[str] | None = None, rule: PathRule = BUNDLE_PATHS) -> dict[str, int]:
     """Return ``{relative POSIX path: size}`` for every file under ``root`` (sorted by path).
 
     ``root`` must be a real directory; every entry must be a directory or a single-link regular
-    file; empty files are refused; with ``suffixes`` every file must end with one of them.
+    file whose path ``rule`` admits; empty files are refused; with ``suffixes`` every file must end
+    with one of them.
     """
 
     for value in (max_files, max_total_bytes, max_file_bytes):
@@ -125,10 +168,11 @@ def regular_files(root: Path, *, max_files: int, max_total_bytes: int, max_file_
     allowed = tuple(suffixes) if suffixes is not None else None
     files: dict[str, int] = {}
     totals = {"bytes": 0, "directories": 0}
+    admit = _admission(rule)
 
     def visit(relative: str, info: os.stat_result) -> bool:
-        if not grammar.is_bundle_path(relative):
-            raise TreeError(f"tree path is not a canonical bundle path: {relative!r}"[:300])
+        if not admit(relative):
+            raise TreeError(f"tree path is not a canonical {rule.name} path or is a case alias: {relative!r}"[:300])
         if stat.S_ISDIR(info.st_mode):
             totals["directories"] += 1
             if totals["directories"] > max(max_files, 1):
@@ -233,9 +277,9 @@ def _stream_regular(directory: int | None, name: str | Path, *, max_bytes: int, 
         os.close(descriptor)
 
 
-def _require_relative(relative: Any) -> list[str]:
-    if not grammar.is_bundle_path(relative):
-        raise TreeError(f"path is not a canonical bundle path: {relative!r}"[:300])
+def _require_relative(relative: Any, rule: PathRule = BUNDLE_PATHS) -> list[str]:
+    if not rule.is_safe(relative):
+        raise TreeError(f"path is not a canonical {rule.name} path: {relative!r}"[:300])
     return relative.split("/")
 
 
@@ -260,14 +304,15 @@ def read_child_file(root: Path, relative: str, *, max_bytes: int) -> bytes:
 
 
 def stream_child_file(root: Path, relative: str, *, max_bytes: int,
-                      consume: Callable[[bytes], None]) -> int:
+                      consume: Callable[[bytes], None], rule: PathRule = BUNDLE_PATHS) -> int:
     """Stream a bounded single-link child through no-follow directory descriptors.
 
     The protected consumer receives bounded chunks; no complete file is allocated. Caller owns
     root ancestry and rechecks the complete inventory when a multi-file operation needs it.
+    ``relative`` must be a path ``rule`` admits (``EXPORT_PATHS`` for a sealed export's own files).
     """
 
-    parts = _require_relative(relative)
+    parts = _require_relative(relative, rule)
     if type(max_bytes) is not int or max_bytes < 1 or not callable(consume):
         raise TreeError("stream bound must be positive and consumer callable")
     root_fd = _open_root(root, "tree root")
@@ -301,15 +346,16 @@ def sha256_file(path: Path, *, max_bytes: int) -> str:
 
 
 def file_records(root: Path, *, exclude: Collection[str] = (), max_files: int, max_total_bytes: int,
-                 max_file_bytes: int) -> list[dict[str, Any]]:
+                 max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]:
     """Return the exact inventory ``[{path, sha256, size}]`` of ``root`` sorted by path, leaving out
     the relative paths in ``exclude`` (for example ``manifest.json``)."""
 
     excluded = set()
     for relative in exclude:
-        _require_relative(relative)
+        _require_relative(relative, rule)
         excluded.add(relative)
-    sizes = regular_files(root, max_files=max_files, max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
+    sizes = regular_files(root, max_files=max_files, max_total_bytes=max_total_bytes,
+                          max_file_bytes=max_file_bytes, rule=rule)
     records: list[dict[str, Any]] = []
     root_fd = _open_root(root, "tree root")
     try:
@@ -334,27 +380,25 @@ def file_records(root: Path, *, exclude: Collection[str] = (), max_files: int, m
     return records
 
 
-def regular_data_records(root: Path, *, max_files: int, max_entries: int,
-                         max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]:
+def regular_data_records(root: Path, *, max_files: int, max_entries: int, max_total_bytes: int,
+                         max_file_bytes: int, rule: PathRule = REPO_PATHS) -> list[dict[str, Any]]:
     """Bounded regular data inventory, including empty files and empty directories.
 
     Directories count toward the entry cap but have no content record. Refuse links, special
-    entries, case aliases and noncanonical repository paths before reading any file bytes.
-    This is data admission, never native artifact validity or executable provenance.
+    entries and paths outside ``rule`` (by default case aliases and noncanonical repository paths)
+    before reading any file bytes. ``SEED_PATHS`` checks structure only: a Gradle cache names its
+    entries freely. This is data admission, never native artifact validity or executable provenance.
     """
     if any(type(value) is not int or value < 1 for value in
            (max_files, max_entries, max_total_bytes, max_file_bytes)):
         raise TreeError("regular data bounds must be positive integers")
     paths: dict[str, int] = {}
-    spellings: set[str] = set()
+    admit = _admission(rule)
     total = 0
     def visit(relative: str, info: os.stat_result) -> bool:
         nonlocal total
-        folded = relative.casefold()
-        if (not grammar.is_repo_path(relative) or relative.split('/')[0].casefold() == '.git'
-                or folded in spellings):
+        if not admit(relative):
             raise TreeError("regular data has an unsafe or aliased path")
-        spellings.add(folded)
         if stat.S_ISDIR(info.st_mode):
             return True
         if info.st_nlink != 1 or not 0 <= info.st_size <= max_file_bytes:
@@ -448,42 +492,20 @@ def copy_selected_regular_data_files(root: Path, stage_fd: int, *, paths: tuple[
     _selected_data_bounds(paths, max_files=max_files, max_entries=max_entries,
                            max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
     return _copy_regular_files(root, stage_fd, paths=paths, max_files=max_files, max_entries=max_entries,
-                               max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes, data=True)
+                               max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes,
+                               rule=REPO_PATHS, data=True)
 
 
-def copy_regular_data_files(root: Path, stage_fd: int, *, max_files: int, max_entries: int,
-                            max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]:
+def copy_regular_data_files(root: Path, stage_fd: int, *, max_files: int, max_entries: int, max_total_bytes: int,
+                            max_file_bytes: int, rule: PathRule = REPO_PATHS) -> list[dict[str, Any]]:
     """Copy regular data into an empty private stage, preserving zero-byte files.
 
     Empty directories are omitted. Caller owns ancestry, writer exclusion and any required
     directory skeleton. Export readers/copy APIs retain their nonempty-file contract.
     """
     return _copy_regular_files(root, stage_fd, paths=None, max_files=max_files, max_entries=max_entries,
-                               max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes, data=True)
-
-
-def grant_regular_data_read_access(root: Path, *, source_owner_uid: int, owner_uid: int,
-                                   reader_gid: int, max_files: int, max_entries: int,
-                                   max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]:
-    """ACL-free 0750/0640 handoff of a fresh independent regular data copy, root last."""
-    return _grant_read_access(root, source_owner_uid=source_owner_uid, owner_uid=owner_uid,
-        reader_gid=reader_gid, max_entries=max_entries, path_is_safe=grammar.is_repo_path,
-        records=lambda: regular_data_records(root, max_files=max_files, max_entries=max_entries,
-            max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes))
-
-
-def privatize_regular_data_copy(root: Path, *, source_owner_uid: int, owner_uid: int,
-                                owner_gid: int, max_files: int, max_entries: int,
-                                max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]:
-    """ACL-free 0700/0600 handoff of a fresh independent regular data copy, root last.
-
-    Protected Linux Root setup only; authenticate accounts/ancestors and exclude all writers.
-    Never apply to a candidate original. Empty files/directories remain admitted data.
-    """
-    return _grant_read_access(root, source_owner_uid=source_owner_uid, owner_uid=owner_uid,
-        reader_gid=owner_gid, max_entries=max_entries, path_is_safe=grammar.is_repo_path, private=True,
-        records=lambda: regular_data_records(root, max_files=max_files, max_entries=max_entries,
-            max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes))
+                               max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes,
+                               rule=rule, data=True)
 
 
 def validate_tree_entries(root: Path, *, max_entries: int) -> None:
@@ -503,8 +525,8 @@ def validate_tree_entries(root: Path, *, max_entries: int) -> None:
         os.close(source)
 
 
-def copy_regular_files(root: Path, stage_fd: int, *, max_files: int, max_entries: int,
-                       max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]:
+def copy_regular_files(root: Path, stage_fd: int, *, max_files: int, max_entries: int, max_total_bytes: int,
+                       max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]:
     """Stream a bounded regular-file tree into an empty caller-owned private stage.
 
     Creates independent single-link files, never aliases source inodes. Caller must exclude
@@ -514,12 +536,12 @@ def copy_regular_files(root: Path, stage_fd: int, *, max_files: int, max_entries
     """
 
     return _copy_regular_files(root, stage_fd, paths=None, max_files=max_files, max_entries=max_entries,
-                               max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
+                               max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes, rule=rule)
 
 
 def copy_selected_regular_files(root: Path, stage_fd: int, *, paths: tuple[str, ...],
                                 max_files: int, max_entries: int, max_total_bytes: int,
-                                max_file_bytes: int) -> list[dict[str, Any]]:
+                                max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]:
     """Append declared regular files to a caller-owned private stage without replacing files.
 
     Inspect/recheck the entire source tree, including unselected files. Caller must protect both
@@ -527,16 +549,40 @@ def copy_selected_regular_files(root: Path, stage_fd: int, *, paths: tuple[str, 
     """
 
     if (type(max_files) is not int or max_files < 1 or type(paths) is not tuple
-            or not 1 <= len(paths) <= max_files or any(not grammar.is_bundle_path(path) for path in paths)
+            or not 1 <= len(paths) <= max_files or any(not rule.is_safe(path) for path in paths)
             or paths != tuple(sorted(set(paths))) or len({path.casefold() for path in paths}) != len(paths)):
         raise TreeError("selected copy requires bounded sorted unique canonical file paths")
     return _copy_regular_files(root, stage_fd, paths=paths, max_files=max_files, max_entries=max_entries,
-                               max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
+                               max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes, rule=rule)
+
+
+def _create_file(stage_fd: int, relative: str) -> int:
+    """Create ``relative`` below a private stage (parents ``0700``) and return its write descriptor.
+
+    Only inventory paths their rule admitted come here, so no output-name rule is applied a second
+    time: a Gradle seed entry may be named with ``:`` or ``\\``. No component is followed or replaced.
+    """
+
+    parts = relative.split("/")
+    parent = os.dup(stage_fd)
+    try:
+        for part in parts[:-1]:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=parent)
+            except FileExistsError:
+                pass
+            child = os.open(part, _DIRECTORY_FLAGS, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        return os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                       0o600, dir_fd=parent)
+    finally:
+        os.close(parent)
 
 
 def _copy_regular_files(root: Path, stage_fd: int, *, paths: tuple[str, ...] | None,
                         max_files: int, max_entries: int, max_total_bytes: int,
-                        max_file_bytes: int, data: bool = False) -> list[dict[str, Any]]:
+                        max_file_bytes: int, rule: PathRule, data: bool = False) -> list[dict[str, Any]]:
     if type(stage_fd) is not int or stage_fd < 0:
         raise TreeError("export copy stage must be a directory descriptor")
     validate_tree_entries(root, max_entries=max_entries)
@@ -546,8 +592,9 @@ def _copy_regular_files(root: Path, stage_fd: int, *, paths: tuple[str, ...] | N
                 max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
         if data:
             return regular_data_records(root, max_files=max_files, max_entries=max_entries,
-                max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
-        return file_records(root, max_files=max_files, max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
+                max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes, rule=rule)
+        return file_records(root, max_files=max_files, max_total_bytes=max_total_bytes,
+                            max_file_bytes=max_file_bytes, rule=rule)
     records = inventory()
     selected = records
     if paths is not None:
@@ -570,7 +617,7 @@ def _copy_regular_files(root: Path, stage_fd: int, *, paths: tuple[str, ...] | N
                 parts = record["path"].split("/")
                 parent = _parent_descriptor(source, parts[:-1])
                 try:
-                    destination = _open_new_file(stage_fd, record["path"])
+                    destination = _create_file(stage_fd, record["path"])
                     try:
                         digest = hashlib.sha256()
                         def consume(chunk: bytes) -> None:
@@ -605,7 +652,7 @@ def _copy_regular_files(root: Path, stage_fd: int, *, paths: tuple[str, ...] | N
 
 def grant_tree_read_access(root: Path, *, source_owner_uid: int, owner_uid: int, reader_gid: int,
                            max_files: int, max_entries: int, max_total_bytes: int,
-                           max_file_bytes: int) -> list[dict[str, Any]]:
+                           max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]:
     """Privileged handoff of a fresh independent private tree to one read-only group.
 
     Run only in protected root setup, never on a candidate-owned original. Caller authenticates
@@ -617,27 +664,28 @@ def grant_tree_read_access(root: Path, *, source_owner_uid: int, owner_uid: int,
 
     def records() -> list[dict[str, Any]]:
         return file_records(root, max_files=max_files, max_total_bytes=max_total_bytes,
-                            max_file_bytes=max_file_bytes)
+                            max_file_bytes=max_file_bytes, rule=rule)
     return _grant_read_access(root, source_owner_uid=source_owner_uid, owner_uid=owner_uid,
                               reader_gid=reader_gid, max_entries=max_entries,
-                              records=records, path_is_safe=grammar.is_bundle_path)
+                              records=records, path_is_safe=rule.is_safe)
 
 
 def grant_regular_data_read_access(root: Path, *, source_owner_uid: int, owner_uid: int, reader_gid: int,
                                    max_files: int, max_entries: int, max_total_bytes: int,
-                                   max_file_bytes: int) -> list[dict[str, Any]]:
+                                   max_file_bytes: int, rule: PathRule = REPO_PATHS) -> list[dict[str, Any]]:
     """Protected read-only handoff of independent regular data, including empty runtime logs.
 
     Same Linux Root/owner/ancestor/writer exclusions and root-last ACL/permission transfer as
-    grant_tree_read_access. Complete bounded data bytes are rechecked; native roles and validity
-    require separate admission. Existing nonempty export and source contracts are unchanged.
+    grant_tree_read_access. Complete bounded data bytes are rechecked under the one ``rule`` that
+    also admits every entry; native roles and validity require separate admission. Existing
+    nonempty export and source contracts are unchanged.
     """
     def records() -> list[dict[str, Any]]:
         return regular_data_records(root, max_files=max_files, max_entries=max_entries,
-                                    max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
+                                    max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes, rule=rule)
     return _grant_read_access(root, source_owner_uid=source_owner_uid, owner_uid=owner_uid,
                               reader_gid=reader_gid, max_entries=max_entries,
-                              records=records, path_is_safe=grammar.is_bundle_path)
+                              records=records, path_is_safe=rule.is_safe)
 
 
 def grant_source_read_access(root: Path, *, tracked_paths: tuple[str, ...], source_owner_uid: int,
@@ -670,36 +718,38 @@ def grant_source_read_access(root: Path, *, tracked_paths: tuple[str, ...], sour
 
 def privatize_tree_copy(root: Path, *, source_owner_uid: int, owner_uid: int, owner_gid: int,
                         max_files: int, max_entries: int, max_total_bytes: int,
-                        max_file_bytes: int) -> list[dict[str, Any]]:
+                        max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]:
     """Transfer an independent protected private copy to its final private non-root owner.
 
     Protected Linux root setup only. Require one protected source owner and exact bytes, remove
     ACLs and assign 0700 directories/0600 files; transfer root last. Never use on a worker original.
     Caller authenticates copy provenance, destination identities, ancestors and excluded writers.
+    No entry is Git metadata, whatever ``rule`` admits.
     """
     def records() -> list[dict[str, Any]]:
         return file_records(root, max_files=max_files, max_total_bytes=max_total_bytes,
-                            max_file_bytes=max_file_bytes)
+                            max_file_bytes=max_file_bytes, rule=rule)
     return _grant_read_access(root, source_owner_uid=source_owner_uid, owner_uid=owner_uid,
-                              reader_gid=owner_gid, max_entries=max_entries, records=records,
-                              path_is_safe=grammar.is_repo_path, private=True)
+                              reader_gid=owner_gid, max_entries=max_entries, records=records, private=True,
+                              path_is_safe=lambda path: rule.is_safe(path) and ".git" not in path.casefold().split("/"))
 
 
 def privatize_regular_data_copy(root: Path, *, source_owner_uid: int, owner_uid: int, owner_gid: int,
                                 max_files: int, max_entries: int, max_total_bytes: int,
-                                max_file_bytes: int) -> list[dict[str, Any]]:
+                                max_file_bytes: int, rule: PathRule = REPO_PATHS) -> list[dict[str, Any]]:
     """Transfer only an independent private regular-data copy, preserving empty files.
 
     Same protected Linux Root/owner/ancestor/writer prerequisites as privatize_tree_copy.
-    Recheck complete bounded data, remove ACLs and keep 0700 directories/0600 files throughout.
-    Never transfer a candidate original; native validity and execution provenance are separate.
+    Recheck complete bounded data under the one ``rule`` that also admits every entry, remove ACLs
+    and keep 0700 directories/0600 files throughout. Never transfer a candidate original; native
+    validity and execution provenance are separate.
     """
     def records() -> list[dict[str, Any]]:
         return regular_data_records(root, max_files=max_files, max_entries=max_entries,
-                                    max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes)
+                                    max_total_bytes=max_total_bytes, max_file_bytes=max_file_bytes, rule=rule)
     return _grant_read_access(root, source_owner_uid=source_owner_uid, owner_uid=owner_uid,
                               reader_gid=owner_gid, max_entries=max_entries, records=records,
-                              path_is_safe=grammar.is_bundle_path, private=True)
+                              path_is_safe=rule.is_safe, private=True)
 
 
 def _grant_read_access(root: Path, *, source_owner_uid: int, owner_uid: int, reader_gid: int,

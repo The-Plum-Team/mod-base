@@ -105,13 +105,45 @@ class HandoffTests(unittest.TestCase):
                 patch.object(tree, 'regular_data_records', return_value=[]) as reading:
             tree.grant_regular_data_read_access(Path('fresh'), **args)
             reading.assert_called_once_with(Path('fresh'), max_files=4, max_entries=8,
-                                           max_total_bytes=10, max_file_bytes=10)
+                                           max_total_bytes=10, max_file_bytes=10, rule=tree.REPO_PATHS)
         for platform, uid in [('win32', 0), ('linux', 1001)]:
             with patch.object(tree.sys, 'platform', platform), \
                     patch.object(tree.os, 'geteuid', return_value=uid, create=True), \
                     patch.object(tree, 'regular_data_records') as reading, self.assertRaises(MbError):
                 tree.grant_regular_data_read_access(Path('unused'), **args)
             reading.assert_not_called()
+
+    def test_each_handoff_admits_entries_under_the_rule_of_its_inventory(self):
+        """One definition per handoff: the entry admission is never wider than the inventory."""
+        bounds = dict(max_files=4, max_entries=8, max_total_bytes=10, max_file_bytes=10)
+        jar = 'libs/Quick Skin - Fabric - 1.21.4-1.0.0.jar'
+        cases = [(tree.grant_regular_data_read_access, 'reader_gid', 'regular_data_records', None,
+                  ['.github/empty.log'], [jar, '.git/config', 'a/.GIT/x']),
+                 (tree.privatize_regular_data_copy, 'owner_gid', 'regular_data_records', None,
+                  ['.github/empty.log'], [jar, '.git/config', 'a/.GIT/x']),
+                 (tree.grant_regular_data_read_access, 'reader_gid', 'regular_data_records', tree.EXPORT_PATHS,
+                  [jar], ['.github/empty.log', 'libs/a  b.jar']),
+                 (tree.privatize_regular_data_copy, 'owner_gid', 'regular_data_records', tree.SEED_PATHS,
+                  [jar, '.git/1.20.1+build.10/a:b~c@d%e'], ['caches/../escape', '/absolute']),
+                 (tree.grant_tree_read_access, 'reader_gid', 'file_records', None,
+                  ['.git/config', '.nojekyll'], [jar]),
+                 (tree.grant_tree_read_access, 'reader_gid', 'file_records', tree.EXPORT_PATHS,
+                  [jar], ['.nojekyll', 'libs/trailing.']),
+                 (tree.privatize_tree_copy, 'owner_gid', 'file_records', None,
+                  ['.github/report.json'], [jar, '.git/config', 'a/.GIT/x']),
+                 (tree.privatize_tree_copy, 'owner_gid', 'file_records', tree.EXPORT_PATHS,
+                  [jar], ['.github/report.json', 'libs/ leading.jar'])]
+        for grant, group, inventory, rule, admitted, refused in cases:
+            def handoff(root, **kwargs):
+                self.assertEqual([name for name in admitted + refused if kwargs['path_is_safe'](name)], admitted)
+                return kwargs['records']()
+            with self.subTest(grant=grant.__name__, rule=rule), \
+                    patch.object(tree, '_grant_read_access', side_effect=handoff), \
+                    patch.object(tree, inventory, return_value=[]) as reading:
+                grant(Path('fresh'), source_owner_uid=0, owner_uid=1001, **{group: 2001}, **bounds,
+                      **({} if rule is None else {'rule': rule}))
+                default = tree.REPO_PATHS if inventory == 'regular_data_records' else tree.BUNDLE_PATHS
+                self.assertIs(reading.call_args.kwargs['rule'], default if rule is None else rule)
 
     def test_private_copy_transfer_keeps_group_other_denied_and_rechecks_content(self):
         self.exercise(private=True)
