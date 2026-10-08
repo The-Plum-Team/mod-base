@@ -14,12 +14,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mod_base.build_ci import selection
+from mod_base.build_ci import selection, transport
 from mod_base.build_ci.exports import verify_build_export
 from mod_base.errors import MbError
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.workflow import CI_CALLER_WORKFLOWS
 from tests.test_ci_gate import GateCase
+from tests.test_ci_transport import World
+from tests.test_ci_validated_export import UploadCase, tree, upload_archive
 
 PACKAGED = CI_CALLER_WORKFLOWS["packaged"]
 REPORT = "target-a.json"
@@ -93,6 +95,26 @@ class SealedBuildConsumerTests(GateCase):
                 with self.assertRaises(MbError):
                     self.select(attempt, Path(directory))
                 self.assertEqual(list(Path(directory).iterdir()), [])
+
+
+class WriterRoundTripTests(UploadCase):
+    """The upload directory the real writer makes (``validation.materialize_validated_export``),
+    archived the way ``actions/upload-artifact`` does and read back with no step in between."""
+
+    def test_the_upload_of_the_assembling_job_reaches_the_reader_of_a_completed_build(self) -> None:
+        world = World()
+        world.add_run("build", "build-full")
+        self.within("complete")
+        arguments = self.verified("verify_build", None, plan=world.plan)
+        self.write_upload(arguments)
+        archive = upload_archive(self.upload)
+        descriptor = world.publish(world.describe("build", "full", "build", archive), archive)
+        output = self.temporary / "downloaded"
+        envelope = transport.download_completed_build(world.api, descriptor=descriptor, plan=world.plan, output=output)
+        self.assertEqual(envelope, arguments["envelope"])
+        # The published copy is the sealed export itself: the record and its reports stay behind.
+        self.assertEqual(tree(output), tree(self.export))
+        self.assertLess(set(tree(self.export)), set(tree(self.upload)))
 
 
 if __name__ == "__main__":
