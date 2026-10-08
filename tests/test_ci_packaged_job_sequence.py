@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from mod_base.build_ci import exports
+from mod_base.build_ci.exports import verify_build_export
 from tests.test_ci_commands_packaged import CommandTestCase, JobWorld, run_ci
 from tests.test_ci_packaged_selection import rebuild
 from tests.test_workflow_ci_policy import ci_callee
@@ -84,6 +85,17 @@ class PackagedJobSequenceTests(CommandTestCase):
         world = rebuild(JobWorld(self.directory, push=True))
         named = self.named(world, "--build-run-id", "same-run")
         self.assertEqual(self.select(world, world.state("lane"), "--build-run-id", named), (0, ""))
+
+    # ``ci select-build`` and ``ci fetch-build`` both create ``ci-selection.json`` in the state,
+    # and a lane job runs one after the other in its one state: the second never replaces a record.
+    @unittest.expectedFailure
+    def test_a_lane_job_fetches_the_build_it_has_just_selected(self) -> None:
+        world = JobWorld(self.directory, push=True).build()
+        named = self.named(world)
+        state = world.state("lane")
+        self.assertEqual(self.select(world, state, "--build-run-id", named), (0, ""))
+        self.assertEqual(self.fetch(world, state), (0, ""))
+        self.assertEqual(verify_build_export(self.sealed, plan=world.plan), world.envelope)
 
 
 if __name__ == "__main__":
