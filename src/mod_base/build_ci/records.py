@@ -490,6 +490,20 @@ def validate_reuse_reference(document: Any, *, plan: dict[str, Any] | None = Non
     return document
 
 
+def reuse_reference(*, plan: dict[str, Any], producer: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+    """The reference the gate job of ``producer`` (a reuse run's identity, without an upload
+    window) seals for the covered ``plan``: a new ``mod-base.ci.reuse`` document that is valid for
+    the plan, independent of its arguments. ``source`` is the original binding with both seal
+    descriptors, as the admission authenticated it (``reuse.admit_post_merge_reuse``). Writing one
+    proves nothing and renews nothing: the original artifacts keep their own retention."""
+
+    validate_plan(plan)
+    document = {"kind": "mod-base.ci.reuse", "schema_version": SCHEMA_VERSIONS["mod-base.ci.reuse"],
+                "identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+                "producer": producer, "source": source}
+    return validate_reuse_reference(copy.deepcopy(document), plan=plan)
+
+
 def _bind_record_producer(document: dict[str, Any], descriptor: dict[str, Any],
                           *, kind: str, unit: str | None, inputs: list[dict[str, Any]]) -> None:
     validate_descriptor(descriptor)

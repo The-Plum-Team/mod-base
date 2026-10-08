@@ -30,8 +30,9 @@ owning Build the index names: the Build this run rebuilt, or the completed full 
 caller; the receipt names every lane, the index and that Build. Everything mutable is observed
 once more immediately before the receipt is returned.
 
-A run in ``reuse`` mode has no export to verify. Its gate seals a reuse reference instead
-(:func:`seal_reuse`), which is not written yet.
+A run in ``reuse`` mode has no export to verify. Its gate decides the reuse again, exactly as
+the plan job of the run did, and seals a reuse reference instead (:func:`seal_reuse`): the
+covered merge and, separately, both original tested records of its pull request.
 
 The results index. A packaged run's complete results are an index of its lane artifacts, not a
 union of their bytes. The aggregating job authenticates its attempt like a gate, with the lanes
@@ -51,10 +52,11 @@ from mod_base.build_ci import describe
 from mod_base.build_ci.graph import run_graph
 from mod_base.build_ci.identity import validate_subject_record
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.records import GATE_MODES, gate_receipt, results_index, validate_source_selection
+from mod_base.build_ci.records import (GATE_MODES, gate_receipt, results_index, reuse_reference,
+                                       validate_source_selection)
+from mod_base.build_ci.reuse import FullRunRequired, ReuseRefused, admit_post_merge_reuse
 from mod_base.build_ci.transport import (_admit_source, _authenticate_build, _authenticate_run, _bound, _plan,
                                          _read_results, _read_sealed_build, _read_sealed_lane)
-from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.model import grammar
 from mod_base.model.validators import check
@@ -188,15 +190,28 @@ def seal_gate(attempt: Attempt, *, config_sha256: str, temporary_root: Path) -> 
 
 
 def seal_reuse(attempt: Attempt, *, temporary_root: Path) -> tuple[str, dict[str, Any]]:
-    """Seal the reuse reference of an attempt authenticated in ``reuse`` mode (K6, not written).
+    """Decide the reuse of an attempt authenticated in ``reuse`` mode again and return its reuse
+    reference as ``(file name, document)``, ready to be written as the one file of the reference.
 
     The attempt arrives with its source admitted, its run authenticated as the latest attempt in
-    progress and its plan job finished while every worker was skipped. What remains is the reuse
-    admission itself and the ``mod-base.ci.reuse`` document, returned like :func:`seal_gate`."""
+    progress and its plan job finished while every worker was skipped. The admission runs once
+    more through the attempt's reads (``reuse.admit_post_merge_reuse``), so the gate depends on
+    nothing its plan job said: both original tested records are read by id and authenticated, in
+    the private directory ``temporary_root``. When the original gates no longer cover this
+    subject, the workers that were skipped cannot be made up for here: the gate raises
+    :class:`~mod_base.build_ci.reuse.ReuseRefused` and seals nothing. The attempt's watch and the
+    admission's are rechecked before return."""
 
     check(attempt.mode == "reuse", "$.mode", "only a reuse run seals a reuse reference")
-    raise MbError("sealing a reuse reference is not implemented: the gate of a reuse run cannot pass yet",
-                  reason="unsupported")
+    outcome = admit_post_merge_reuse(attempt.reads, plan=attempt.plan, event=attempt.producer["event"],
+                                     temporary_root=temporary_root)
+    if isinstance(outcome, FullRunRequired):
+        raise ReuseRefused(f"this run skipped its workers for reuse, which is no longer admitted "
+                           f"({outcome.reason}): {outcome.detail}; rerun all jobs")
+    document = reuse_reference(plan=attempt.plan, producer=attempt.producer, source=outcome.source)
+    attempt.watch.recheck()
+    outcome.recheck()
+    return grammar.CI_REUSE_NAME, document
 
 
 def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan: dict[str, Any],

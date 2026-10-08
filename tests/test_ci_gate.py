@@ -441,7 +441,8 @@ class ModeTests(GateCase):
         return gate.authenticate_attempt(attempt.api, record=attempt.record, plan=attempt.plan, gate=gate_,
                                          run_id=attempt.run_id, run_attempt=ATTEMPT)
 
-    def test_a_reuse_run_is_authenticated_as_one_and_cannot_seal_yet(self) -> None:
+    def test_a_reuse_run_is_authenticated_as_one(self) -> None:
+        # What its gate then seals is in tests/test_ci_reuse_seal.py.
         for caller, listing, name in (("build", "build-reuse", GATE), ("packaged", "packaged-reuse", PACKAGED_GATE)):
             with self.subTest(caller=caller):
                 attempt = self.attempt(listing=listing, caller=caller, push=True)
@@ -449,14 +450,9 @@ class ModeTests(GateCase):
                 authenticated = self.authenticate(attempt, caller)
                 self.assertEqual((authenticated.mode, authenticated.descriptors), ("reuse", []))
                 self.assertEqual(authenticated.producer, attempt.producer("reuse"))
+                self.assertEqual(attempt.api.request_count, 6)
                 with self.assertRaisesRegex(MbError, "a reuse run seals a reuse reference"):
                     gate.seal_gate(authenticated, config_sha256="0" * 64, temporary_root=self.temporary)
-                with self.assertRaises(MbError) as caught:
-                    gate.seal_reuse(authenticated, temporary_root=self.temporary)
-                self.assertEqual(caught.exception.reason, "unsupported")
-                before = attempt.api.request_count
-                self.assert_rejected(attempt, caller, "sealing a reuse reference is not implemented", "unsupported")
-                self.assertEqual(attempt.api.request_count - before, 6)
 
     def test_a_reuse_shaped_run_must_be_exactly_the_reuse_graph(self) -> None:
         attempt = self.attempt(listing="build-reuse", push=True)

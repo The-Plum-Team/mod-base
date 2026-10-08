@@ -292,10 +292,11 @@ MAX_CI_STATUS_DESCRIPTION_CHARS = 140
 #: the rest is for retries and for the further pages of a run that lists more than 100 jobs or
 #: artifacts.
 MAX_CI_ASSEMBLE_REQUESTS = 48 + 3 * MAX_CI_TARGETS
-#: ``ci seal-gate`` sends 15 requests for a Build gate and 20 for the packaged gate of a pull
-#: request, whatever the number of targets and lanes; the rest is for retries and for the further
-#: pages of a run that lists more than 100 jobs or artifacts.
-MAX_CI_GATE_REQUESTS = 60
+#: ``ci seal-gate`` sends 15 requests for a Build gate, 20 for the packaged gate of a pull request
+#: and 47 for the gate of a reuse run, which decides the reuse again (``gate.seal_reuse``), whatever
+#: the number of targets and lanes; the rest is for retries and for the further pages of a run that
+#: lists more than 100 jobs or artifacts.
+MAX_CI_GATE_REQUESTS = 96
 #: Pull requests GitHub associates with one pushed commit: one page of that listing. A merge commit
 #: has one; more than a page is no merge post-merge reuse attributes (``reuse.admit_post_merge_reuse``).
 MAX_CI_COMMIT_PULLS = 100

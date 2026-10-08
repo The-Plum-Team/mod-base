@@ -39,6 +39,7 @@ CI_UNIT_ID = re.compile(r"^(?!.*--)[a-z0-9][a-z0-9._-]{0,79}$")
 CI_ENVELOPE_NAME = "ci-envelope.json"
 CI_ARCHIVE_NAME = "ci-export.zip"
 CI_GATE_NAME = "ci-gate.json"
+CI_REUSE_NAME = "ci-reuse.json"
 CI_RESULTS_NAME = "ci-results.json"
 CI_SELECTION_NAME = "ci-selection.json"
 CI_PLAN_NAME = "ci-plan.json"

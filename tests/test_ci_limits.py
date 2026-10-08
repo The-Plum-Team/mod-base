@@ -126,9 +126,9 @@ KIT: dict[str, tuple[Any, str]] = {
                               "the inventory and the scenario contract; Quick Skin needs one (gradle.properties)"),
     "MAX_CI_IDENTITY_BYTES": (16 * KIB, "the private subject record of one job"),
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
-    "MAX_CI_GATE_REQUESTS": (60, "API requests one `ci seal-gate` may spend: 15 for a Build gate and 20 for the "
-                                 "packaged gate of a pull request, whatever the plan's size, and room for retries "
-                                 "and further listing pages"),
+    "MAX_CI_GATE_REQUESTS": (96, "API requests one `ci seal-gate` may spend: 15 for a Build gate, 20 for the "
+                                 "packaged gate of a pull request and 47 for the gate of a reuse run, whatever the "
+                                 "plan's size, and room for retries and further listing pages"),
     "MAX_CI_COMMIT_PULLS": (100, "pull requests GitHub associates with one pushed commit: the one page "
                                  "post-merge reuse reads to find the merge"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),

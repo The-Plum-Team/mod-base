@@ -39,6 +39,9 @@ What admission requires, in the order it is established:
 
 A reference covers the merged commit and names the original identity, runs, attempts and
 artifacts separately. It renews no retention: the original artifacts expire when they would have.
+:func:`download_reuse_reference` reads one back for a consumer that trusts a reused generation: it
+authenticates the reuse run, refuses a run that mixes a reference with evidence of its own, and
+authenticates the original pair again.
 """
 
 from __future__ import annotations
@@ -49,14 +52,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mod_base.build_ci.graph import require_graph, run_graph, sealed_upload, upload_job_name
+from mod_base.build_ci.graph import (_job_window, _step_window, require_graph, run_graph, sealed_upload,
+                                     upload_job_name)
 from mod_base.build_ci.identity import PROTECTED_EVENTS, PULL_REQUEST_EVENT
 from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.records import _REUSE_SEMANTICS, original_plan
+from mod_base.build_ci.records import _REUSE_SEMANTICS, bind_reuse_reference, original_plan
 from mod_base.build_ci.selection import newest_run, pending_run, producer_record
-from mod_base.build_ci.transport import (OriginalUnavailable, _artifact_state, _descriptor, _download, _merged,
-                                         _merged_pair, _original_evidence, _plan, _run)
+from mod_base.build_ci.transport import (OriginalUnavailable, _admit_source, _artifact_state, _authenticate_artifacts,
+                                         _authenticate_run, _authenticate_upload, _bound, _complete_jobs,
+                                         _descriptor, _download, _merged, _merged_pair, _original_evidence, _plan,
+                                         _run)
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.jobs import job_graph
@@ -66,7 +72,7 @@ from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.documents import load_document
 from mod_base.model.validators import Int, check
-from mod_base.workflow import CI_CALLER_WORKFLOWS, find_job
+from mod_base.workflow import CI_CALLER_WORKFLOWS, CI_SEAL_STEP, ci_producer, find_job
 
 #: Why a push builds and runs in full, by the token ``ci reuse-admit`` outputs as ``reason``.
 FULL_RUN_REASONS = {
@@ -112,6 +118,13 @@ class OriginalPending(MbError):
     result is unknown. The job stops; rerun it when the original run has finished."""
 
     default_reason = "ci-original-pending"
+
+
+class ReuseRefused(MbError):
+    """A run that skipped its workers for reuse can no longer be covered by the original gates
+    (exit 2). Its gate seals nothing; rerunning all jobs decides again and tests in full."""
+
+    default_reason = "ci-reuse-refused"
 
 
 @dataclass(frozen=True)
@@ -385,11 +398,11 @@ def admit_post_merge_reuse(api: GitHubApi | CommandReads, *, plan: dict[str, Any
     """Decide whether the gates of a merged pull request cover the subject of ``plan``.
 
     ``plan`` is the protected plan of the job's subject and ``event`` the event of its run, both
-    from the job's state; ``temporary_root`` is a private directory for the two record downloads,
-    which are removed again. Any event but a push answers a full run without a request. Returns
-    :class:`ReuseAdmitted` or :class:`FullRunRequired` and raises for everything that must stop
-    the job (see the module). Nothing is written: an admission is one observation, and its
-    ``recheck`` repeats every mutable read before the caller's effect."""
+    from the job's state; ``temporary_root`` is a private directory in which the two tested
+    records are extracted and removed again. Any event but a push answers a full run without a
+    request. Returns :class:`ReuseAdmitted` or :class:`FullRunRequired` and raises for everything
+    that must stop the job (see the module). Nothing is written: an admission is one observation,
+    and its ``recheck`` repeats every mutable read before the caller's effect."""
 
     plan = _plan(plan)
     check(type(event) is str and event in (PULL_REQUEST_EVENT, *PROTECTED_EVENTS), "$.event",
@@ -404,3 +417,65 @@ def admit_post_merge_reuse(api: GitHubApi | CommandReads, *, plan: dict[str, Any
     except OriginalUnavailable as gone:
         return FullRunRequired("original-evidence-unavailable", str(gone))
     return ReuseAdmitted(source["identity"]["pr_number"], source, watch)
+
+
+def download_reuse_reference(api: GitHubApi | CommandReads, *, descriptor: dict[str, Any], plan: dict[str, Any],
+                             temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Read the reuse reference of a finished reuse run and authenticate the generation behind it.
+
+    ``plan`` is the consumer's own protected plan of the live default-branch commit and
+    ``descriptor`` selects the ``mb-ci-reuse`` artifact of the run that covers it. Returns
+    ``(reference, Build receipt, packaged receipt)``: the two original receipts are read again by
+    id and authenticated as a coherent pair of the merged pull request, exactly as at admission.
+
+    The covering run must be the latest attempt of a completed successful push run in exactly the
+    reuse graph, and its attempt may list no other evidence of its own: a run that skipped its
+    workers and also holds a Build, a lane result or a tested record is a mixed generation and is
+    rejected. Its gate must have started sealing after every prerequisite of its own run and every
+    job of both original runs had finished. An original artifact that has since expired raises
+    ``transport.OriginalUnavailable``: the reference is intact, but its generation can no longer
+    be proven. Everything mutable is observed again before return. Whether that run is the newest
+    one of its caller for the commit is the consumer's own selection, as for every tested record."""
+
+    plan, descriptor = _plan(plan), _descriptor(descriptor)
+    _bound(descriptor, plan, "reuse", None)
+    producer, covered = descriptor["producer"], plan["identity"]
+    caller = ci_producer(producer["workflow_path"])
+    check(producer["event"] == "push" and producer["graph_sha256"] == run_graph(caller, "reuse").sha256(plan),
+          "$.producer", "is not a reuse run of a push for this plan")
+    reads, watch, originals = CommandReads.of(api), Watch(), Watch()
+    _admit_source(reads, watch, covered)
+    _authenticate_run(reads, watch, producer, plan, mode="reuse", complete=True)
+    jobs = _complete_jobs(reads, producer, plan, mode="reuse")
+    _authenticate_upload(descriptor, jobs)
+    _authenticate_artifacts(reads, watch, [descriptor], covered)
+    run_id, attempt = producer["run_id"], producer["run_attempt"]
+    for row in reads.paginate(f"/repos/{reads.repository}/actions/runs/{run_id}/artifacts", field="artifacts",
+                              max_items=limits.MAX_CI_ARTIFACTS_PER_GATE):
+        name = grammar.parse_ci_artifact_name(row.get("name"))
+        check(name is None or (name.run_id, name.run_attempt) != (run_id, attempt)
+              or name.name == descriptor["artifact"]["name"], "$.artifacts",
+              "a reuse run that lists evidence of its own attempt is a mixed generation")
+
+    document = _read_record(_download(reads, descriptor), grammar.CI_REUSE_NAME, "mod-base.ci.reuse",
+                            temporary_root, plan=plan)
+    bind_reuse_reference(document, descriptor=descriptor, plan=plan)
+    source = document["source"]
+    original = original_plan(plan, source["identity"])
+    gate_name = upload_job_name(caller, "reuse", None)
+    verifier = _step_window(find_job(jobs, gate_name, run_attempt=attempt), CI_SEAL_STEP)[0]
+    for name in run_graph(caller, "reuse").prerequisites(plan, gate_name):
+        check(_job_window(find_job(jobs, name, run_attempt=attempt))[1] <= verifier, "$.jobs",
+              "the reuse gate started before its prerequisites completed")
+
+    receipts = _merged_pair(reads, originals, build_descriptor=source["build_seal"],
+                            packaged_descriptor=source["packaged_seal"], plan=original,
+                            merged=_merged(original, covered["controller_sha"], covered["tested_sha"]),
+                            temporary_root=temporary_root)
+    for seal in (source["build_seal"], source["packaged_seal"]):
+        for job in reads.attempt_jobs(seal["producer"]["run_id"], seal["producer"]["run_attempt"]):
+            check(job["conclusion"] == "skipped" or _job_window(job)[1] <= verifier, "$.source.jobs",
+                  "an original job completed after the reuse gate started")
+    watch.recheck()
+    originals.recheck()
+    return document, *receipts

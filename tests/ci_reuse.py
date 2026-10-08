@@ -47,6 +47,7 @@ BUNDLE, LANE, RESULTS, BUILD_SEAL, PACKAGED_SEAL = 500, 510, 590, 600, 601
 GATE = {"build": "Shared Build / Verify complete Build",
         "packaged": "Shared Packaged E2E / Verify complete packaged E2E"}
 REUSE_LISTING = {"build": "build-reuse", "packaged": "packaged-reuse"}
+REFERENCE = 700
 
 
 def original_identity(covered: dict[str, Any], **changes: Any) -> dict[str, Any]:
@@ -205,6 +206,22 @@ class Merged:
         return {"identity": self.plan["identity"], "plan_sha256": self.plan["plan_sha256"],
                 "profile": self.plan["profile"], "build_seal": self.seals["build"],
                 "packaged_seal": self.seals["packaged"]}
+
+
+def reuse_attempt(case: Any, caller: str = "build", **options: Any) -> Attempt:
+    """A push run of ``caller`` in reuse mode whose gate job is sealing: every worker was skipped."""
+
+    attempt = case.attempt(listing=REUSE_LISTING[caller], caller=caller, push=True, **options)
+    attempt.sealing(GATE[caller])
+    return attempt
+
+
+def publish_reference(attempt: Attempt, raw: bytes, *, name: str = grammar.CI_REUSE_NAME) -> dict[str, Any]:
+    """Finish the reuse run, upload ``raw`` as its reference and return the artifact's descriptor."""
+
+    attempt.complete(REUSE_LISTING[attempt.caller])
+    attempt.publish("reuse", None, record_zip(name, raw), artifact_id=REFERENCE)
+    return attempt.descriptor("reuse", REFERENCE)
 
 
 def downloaded(calls: Any) -> list[int]:
