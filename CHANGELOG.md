@@ -7,6 +7,10 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 
 ## Unreleased (planned v1.1.0)
 
+- Add `ci aggregate --output DIR`, the sealing step of the packaged run's aggregating job: it reads
+  the results of every planned lane of its own attempt by numeric id, verifies each against the
+  plan, its validation record and the Build of the job's selection record, and writes the
+  `mod-base.ci.results` index. Lanes are read one at a time and the Build bundle is not read.
 - Add `ci seal-gate --gate build|packaged --output DIR`, the write side of the tested record: a
   gate authenticates its own running attempt (source, run, every earlier job as its graph expects,
   every sealed artifact) and writes the `mod-base.ci.gate` receipt that the existing readers

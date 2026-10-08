@@ -296,6 +296,9 @@ MAX_CI_ASSEMBLE_REQUESTS = 48 + 3 * MAX_CI_TARGETS
 #: request, whatever the number of targets and lanes; the rest is for retries and for the further
 #: pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_GATE_REQUESTS = 60
+#: ``ci aggregate`` sends 13 requests and 2 per lane, the two of a download (81 for 34 lanes); the
+#: rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
+MAX_CI_AGGREGATE_REQUESTS = 48 + 3 * MAX_CI_LANES
 MAX_CI_BATCH_MEMBERS = 50
 #: A batch manifest travels in the body of its pull request, which GitHub bounds at 65,536; the
 #: whole body, the marker inside it and the decoded document share this bound.

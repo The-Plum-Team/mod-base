@@ -5,7 +5,8 @@ from __future__ import annotations
 import copy
 import unittest
 
-from mod_base.build_ci.records import bind_results_index, gate_receipt, validate_gate_receipt, validate_results_index
+from mod_base.build_ci.records import (bind_results_index, gate_receipt, results_index, validate_gate_receipt,
+                                       validate_results_index)
 from mod_base.errors import MbError
 from mod_base.model.canonical import canonical_json
 from mod_base.model.documents import load_document
@@ -114,6 +115,39 @@ class ResultsIndexTests(unittest.TestCase):
             bind_results_index(document, descriptor=other, plan=plan)
         with self.assertRaisesRegex(MbError, "does not equal the complete admitted binding"):
             bind_results_index(document, descriptor=results(), plan=ci_plan())
+
+
+class ResultsIndexWriterTests(unittest.TestCase):
+    LANE_KEYS = ("descriptor", "envelope_sha256", "validation_sha256", "report_sha256")
+
+    def write(self, document: dict, plan: dict, **changes) -> dict:
+        arguments = {"producer": document["producer"], "owning_build": document["owning_build"],
+                     "build_envelope_sha256": document["build_envelope_sha256"],
+                     "lanes": [{key: lane[key] for key in self.LANE_KEYS} for lane in document["lanes"]]}
+        arguments.update(changes)
+        return results_index(plan=plan, **arguments)
+
+    def test_the_writer_builds_the_index_of_every_mode_from_the_plan_and_what_was_read(self) -> None:
+        for mode, plan in (*MODES, ("pull-request", ci_staged_plan)):
+            with self.subTest(mode=mode):
+                expected = ci_run_results(plan(), mode)
+                written = self.write(expected, plan())
+                self.assertEqual(written, expected)
+                self.assertIs(validate_results_index(written, plan=plan()), written)
+
+    def test_the_index_is_independent_of_its_arguments_and_complete(self) -> None:
+        plan, source = ci_staged_plan(), ci_run_results(ci_staged_plan(), "pull-request")
+        written = self.write(source, plan)
+        source["lanes"][0]["descriptor"]["artifact"]["id"] = 7
+        self.assertEqual(written, ci_run_results(ci_staged_plan(), "pull-request"))
+        source = ci_run_results(ci_staged_plan(), "pull-request")
+        lanes = [{key: lane[key] for key in self.LANE_KEYS} for lane in source["lanes"]]
+        for label, changes in (("a lane short", dict(lanes=lanes[:-1])), ("lanes in another order", dict(lanes=lanes[::-1])),
+                               ("an own id", dict(lanes=[{**lanes[0], "id": "lane-c"}, *lanes[1:]])),
+                               ("no hash", dict(build_envelope_sha256="")),
+                               ("not a list", dict(lanes=tuple(lanes)))):
+            with self.subTest(case=label), self.assertRaises(MbError):
+                self.write(source, plan, **changes)
 
 
 class GateReceiptWriterTests(unittest.TestCase):

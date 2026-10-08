@@ -210,6 +210,10 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
         816, "the 15 requests and 2 per target of `ci assemble`, with 33 and 1 per target more for retries and "
              "further listing pages",
         lambda: (15 + 33) + (2 + 1) * limits.MAX_CI_TARGETS),
+    "MAX_CI_AGGREGATE_REQUESTS": (
+        816, "the 13 requests and 2 per lane of `ci aggregate`, with 35 and 1 per lane more for retries and "
+             "further listing pages",
+        lambda: (13 + 35) + (2 + 1) * limits.MAX_CI_LANES),
     "MAX_CI_BATCH_PREPARE_REQUESTS": (
         216, "the 10 requests and 3 per member of `ci batch-prepare`, with 6 and 1 per member more for retries",
         lambda: (10 + 6) + (3 + 1) * limits.MAX_CI_BATCH_MEMBERS),

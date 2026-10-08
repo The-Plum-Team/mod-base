@@ -29,7 +29,7 @@ from mod_base.build_ci.config import load_build_config
 from mod_base.build_ci.graph import run_graph, sealed_upload, upload_job_name
 from mod_base.build_ci.protocol import plan_sha256
 from mod_base.model import grammar
-from mod_base.model.canonical import canonical_json, sha256_hex, strict_loads
+from mod_base.model.canonical import canonical_json, canonical_sha256, sha256_hex, strict_loads
 from mod_base.workflow import CI_CALLER_WORKFLOWS
 from tests import ci_mod_harness as h
 from tests.helpers import ci_api_artifact, ci_api_run, ci_graph_jobs, ci_plan
@@ -75,6 +75,40 @@ def sealed(archive: bytes, document: dict[str, Any], files: dict[str, bytes]) ->
             package.writestr(name, data)
         package.writestr(grammar.CI_VALIDATION_NAME, canonical_json(document))
     return stream.getvalue()
+
+
+def lane_archive(plan: dict[str, Any], producer: dict[str, Any], owning_build: dict[str, Any],
+                 lane_id: str) -> tuple[bytes, dict[str, Any]]:
+    """A real lane results ZIP as the lane job freezes it: one report, one empty log and the
+    canonical runtime envelope of that lane, which names the Build it ran."""
+
+    lane = next(lane for lane in plan["lanes"] if lane["id"] == lane_id)
+    contents = {f"lanes/{lane_id}/result.json": canonical_json({"lane": lane_id, "passed": True}),
+                f"lanes/{lane_id}/runtime.log": b""}
+    envelope = {"kind": "mod-base.ci.runtime-envelope", "schema_version": 1,
+                "identity": copy.deepcopy(plan["identity"]), "plan_sha256": plan["plan_sha256"],
+                "profile": plan["profile"],
+                "producer": {key: value for key, value in producer.items() if key != "upload_window"},
+                "scope": "lane", "lane_id": lane_id, "owning_build": copy.deepcopy(owning_build),
+                "lanes": [{"id": lane_id, "native_contract_sha256": lane["native_contract_sha256"]}],
+                "files": [{"path": name, "lane_id": lane_id,
+                           "role": "runtime-log" if name.endswith(".log") else "native-report",
+                           "size": len(data), "sha256": sha256_hex(data)} for name, data in sorted(contents.items())]}
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as package:
+        for name, data in contents.items():
+            package.writestr(name, data)
+        package.writestr(grammar.CI_RUNTIME_ENVELOPE_NAME, canonical_json(envelope))
+    return stream.getvalue(), envelope
+
+
+def runtime_input_sha256(plan: dict[str, Any], build_envelope_sha256: str, envelope: dict[str, Any]) -> str:
+    """The input digest a lane's validator ran over: the plan, the owning Build's envelope and the
+    lane's runtime envelope (``runtime_inputs``)."""
+
+    return canonical_sha256({"format": grammar.CI_RUNTIME_INPUT_FORMAT, "plan_sha256": plan["plan_sha256"],
+                             "build_envelope_sha256": build_envelope_sha256,
+                             "runtime_envelope_sha256": canonical_sha256(envelope)})
 
 
 def record_zip(name: str, raw: bytes) -> bytes:
@@ -218,6 +252,21 @@ class Attempt:
                 "artifact": {"id": record["id"], "name": record["name"], "digest": record["digest"],
                              "size": record["size_in_bytes"], "created_at": record["created_at"],
                              "expires_at": record["expires_at"]}}
+
+    def select(self, mode: str, owning_build: dict[str, Any], envelope_sha256: str, **changes: Any) -> dict[str, Any]:
+        """Write the selection record ``ci select-build`` leaves in this job's state: the Build
+        this attempt selected and the SHA-256 of its envelope."""
+
+        producer = self.producer(mode)
+        document = {"kind": "mod-base.ci.selection", "schema_version": 1,
+                    "identity": copy.deepcopy(self.plan["identity"]), "plan_sha256": self.plan["plan_sha256"],
+                    "profile": self.plan["profile"],
+                    "request": {"run_id": self.run_id, "run_attempt": ATTEMPT, "nonce": "5" * 64,
+                                "workflow_path": producer["workflow_path"], "workflow_ref": producer["workflow_ref"]},
+                    "build": owning_build, "envelope_sha256": envelope_sha256}
+        document.update(changes)
+        identity.write_state_record(self.state, grammar.CI_SELECTION_NAME, canonical_json(document))
+        return document
 
     def add_build_run(self, data: bytes, *, artifact_id: int = 100, **run: Any) -> dict[str, Any]:
         """Seed the finished full run of the Build caller for this subject with ``data`` as its

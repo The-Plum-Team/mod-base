@@ -488,6 +488,24 @@ def bind_gate_receipt(document: dict[str, Any], *, descriptor: dict[str, Any],
     return document
 
 
+def results_index(*, plan: dict[str, Any], producer: dict[str, Any], owning_build: dict[str, Any],
+                  build_envelope_sha256: str, lanes: list[dict[str, Any]]) -> dict[str, Any]:
+    """The results index the aggregating job of ``producer`` (an attempt's identity, without a
+    window) seals for ``plan``: a new ``mod-base.ci.results`` document that is valid for the plan,
+    independent of its arguments. ``lanes`` holds, in plan order, ``descriptor``,
+    ``envelope_sha256``, ``validation_sha256`` and ``report_sha256`` of every planned lane; the
+    lane's id and native contract are the plan's. The job authenticates each of them first."""
+
+    validate_plan(plan)
+    check(type(lanes) is list and len(lanes) == len(plan["lanes"]), "$.lanes", "must hold every planned lane")
+    document = {"kind": "mod-base.ci.results", "schema_version": SCHEMA_VERSIONS["mod-base.ci.results"],
+                "identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+                "producer": producer, "owning_build": owning_build, "build_envelope_sha256": build_envelope_sha256,
+                "lanes": [{"id": planned["id"], "native_contract_sha256": planned["native_contract_sha256"], **lane}
+                          for planned, lane in zip(plan["lanes"], lanes)]}
+    return validate_results_index(copy.deepcopy(document), plan=plan)
+
+
 def bind_results_index(document: dict[str, Any], *, descriptor: dict[str, Any],
                        plan: dict[str, Any]) -> dict[str, Any]:
     """Bind a results index to the results artifact it was read from: the same attempt sealed

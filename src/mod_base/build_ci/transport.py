@@ -46,7 +46,7 @@ from mod_base.io.atomic_directory import atomic_directory
 from mod_base.io.bounded_zip import ExtractionLimits, extract, extract_build, extract_runtime
 from mod_base.io.tree import read_child_file, validate_tree_entries
 from mod_base.model import grammar, limits
-from mod_base.model.canonical import canonical_json, strict_loads
+from mod_base.model.canonical import canonical_json, canonical_sha256, strict_loads
 from mod_base.model.documents import load_document
 from mod_base.model.validators import Int, List, check
 from mod_base.workflow import ci_producer, find_job
@@ -423,6 +423,43 @@ def _read_sealed_build(reads: CommandReads, descriptor: dict[str, Any], plan: di
             return envelope, validation
     except OSError as error:
         raise MbError("cannot read the sealed Build of this attempt", reason="ci-transport") from error
+
+
+def _read_sealed_lane(reads: CommandReads, descriptor: dict[str, Any], plan: dict[str, Any], *,
+                      owning_build: dict[str, Any], build_envelope_sha256: str, source_config_sha256: str,
+                      temporary_root: Path) -> dict[str, str]:
+    """Download one lane's results of the reader's own attempt by id and verify them in a private
+    temporary directory, one lane at a time: the SHA-256 of its canonical runtime envelope, of its
+    canonical validation record and of the lane's verification report.
+
+    The export is the lane's and is bound to its descriptor and to ``owning_build``, the complete
+    Build the reader selected. The validation record is the one the lane job froze for exactly
+    these bytes: the ``verify_runtime`` hook of that lane in the descriptor's attempt, under the
+    protected Build config the reader itself loaded, over the digest of the plan, of the owning
+    Build's envelope (``build_envelope_sha256``; the bundle itself is not read) and of this runtime
+    envelope. The caller authenticates the run, its jobs and the artifact."""
+
+    data = _download(reads, descriptor)
+    producer = descriptor["producer"]
+    try:
+        with tempfile.TemporaryDirectory(prefix="mb-ci-sealed-", dir=temporary_root) as temporary:
+            root, receipt = Path(temporary) / "export", Path(temporary) / "validation"
+            extract_runtime(data, root, scope="lane")
+            del data
+            _detach_validation(root, receipt, plan)
+            envelope = verify_runtime_export(root, plan=plan)
+            bind_runtime_envelope(envelope, descriptor=descriptor, owning_build=owning_build, plan=plan)
+            envelope_sha256 = canonical_sha256(envelope)
+            validation = verify_validation_export(
+                receipt, plan=plan, hook="verify_runtime", unit_id=envelope["lane_id"], run_id=producer["run_id"],
+                run_attempt=producer["run_attempt"], source_config_sha256=source_config_sha256,
+                input_sha256=canonical_sha256({
+                    "format": grammar.CI_RUNTIME_INPUT_FORMAT, "plan_sha256": plan["plan_sha256"],
+                    "build_envelope_sha256": build_envelope_sha256, "runtime_envelope_sha256": envelope_sha256}))
+            return {"envelope_sha256": envelope_sha256, "validation_sha256": canonical_sha256(validation),
+                    "report_sha256": validation["reports"][0]["sha256"]}
+    except OSError as error:
+        raise MbError("cannot read the sealed results of a lane of this attempt", reason="ci-transport") from error
 
 
 def _read_results(reads: CommandReads, descriptor: dict[str, Any], plan: dict[str, Any],

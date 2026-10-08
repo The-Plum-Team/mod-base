@@ -753,8 +753,12 @@ A lane has exactly:
 | `report_sha256` | SHA-256 of the lane's verification report, as that validation record inventories it: the lane's native receipt in the packaged gate. |
 
 There is no success flag, file inventory or status. An index is evidence only together with what
-its writer and readers authenticate: the gate requires the index to list exactly the lane
-artifacts its attempt uploaded and authenticates the owning Build (`build_ci.gate`).
+its writer and readers authenticate. The aggregating job (`ci aggregate`) requires exactly one
+artifact of its own attempt for every planned lane and none for another, reads each by numeric
+id, verifies its export against the plan and its validation record against that export and the
+envelope hash of the Build the job selected, and never reads the Build bundle. The gate requires
+the index to list exactly the lane artifacts its attempt uploaded and authenticates the owning
+Build (`build_ci.gate`).
 
 ## Profile activation data v1
 

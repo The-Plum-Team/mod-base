@@ -1,10 +1,11 @@
-"""What a gate job proves about its own attempt before it seals the tested record (MB11).
+"""What the sealing jobs of a run prove about their own attempt before they seal a record (MB11).
 
 A gate is the last job of its call and runs inside the run it judges. ``ci seal-gate`` therefore
 cannot require a completed graph: the gate itself is still running. It authenticates the attempt
 as far as it exists (:func:`authenticate_attempt`) and then seals (:func:`seal_gate`), and the
 reader of the record later requires the completed graph and the real chronology
-(``graph.authenticate_gate_timeline``).
+(``graph.authenticate_gate_timeline``). The aggregating job of a packaged run does the same one
+step earlier and seals the results index its gate reads (:func:`seal_results`).
 
 The mode. The job's identity record fixes which modes can reach this gate at all
 (:func:`admissible_modes`): a pull request has exactly one. A protected run has more, and which
@@ -31,6 +32,12 @@ once more immediately before the receipt is returned.
 
 A run in ``reuse`` mode has no export to verify. Its gate seals a reuse reference instead
 (:func:`seal_reuse`), which is not written yet.
+
+The results index. A packaged run's complete results are an index of its lane artifacts, not a
+union of their bytes. The aggregating job authenticates its attempt like a gate, with the lanes
+as the artifacts, then reads every lane by numeric id, one at a time: the export against the
+plan, the lane's validation record against that export, and both against the Build the job's
+selection record names. The Build bundle itself is not read here; the gate authenticates it.
 """
 
 from __future__ import annotations
@@ -44,9 +51,9 @@ from mod_base.build_ci import describe
 from mod_base.build_ci.graph import run_graph
 from mod_base.build_ci.identity import validate_subject_record
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.records import GATE_MODES, gate_receipt
+from mod_base.build_ci.records import GATE_MODES, gate_receipt, results_index, validate_source_selection
 from mod_base.build_ci.transport import (_admit_source, _authenticate_build, _authenticate_run, _bound, _plan,
-                                         _read_results, _read_sealed_build)
+                                         _read_results, _read_sealed_build, _read_sealed_lane)
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.model import grammar
@@ -98,12 +105,11 @@ def admissible_modes(record: dict[str, Any], gate: str) -> tuple[str, ...]:
     return tuple(modes)
 
 
-def _shown_mode(reads: CommandReads, record: dict[str, Any], plan: dict[str, Any], gate: str, run_id: int,
-                run_attempt: int) -> str:
-    """The one admissible mode whose graph holds every job this attempt lists."""
+def _shown_mode(reads: CommandReads, record: dict[str, Any], plan: dict[str, Any], modes: tuple[str, ...],
+                run_id: int, run_attempt: int) -> str:
+    """The one of the admissible ``modes`` whose graph holds every job this attempt lists."""
 
-    modes = admissible_modes(record, gate)
-    check(bool(modes), "$.gate", "no run of this caller reaches that gate for this subject")
+    check(bool(modes), "$.mode", "no run of this caller reaches that job for this subject")
     if len(modes) == 1:
         return modes[0]
     caller = ci_producer(record["workflow_path"])
@@ -122,10 +128,10 @@ def authenticate_attempt(api: GitHubApi | CommandReads, *, record: dict[str, Any
 
     plan = _plan(plan)
     reads, watch = CommandReads.of(api), Watch()
-    admissible_modes(record, gate)
+    modes = admissible_modes(record, gate)
     caller = ci_producer(record["workflow_path"])
     _admit_source(reads, watch, plan["identity"])
-    mode = _shown_mode(reads, record, plan, gate, run_id, run_attempt)
+    mode = _shown_mode(reads, record, plan, modes, run_id, run_attempt)
     producer = describe.attempt_producer(record, plan, mode=mode, run_id=run_id, run_attempt=run_attempt)
     _authenticate_run(reads, watch, producer, plan, mode=mode, complete=False)
     descriptors = watch.read(("jobs and artifacts of this attempt", run_id, run_attempt), functools.partial(
@@ -191,3 +197,42 @@ def seal_reuse(attempt: Attempt, *, temporary_root: Path) -> tuple[str, dict[str
     check(attempt.mode == "reuse", "$.mode", "only a reuse run seals a reuse reference")
     raise MbError("sealing a reuse reference is not implemented: the gate of a reuse run cannot pass yet",
                   reason="unsupported")
+
+
+def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan: dict[str, Any],
+                 selection: dict[str, Any], run_id: int, run_attempt: int, config_sha256: str,
+                 temporary_root: Path) -> tuple[str, dict[str, Any]]:
+    """Authenticate the lanes of the running attempt whose aggregating job calls this and return
+    its results index as ``(file name, document)``, ready to be written as the one file of the
+    results artifact.
+
+    ``record`` is the job's identity record, ``plan`` the plan of that subject and ``selection``
+    the selection record of this job's state: the Build every lane ran, selected by this very
+    attempt. Every planned lane must have uploaded exactly one artifact in this attempt and no
+    other lane may have. ``config_sha256`` is the digest of the protected Build config this job
+    loaded; ``temporary_root`` a private directory for one lane's download at a time. Everything
+    mutable is observed once more before return."""
+
+    plan = _plan(plan)
+    reads, watch = CommandReads.of(api), Watch()
+    modes = tuple(mode for mode in admissible_modes(record, "packaged") if mode != "reuse")
+    validate_source_selection(selection, plan=plan)
+    request, owning = selection["request"], selection["build"]
+    check((request["run_id"], request["run_attempt"], request["workflow_path"])
+          == (run_id, run_attempt, record["workflow_path"]), "$.selection.request",
+          "the selection record belongs to another run or attempt")
+    _admit_source(reads, watch, plan["identity"])
+    mode = _shown_mode(reads, record, plan, modes, run_id, run_attempt)
+    producer = describe.attempt_producer(record, plan, mode=mode, run_id=run_id, run_attempt=run_attempt)
+    _authenticate_run(reads, watch, producer, plan, mode=mode, complete=False)
+    descriptors = watch.read(("jobs and lane artifacts of this attempt", run_id, run_attempt), functools.partial(
+        describe.describe_attempt, reads, producer=producer, plan=plan, mode=mode,
+        expected=[("runtime", lane["id"]) for lane in plan["lanes"]],
+        finished=describe.settled_jobs("packaged", mode, plan, "results")))
+    lanes = [{"descriptor": descriptor, **_read_sealed_lane(
+        reads, descriptor, plan, owning_build=owning, build_envelope_sha256=selection["envelope_sha256"],
+        source_config_sha256=config_sha256, temporary_root=temporary_root)} for descriptor in descriptors]
+    document = results_index(plan=plan, producer=producer, owning_build=owning,
+                             build_envelope_sha256=selection["envelope_sha256"], lanes=lanes)
+    watch.recheck()
+    return grammar.CI_RESULTS_NAME, document

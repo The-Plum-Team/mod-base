@@ -563,6 +563,7 @@ Constants:
 * `CI_ARCHIVE_NAME`: fixed local encoded export ZIP leaf, not a nested GitHub artifact format.
 * `CI_GATE_NAME`: fixed single root filename of a tested gate-record ZIP.
 * `CI_RESULTS_NAME`: fixed single root filename of a results-index ZIP (`mb-ci-results--R--aN`).
+* `CI_SELECTION_NAME`: the state record of the Build a packaged job selected (`mod-base.ci.selection`), which `ci select-build` writes and `ci aggregate` reads.
 * `CI_VALIDATION_NAME`: reserved verifier output record filename.
 * `CI_EXECUTION_NAME`: fixed private local runner-to-root execution record filename.
 * `CI_ROOT_REQUEST_NAME`: fixed file name of the one private request inside a root operation's request directory.
@@ -740,6 +741,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `CI_BATCH_GIT_TIMEOUT_SECONDS`, `CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS`: 120 seconds for one Git plumbing call of the batch store, 600 for one fetch or push.
 * `MAX_CI_BATCH_GIT_OUTPUT_BYTES`: The output of one Git call of the batch store; the source-listing bound.
 * `MAX_CI_ASSEMBLE_REQUESTS`: 816, the request budget of `ci assemble`: it sends 15 requests and 2 per target, the two of a download (49 for 17 targets); the rest is for retries and further listing pages.
+* `MAX_CI_AGGREGATE_REQUESTS`: 816, the request budget of `ci aggregate`: it sends 13 requests and 2 per lane, the two of a download (81 for 34 lanes); the rest is for retries and further listing pages.
 * `MAX_CI_BATCH_PREPARE_REQUESTS`: 216, the request budget of `ci batch-prepare`: it sends 10 requests and 3 per member (160 for 50 members); the rest is for retries.
 * `MAX_CI_BATCH_SETTLE_REQUESTS`: 348, the request budget of `ci batch-settle`: it sends 3 requests, the 28 of `transport.download_merged_gate_pair` for both original gates and at most 5 per member (281 for 50 members); the rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
 * `MAX_CI_BUNDLE_COMPRESSED_BYTES`: 512 MiB archive cap of one `mb-ci-*` artifact of any kind and profile (`tests/test_ci_limits.py` pins every Build/E2E bound with the native bound it preserves).
@@ -1921,6 +1923,7 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 * `def bind_gate_receipt(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Bind a pre-upload full gate receipt to its selected tested-record identity/unit and actual upload window; all source uploads precede record upload and source IDs cannot collide with the record. Full API/native execution proof remains separate.
 * `def gate_receipt(*, plan: dict[str, Any], producer: dict[str, Any], gate: str, mode: str, artifacts: list[dict[str, Any]], owning_build: dict[str, Any] | None, native_receipts: list[dict[str, Any]]) -> dict[str, Any]`: The receipt the gate job of `producer` (an attempt's identity, without an upload window) seals for `plan`: a new `mod-base.ci.gate` document, valid for the plan and independent of its arguments. Writing one proves nothing; the gate authenticates what it names first (`gate.seal_gate`).
 * `def validate_results_index(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.results` v1, the complete packaged results of one attempt as an index of its lanes: the sealing attempt (always the packaged caller), the owning Build (the one the run rebuilt, or one of a separate Build run) with its envelope's SHA-256, and for every lane its runtime artifact of the same attempt, the SHA-256 of the runtime envelope and of the validation record inside it and of the lane's verification report. With a plan the lanes are exactly the planned ones with their native contracts, in plan order.
+* `def results_index(*, plan: dict[str, Any], producer: dict[str, Any], owning_build: dict[str, Any], build_envelope_sha256: str, lanes: list[dict[str, Any]]) -> dict[str, Any]`: The results index the aggregating job of `producer` seals for `plan`: a new `mod-base.ci.results` document, valid for the plan and independent of its arguments. `lanes` holds `descriptor`, `envelope_sha256`, `validation_sha256` and `report_sha256` of every planned lane in plan order; ids and native contracts are the plan's. The job authenticates each lane first (`gate.seal_results`).
 * `def bind_results_index(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Bind a results index to the results artifact it was read from: same sealing attempt, the artifact kind `results`, no id shared with a lane or the owning Build, and every one of them uploaded before the index.
 * `def validate_reuse_reference(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
 * `def bind_reuse_reference(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]`: Bind direct reuse identity to its selected reuse-record upload, retaining source-before-record chronology and ID separation. K6 must additionally prove actual source completion before protected verifier start, full original graphs, coherent tree/policy equality and source availability.
@@ -2379,8 +2382,9 @@ failed-jobs-only rerun. The run, the source and the bytes are authenticated by t
 
 ## `mod_base.build_ci.gate`
 
-Owner: MB11. What a gate job proves about its own running attempt before it seals the tested
-record. The job's identity record fixes the modes that can reach the gate; a pull request has one,
+Owner: MB11. What the sealing jobs of a run prove about their own running attempt before they
+seal a record: the gate its tested record, the aggregating job of a packaged run the results
+index. The job's identity record fixes the modes that can reach the gate; a pull request has one,
 and a protected run shows which of its modes it is by the job names of its own attempt, never by
 an input of the gate job. In that mode the gate requires the live source, the run as its latest
 attempt in progress (bound to the controller commit and kit pin), every job the graph finishes
@@ -2398,20 +2402,23 @@ every artifact those jobs uploaded. The completed graph and the chronology are t
 * `def authenticate_attempt(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan: dict[str, Any], gate: str, run_id: int, run_attempt: int) -> Attempt`: Admit the source, settle the mode, authenticate the run and describe the settled jobs' artifacts under one watch. Nothing is sealed.
 * `def seal_gate(attempt: Attempt, *, config_sha256: str, temporary_root: Path) -> tuple[str, dict[str, Any]]`: `(grammar.CI_GATE_NAME, receipt)` of an attempt in a mode other than `reuse`. A Build gate downloads the complete Build of the attempt, verifies the export against the plan and its `verify_build` validation record (frozen under `config_sha256` over the canonical envelope) and names the bundle and every target's report. A packaged gate downloads the results index, requires exactly the lane artifacts this attempt uploaded and authenticates the owning Build (the rebuilt one, or a completed full run of the Build caller). The watch is rechecked before return.
 * `def seal_reuse(attempt: Attempt, *, temporary_root: Path) -> tuple[str, dict[str, Any]]`: The seam of K6: the reuse reference of an attempt authenticated in `reuse` mode. Not written yet: raises `MbError` with reason `unsupported`.
+* `def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan: dict[str, Any], selection: dict[str, Any], run_id: int, run_attempt: int, config_sha256: str, temporary_root: Path) -> tuple[str, dict[str, Any]]`: `(grammar.CI_RESULTS_NAME, index)` of the running packaged attempt whose aggregating job calls it. `selection` is the selection record of the job's state and must be this attempt's own request. The attempt is authenticated like a gate's (never in `reuse` mode) with exactly one artifact of this attempt for every planned lane and none for another; each lane is then downloaded by id, one at a time, and its export verified against the plan and bound to the selected Build, and its `verify_runtime` validation record verified against `config_sha256` and the digest of the plan, the selected Build's envelope hash and the lane's envelope. The Build bundle is not read. The watch is rechecked before return.
 
 ## `mod_base.build_ci.commands_build`
 
-Owner: MB11. `ci assemble` and `ci seal-gate`, listed in `commands.VERB_MODULES`: the fan-in and
-gate steps of a Build or packaged run. Both take the job arguments (`commands.add_job_arguments`:
-`--repo`, `--config`, `--state DIR`), read `identity.json` and `ci-plan.json` of the state and
-the run and attempt from `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`, and build their API client
-through `commands.api_client` with an explicit budget. The state must belong to the executing
-repository and controller commit and the plan to the subject of the state. Downloads go into a
-temporary directory inside the state and are removed again.
+Owner: MB11. `ci assemble`, `ci aggregate` and `ci seal-gate`, listed in `commands.VERB_MODULES`:
+the fan-in and gate steps of a Build or packaged run. All take the job arguments
+(`commands.add_job_arguments`: `--repo`, `--config`, `--state DIR`), read `identity.json` and
+`ci-plan.json` of the state and the run and attempt from `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`,
+and build their API client through `commands.api_client` with an explicit budget. The state must
+belong to the executing repository and controller commit and the plan to the subject of the
+state. Downloads go into a temporary directory inside the state and are removed again; a record
+is written last, as the one file of a directory the command creates.
 
 * `PARTITIONS_NAME = 'ci-partitions.json'`: the state record `ci assemble` writes last: `{"descriptors", "envelope_sha256"}`, the partition descriptors in plan order and the SHA-256 of the assembled envelope.
-* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register both verbs on the `ci` verb group. `assemble` has no flag of its own; `seal-gate --gate build|packaged --output DIR`.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register the three verbs on the `ci` verb group. `assemble` has no flag of its own; `aggregate --output DIR`; `seal-gate --gate build|packaged --output DIR`.
 * `def run_assemble(args: argparse.Namespace) -> int`: The `assemble` handler, a step of a Build job in a full run of the Build caller or in a packaged run that rebuilds: describes the partition of every planned target of this attempt, downloads them (`transport.download_target_set`) and assembles their exact union into `exports.BUILD_VALIDATION_ROOT`, which must not exist. Budget `MAX_CI_ASSEMBLE_REQUESTS`.
+* `def run_aggregate(args: argparse.Namespace) -> int`: The `aggregate` handler, the sealing step of the aggregating job of a packaged run: reads the canonical selection record `grammar.CI_SELECTION_NAME` of the state and writes the index of `gate.seal_results` as `ci-results.json`, the one file of the new directory `--output`. Budget `MAX_CI_AGGREGATE_REQUESTS`.
 * `def run_seal_gate(args: argparse.Namespace) -> int`: The `seal-gate` handler: `gate.authenticate_attempt`, then `gate.seal_gate` (or `gate.seal_reuse` in a reuse run) with the digest of the protected Build config of the mod checkout, and the record written last as the one file of the new directory `--output`. Budget `MAX_CI_GATE_REQUESTS`.
 
 ## `mod_base.build_ci.handoff`

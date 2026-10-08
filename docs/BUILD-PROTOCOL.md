@@ -553,6 +553,15 @@ artifacts and authenticates the owning Build. The reader of a receipt requires t
 graph and the real chronology. A job or an artifact of an earlier attempt is a rejection that
 says so: after a failed-jobs-only rerun the recovery is to rerun all jobs.
 
+The aggregating job of a packaged run seals that index (`ci aggregate`). It authenticates its
+attempt like a gate, with one artifact of this attempt for every planned lane and none for
+another, and reads every lane by numeric id, one at a time, so that the lanes are never held as
+one union: the lane's export against the plan, bound to the Build of the job's selection record
+(`ci-selection.json` in the job state), and the lane's `verify_runtime` validation record, which
+lies beside the runtime envelope, against that export. The record's input digest covers the plan,
+the selected Build's envelope hash and the lane's envelope, so the Build bundle itself is not read
+by this job. A download costs two requests: the command sends 13 requests and two per lane.
+
 `mod-base.ci.reuse` adds current producer and `source`: original PR binding plus independent
 direct `build_seal`/`packaged_seal` tested descriptors. Covered default-branch commit and original
 tested commit retain separate current/non-PR and original/PR bindings even when the final merged
