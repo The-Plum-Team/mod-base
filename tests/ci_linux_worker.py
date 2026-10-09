@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import json
 import shutil
 import stat
 import struct
@@ -55,6 +56,20 @@ PYTHON_ROOTS = tuple(dict.fromkeys((sys.base_prefix, sys.prefix)))
 #: next to the plan.
 _, SOURCES = ci_plan_inputs()
 _FENCED = []
+_FENCE_TIMINGS = []
+
+
+def observe_fence_timing(event, args):
+    """Observe the real root operation, including command invocations with captured stderr."""
+    if event == "mod_base.host_fence_timing":
+        timing = json.loads(args[0])
+        if not _FENCE_TIMINGS:
+            print("cold host-fence: " + json.dumps(timing, separators=(",", ":")),
+                  file=sys.__stderr__, flush=True)
+        _FENCE_TIMINGS.append(timing)
+
+
+sys.addaudithook(observe_fence_timing)
 
 
 def fence_host(boundary):

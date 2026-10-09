@@ -9,6 +9,7 @@ PATH. Neither fence is a VM boundary.
 
 from __future__ import annotations
 
+import json
 import os
 import selectors
 import stat
@@ -285,7 +286,8 @@ def authenticate_privileged_host_boundary(boundary: HostBoundary) -> None:
     _authenticate_home_receipt(boundary)
 
 
-def _fence_command(command: tuple[str, ...], *, phase: str = "administrative") -> tuple[bytes, bool]:
+def _fence_command(command: tuple[str, ...], *, phase: str = "administrative",
+                   deadline: float | None = None) -> tuple[bytes, bool]:
     """Run one fixed administrative command; return its bounded stdout and whether all of it fit.
 
     A command that cannot start, exits non-zero or outlives its bound is a rejection. A non-zero
@@ -307,7 +309,8 @@ def _fence_command(command: tuple[str, ...], *, phase: str = "administrative") -
                                    stderr=subprocess.PIPE, env=dict(_FENCE_ENV), cwd="/", close_fds=True)
         if process.stdout is None or process.stderr is None:
             raise failure("pipes unavailable")
-        deadline = time.monotonic() + limits.CI_HOST_FENCE_TIMEOUT_SECONDS
+        if deadline is None:
+            deadline = time.monotonic() + limits.CI_HOST_FENCE_TIMEOUT_SECONDS
         with selectors.DefaultSelector() as selector:
             for stream, kept in ((process.stdout, output), (process.stderr, diagnostic)):
                 os.set_blocking(stream.fileno(), False)
@@ -348,7 +351,7 @@ def _fence_command(command: tuple[str, ...], *, phase: str = "administrative") -
                         stream.close()
 
 
-def _close_writable_trees(trees: tuple[str, ...]) -> None:
+def _close_writable_trees(trees: tuple[str, ...], *, timings: dict[str, float] | None = None) -> None:
     """One walk: drop group/other write from directories and regular files, and every default ACL.
 
     Only entries that carry a write bit are changed, so a second run leaves metadata alone. Links
@@ -356,10 +359,18 @@ def _close_writable_trees(trees: tuple[str, ...]) -> None:
     ACL would hand ``other::rwx`` to whatever is created in the tree afterwards.
     """
 
-    _fence_command(("/usr/bin/find", *trees, "-xdev", "-ignore_readdir_race",
-                    "(", "(", "-type", "d", "-o", "-type", "f", ")", "-perm", "/0022",
-                    "-exec", "/usr/bin/chmod", "go-w", "--", "{}", "+", ")", ",",
-                    "(", "-type", "d", "-exec", "/usr/bin/setfacl", "-k", "--", "{}", "+", ")"), phase="repair")
+    deadline = time.monotonic() + limits.CI_HOST_FENCE_TIMEOUT_SECONDS
+    for tree in trees:
+        started = time.monotonic()
+        try:
+            _fence_command(("/usr/bin/find", tree, "-xdev", "-ignore_readdir_race",
+                            "(", "(", "-type", "d", "-o", "-type", "f", ")", "-perm", "/0022",
+                            "-exec", "/usr/bin/chmod", "go-w", "--", "{}", "+", ")", ",",
+                            "(", "-type", "d", "-exec", "/usr/bin/setfacl", "-k", "--", "{}", "+", ")"),
+                           phase="repair", deadline=deadline)
+        finally:
+            if timings is not None:
+                timings[tree] = round(time.monotonic() - started, 6)
 
 
 def _reachable_writable_entries(root: str, *, skip: str) -> tuple[list[str], bool]:
@@ -396,6 +407,21 @@ def fence_worker_host(*, boundary: HostBoundary) -> None:
     directories outside those trees, such as ``/tmp``, stay as they are.
     """
 
+    started = time.monotonic()
+    timings: dict[str, Any] = {"repair": {}, "verification": 0.0, "ok": False}
+    try:
+        _fence_worker_host(boundary, timings)
+        timings["ok"] = True
+    finally:
+        timings["total"] = round(time.monotonic() - started, 6)
+        # A bounded informational observation, not an admission receipt. The runner transports
+        # it as an audit event; hosted tests report the first real fence even when CLI output is
+        # captured. Fixed phase names and image roots never expose candidate-controlled paths.
+        print("mod-base host-fence timing: " + json.dumps(timings, separators=(",", ":")),
+              file=sys.stderr, flush=True)
+
+
+def _fence_worker_host(boundary: HostBoundary, timings: dict[str, Any]) -> None:
     authenticate_privileged_host_boundary(boundary)
     import pwd
 
@@ -414,8 +440,12 @@ def fence_worker_host(*, boundary: HostBoundary) -> None:
                 continue
             trees.append(tree)
         if trees:
-            _close_writable_trees(tuple(trees))
-        entries, complete = _reachable_writable_entries("/", skip=str(WORKER_ROOT.parent))
+            _close_writable_trees(tuple(trees), timings=timings["repair"])
+        started = time.monotonic()
+        try:
+            entries, complete = _reachable_writable_entries("/", skip=str(WORKER_ROOT.parent))
+        finally:
+            timings["verification"] = round(time.monotonic() - started, 6)
     except OSError as error:
         raise WorkerError("cannot fence the worker host") from error
     if entries or not complete:

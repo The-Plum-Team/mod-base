@@ -19,6 +19,7 @@ import os
 import selectors
 import signal
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
@@ -583,6 +584,14 @@ def run_root_operation(operation: str, *, python: str, kit_root: Path, kit_diges
         if remaining <= 0:
             raise WorkerError(f"root operation {operation} timed out")
         code = process.wait(timeout=remaining)
+        if operation == "host-fence":
+            ordinary = []
+            for line in diagnostic.decode("utf-8", "replace").splitlines():
+                if line.startswith("mod-base host-fence timing: "):
+                    sys.audit("mod_base.host_fence_timing", line.removeprefix("mod-base host-fence timing: "))
+                else:
+                    ordinary.append(line)
+            diagnostic = bytearray("\n".join(ordinary).encode("utf-8"))
         if code != 0:
             detail = single_line(diagnostic.decode("utf-8", "replace"), limit=600)
             raise WorkerError(f"root operation {operation} failed with exit {code}: {detail}")

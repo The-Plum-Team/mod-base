@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -342,6 +343,16 @@ class HostFenceCommandTests(unittest.TestCase):
             with self.subTest(phase=phase), patch.object(limits, "CI_HOST_FENCE_TIMEOUT_SECONDS", 0.3), \
                     self.assertRaisesRegex(MbError, rf"timed out \(phase={phase}; elapsed=\d+\.\d{{2}}s\)$"):
                 host._fence_command(("/usr/bin/sleep", "30"), phase=phase)
+
+    def test_repair_reports_each_real_tree_and_preserves_a_shared_deadline(self):
+        other = self.base / "other"
+        other.mkdir(mode=0o777)
+        timings = {}
+        host._close_writable_trees((str(self.tree), str(other)), timings=timings)
+        self.assertEqual(set(timings), {str(self.tree), str(other)})
+        self.assertTrue(all(type(value) is float and value >= 0 for value in timings.values()))
+        with self.assertRaisesRegex(MbError, "timed out .*phase=repair"):
+            host._fence_command(("/usr/bin/sleep", "30"), phase="repair", deadline=time.monotonic() - 1)
 
     def test_verification_command_failure_identifies_its_phase_and_elapsed_time(self):
         unreadable = self.base / "unreadable"
