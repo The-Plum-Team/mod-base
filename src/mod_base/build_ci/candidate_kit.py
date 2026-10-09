@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ from mod_base.github.api import GitHubApi
 from mod_base.io.tree import read_child_file
 from mod_base.model import limits
 from mod_base.model.validators import check
-from mod_base.pin import Pin, kit_tree_digest, parse_pin, verify_released, verify_staged_files
+from mod_base.pin import ACTIONS_DIR, Pin, kit_tree_digest, parse_pin, verify_released, verify_staged_files
 
 
 def verified_checkout(checkout: Path, sha: str, tree: str | None = None) -> Path:
@@ -62,6 +63,8 @@ def verify_future_checkout(checkout: Path, pin: Pin) -> str:
               "future kit does not declare the supported kit-digest-v1 literal")
         digest = kit_tree_digest(checkout)
         check(digest == literals[0], "$.candidate_kit", "future kit tree differs from its own digest literal")
+        check(stat.S_ISDIR((checkout / ACTIONS_DIR).lstat().st_mode), "$.candidate_kit",
+              "future kit must supply the supported actions/ directory and its staged-file lock")
         verify_staged_files(checkout)
     except (MbError, OSError, UnicodeError) as error:
         raise MbError(f"cannot verify the candidate kit with the executing verifier: {error}; "

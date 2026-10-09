@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import copy
 import re
+import shutil
 from pathlib import Path
 
 from mod_base import runtime
 from mod_base.build_ci import candidate_kit, planning
 from mod_base.errors import MbError
 from mod_base.model.canonical import canonical_sha256
-from mod_base.pin import Pin, STAGED_LOCK, kit_tree_digest
+from mod_base.pin import ACTIONS_DIR, ACTIONS_LOCK, Pin, STAGED_LOCK, kit_tree_digest
 from tests import ci_future_kit, ci_lifecycle_fixture as fixture, ci_mod_harness as h
 from tests.test_ci_lifecycle_candidate import CandidateCase
 
@@ -112,3 +113,25 @@ class CandidateKitAdmissionTests(CandidateCase):
         bad = Pin(fixture.git(future, "rev-parse", "HEAD"), pin.version, ())
         with self.assertRaisesRegex(MbError, "compatibility-first release"):
             candidate_kit.verify_future_checkout(future, bad)
+
+    def test_future_actions_and_second_lock_are_required_by_the_executing_representation(self) -> None:
+        for absent_actions in (False, True):
+            for absent_lock in (False, True):
+                with self.subTest(absent_actions=absent_actions, absent_lock=absent_lock):
+                    future = self.temporary / f"future-{absent_actions}-{absent_lock}"
+                    pin, _ = ci_future_kit.future_kit(runtime.kit_root(), future)
+                    if absent_actions:
+                        shutil.rmtree(future / ACTIONS_DIR)
+                    if absent_lock:
+                        (future / ACTIONS_LOCK).unlink()
+                    else:
+                        (future / ACTIONS_LOCK).write_bytes(b'{"lock_version":2}\n')
+                    workflow = future / ".github/workflows/build.yml"
+                    workflow.write_text(re.sub(r'sha256:[0-9a-f]{64}', kit_tree_digest(future),
+                                               workflow.read_text(encoding="utf-8")),
+                                        encoding="utf-8", newline="\n")
+                    fixture.git(future, "add", "-A")
+                    fixture.git(future, "commit", "-q", "-m", "unsupported actions representation")
+                    bad = Pin(fixture.git(future, "rev-parse", "HEAD"), pin.version, ())
+                    with self.assertRaisesRegex(MbError, "compatibility-first release"):
+                        candidate_kit.verify_future_checkout(future, bad)
