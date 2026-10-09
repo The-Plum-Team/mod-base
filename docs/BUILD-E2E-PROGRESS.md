@@ -11,19 +11,21 @@ ADR 0007 is Proposed. **K7, Q1–Q10, B1–B7 and GitHub settings remain untouch
 
 ## Evidence and its scope
 
-- **Ordinary suite:** Python 3.11–3.13; GitHub is `FakeGitHub`. Files, Git and processes are real
-  in the integration cases; older isolated tests also replace system/account operations.
-- **Hosted account proof:** `ci_linux_worker.py` (128 tests) and `ci_linux_deferred.py` (2 tests)
+- **Ordinary suite:** 3,013 tests on each Python 3.11–3.13 at functional head `d432b0e`, with
+  one skip and two documented expected failures. GitHub is `FakeGitHub`; integration cases use
+  real files, Git and processes, while older isolated tests also replace system/account operations.
+- **Hosted account proof:** `ci_linux_worker.py` and `ci_linux_deferred.py` (2 tests)
   run separately in the kit's own CI on each Python version. They exercise the real accounts,
   host fence, root operations, cleanup and deferred-execution deadlines.
 - **Pipeline proof:** `ci_linux_pipeline.py` runs workflow-derived command lines through the
   entire synthetic PR Build → packaged → status chain, with real checkouts, hooks, accounts,
   root launches, selection hand-over and generated upload ZIPs. Both status intents succeed;
   corrupt lane ZIP, missing target, newer Build attempt and draft controls reject. GitHub,
-  caller orchestration and third-party Actions remain fake. The coordinator's integrated
-  Python 3.12 run passed in 241.342 seconds, observing 13 real fence launches and 211 requests;
-  required CI 37865793803 failed `build/plan` worker preparation on all three Python versions
-  ("tool closure changed after protected admission"); its correction and final hosted proof are pending.
+  caller orchestration and third-party Actions remain simulated. At `d432b0e`, CI 37868477705
+  passed all three pipeline jobs, each observing 13 real fence launches and 211 requests.
+  Its ordinary and deferred-execution jobs also passed on all three Python versions. This is
+  functional evidence at that head. Latest-head acceptance requires every required job under
+  [PR8 checks](https://github.com/The-Plum-Team/mod-base/pull/8/checks) to pass.
 - **Workflow policy:** registry/YAML checks, actionlint, shellcheck and execution of shell bodies.
   The CI `Test` gate requires the ordinary, worker, deferred and pipeline jobs in every Python leg.
 
@@ -80,7 +82,7 @@ outdated base fails with `ci-pr-base-outdated` and asks for a branch update. A d
 advance invalidates in-flight generations; rerunning the old run keeps its old controller, so a
 new PR event is needed. Upload creation times allow two seconds of service/runner clock skew;
 other chronology remains exact. Minor consolidation of duplicate job openers and the state-file
-catalogue remains; no bound was raised to make a pipeline pass.
+catalogue remains; no protocol or artifact bound was raised to make a pipeline pass.
 
 ## Quick Skin (Q1 to Q10)
 

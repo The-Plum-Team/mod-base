@@ -29,6 +29,8 @@ K7's release candidate and managed-caller canary are required before adoption.
   digest, stage source/Build/kit inputs, prove tracked sources unchanged, freeze exports and
   seal validation reports through private requests. Account cleanup revokes user managers,
   linger, cron and at jobs as well as processes; an error prevents successful sealing.
+  Admit linked JDK certificates through stable ancestor identity/type/permissions while keeping
+  full tool stamps and race checks; unrelated `/etc` timestamp changes no longer reject admission.
 - Add `ci assemble` for the exact union of target partitions and `ci aggregate` for the
   packaged results index. The index authenticates every lane's descriptor and receipt hashes
   without combining all lane bytes into one archive. Complete Builds require their validation
@@ -75,7 +77,7 @@ K7's release candidate and managed-caller canary are required before adoption.
   hooks, root operations and artifacts with fake GitHub, plus corruption/missing/stale/draft controls.
 - Keep retention at one day for targets, seven for Build/lane/results, 90 for gates/reuse.
   Owner review remains for common 512 MiB archives, whole-lane 512-file/256 MiB bounds and
-  Quick Skin's 4 MiB native-report cap. No limit is raised because a pipeline fails.
+  Quick Skin's 4 MiB native-report cap. Protocol and artifact bounds are not raised for failures.
 - Operator prerequisites: ratify the design/ADR, complete K7 and release; then provide native
   adapters, lane packages before fencing and cache restore/save (current Gradle seeds are empty).
   Provision `mod-base-gate` with `MOD_BASE_GATE_APP_CLIENT_ID` and
