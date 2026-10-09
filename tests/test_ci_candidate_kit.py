@@ -89,6 +89,24 @@ class CandidateKitAdmissionTests(CandidateCase):
         with self.assertRaisesRegex(MbError, "future kit tree differs from its own digest literal"):
             candidate_kit.verify_future_checkout(future, bad)
 
+    def test_future_fixture_preserves_a_real_shallow_source_commit_as_parent(self) -> None:
+        origin = self.temporary / "origin"
+        fixture.commit_candidate(runtime.kit_root(), origin)
+        fixture.git(origin, "commit", "--allow-empty", "-q", "-m", "shallow source tip")
+        shallow = self.temporary / "shallow"
+        fixture.git(self.temporary, "clone", "-q", "--depth=1", origin.as_uri(), str(shallow))
+        self.assertEqual(fixture.git(shallow, "rev-parse", "--is-shallow-repository"), "true")
+        self.assertEqual(fixture.git(shallow, "rev-list", "--count", "HEAD"), "1")
+        source_head = fixture.git(shallow, "rev-parse", "HEAD")
+        future = self.temporary / "future"
+        pin, digest = ci_future_kit.future_kit(shallow, future)
+        self.assertNotEqual(pin.sha, source_head)
+        self.assertEqual(fixture.git(future, "rev-parse", "HEAD^"), source_head)
+        fixture.git(future, "merge-base", "--is-ancestor", source_head, pin.sha)
+        self.assertEqual(fixture.git(future, "rev-parse", "v1.0.4^{commit}"), pin.sha)
+        self.assertEqual(candidate_kit.verify_future_checkout(future, pin), digest)
+        self.assertEqual(fixture.git(shallow, "rev-parse", "HEAD"), source_head)
+
     def test_incompatible_digest_version_fails_with_compatibility_first_message(self) -> None:
         future = self.temporary / "future"
         pin, _ = ci_future_kit.future_kit(runtime.kit_root(), future)

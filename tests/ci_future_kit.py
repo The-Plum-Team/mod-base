@@ -28,7 +28,7 @@ def future_kit(source: Path, destination: Path, *, candidate_only: bool = False)
         workflow.write_text(text, encoding="utf-8", newline="\n")
     git(destination, "init", "-q")
     if (source / ".git").is_dir():
-        git(destination, "fetch", "-q", "--no-tags", source.as_uri(), "HEAD")
+        git(destination, "fetch", "-q", "--no-tags", "--update-shallow", source.as_uri(), "HEAD")
         git(destination, "reset", "--soft", "FETCH_HEAD")
     git(destination, "add", "-A")
     git(destination, "commit", "-q", "-m", "released future kit")
