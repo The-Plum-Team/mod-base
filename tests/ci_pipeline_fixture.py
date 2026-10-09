@@ -257,7 +257,7 @@ class Pipeline:
                        **{key: value for key, value in os.environ.items() if key.startswith("JAVA_HOME_")}}
         environment.pop("MOD_BASE_KIT_SHA", None)
         environment.pop("GH_TOKEN", None)
-        # The rig provisions standalone JDK trees, like the three trees on the hosted image.
+        # Disposable rigs may provision these JDK roots; the hosted image's own paths win.
         for version in (17, 21, 25):
             fallback = Path(f"/opt/modbase-jdk-{version}")
             if fallback.is_dir():

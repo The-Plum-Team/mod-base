@@ -211,6 +211,23 @@ class _Scan:
         finally:
             os.close(descriptor)
 
+    def metadata_sha256(self) -> str:
+        """Bind tool inventories in full and traversed ancestors by identity and permissions.
+
+        A JDK's cacerts may link through /etc, whose unrelated account files change during
+        the worker lifecycle. Such ancestors are not inventories of their other children.
+        Keep their complete stamps in ``records`` for race checks within this scan; only
+        the persistent receipt omits their link count, size and directory timestamps.
+        """
+        digest = hashlib.sha256()
+        for path in sorted(self.records):
+            record = self.records[path]
+            stamp = record["stamp"]
+            if stat.S_ISDIR(stamp[2]) and tuple(stamp[:2]) not in self.directories:
+                record = {**record, "stamp": stamp[:5]}
+            digest.update(canonical_json(record))
+        return digest.hexdigest()
+
 
 def inspect_worker_toolchains(*, boundary: HostBoundary, roots: tuple[str, ...]) -> ToolTreeProof:
     """Inspect the permission/identity closure of the selected roots as the fenced runner."""
@@ -230,10 +247,7 @@ def inspect_worker_toolchains(*, boundary: HostBoundary, roots: tuple[str, ...])
             scanner.walk(resolved, 0)
     except OSError as error:
         raise WorkerError("cannot inspect protected host tool closure") from error
-    digest = hashlib.sha256()
-    for path in sorted(scanner.records):
-        digest.update(canonical_json(scanner.records[path]))
-    return ToolTreeProof(roots, digest.hexdigest(), scanner.files, len(scanner.records), scanner.total)
+    return ToolTreeProof(roots, scanner.metadata_sha256(), scanner.files, len(scanner.records), scanner.total)
 
 
 def authenticate_toolchains(proof: ToolTreeProof, *, boundary: HostBoundary) -> None:

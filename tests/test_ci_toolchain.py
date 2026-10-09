@@ -351,6 +351,88 @@ class RealToolTreeTests(unittest.TestCase):
         self.assertIn("/", scanner.records)
         self.assertEqual(set(os.listdir("/proc/self/fd")), before)
 
+    def linked_cacerts(self):
+        system = self.base / "system"
+        certificates = system / "ssl/certs"
+        certificates.mkdir(parents=True)
+        target = certificates / "cacerts"
+        target.write_bytes(b"trusted CA store\n")
+        link = self.root / "lib/cacerts"
+        link.symlink_to(target)
+        return system, target, link
+
+    def test_external_siblings_do_not_change_a_linked_tool_receipt(self):
+        system, target, link = self.linked_cacerts()
+        admitted = self.scan()
+        receipt = admitted.metadata_sha256()
+        sibling = system / "passwd"
+        sibling.write_bytes(b"new account\n")
+        observed = self.scan()
+        self.assertNotEqual(admitted.records[str(system)], observed.records[str(system)])
+        self.assertEqual(receipt, observed.metadata_sha256())
+        sibling.unlink()
+        (system / "unrelated-directory").mkdir()
+        observed = self.scan()
+        self.assertNotEqual(admitted.records[str(system)]["stamp"][5], observed.records[str(system)]["stamp"][5])
+        self.assertEqual(receipt, observed.metadata_sha256())
+        self.assertEqual(admitted.records[str(target)], observed.records[str(target)])
+        self.assertEqual(admitted.records[str(link)], observed.records[str(link)])
+
+    def test_link_target_and_ancestor_identity_type_and_permissions_remain_bound(self):
+        for mutation in ("target-bytes", "target-inode", "link-destination", "ancestor-inode",
+                         "ancestor-mode", "ancestor-type", "ancestor-writable"):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                system, target, link = self.linked_cacerts()
+                receipt = self.scan().metadata_sha256()
+                if mutation == "target-bytes":
+                    target.write_bytes(b"altered CA store\n")
+                elif mutation == "target-inode":
+                    replacement = target.with_name("replacement")
+                    replacement.write_bytes(target.read_bytes())
+                    replacement.replace(target)
+                elif mutation == "link-destination":
+                    replacement = target.with_name("other-cacerts")
+                    replacement.write_bytes(target.read_bytes())
+                    link.unlink()
+                    link.symlink_to(replacement)
+                elif mutation in ("ancestor-inode", "ancestor-type"):
+                    previous = system.with_name("previous-system")
+                    system.rename(previous)
+                    if mutation == "ancestor-inode":
+                        system.mkdir()
+                        (previous / "ssl").rename(system / "ssl")
+                    else:
+                        system.symlink_to(previous, target_is_directory=True)
+                else:
+                    system.chmod(0o750 if mutation == "ancestor-mode" else 0o777)
+                if mutation == "ancestor-writable":
+                    with self.assertRaisesRegex(MbError, "group/other write"):
+                        self.scan()
+                else:
+                    self.assertNotEqual(receipt, self.scan().metadata_sha256())
+
+    def test_walked_directory_metadata_stays_bound_including_link_targets(self):
+        for external in (False, True):
+            with self.subTest(external=external):
+                self.setUp()
+                directory = self.root / "lib"
+                if external:
+                    directory = self.base / "external-tools"
+                    directory.mkdir()
+                    (self.root / "external-tools").symlink_to(directory, target_is_directory=True)
+                receipt = self.scan().metadata_sha256()
+                info = directory.stat()
+                os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+                self.assertNotEqual(receipt, self.scan().metadata_sha256())
+
+    def test_ancestor_changes_still_reject_during_one_scan(self):
+        system, _, _ = self.linked_cacerts()
+        scanner = self.scan()
+        (system / "passwd").write_bytes(b"new account\n")
+        with self.assertRaisesRegex(MbError, "entry changed during admission"):
+            scanner.resolve(str(system))
+
     def test_writable_special_and_escaping_entries_are_rejected_for_real(self):
         def writable_file():
             (self.root / "lib/os.py").chmod(0o666)
