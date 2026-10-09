@@ -22,6 +22,7 @@ from typing import Any
 from unittest import mock
 
 from mod_base import cli
+from mod_base.build_ci.activation import CALLERS
 from mod_base.config import parse_config
 from mod_base.errors import MbError
 from mod_base.model.documents import validate_template_manifest
@@ -50,7 +51,7 @@ QS_GITATTRIBUTES = (
     b"*.bat whitespace=cr-at-eol\n"
 )
 
-#: The rules v0.9.2 adds after them: every managed and fragment path is checked out with LF, so a
+#: Every managed and fragment path, including the registered Build/E2E callers, uses LF, so a
 #: ``core.autocrlf=true`` clone (Git for Windows' default) passes ``template check``.
 EOL_RULES = (
     b"\n"
@@ -58,12 +59,16 @@ EOL_RULES = (
     b"# managed region included) byte for byte with the kit's template and reads the others line by\n"
     b"# line. Git for Windows' default `core.autocrlf=true` would check them out with CRLF line endings\n"
     b"# and fail that check on a clean clone, so they are always checked out with LF, whatever the local\n"
-    b"# setting. The list is exactly the template manifest's managed and fragment paths.\n"
+    b"# setting. The list is the manifest's managed and fragment paths plus the four Build/E2E callers.\n"
     b"/.gitattributes text eol=lf\n"
     b"/.gitignore text eol=lf\n"
     b"/.github/CODEOWNERS text eol=lf\n"
     b"/.github/dependabot.yml text eol=lf\n"
     b"/.github/pull_request_template.md text eol=lf\n"
+    b"/.github/workflows/mod-base-build.yml text eol=lf\n"
+    b"/.github/workflows/mod-base-gate-status.yml text eol=lf\n"
+    b"/.github/workflows/mod-base-guard.yml text eol=lf\n"
+    b"/.github/workflows/mod-base-packaged-e2e.yml text eol=lf\n"
     b"/.github/workflows/pages.yml text eol=lf\n"
     b"/AGENTS.md text eol=lf\n"
     b"/docs/ai/shared/PUBLIC-EVIDENCE.md text eol=lf\n"
@@ -354,8 +359,8 @@ class KitTemplateTest(unittest.TestCase):
         self.assertEqual(managed, QS_GITATTRIBUTES + EOL_RULES)
         rules = [line.split() for line in managed.decode("ascii").splitlines() if line and not line.startswith("#")]
         self.assertIn(["*.bat", "whitespace=cr-at-eol"], rules)
-        checked = sorted(entry["path"] for entry in self.manifest()["files"]
-                         if entry["class"] in ("managed", "fragment"))
+        checked = {entry["path"] for entry in self.manifest()["files"]
+                   if entry["class"] in ("managed", "fragment")} | set(CALLERS)
         self.assertEqual(sorted(rule[0] for rule in rules if rule[1:] == ["text", "eol=lf"]),
                          sorted(f"/{path}" for path in checked))
         self.assertIn(".github/workflows/pages.yml", checked)

@@ -270,9 +270,9 @@ callers (`mod-base-guard.yml`, `mod-base-build.yml`, `mod-base-packaged-e2e.yml`
 `mod-base-gate-status.yml` in `.github/workflows/`) are managed files: none in `disabled`, all in
 `shadow` and `shared-build-and-e2e`, all but the packaged E2E caller in `shared-build`, and in
 `reviewed-rollback` those of the mode it leaves. A managed caller is the kit template rendered with
-the mod's pin and, in the branch filter of the Build and packaged E2E callers' `push` trigger, the
-`canonical_branch` of `site/mod-base.json`, byte for byte; it has no extension region and cannot
-be named in `template.deferred`. A change of `canonical_branch` is therefore followed by
+the mod's pin and the `canonical_branch` of `site/mod-base.json` in the producers' `push`
+filters and all three callers' pull-request base filters, byte for byte; it has no extension
+region and cannot be named in `template.deferred`. A change of `canonical_branch` is followed by
 `template sync --write`. A caller outside its mode must not exist.
 
 Every change of mode is its own pull request, never combined with a kit bump:
@@ -297,6 +297,9 @@ pull request) and back; `disabled` to `shadow` or `shared-build`; `shadow` to `d
 `shadow`, `shared-build` and `shared-build-and-e2e` to `reviewed-rollback`; and `reviewed-rollback`
 to `disabled`.
 
+This is the operator admission route; no kit workflow invokes `template transition`. The mod's
+adoption must put the reviewed transition check into its own procedure.
+
 Rollback is two pull requests. The first sets `"mode": "reviewed-rollback"` and
 `"rollback_from"` to the mode being left: the callers stay managed and unchanged while the mod's
 previous gates are restored and reviewed. The second sets `disabled` (and `"rollback_from": null`)
@@ -308,9 +311,11 @@ A kit bump in an active mode is an ordinary bump: `bump` rewrites the pin lines 
 the activation manifest (v1.0.3 and older) while a mode other than `disabled` is active, so a pin
 rollback that far follows the two rollback pull requests. When `bump` fails after it started
 writing, it restores every workflow and action file; run `template sync --repo . --write` to
-restore any other managed file. On a `core.autocrlf=true` clone the callers check out with CRLF
-until the managed `.gitattributes` lists them: add `/.github/workflows/mod-base-*.yml text eol=lf`
-to `.git/info/attributes`.
+restore any other managed file. The managed `.gitattributes` lists all four callers with explicit
+`eol=lf` rules, including on a `core.autocrlf=true` clone. This bump command is not proof that the
+shared candidate worker can run a changed pin: its overlay still supplies the protected kit.
+Implement that future-pin staging route before Q/B uses it for controller upgrades
+([BUILD-PROTOCOL.md](BUILD-PROTOCOL.md), "Candidate kit pin limitation").
 
 ### The gate status App
 

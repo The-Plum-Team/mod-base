@@ -10,9 +10,9 @@ remains. The reasons are in [ADR 0007](adr/0007-protected-build-and-packaged-run
 [BUILD-ADAPTER.md](BUILD-ADAPTER.md), and the way a mod turns the pipeline on and off in
 [OPERATIONS.md](OPERATIONS.md#builde2e-activation-and-rollback).
 
-The selected Build hand-over between packaged jobs and the request budget are still being
-changed, and the page marks them below. The candidate staging, execution and sealing commands
-are registered and compose the real account and root operations.
+The K1–K6 commands compose the worker lifecycle, Build selection, fan-in, gates, status
+evaluation, batches and post-merge reuse. The final section separates the command/account proof
+from the GitHub behavior that still needs K7.
 
 ## Trust model
 
@@ -36,8 +36,14 @@ is a pair of Unix accounts on a GitHub-hosted Linux runner, not a virtual machin
 ### The subject of a job
 
 `ci subject` is the first kit step of every Build and packaged job, and of a status job once its
-evaluation needs the plan. It learns what the job tests from the API, never from the run's own
-`head_sha` or from a caller input alone.
+evaluation needs the plan. It authenticates the subject against live API state. With
+`--candidate DIR`, it also reads the tested tree and ordered parents through sanitized Git from
+the verified local checkouts: a ready subject costs one request. Without that checkout it reads
+the commit facts from the API (four requests for a ready pull request, five for a protected
+subject). Neither route trusts the run's own `head_sha` or a caller input alone.
+The candidate route requires `ci plan --expect-sha256` to match the fully authenticated plan of
+the earlier planning/input job. It does not repeat the default-branch and live-controller-head
+observations itself; the final gate repeats them before success. Status jobs use the full route.
 
 - **A pull request** (`--pr N`) must be open, not a draft, have its head and base in this
   repository (a fork is refused) and be based on the default branch at exactly the executing
@@ -154,8 +160,9 @@ record, and `tests/fixtures/ci_graphs/` holds a literal listing of every mode.
 | `gate-status.yml` | `evaluate` "Evaluate gate states" |
 
 The two producers, the Build caller and the packaged E2E caller, run on `pull_request_target`
-(opened, synchronize, reopened, ready for review, converted to draft), on a push to the mod's
-canonical branch and on `workflow_dispatch`. Each such event starts one *generation*: a Build run
+(opened, synchronize, reopened, ready for review, converted to draft) against the canonical
+branch, on a push to that branch and on `workflow_dispatch`. Each such event starts one
+*generation*: a Build run
 and a packaged run for the same subject. A new generation of a pull request cancels the one before
 it. The status caller is no producer and its runs are nobody's evidence: it runs when a run of
 either producer is requested or has completed, on the same pull-request events, once an hour for
@@ -187,13 +194,12 @@ Every job of a kit workflow has the same shape. Each kit step runs one command a
 user, `python3 -P -m mod_base ci <verb> --repo mod --config mod/site/mod-base.json --state DIR`,
 with `PYTHONPATH` set to the verified kit, the state in `$RUNNER_TEMP/mb-state` and an API token
 only where the verb reads the API. The steps of a `target` job, the most complete one, follow.
-Steps 5 to 7 are written into the workflows, but their verbs were still being finished when this
-page was written: they are described as specified.
+All lifecycle verbs below are registered and exercised by the hosted command-chain test.
 
 | Step | What it does |
 | --- | --- |
 | 1. Prologue: shell and pinned actions, no kit code | Validates the call inputs, checks out the protected mod at `github.sha` into `mod/` and the kit at `inputs.kit-sha` into `kit/`, and requires both to be clean and at those commits, the kit's tree digest to equal the workflow's `MB_KIT_TREE_DIGEST` literal and the calling workflow to be a managed caller of the mod's canonical branch. Installs Python 3.13 and the hash-locked Pillow. A job that runs candidate code also checks out the tested commit into `candidate/`, without credentials; no step of the runner executes anything from it. |
-| 2. `ci subject --producer build\|packaged\|status --pr N --github-output F` | Authenticates the subject, creates the state directory and writes `identity.json`. Outputs: `tested_sha`, `pr_number`. |
+| 2. `ci subject --producer build\|packaged\|status --pr N [--candidate DIR] --github-output F` | Authenticates the subject, creates the state directory and writes `identity.json`. Outputs: `tested_sha`, `pr_number`. |
 | 3. `ci worker-prepare --roles validator\|candidate+validator --python PATH [--java-home PATH]...` | Closes the runner home, has root fence the image, admits the tool trees (the interpreter's prefix and every JDK home: no foreign owner, no group or other write access, no special file), allocates the accounts and hands the protected adapter copy to the validator. It sends no API request. |
 | 4. `ci plan [--candidate DIR] [--expect-sha256 HEX] [--github-output F]` | Stages the candidate files the config names (from the Git objects of `candidate/`, or from the API when the job has no such checkout), runs `derive_plan` as the validator, builds the plan around the result and writes `ci-plan.json`. With `--expect-sha256`, the hash the planning job derived, another plan fails the job. Outputs: `plan_sha256` and the job matrices `targets` and `lanes`. |
 | 5. `ci worker-stage --candidate DIR [--bundle] [--gradle-seed DIR]` | Has root publish the tested tree for the candidate as `repository/`, with a `.git` reduced to objects and refs (no hooks, no configuration), the kit overlay (the copy of the pinned kit that a mod's bootstrap stages inside a checkout) and, when given, a Gradle seed. For a lane, `--bundle` also stages the Build from `sealed-build/` at the `bundle.path` of the config. |
@@ -242,7 +248,8 @@ selected, and none of them selects again. `input` returns its selection record a
 `selection`: the one line `ci select-build` writes. Each later job has a step without a kit
 command and without a token, "Receive the selected Build", which admits one line of at most
 65,536 characters in the alphabet of the kit's canonical JSON that names the record's kind, and
-writes it to `$RUNNER_TEMP/mb-state/build-selection.json`, a new file of the runner alone. The
+writes it to `$RUNNER_TEMP/mb-state/build-selection.json`, a new file of the runner alone. A
+synthetic packaged job sequence and the full hosted pipeline execute this shell hand-over. The
 job's `ci fetch-build`, `ci aggregate` or `ci seal-gate` is given that file as `--selection` and
 reads it before it sends a request (`commands_packaged.received_selection`): the bytes must be the
 canonical JSON of a `mod-base.ci.selection` record of the job's own plan, requested by this very
@@ -257,7 +264,7 @@ The verbs outside the worker lifecycle:
 | `ci reuse-admit --github-output F` | For a push to the default branch, decides whether both gates of the pull request it merged cover the pushed commit (`reuse.admit_post_merge_reuse`); any other event answers `full` without a request. Admitted, `mode=reuse`: the commit is the final commit of exactly one merged pull request of this repository; the newest Build run and the newest packaged run of that pull request's last head completed successfully as their latest attempts under the kit pin that executes now, and neither is a deferral or a reuse run; the tree, the policy digest, the kit pin, the inventory, the scenario contract, the runtime selection and the plan are those of the push; both runs show their full graph and their tested records pair; every artifact they name is still available. Full run, `mode=full` with a `reason` of `reuse.FULL_RUN_REASONS`: an ordinary reason to test again, an expired original artifact among them. Error: an API failure, evidence that is still there and differs, or an original run that has not finished. The answer is kept as the state record `ci-reuse-admission.json`. |
 | `ci assemble` | Describes the partition of every planned target of its own attempt from the API (one unexpired artifact for each, bound to the upload step of the job that sealed it), downloads each by numeric id, verifies it with the validation record its job uploaded and assembles the exact union into `sealed-build/`. |
 | `ci select-build [--build-run-id ID\|same-run] [--wait-seconds N] --output FILE --github-output F` | Finds and authenticates the exact Build of a packaged run and writes the selection record. A pull request names no run and waits for the newest Build run of its head: one listing a minute, at most 5,400 seconds. A protected subject takes the newest Build run of its commit and waits within the same bound while that run is in progress (a push starts both callers together); when there is none it says so and its caller builds in the same run, and `same-run` then authenticates that Build. The bundle is downloaded and verified once, for the hash of its envelope. |
-| `ci fetch-build --selection FILE` | Repeats the observation immediately before a lane uses the Build, requires the selected descriptor again, downloads the bundle by numeric id into `sealed-build/` and requires its envelope to have the recorded hash. The hand-over described above is to make it lighter. |
+| `ci fetch-build --selection FILE` | Admits the selection for this plan and run attempt, downloads only the selected archive by numeric id into `sealed-build/`, and checks its size, digest, envelope hash and mandatory validation record/reports against the protected config. It costs two requests including the storage GET. The gate repeats live-source and newest-run observations. |
 | `ci aggregate --selection FILE --output DIR` | The seal step of the `aggregate` job. Requires exactly one artifact of its own attempt for every planned lane, reads them by numeric id one at a time, verifies each against the plan, its validation record and the Build of the selection record, and writes `ci-results.json`. |
 | `ci seal-gate --gate build\|packaged [--selection FILE] --output DIR` | The seal step of a gate. A gate runs inside the run it judges, so it authenticates the attempt as far as it exists: the live source; the run as its latest attempt, bound to the controller and the kit; every earlier job with the conclusion its graph expects; every artifact listed once and unexpired. A Build gate then downloads and verifies the complete Build. A packaged gate reads the results index, requires exactly the lane artifacts of its attempt, requires the index to own the Build and the envelope hash of the selection record, and authenticates that Build: unless this run rebuilt it, it must still be the complete bundle of the newest Build run of the live subject, which the gate observes here and once more before the receipt (no lane asks that question). It writes `ci-gate.json`. In a reuse run it decides the reuse again, as `ci reuse-admit` did, and writes `ci-reuse.json`; when the original gates no longer cover the commit it seals nothing and fails. A reader of a tested record later requires the completed graph and the real chronology (`graph.authenticate_gate_timeline`). |
 | `ci gate-status --pr N [--settle] --github-output F` | Read-only: the state each gate may show on the current head of a pull request, from the newest run of each producer. The first call of the status job, `--settle`, runs before any subject and answers only when no gate needs the plan: a draft, no run yet, a run in progress, or a newest run that failed or was cancelled (`settled=true` with `intents`). When a newest run finished successfully it outputs `settled=false`; the job then authenticates the pull request, derives the plan and calls the command again. `success` needs that second call: the newest run is complete, its exact graph authenticates, its tested record binds to the plan, the packaged gate consumed exactly the bundle the Build gate sealed, and the live pull request still has the head, base and test merge of that plan. `pending`: a draft, no run yet, a run in progress or a draft deferral. `failure`: anything else, with one line that says why. `intents` holds for each gate the context string of the protected Build config (with the suffix ` (shadow)` in shadow mode, so that it cannot be a required name), the state, the description and the URL of the deciding run; the target is the head commit of the pull request. |
@@ -289,19 +296,28 @@ Every path is fixed (`build_ci.worker.WORKER_ROOT`, the directory constants of `
   root-request-<operation>/   the private request of one root operation
 ```
 
-The state of a job is `$RUNNER_TEMP/mb-state`, a directory only the runner can enter, whose
-records are written once and never replaced: `identity.json`, `worker-host.json`, `worker.json`,
-`ci-plan.json` and, where a job writes them, `ci-selection.json`, `ci-partitions.json` and
-`ci-reuse-admission.json`. Both accounts are created for the job; an account or a worker root that
-already exists is refused. A hook starts with a umask of 077 as
+The state of a job is `$RUNNER_TEMP/mb-state`, a directory only the runner can enter. Records
+are written once and never replaced: `identity.json` binds the subject; `worker-host.json` and
+`worker.json` bind the home, accounts, tools and config; `ci-plan.json` holds the plan;
+`worker-stage.json`, `worker-run.json` and `worker-seal.json` record staging, execution (including
+failure) and sealing. `ci-selection.json` is written by selection or lane fetch in their separate
+jobs; `build-selection.json` is the later job's received output. `ci-partitions.json` records
+assembled partitions but has no reader; `ci-reuse-admission.json` records the reuse decision.
+The catalogue and job-opening helpers still have minor consolidation work. Accounts are created
+according to `--roles`; an existing account or worker root is refused. A hook starts with umask 077 as
 `sudo -n --user '#<uid>' -- setpriv --no-new-privs -- env -i --chdir=<checkout> <environment> ...`,
-and between two hooks both accounts are terminated and locked.
+and between hooks every allocated account is terminated and locked. Termination revokes linger
+and stops the systemd user manager, runtime directory and user slice, kills by real and effective
+UID, locks/expires the account, revokes the manager again, removes cron and at jobs and proves
+quiescence with a final sweep. The first cleanup failure is retained even when a bounded
+emergency sweep succeeds; failed cleanup never authorizes sealing or upload. Deferred-execution
+tests observe both accounts beyond timer/cron deadlines and exercise an exhausted cleanup deadline.
 
 ## Root operations
 
-Creating, locking, killing and entering an account are fixed `sudo` command lines of
-`build_ci.worker`. All other root work runs in one child process that the runner starts with a
-fixed environment and no inherited descriptors (`root_request.run_root_operation`):
+Creating, locking, killing and entering an account, and revoking its deferred execution, use
+fixed `sudo` command lines of `build_ci.worker`. All other root work runs in one child process
+with a fixed environment and no inherited descriptors (`root_request.run_root_operation`):
 
 ```
 /usr/bin/sudo -n -- <python> -I -B -S <kit>/tools/ci_privileged_bootstrap.py \
@@ -316,8 +332,7 @@ link, owned by the runner): the operation, the nonce, the identity of the closed
 a closed argument object. Root admits the request and the live fence, runs the operation and reads
 the request again unchanged. A request selects no program, hook or destination, and root never
 calls the GitHub API. The closed list is `grammar.CI_ROOT_OPERATIONS`, which the bootstrap mirrors
-without importing the kit (`tests/test_ci_privileged_bootstrap.py` keeps both equal). The verbs
-that are still being finished may add to it; when this page was written it held:
+without importing the kit (`tests/test_ci_privileged_bootstrap.py` keeps both equal):
 
 | Operation | What root does |
 | --- | --- |
@@ -325,6 +340,10 @@ that are still being finished may add to it; when this page was written it held:
 | `grant-controller` | Hands the protected adapter copy in `controller/` to the validator, read-only |
 | `grant-plan-inputs`, `take-derived-plan`, `grant-validation-inputs` | Around `derive_plan`: hands the staged candidate files in `validation-input/` to the validator, takes the one file the hook wrote out of the validator's home, and hands `validation-input/` over again with the plan |
 | `stage-candidate` | Publishes the tested tree, its reduced `.git`, the kit overlay and an optional Gradle seed for the candidate; the only operation whose request names directories, all below the fenced runner home |
+| `stage-bundle` | Gives a lane the verified Build at the protected config's bundle path |
+| `take-derived-runtime` | Takes the validator's native `runtime.json` for strict runner-side decoding |
+| `verify-candidate-source` | Proves the staged tracked sources still equal the tested commit |
+| `freeze-build-export`, `freeze-runtime-export` | Terminates the candidate, copies the export into its sealed root and writes the Build or lane envelope |
 | `grant-build-validation`, `grant-runtime-validation` | Verifies the frozen copy in `sealed-build/`, or in `sealed-runtime/` for one lane, and hands it to the validator, read-only |
 | `freeze-build-validation`, `freeze-runtime-validation` | Terminates the validator, copies exactly the expected reports into `sealed-validation/` and writes the validation record, for a Build export or for one lane |
 
@@ -346,11 +365,14 @@ An artifact is read only by its numeric id through the kit's own client (`build_
 workflow uses a download action. The archive's length and SHA-256 must equal the descriptor before
 it is opened, an archive is at most 512 MiB and a record at most 4 MiB, and every extracted file is
 compared with the envelope. The Pages rotation does not recognise these names.
+Complete Build readers require the validation record and all expected native reports; commands
+with the protected config loaded also bind its digest. A bare export is rejected.
 
 ## Failures
 
 What the commands do in the situations of the design's failure table, and in the one the fourth
-row adds. Every rejection is an `MbError`: exit code 2 and one bounded line on standard error.
+row adds. Rejections are `MbError`s with one bounded stderr line: normally exit 2; unavailable
+or superseded evidence uses exit 3, including expired original evidence during `ci batch-settle`.
 
 | Situation | Behaviour |
 | --- | --- |
@@ -366,7 +388,7 @@ row adds. Every rejection is an `MbError`: exit code 2 and one bounded line on s
 | Malformed or ambiguous metadata, a digest, hash or graph mismatch, an unsafe archive | A rejection. Nothing turns it into "not found" |
 | A GitHub API failure | The client sends a request at most four times (transport errors, HTTP 408, 429, 500, 502, 503, 504 and rate-limit answers, with delays of at most 30 seconds); then the command fails, as it does when its request budget is spent. `ci gate-status` then produces no intent at all |
 | A rerun of failed jobs only | A job or an artifact of an earlier attempt is refused with "a failed-jobs-only rerun mixes attempts; rerun all jobs", and a selection record serves only the attempt that requested it |
-| An artifact disappears after it was selected | `ci fetch-build` repeats the selection immediately before the download and requires the same unexpired descriptor; `ci seal-gate` observes the source, the run and its artifacts once more before it returns |
+| An artifact disappears after it was selected | `ci fetch-build` fails its numeric-id download; it never selects a replacement. `ci seal-gate` observes the live source, newest run and artifacts again before returning |
 | A target, a lane or a batch member is missing | `ci assemble` and `ci aggregate` require exactly one artifact of their own attempt for every planned unit, and a gate one native receipt for every planned unit. `ci batch-settle` refuses a batch whose rebuilt commits differ from its manifest |
 | A Pages, AI review or notification failure | Outside this pipeline: no `ci` command reads or writes Pages state, and the Pages workflows are unchanged |
 
@@ -374,15 +396,18 @@ Hook timeouts and job deadlines are separate bounds. The configuration's six-hou
 per hook, not a promise that every admitted configuration fits a whole job; the job deadline
 remains authoritative and a timed-out job cannot produce a successful gate. The generic test
 configuration permits a 60-minute policy hook inside a 60-minute job and a 120-minute target hook
-inside a 120-minute job, before setup, planning and verification. The packaged input job permits
+inside a 120-minute job; planning and verification make those hook sums 70 and 140 minutes,
+before other setup. The packaged input job permits
 a 10-minute planning hook plus a 90-minute Build wait inside 100 minutes. This distinction is
-retained deliberately as `CiConfiguredTimeoutTests.test_no_admitted_hook_timeout_is_as_long_as_the_job_that_runs_it`
+retained by the coordinator's explicit scope decision as
+`CiConfiguredTimeoutTests.test_no_admitted_hook_timeout_is_as_long_as_the_job_that_runs_it`
 in `tests/test_workflow_ci_policy.py` (`expectedFailure`). No adapter timing has been measured for
 the mods: choosing their budgets and setup margin belongs to K7 and the Q/B migrations.
 
 ## Request budget
 
-The token of a workflow run may send 1,000 REST requests an hour for its repository. Every
+The allowance for a job's `GITHUB_TOKEN` is 1,000 REST requests per hour per repository, shared
+by runs in that repository; a new run does not get a separate allowance. Every
 command that reads the API therefore builds its client with an explicit `max_requests`, retries
 included (`commands.api_client`), a test pins the number of requests of a typical case, and
 objects named by SHA and the job list of a completed attempt are fetched once per command
@@ -390,11 +415,11 @@ objects named by SHA and the job list of a completed attempt are fetched once pe
 
 | Command | Requests in the pinned case | Cap in `model/limits.py` | Pinned in |
 | --- | --- | --- | --- |
-| `ci subject` | 4 for a pull request, 5 for a protected subject | `MAX_CI_SUBJECT_REQUESTS`, 16 | `tests/test_ci_commands_subject.py` |
+| `ci subject` | 4 for a ready pull request, 5 for a protected subject; 1 with `--candidate` | `MAX_CI_SUBJECT_REQUESTS`, 16; `MAX_CI_DERIVED_SUBJECT_REQUESTS`, 4 | `tests/test_ci_commands_subject.py` |
 | `ci plan` | 0 with a candidate checkout; otherwise the tree and one blob for each candidate file, 3 to 11 | `MAX_CI_PLAN_REQUESTS`, 24 | `tests/test_ci_lifecycle.py` |
 | `ci reuse-admit` | 38 for an admitted reuse, 11 when the merged tree differs, 1 for a push that merges no pull request | `MAX_CI_REUSE_ADMIT_REQUESTS`, 96 | `tests/test_ci_reuse.py` |
 | `ci select-build` | 17 for a pull request whose Build is complete and one more for every poll before that; 15 for a protected subject | `MAX_CI_SELECT_BUILD_REQUESTS`, 155 | `tests/test_ci_commands_packaged.py` |
-| `ci fetch-build` | 21 for a pull request; 18 for a selected and 15 for a rebuilt Build | `MAX_CI_FETCH_BUILD_REQUESTS`, 48 | `tests/test_ci_commands_packaged.py` |
+| `ci fetch-build` | 2 for every route, including the storage GET | `MAX_CI_FETCH_BUILD_REQUESTS`, 8 | `tests/test_ci_commands_packaged.py` |
 | `ci assemble` | 15 and 2 for each target: 49 for 17 targets | `MAX_CI_ASSEMBLE_REQUESTS`, 816 | `tests/test_ci_commands_build.py` |
 | `ci aggregate` | 13 and 2 for each lane: 81 for 34 lanes | `MAX_CI_AGGREGATE_REQUESTS`, 816 | `tests/test_ci_aggregate.py` |
 | `ci seal-gate` | 15 for a Build gate, 23 for the packaged gate of a pull request, 47 for the gate of a reuse run | `MAX_CI_GATE_REQUESTS`, 96 | `tests/test_ci_gate.py`, `tests/test_ci_reuse_seal.py` |
@@ -402,21 +427,41 @@ objects named by SHA and the job list of a completed attempt are fetched once pe
 | `ci batch-prepare` | 10 and 3 for each member: 160 for 50 | `MAX_CI_BATCH_PREPARE_REQUESTS`, 216 | `tests/test_ci_batch_commands.py` |
 | `ci batch-settle` | 3, 28 for both gates and at most 5 for each member: 281 for 50 | `MAX_CI_BATCH_SETTLE_REQUESTS`, 348 | `tests/test_ci_batch_commands.py` |
 
-Still moving: these numbers are pending. As the workflows stood when this page was written, one
-pull-request generation of the largest mod (Quick Skin: 17 targets, 34 lanes) would cost about
-1,860 requests, more than the hourly allowance. The Build run accounts for about 160 of them and
-the 34 lane jobs for about 1,430, because every lane job authenticates the subject, selects the
-Build again and fetches it. Two changes in progress cut this: the hand-over of the selection
-record described above, with a lighter `ci fetch-build`, and a `ci subject` that costs one request
-in a job that holds the candidate checkout. The total of a generation then becomes a pinned test;
-until it does, the figures of those three commands and every total are provisional.
+`tests/ci_request_budget.py` derives the whole-generation ledger from the actual workflow
+commands; `test_ci_generation_budget.py` pins the native fixture totals. Each total includes
+Build, packaged E2E and one final status evaluation (both `--settle` and verified evaluation,
+including subject and plan). Jobs and artifact listings fit one page; waiting polls are zero.
+
+| Case | Targets / lanes / extra plan inputs | Build | Packaged | Status | Total |
+| --- | --- | --- | --- | --- | --- |
+| Synthetic hosted command chain | 2 / 3 / 1 | 61 | 92 | 58 | 211 |
+| Quick Skin fixture | 17 / 34 / 1 | 106 | 247 | 58 | 411 |
+| Block Pops fixture | 10 / 20 / 0 | 82 | 174 | 57 | 313 |
+
+The hosted pipeline observes every command's traffic through `FakeGitHub` and compares it with
+this ledger while running the real workflow-derived command lines, files, Git, accounts, hooks
+and root operations. Each archive costs two counted requests: the REST redirect and a storage
+GET, although the storage GET is not charged to the REST allowance. This scope excludes
+third-party Actions' internal traffic, retries, other generations and earlier status events.
+It is not a measurement of a live GitHub generation.
+
+Each pending selection poll adds one request: Quick Skin plus 89 pending polls is 500, below
+the target of 600. `MAX_CI_GENERATION_REQUESTS = 440` is a test-only regression budget for the
+no-wait native fixtures, not runtime admission. The structural maxima of 256 targets and 256
+lanes cost at least 2,287 requests before extra listing pages, exceeding the 1,000 allowance.
+The coordinator explicitly retained those structural bounds without promising that such a
+generation fits; concurrent runs, polling and real hosted traffic must be considered at adoption.
 
 ## What only a hosted canary can confirm
 
-The unit tests fake the GitHub API, and `tests/ci_linux_worker.py` runs the accounts, `sudo` and
-the root operations on a GitHub-hosted runner in the kit's own CI. Neither runs a managed caller on
-GitHub. The following rests on documentation, on fixtures or on single observations, and the
-canary of step K7 has to show it before a mod adopts the pipeline:
+The kit's own CI runs `tests/ci_linux_worker.py` for accounts, `sudo` and root operations and
+`tests/ci_linux_deferred.py` for deferred execution. T1 CI run 37847494098 at `7c25343` showed
+both accounts denied access to existing Docker/containerd sockets on Python 3.11, 3.12 and 3.13;
+`pkexec` was absent. That proves socket access denial on those images, not daemon functionality
+or a `pkexec` path. P1's `tests/ci_linux_pipeline.py` runs the Build → packaged → status command
+lines extracted from the workflows with real accounts, Git, files, root operations and produced
+artifacts, but GitHub and its orchestration are still fake. Neither is a managed caller running
+on GitHub. K7 must still establish:
 
 - that a run of a managed `pull_request_target` caller and its artifacts are recorded under the
   head commit and branch of the pull request, and that a listing filtered by branch, `head_sha` and
@@ -426,14 +471,15 @@ canary of step K7 has to show it before a mod adopts the pipeline:
   kit workflow at the kit commit, and whether a kit workflow whose calling job was skipped appears;
 - how the jobs API names a skipped calling job, a matrix job that was skipped before it expanded
   and a skipped job of the caller. The listings in `tests/fixtures/ci_graphs/` assume these names;
-- that an artifact's `created_at` lies inside the window of its upload step once both are cut to
-  whole seconds, and which timestamp shapes the API returns;
+- that artifact `created_at` fits the upload window with the two-second service/runner clock
+  tolerance after whole-second normalization, and which timestamp shapes the API returns;
 - that marking a draft ready starts a new run for the same head, which the wait for a Build relies
   on to leave a deferral behind;
-- that the kit workflows run as written on a hosted `ubuntu-24.04` image: the steps of a job have
-  run as separate commands in tests, never as one job, and the workflows pass the image's
-  `JAVA_HOME_17_X64`, `JAVA_HOME_21_X64` and `JAVA_HOME_25_X64` as JDK homes;
-- how many API requests a real generation spends against the hourly allowance of its token;
+- that GitHub executes the complete callers and reusable jobs as written on `ubuntu-24.04`,
+  including real job-output selection hand-over, upload behavior and the image's
+  `JAVA_HOME_17_X64`, `JAVA_HOME_21_X64` and `JAVA_HOME_25_X64` homes;
+- how much real generation traffic, including third-party Actions, spends the repository's
+  hourly `GITHUB_TOKEN` allowance;
 - that a `workflow_run` event of a producer run carries the head branch, head commit and head
   repository by which the status caller finds the pull request, and that the pull requests GitHub
   lists for a pushed commit include the one post-merge reuse looks for;

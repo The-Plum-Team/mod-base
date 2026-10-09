@@ -179,8 +179,8 @@ exit non-zero on any difference; it writes its report only when everything holds
 ## What protected code does around a hook
 
 Every step below is one `ci` command of a job; [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md) describes
-the root operations and the state records behind them. Both accounts are terminated and locked
-between two steps, so nothing a hook starts outlives its step.
+the root operations and the state records behind them. Allocated accounts are terminated and
+locked between hooks; cleanup also revokes their deferred execution and fails closed on error.
 
 1. **Plan** (`ci plan`, every job). Protected code stages the candidate files in
    `validation-input/`, runs `derive_plan`, parses `plan.json`, adds the authenticated identity,
@@ -191,9 +191,13 @@ between two steps, so nothing a hook starts outlives its step.
    detached at the tested commit and hold exactly the tested tree: an untracked or ignored file
    stops the job before anything is copied. Root then gives the candidate account the
    `repository/` described above (the tracked files, the curated `.git`, the kit at
-   `out/mod-base-kit`), seeds `GRADLE_USER_HOME` when the job restored a cache and, in a lane
+   `out/mod-base-kit`), seeds `GRADLE_USER_HOME` when `--gradle-seed` is supplied and, in a lane
    job, copies the complete Build of `sealed-build/` to `repository/<bundle.path>`. Nothing of the
    candidate has run at this point.
+   Current workflows supply no seed and start with empty Gradle homes; cache restore/save and
+   native lane system packages before fencing remain adoption work. The overlay contains the
+   protected executing pin. A candidate future-pin bump currently fails bootstrap stamp matching
+   and needs separate admission/staging before Q/B adopts that upgrade route.
 3. **Run** (`ci worker-run`). A job runs one candidate hook:
    * `policy` receives its checkout and no extra variable.
    * `build_target` receives its checkout and `MB_TARGET_ID`.

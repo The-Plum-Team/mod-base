@@ -1,4 +1,4 @@
-a2762dc1f34d57b2f7be02c0cc46c26518ce7a6850fe409c047769496a0ec9a3  ./template/managed/.gitattributes
+cad55bd8179501ba4d0e798eab9495f32fc1e038baef975c4b2a2747dca424b5  ./template/managed/.gitattributes
 e112952ffd5892abcbd9bca33e3cb0aaffee22a1c7c2a42a50bc768eada9899b  ./template/managed/.github/workflows/mod-base-build.yml
 d4789a2b35ed36b902596ca2c92325563e17f3d8d51699a952d9c602f93804ff  ./template/managed/.github/workflows/mod-base-gate-status.yml
 39eb62809ec3737142e31d96ad9375837940d476ec9169ed4eba8e0dce6fe248  ./template/managed/.github/workflows/mod-base-guard.yml

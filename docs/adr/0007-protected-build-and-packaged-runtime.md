@@ -18,7 +18,7 @@ helpers run from the candidate checkout. Block Pops runs from a protected contro
 the candidate to a disposable account, but compiles everything twice on one runner behind a global
 lock. The design combines Quick Skin's topology with Block Pops' boundary in the kit. A review of
 the first implementation on this branch found library code that no command or workflow called and
-several wrong assumptions about GitHub; the decisions D1 to D10 below settle them.
+several wrong assumptions about GitHub; the decisions below settle the shared contracts.
 
 ## Decision
 
@@ -55,27 +55,24 @@ and expiry time).
 
 ### Document kinds
 
-All are new, strict, canonical JSON at schema version 1. The previous release rejects each as an
-unknown kind (`tests/test_schema_evolution.py`).
+All thirteen are new, strict, canonical JSON at schema version 1. The previous release rejects
+each as an unknown kind (`tests/test_schema_evolution.py`).
 
 | Kind | Holds |
 | --- | --- |
 | `mod-base.build.config` | The mod's protected Build configuration, `scripts/ci/mod-base-build.json`: adapter entry points with their hashed import closure, input and bundle paths, status contexts, timeouts. |
 | `mod-base.build.plan` | Targets and lanes derived from the release inventory and scenario contract, with every planned output, under the identity. |
 | `mod-base.build.envelope` | The inventory of one sealed Build export, a target partition or the complete bundle: path, size, hash, lane and role of every file. |
-| `mod-base.ci.runtime-envelope` | The inventory of one sealed runtime export, a lane or the complete results, with the Build it ran against. |
+| `mod-base.ci.runtime-envelope` | The inventory of one lane's sealed runtime export, with the Build it ran against. |
 | `mod-base.ci.validation` | The validator's receipt: the native verification reports of one hook and unit, bound to plan, run and input hash. |
 | `mod-base.ci.selection` | The exact Build a packaged run selected: its full descriptor and envelope hash. |
 | `mod-base.ci.gate` | The tested record of a Build or packaged gate: its artifacts, owning Build and native receipts. |
 | `mod-base.ci.results` | The complete packaged results of one attempt as an index: every lane's sealed artifact with the hashes of its envelope, validation record and report, and the owning Build. |
 | `mod-base.ci.reuse` | A direct reference from a merged commit to both original pull-request gate records. |
 | `mod-base.ci.execution` | A private runner-to-root record of one hook execution: bounded log, nonce and context. |
-| `mod-base.ci.root-request` | A private request to the root child to seal a Build export. |
-| `mod-base.ci.runtime-root-request` | The same for a runtime export. |
+| `mod-base.ci.root-request` | A private request for one operation of `grammar.CI_ROOT_OPERATIONS`: host fencing, staging, grants, source proof, export sealing or validation sealing. The nonce and closed arguments bind it to the runner and job. |
 | `mod-base.ci.activation` | The profile activation mode of a mod, `site/mod-base-build-activation.json`. |
 | `mod-base.ci.batch` | A batch manifest: base, ordered members with their heads, trees and patches, resulting tree. |
-
-`mod-base.ci.kit-installation` existed in the first implementation and is removed by D4.
 
 ### Bounds
 
@@ -107,7 +104,7 @@ because a kit job seals exactly one tree. The limits inside a JAR (8,192 entries
 32 nested archives to depth 4) stay with Block Pops' protected verifier, the code that opens the
 JAR. The native 512 MiB fan-in budget is the aggregate bound above.
 
-Two scopes are stricter than the mods and are decided here, for the owner to confirm:
+Three scopes are stricter than the mods and await owner confirmation:
 
 - The 512 MiB archive cap applies to every profile and artifact kind. The design names it for Quick
   Skin; Block Pops' evaluator admits 2 GiB. The kit downloads an archive into memory within the
@@ -116,11 +113,13 @@ Two scopes are stricter than the mods and are decided here, for the owner to con
   Measured bundles: Quick Skin 192.8 MiB, Block Pops 118.6 MiB.
 - 512 files and 256 MiB count a whole lane, where both mods count each evidence profile (one
   scenario of a lane). Measured largest lane: 141 files and 52.7 MiB (Quick Skin, seven scenarios).
+- Quick Skin's native-report cap is 4 MiB, below its own 16 MiB manifest reader.
 
-One measurement is an open problem. Block Pops' aggregate of 20 lanes is 764 files and 218 MiB and
-fits the fan-in budget. Quick Skin's 34 lanes are about 4,760 files and 1.2 GiB of archives, so its
-complete runtime export cannot be the byte union of its lanes. The bound is not raised; what that
-export holds for Quick Skin is still to be decided.
+Block Pops' aggregate of 20 lanes is 764 files and 218 MiB; Quick Skin's 34 lanes are about 4,760
+files and 1.2 GiB of archives. Both use `mod-base.ci.results`: the aggregate validates each lane
+one at a time and seals an index of its descriptor and receipt hashes. It never unions the lane
+bytes, and the fan-in bound is unchanged. Consumers download only the lanes they need; original
+runtime consumption after merge remains Q9/B6.
 
 ### Graphs
 
@@ -166,9 +165,9 @@ write native files only; the kit inventories, hashes and binds them.
 - **D2. An exact graph includes the caller's jobs.** The guard the design requires can only be
   another job of the same run, so a graph of callee jobs alone rejects every real run.
 - **D3. One process model.** Privilege is taken in one audited place, and root needs no token.
-- **D4. The private interpreter and installation tower is removed.** No design sentence asks for
-  it, its trust is circular (the installer is imported from the checkout it would protect), and it
-  cannot work on a hosted image.
+- **D4. Use the verified checkout and admitted host tools.** The root bootstrap checks the kit
+  digest before importing the closed operations; the host fence and tool admission protect the
+  interpreter and JDKs. There is no separate kit installation or private interpreter protocol.
 - **D5. A host fence for hosted images.** On a hosted runner the tool caches, JDKs and
   `/usr/local/bin` are world-writable, so any local account could replace the interpreter. Root
   removes that write access and proves none is left before a worker account exists.
@@ -183,6 +182,8 @@ write native files only; the kit inventories, hashes and binds them.
   and a timeout may reach GitHub's 360 minutes.
 - **D10. Only the mod publishes required statuses.** The kit supplies a read-only evaluation; the
   App credentials and the context strings stay in a caller-owned job.
+- **D11. Complete packaged results are an index.** Descriptors and receipt hashes preserve exact
+  lane coverage without forcing all runtime bytes into a single archive.
 
 ## Consequences
 
@@ -192,6 +193,10 @@ write native files only; the kit inventories, hashes and binds them.
   immediate predecessor release, derived from the changelog.
 - Pages document shapes, `ADAPTER_API`, the pixel metric version and existing workflow names do not
   change. The planned release is v1.1.0.
+- `BUILD_ADAPTER_API = 1` is separate. The current worker overlay supplies the protected executing
+  kit pin; future candidate-pin staging needs implementation before Q/B adopts that upgrade route.
+  The documented expected failure and the separate hook/job timeout decision remain in
+  [BUILD-PROTOCOL.md](../BUILD-PROTOCOL.md).
 - Block Pops' source artifacts are kept seven days instead of one: about 0.5 GiB per pull-request
   generation by today's sizes.
 - `tests/fixtures/ci_native` holds the inventories, lane lists, output names, job listings and
@@ -211,5 +216,5 @@ write native files only; the kit inventories, hashes and binds them.
   Block Pops' boundary withholds.
 - Per-profile archive caps with Block Pops at 2 GiB: needs a streaming download the kit does not
   have, for a bundle that is a quarter of the common cap today.
-- Raising the fan-in budget until Quick Skin's lanes fit: forbidden by the design; the format of
-  the complete export is the thing to decide.
+- Raising the fan-in budget until Quick Skin's lanes fit: the results index preserves the bound
+  while retaining the descriptors and receipts needed to authenticate every lane.

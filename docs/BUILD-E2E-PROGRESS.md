@@ -1,74 +1,86 @@
 # Build and packaged E2E: status
 
-Where the implementation of [BUILD-E2E-DESIGN.md](BUILD-E2E-DESIGN.md) stands, by the steps of its
-section "Independently mergeable migration". [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md) explains how
-the pieces work and [ADR 0007](adr/0007-protected-build-and-packaged-runtime.md) why.
+Where the implementation of [BUILD-E2E-DESIGN.md](BUILD-E2E-DESIGN.md) stands, by its
+independently mergeable migration steps. [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md) describes the
+commands and evidence; [ADR 0007](adr/0007-protected-build-and-packaged-runtime.md) records the decisions.
 
-Nothing is released and nothing is active. The work is the unreleased section of `CHANGELOG.md`
-(planned v1.1.0). No mod pins it, no mod has an activation manifest, and no managed Build or
-packaged E2E caller has run on GitHub. The design is a draft that awaits the owner's agreement,
-and ADR 0007 is "Proposed". **Step K7, the release candidate and the hosted canary, has not been
-done and cannot be done without the owner.** Two parts of the kit's own steps were still being
-changed when this page was written; "Still moving" lists them.
+K1–K6 now compose through registered commands and their workflow or operator entries. Nothing
+is released or active: planned v1.1.0 remains unreleased, no mod pins it or has an activation
+manifest, and no managed Build/E2E caller has run on GitHub. The design awaits owner agreement;
+ADR 0007 is Proposed. **K7, Q1–Q10, B1–B7 and GitHub settings remain untouched.**
 
-## How to read the evidence
+## Evidence and its scope
 
-- **Suite**: a module of `tests/` that the ordinary suite runs on Python 3.11, 3.12 and 3.13. The
-  GitHub API is always a fake (`mod_base.github.fake.FakeGitHub`). The newer modules use real
-  files, Git and processes; several older ones also replace system calls or account operations and
-  say so in their docstrings.
-- **Hosted**: a class of `tests/ci_linux_worker.py`. It creates the real accounts and uses `sudo`,
-  so the suite does not collect it. The kit's CI runs it on a GitHub-hosted runner in every Python
-  leg (step "Require real disposable-account termination on Linux").
-- **Workflow policy**: `tests/test_workflow_ci_policy.py` and one module for each kit workflow.
-  They read the YAML against the registry tables of `workflow.py`, run actionlint and shellcheck
-  and execute every `run:` body with the kit command replaced by a recorder.
+- **Ordinary suite:** Python 3.11–3.13; GitHub is `FakeGitHub`. Files, Git and processes are real
+  in the integration cases; older isolated tests also replace system/account operations.
+- **Hosted account proof:** `ci_linux_worker.py` (128 tests) and `ci_linux_deferred.py` (2 tests)
+  run separately in the kit's own CI on each Python version. They exercise the real accounts,
+  host fence, root operations, cleanup and deferred-execution deadlines.
+- **Pipeline proof:** `ci_linux_pipeline.py` runs workflow-derived command lines through the
+  entire synthetic PR Build → packaged → status chain, with real checkouts, hooks, accounts,
+  root launches, selection hand-over and generated upload ZIPs. Both status intents succeed;
+  corrupt lane ZIP, missing target, newer Build attempt and draft controls reject. GitHub,
+  caller orchestration and third-party Actions remain fake. The coordinator's integrated
+  Python 3.12 run passed in 241.342 seconds, observing 13 real fence launches and 211 requests;
+  required CI 37865793803 failed `build/plan` worker preparation on all three Python versions
+  ("tool closure changed after protected admission"); its correction and final hosted proof are pending.
+- **Workflow policy:** registry/YAML checks, actionlint, shellcheck and execution of shell bodies.
+  The CI `Test` gate requires the ordinary, worker, deferred and pipeline jobs in every Python leg.
 
-None of these runs a job of the pipeline on GitHub Actions. What only such a run can show is the
-last section of BUILD-PROTOCOL.md.
+The final section of BUILD-PROTOCOL.md lists what only K7's managed-caller canary can establish.
+T1 CI 37847494098 at `7c25343` already showed both accounts denied access to existing
+Docker/containerd sockets on all three Python versions; `pkexec` was absent, so that path and
+actual daemon functionality are not claimed.
 
 ## The kit (K1 to K7)
 
-Module names are relative to `src/mod_base/build_ci/` and test names to `tests/`.
+Paths below are relative to `src/mod_base/build_ci/` unless otherwise stated.
 
-| Step | What exists | Evidence | What remains |
-| --- | --- | --- | --- |
-| K1: protocol, schemas, graphs | ADR 0007. Thirteen document kinds at version 1 with strict validators (`protocol.py`, `records.py`, `runtime_schema.py`, `validation.py`, `handoff.py`, `root_request_schema.py`, `config.py`, `activation.py`, `batch_schema.py`) and the compatibility ledger `tests/fixtures/documents/compatibility.json`. The graph contract (`graph.py`, the names in `workflow.py`) with a literal job listing of every mode in `tests/fixtures/ci_graphs/`. The bounds in `model/limits.py`. Parity fixtures of both mods in `tests/fixtures/ci_native/`. | Suite: `test_schema_evolution.py`, `test_ci_protocol.py`, `test_ci_records.py`, `test_ci_results_index.py`, `test_ci_runtime_envelope.py`, `test_ci_limits.py`, `test_ci_native.py`, `test_ci_native_plan.py`, `test_ci_gate_timeline.py`. | The owner's agreement to the design and to the ADR, and the owner's confirmation of the two bounds that are stricter than the mods' own: one 512 MiB archive cap for every profile, and 512 files and 256 MiB counted for a whole lane. ADR 0007 needs two corrections: it lists the kind `mod-base.ci.runtime-root-request`, which no longer exists, and it calls the format of Quick Skin's complete results undecided, which `mod-base.ci.results` settled. |
-| K2: worker, sealing, second validator | Accounts and execution (`worker.py`), the host fence (`host.py`), tool admission (`toolchain.py`), the root channel (`root_request.py`, `root_request_schema.py`, `root_request_operations.py`, `tools/ci_privileged_bootstrap.py`), candidate staging (`worker_preparation.py`, `worker_source.py`, `worker_git.py`, `worker_overlay.py`, `gradle_cache.py`, `source.py`), sealing and verification (`exports.py`, `runtime_freeze.py`, `runtime_exports.py`, `inputs.py`, `runtime_inputs.py`, `controller.py`, `validation.py`, `handoff.py`, `runtime_handoff.py`), the policy runner's rules (`policy.py`) and the adapter contract (`adapter.py`, `config.py`, `planning.py`, `identity.py`, [BUILD-ADAPTER.md](BUILD-ADAPTER.md)). `ci subject` writes the identity record, and `lifecycle.py` composes the rest into `ci worker-prepare`, `ci plan`, `ci worker-stage`, `ci worker-run`, `ci worker-seal`, `ci worker-validate` and `ci worker-finish`. A synthetic mod with all eight hooks is `tests/fixtures/ci_mod/`. | Hosted: `LinuxHostFenceTests`, `LinuxWorkerTests`, `LinuxCandidateStagingTests`, `LinuxLifecycleCommandTests`, `LinuxCandidateCommandTests`, `LinuxWorkerValidateTests`, `LinuxJobChainTests` and the copy classes `LinuxSourceTests`, `LinuxControllerSourceTests`, `LinuxValidationPlanTests`, `LinuxValidationExportTests`, `LinuxExportCopyTests`. Suite: `test_ci_lifecycle.py`, `test_ci_worker*.py`, `test_ci_host.py`, `test_ci_toolchain.py`, `test_ci_root_request*.py`, `test_ci_privileged_bootstrap.py`, `test_ci_mod.py`, `test_ci_adapter.py`, `test_ci_planning.py`, `test_ci_identity.py`, `test_ci_commands_subject.py`, `test_ci_policy.py`, `test_ci_validated_export.py`. | Neither mod has an adapter for `BUILD_ADAPTER_API = 1` (Q1, B1): the hooks have run only for the synthetic mod. Planning does not yet refuse an output whose path collides with a report name of the artifact it is uploaded in; the uploading job fails instead. The kit workflows pass no Gradle seed, so every candidate starts with an empty Gradle home. Several older suite modules (`test_ci_runtime_freeze.py`, `test_ci_runtime_handoff.py`, `test_ci_runtime_inputs.py`, `test_ci_execution_handoff.py` and `test_ci_host.py` among them) replace system calls or account operations, so that code is proven only where a hosted class runs it. |
-| K3: Build and packaged workflows | `.github/workflows/build.yml` (`plan`, `policy`, `target`, `assemble`, `gate`), `select-build.yml` (`select`), `packaged-e2e.yml` (`input`, `lane`, `aggregate`, `gate`) and `gate-status.yml` (`evaluate`), with their registry and job tables in `workflow.py`. Selection, transport and gates (`selection.py`, `transport.py`, `describe.py`, `gate.py`, `reads.py`, `authenticate.py`, `archive.py`) with `ci select-build`, `ci fetch-build`, `ci assemble`, `ci aggregate` and `ci seal-gate`. The status evaluation (`status.py`) with `ci gate-status`, which settles what needs no plan before it derives one. | Workflow policy: `test_workflow_ci_policy.py`, `test_workflow_build.py`, `test_workflow_select_build.py`, `test_workflow_packaged_e2e.py`, `test_workflow_gate_status.py`. Suite: `test_ci_build_selection.py`, `test_ci_packaged_selection.py`, `test_ci_latest_download.py`, `test_ci_transport.py`, `test_ci_describe.py`, `test_ci_commands_build.py`, `test_ci_commands_packaged.py`, `test_ci_packaged_job_sequence.py` (a whole packaged run with the command lines of its workflow), `test_ci_aggregate.py`, `test_ci_gate.py`, `test_ci_gate_transport.py`, `test_ci_commands_status.py`. Hosted (a real Linux filesystem, no accounts): `LinuxBuildTransportTests`, `LinuxBuildAssemblyTests`, `LinuxGateTransportTests`, `LinuxLatestBuildDownloadTests`, `LinuxBuildArchiveTests`. | The request budget: see "Still moving". No workflow has run on GitHub (K7), so whether a job output carries the selection record of the `input` job intact to the later jobs of a packaged run rests on GitHub's documented limits (1 MB for the outputs of one job; the record is about 4 kB). |
-| K4: managed callers, activation, bootstrap | The closed registry of rendered callers and the activation check of `template check`, `sync` and `init` (`src/mod_base/template/tool.py`); the activation manifest and its transitions (`activation.py`, `transition.py`); the commands `template activation` and `template transition`; the bootstrap's `bump`, which requires the target kit to read the manifest and restores the pin files when its write phase fails. The managed templates in `template/managed/.github/workflows/`: `mod-base-guard.yml`, which all three callers call first, `mod-base-build.yml`, `mod-base-packaged-e2e.yml` and `mod-base-gate-status.yml` (`guard`, `locate`, `evaluate`, `publish`), the only writer of the two gate statuses. The procedures are in [OPERATIONS.md](OPERATIONS.md#builde2e-activation-and-rollback). | Suite: `test_ci_activation.py`, `test_template_activation.py`, `test_template_transition.py`, `test_template_rendered_registry.py`, `test_managed_ci_callers.py`, `test_managed_status_caller.py`, `test_bootstrap_bump_planning.py`, `test_template_released_bootstraps.py`, `test_ci_controller_activation.py`. | The status caller publishes nothing until the owner has created the environment `mod-base-gate` with the variable and the secret of the mod's App in the mod's repository; until then a run of it fails in `publish` and can never publish a success instead. The admission of a transition is library code and the operator command `template transition`; no workflow runs it. The managed `.gitattributes` has no `eol=lf` rule for the four callers. |
-| K5: batches | `batch.py`, `batch_git.py`, `batch_schema.py` and `commands_batch.py`: `ci batch-prepare` and `ci batch-settle`, with the kind `mod-base.ci.batch`. | Suite: `test_ci_batch.py`, `test_ci_batch_git.py`, `test_ci_batch_manifest.py`, `test_ci_batch_settle.py`, `test_ci_batch_commands.py`, `test_ci_batch_api.py`. | No workflow, managed caller or written procedure starts the two commands. They need the token of an App or of an automation account that may push `batch/*` branches and open and close pull requests, and the allowed-path list of the mod's protected policy. |
-| K6: post-merge reuse | The decision (`reuse.py`: `admit_post_merge_reuse` with its three outcomes, admitted, full run with a reason, or an error), `ci reuse-admit` in the `plan` job of `build.yml` and in `select-build.yml` (`commands_reuse.py`), the gate of a reuse run, which decides again and seals the reference `ci-reuse.json` (`gate.seal_reuse`), and the reader `reuse.download_reuse_reference`. The readers of the original evidence of a merged pull request (`authenticate.authenticate_merged_pr_identity`, `transport.download_merged_gate_pair` and `transport.download_merged_build`). The policy digest that reuse compares covers the mod's caller workflows and activation manifest, so a merge that changes one of them is tested in full. | Suite: `test_ci_reuse.py`, `test_ci_reuse_seal.py`, `test_ci_merged_unavailable.py`, `test_ci_records.py`, `test_ci_merged_pr.py`, `test_ci_merged_build_selection.py`, `test_ci_merged_gate_transport.py`, `test_ci_merged_gate_pair.py`, `test_ci_merged_build.py`, and the listings `build-reuse.json` and `packaged-reuse.json`. | No command consumes a reuse reference yet: the status evaluation covers pull requests only, and the mods' own consumers need readers (Q9, B6). Original runtime consumption after a merge belongs to Q9/B6: read the results index and the individual lanes a consumer needs. No reuse run on GitHub (K7). |
-| K7: release candidate and hosted canary | Nothing for this pipeline. `canary/` and the canary procedure of OPERATIONS.md cover Pages only. The synthetic mod `tests/fixtures/ci_mod/` is the fixture the canary is to use. | None. | All of it, and it needs the owner: the immutable tag of the release candidate, which the owner's release procedure creates; an isolated test repository with the managed callers, an activation manifest and an App that can publish statuses; then the runs the design's row K7 lists. A tag whose canary fails gets no Release, and no mod pins it. |
+| Step | Delivered and checked | Remaining constraints |
+| --- | --- | --- |
+| K1: protocol, schemas, graphs | Thirteen strict v1 kinds, compatibility ledger, literal caller/callee graph fixtures, native plan/output parity and the complete limits ledger. `mod-base.ci.results` is the lane-descriptor/receipt index. | Owner ratification of the design/ADR and narrower kit bounds: 512 MiB archives for every profile; 512 files/256 MiB for a whole lane; Quick Skin native reports capped at 4 MiB versus its native 16 MiB reader. |
+| K2: worker, sealing, second validator | `subject`, `worker-prepare`, `plan`, `worker-stage`, `worker-run`, `worker-seal`, `worker-validate`, `worker-finish` compose real staging, protected-pin overlay, hook execution, source proof, envelopes and receipts. Hosted tests cover account/root and deferred cleanup, including failure paths. | Native adapters remain Q1/B1. Workflows supply no Gradle seed (empty candidate Gradle homes); cache restore/save and lane system packages before fencing remain adoption work. Reserved record/report path collisions fail later at upload preparation, not planning. |
+| K3: Build and packaged workflows | `build.yml`, `select-build.yml`, `packaged-e2e.yml`, `gate-status.yml`; `select-build`, `fetch-build`, `assemble`, `aggregate`, `seal-gate`, `gate-status`. P1 runs the full synthetic command chain and negative controls. Complete Build validation records/reports are mandatory; loaded protected config digests are bound. | Managed caller execution, job names/references, real uploads, selection job-output transport and real request allowance still require K7. Hook/job timing needs native adoption measurements. |
+| K4: callers, activation, bootstrap | Four registered managed callers, activation checks in `template check/sync/init`, `template activation/transition`, bootstrap bump/rollback checks, canonical-base PR filters and LF checkout rules. | Owner creates the `mod-base-gate` environment and App variable/secret before the status caller is active. Transition admission is an operator command; no workflow runs it. Future candidate kit pins remain unsupported below. |
+| K5: batches | `ci batch-prepare`, `ci batch-settle`, strict batch manifests and real-Git rebuild/settlement tests. CLI flags and effects are in the protocol. | No workflow or managed caller starts them. The owner/adopter must supply a reviewed batch procedure, protected allowed-path list and App/automation credentials allowed to push `batch/*` and open/close PRs. |
+| K6: post-merge reuse | `ci reuse-admit` is wired into Build planning and protected selection; reuse gates re-admit and seal `ci-reuse.json`. Original gate-pair and Build readers verify retained evidence; policy digests cover the activation manifest and four callers. | No command consumes reuse references yet. Q9/B6 must consume original runtime via the results index and required lane artifacts; unused byte-union runtime readers were removed. Live reuse remains a K7 case. |
+| K7: release candidate and hosted canary | Not started. Existing `canary/` and OPERATIONS.md's canary procedure cover Pages; `tests/fixtures/ci_mod/` supplies the synthetic Build adapter. | Owner-controlled immutable release-candidate tag, isolated repository, activation manifest and gate App; all K7 design cases. A failed tag gets no Release and no mod pin. |
 
-## Still moving
+## Measured request budget
 
-The request budget was being changed when this page was written. The reference describes it as
-it is meant to work and marks it.
+The workflow-derived ledger includes Build, packaged E2E and one final status evaluation:
+synthetic 2 targets/3 lanes/1 extra input: **61 + 92 + 58 = 211**; Quick Skin 17/34/1:
+**106 + 247 + 58 = 411**; Block Pops 10/20/0: **82 + 174 + 57 = 313**. It counts kit
+traffic through FakeGitHub, including storage GETs, with single-page listings and no waiting,
+retries, other generations or earlier status events. Third-party Actions' internal traffic is
+outside this measurement. Every pending poll adds one; Quick Skin plus 89 polls is 500 (<600).
 
-1. **The request budget.** A workflow token may send 1,000 REST requests an hour for its
-   repository. As the workflows stand, one generation of a pull request (its Build run and its
-   packaged run) would cost about 1,860 for the largest mod, with 17 targets and 34 lanes. The
-   later jobs of a packaged run no longer select again; a lighter `ci fetch-build`, and a
-   `ci subject` that costs one request in a
-   job that holds the candidate checkout, are to cut this further, and the total of a generation is to
-   become a pinned test. The numbers in BUILD-PROTOCOL.md, "Request budget", are pending until then.
+A job's `GITHUB_TOKEN` allowance is 1,000 REST requests/hour/repository, shared by runs.
+`MAX_CI_GENERATION_REQUESTS = 440` is a test-only no-wait regression budget. The coordinator
+retained structural bounds of 256 targets/256 lanes, whose cost is at least 2,287 plus pagination;
+those bounds do not promise an executable generation within the allowance.
 
-## Known behaviour
+## Known behavior and explicit scope decisions
 
-Candidate staging supplies the protected executing kit pin. An unchanged candidate pin works;
-a future-pin bump is rejected by the managed bootstrap even after release-tag/ancestry admission.
-This is a demonstrated expected failure in `test_ci_lifecycle_candidate.KitOverlayTests`, with the
-scope decision and missing contract in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md), "Candidate kit pin
-limitation". It must be implemented before Q/B adopts that upgrade route; K4 and the canary do not
-establish support for it.
+Exactly two actual `expectedFailure` tests remain, each with the coordinator's written decision
+in BUILD-PROTOCOL.md:
 
-A pull request is tested on the commit of the default branch that was its base when the run
-started. When the default branch moves, the runs of that pull request that are in flight reject
-("protected executing controller has moved"), and a status evaluation that needs the plan fails in
-`ci subject` and publishes nothing, so the statuses stay as they were. A rerun of the same run
-cannot succeed, because GitHub reruns a run at its original commit. The pull request needs a new
-event, a push or an update of its branch, which starts a new generation on the new base.
+- `test_ci_lifecycle_candidate.KitOverlayTests.test_a_candidate_kit_bump_resolves_the_lifecycle_overlay`:
+  the real overlay/Git/bootstrap regression passes for the protected pin but a changed candidate
+  pin fails stamp matching, even after release-tag/ancestry admission. Implement separate protected
+  admission and staging of the candidate kit **before Q/B adopts that upgrade route**. A successful
+  canary cannot supply the missing implementation; current K1–K6 scope uses the same pin.
+- `test_workflow_ci_policy.CiConfiguredTimeoutTests.test_no_admitted_hook_timeout_is_as_long_as_the_job_that_runs_it`:
+  per-hook admission does not guarantee that a whole job fits its hard deadline. Timeout fails
+  closed. Generic fixture hook sums of 70/140/100 minutes versus jobs of 60/120/100 minutes are
+  not native adapter measurements; calibration belongs to K7/Q/B.
+
+Subject admission waits up to 15 seconds/four observations for a pending PR test merge. An
+outdated base fails with `ci-pr-base-outdated` and asks for a branch update. A default branch
+advance invalidates in-flight generations; rerunning the old run keeps its old controller, so a
+new PR event is needed. Upload creation times allow two seconds of service/runner clock skew;
+other chronology remains exact. Minor consolidation of duplicate job openers and the state-file
+catalogue remains; no bound was raised to make a pipeline pass.
 
 ## Quick Skin (Q1 to Q10)
 

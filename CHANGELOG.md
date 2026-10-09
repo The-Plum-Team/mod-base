@@ -7,488 +7,84 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 
 ## Unreleased (planned v1.1.0)
 
-- Add `ci aggregate --output DIR`, the sealing step of the packaged run's aggregating job: it reads
-  the results of every planned lane of its own attempt by numeric id, verifies each against the
-  plan, its validation record and the Build of the job's selection record, and writes the
-  `mod-base.ci.results` index. Lanes are read one at a time and the Build bundle is not read.
-- Add `ci seal-gate --gate build|packaged --output DIR`, the write side of the tested record: a
-  gate authenticates its own running attempt (source, run, every earlier job as its graph expects,
-  every sealed artifact) and writes the `mod-base.ci.gate` receipt that the existing readers
-  accept once the run has finished. Add the new kind `mod-base.ci.results` (v1): the complete
-  packaged results as an index of the lane artifacts, which the packaged gate reads. In a reuse
-  run the gate seals the reuse reference `ci-reuse.json` instead.
-- Add `ci assemble`, the fan-in step of the Build's assembling job: it describes the target
-  partitions of its own running attempt from the API (`build_ci.describe`: exactly one unexpired
-  artifact per planned target, bound to the upload step of the job that sealed it; a job or an
-  artifact of an earlier attempt is refused as a failed-jobs-only rerun), downloads them by numeric
-  id and assembles their exact union into the sealed Build root.
-- Define the Build adapter contract in code (`build_ci.adapter`: eight hooks, argv, environment,
-  file names, strict parsers of `plan.json` and `runtime.json`) and for mod authors
-  (`docs/BUILD-ADAPTER.md`). The unreleased `mod-base.build.config` gains the required fields
-  `inventory.path`, `scenario_contract.path`, `bundle.path`, `contexts.build` and
-  `contexts.packaged`. Add the `ci` command with `ci subject`, which authenticates the tested
-  subject and writes the private identity record, pure plan construction with the policy digest,
-  and a synthetic mod (`tests/fixtures/ci_mod`) that implements every hook. Planned output paths
-  accept the mods' real file names (single inner spaces and `+`).
-- Add `ci subject --candidate DIR` for the jobs that hold the candidate checkout (the Build's policy
-  and target jobs and the packaged lanes). They derive the same identity record from that
-  checkout, from the mod checkout and from one API request instead of four (five for a push),
-  and prove it by reproducing the plan hash of the job of their run that authenticated in full.
-  Every other job, the gates among them, still authenticates in full.
-- Add the first job steps of the disposable-worker lifecycle: `ci worker-prepare` (host fence,
-  accounts, the protected adapter copy for the validator), `ci plan` (runs `derive_plan` and writes
-  the plan of the job) and `ci worker-finish` (locks the accounts and reopens the runner home).
-  For a mod's hooks: a hook starts with `umask 077`, so its output is private unless it decides
-  otherwise; a hook that leaves a running process behind (a Gradle daemon, for one) fails its step
-  even when it exited zero; and every candidate file the protected config names is staged for
-  the protected hooks under its name in `validation-input/`, next to `ci-plan.json` once the plan
-  exists.
-- Add the candidate steps of the disposable-worker lifecycle: `ci worker-stage` (the candidate's
-  own copy of the tested commit, the kit the protected branch pins at `out/mod-base-kit`, an
-  optional Gradle seed
-  and, for a lane, the verified Build at `bundle.path`), `ci worker-run` (one candidate hook:
-  `policy`, `build_target` or `run_lane`) and `ci worker-seal` (locks the candidate, proves its
-  tracked sources unchanged and freezes its export). For a mod's hooks: a candidate hook gets
-  `MB_JAVA_HOMES`, every JDK home of the job joined with `:` (the first is `JAVA_HOME`); a hook
-  writes no kit document, because the kit builds `ci-envelope.json` and the runtime envelope itself
-  from the plan and the bytes it finds, so a `build_target` export must hold exactly the planned
-  files; runtime results get their role from their name (`crash-reports/`, `.png`, `.json`,
-  anything else is a log); and after a candidate hook nothing untracked may exist in its checkout
-  outside `out/mod-base-kit` and `bundle.path`.
-- Add the verification step of the disposable-worker lifecycle: `ci worker-validate` (hands the
-  job's sealed export to the validator read-only, runs `verify_target`, `verify_build` or
-  `verify_runtime`, has root seal the reports with the validation record the kit builds and
-  writes the directory the job uploads). For a mod's hooks: a verification hook leaves exactly
-  one `<unit id>.json` report for every unit it verified and nothing else, and it finds its
-  output directory empty, also in a lane job whose `derive_runtime` ran before it.
-- The unreleased Build kinds describe what Block Pops and Quick Skin really stage.
-  `mod-base.build.plan`: an output's `lane_id` may be `null` for a file of the target as a whole
-  (its staged manifest, a report, a log, one SBOM for all its lanes). Every lane has exactly one
-  production and one harness output, an SBOM is optional (at most one per lane and one per
-  target) and every target has a native report. Paths stay unique in the whole plan, so an adapter
-  stages a file every target writes below `targets/<target id>/`. The plan gains `plan_inputs`
-  (`[{name, sha256}]`). `mod-base.build.config` gains the required `plan_inputs`
-  (`[{name, path}]`, 0..8): more candidate files a plan is derived from, staged for the protected
-  hooks next to the inventory and the scenario contract (Quick Skin lists `gradle.properties`,
-  which holds the version in its JAR names). `mod-base.build.envelope`: `lane_id` is nullable in
-  the same way, a file path is an export path and an `sbom` file is at most 16 MiB.
-  `mod-base.ci.runtime-envelope`: a file path is an export path. Sealed Build and runtime
-  archives keep the mods' own file names when they are encoded and extracted; Pages archives are
-  unchanged.
-- Managed files: the bootstrap `scripts/ci/mod_base_kit.py` changes. `bump` now refuses, before it
-  edits anything, a kit that does not read the mod's `site/mod-base-build-activation.json` while a
-  mode other than `disabled` is active there (a rollback to v1.0.3 or older first returns the mod
-  to `disabled`), and it restores every workflow and action file when its write phase fails. A mod
-  without that manifest bumps exactly as before; every released bootstrap still stages and bumps
-  to this kit.
-- Managed files, by activation only: four caller workflows (`.github/workflows/mod-base-guard.yml`,
-  `mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`) become managed
-  files of a mod whose activation mode lists them. They are not template-manifest entries and no
-  mod without an activation manifest receives or is asked for one. All four are the reviewed
-  workflows; the managed `.gitattributes` has no `eol=lf` rule for them yet.
-  - `mod-base-guard.yml` is a local reusable workflow (input `callees`, output `kit-sha`) that the
-    two producers and the gate status caller call first, so the run lists it in
-    `referenced_workflows` at the commit the caller ran from. Its one job, shell alone with a
-    read-only token, admits the event (`pull_request_target`, `push`, `workflow_dispatch` for a
-    producer; `workflow_run`, `pull_request_target`, `schedule`, `workflow_dispatch` for the status
-    caller; always for the default branch), checks out the protected mod at `github.sha` without
-    persisting a credential, requires the single pin the bootstrap reads there to be the pin the
-    guard was rendered for and a released commit of the kit's main branch
-    (`mod_base_kit.py verify --network`), and requires the run to reference nothing but this guard
-    at `github.sha` and the caller's own kit workflows at the pin.
-  - `mod-base-build.yml` (workflow `mod-base Build`) and `mod-base-packaged-e2e.yml` (workflow
-    `mod-base packaged E2E`) run on `pull_request_target` (`opened`, `synchronize`, `reopened`,
-    `ready_for_review`, `converted_to_draft`), on a push to the canonical branch and on
-    `workflow_dispatch`, with `permissions: {}`, read-only job grants and no secret. A draft pull
-    request gets the deferral job alone. The packaged caller selects an existing Build for a push
-    or a manual request (`select-build.yml`) and calls `build.yml` itself only when none exists; a
-    pull request waits for its separate Build run. A new generation of a pull request cancels the
-    one before it; nothing else is cancelled while it runs. Pull request triggers of all three
-    callers filter to the canonical base branch, so another-base run under the same head cannot
-    supersede the protected generation. Both concurrency groups carry the name
-    of their workflow (`build-gate-<workflow>-…`, `packaged-e2e-<workflow>-…`), so neither is the
-    group of a mod's own Build or packaged E2E workflow, which runs beside the callers in `shadow`.
-  - `mod-base-gate-status.yml` (workflow `mod-base gate status`) is the only writer of the two
-    protected gate contexts. It runs when a run of either producer is requested or has completed
-    (`workflow_run`), on the same five pull request events as the producers, once an hour for one
-    open pull request in turn (of the ten most recently updated that are no drafts) and on
-    `workflow_dispatch` with a pull request number. Jobs: `guard`; `locate` (shell, read-only
-    token: the pull request of the event, or none); `evaluate` (the kit's `gate-status.yml`,
-    read-only, no secret); `publish`, which runs only after a successful evaluation that returned a
-    document. `publish` is the one job that names an environment (`mod-base-gate`), a variable
-    (`MOD_BASE_GATE_APP_CLIENT_ID`) and a secret (`MOD_BASE_GATE_APP_PRIVATE_KEY`): it mints an
-    App token that can write commit statuses of this repository and nothing else
-    (`actions/create-github-app-token`, pinned), admits the document as a whole or not at all,
-    reads the live pull request again (open, the evaluated head, the default branch of this
-    repository, no draft unless every status is pending) and posts one status for each gate, a
-    state that is no success first and none that the App already shows unchanged (GitHub keeps at
-    most 1000 statuses of one context on one commit). A run waits for the run before it of the
-    same pull request and is never cancelled by a newer one. **An owner creates the environment,
-    the variable and the secret** (docs/OPERATIONS.md, "The gate status App"), and a mod that
-    manages this caller makes `.github/dependabot.yml` ignore `actions/create-github-app-token`
-    (`template check` names it; the seed already does).
-  - A caller that is rendered whole may hold a third placeholder, `{{BRANCH}}`, which
-    `template sync|init` fill in with `canonical_branch` of `site/mod-base.json`: GitHub reads the
-    branch filter of a `push` trigger as a literal. A caller whose branch differs from the
-    configuration is drift, `template transition` renders the candidate's callers for the
-    candidate's canonical branch, and a caller template holding any other `{{NAME}}` token is
-    refused. `template.tool.expected_callers` and `build_ci.transition.verify_candidate_callers`
-    take the branch as an optional last argument; `template.tool.canonical_branch` reads it.
-- Add the first Build/E2E callee workflow, `.github/workflows/build.yml`: jobs `plan`, `policy`,
-  `target` (one per planned target), `assemble` and `gate`, inputs `kit-sha` and `pr-number`. It
-  has its own registry (`workflow.CI_CALLEE_WORKFLOWS` with the job tables `CI_JOB_VERBS`,
-  `CI_JOB_ARTIFACTS` and `CI_JOB_PERMISSIONS`), its own Build controller prologue, which admits
-  only the managed Build and packaged E2E callers of the canonical branch, and its own policy
-  tests. The Pages callees, their registry and their prologue are unchanged.
-  `tools/update_tree_digest.py` maintains its `MB_KIT_TREE_DIGEST` literal with the other three.
-- Add the Build/E2E callee workflow `.github/workflows/select-build.yml`: one job, `select`, input
-  `kit-sha`, outputs `mode` (`full`, or `reuse` when a push reuses the result its pull request was
-  tested with), `found` and `build-run-id` (the exact existing Build of a protected push or
-  dispatch; both empty in reuse mode). A pull request never reaches it. It has its rows in the
-  `CI_JOB_*` tables, the prologue and the policy tests of `build.yml`, and a literal the digest
-  tool maintains.
-- Add the Build/E2E callee workflow `.github/workflows/packaged-e2e.yml`: jobs `input`, `lane` (one
-  per planned lane), `aggregate` and `gate`, inputs `kit-sha`, `pr-number`, `mode` and
-  `build-run-id` (empty for a pull request, whose `input` job waits up to 5400 seconds for the
-  separate Build run; a run id; or `same-run` after a rebuild in the same run). Only `input`
-  selects: it returns its selection record as the job output `selection`, every later job writes
-  that line to a file and gives it to `ci fetch-build`, `ci aggregate` or `ci seal-gate` as
-  `--selection`, and each binds the record to the run attempt before it uses it. The `aggregate`
-  job's sealing step is `ci aggregate`, and in reuse mode only the gate runs. It is tabled,
-  policed and digested like the other two.
-- Add the Build/E2E callee workflow `.github/workflows/gate-status.yml`: one job, `evaluate`,
-  inputs `kit-sha` and `pr-number`, output `intents` (the canonical document of `ci gate-status`).
-  Its prologue admits the managed gate status caller of the canonical branch alone
-  (`workflow.CI_CALLEE_CALLERS`), on `workflow_run`, `pull_request_target`, `schedule` and
-  `workflow_dispatch`. The job issues `ci gate-status` twice. The first call, `--settle`, runs
-  before any subject and answers only when no gate needs the protected plan: a draft, a
-  generation that has not started or still runs, a newest run that failed (outputs `settled=true`
-  and `intents`). Otherwise it outputs `settled=false`, and only then the job runs
-  `ci subject --producer status --pr N`, `ci worker-prepare --roles validator`, `ci plan` and the
-  second call, which verifies each finished run against that plan. Without a plan no gate is ever
-  a success. `status` is a third producer of `ci subject` (never a gate): its subject is always
-  the pull request it names, on each event of the status caller, and its controller the
-  default-branch commit the run executes, so it derives the identity and the plan of the gates.
-- `ci select-build`: a protected push or dispatch whose newest Build run is still in progress now
-  waits for it, within the same `--wait-seconds` (5400 at most, one listing request per poll) as
-  a pull request, instead of failing: a push starts the Build caller and the packaged caller
-  together, so the packaged run always met its sibling Build running. A newest run that failed or
-  was cancelled is still a rejection at once, and a commit without a Build run still answers
-  `found=false`. `selection.download_protected_build` takes `wait_seconds`, `monotonic` and
-  `sleep`; `selection.select_protected_build`, one observation, still rejects a run in progress.
-- `mod-base.ci.activation` v1 (still unreleased) gains the required `rollback_from` field, which
-  names the mode a `reviewed-rollback` leaves and is `null` otherwise. `template check|sync|init`
-  accept every mode, manage exactly the callers of the mod's mode, report a caller outside its mode
-  as `forbidden`, and fail on a Build configuration without a manifest. While a mode manages
-  callers, `.github/dependabot.yml` must also ignore the third-party actions they pin.
-- New commands (additive): `template activation --repo DIR` prints the validated activation state,
-  its managed callers and the allowed next states; `template transition --repo DIR --base DIR`
-  admits a change of activation against a checkout of the protected base (allowed transition,
-  unchanged pin, candidate callers equal to the rendered templates).
+The protected Build and packaged E2E kit is implemented through K1–K6. This version is
+unreleased, no consumer is activated, and the design and ADR 0007 await owner agreement.
+K7's release candidate and managed-caller canary are required before adoption.
 
-- Add inactive historical PR Build selection/revalidation preserving original controller,
-  newest run/attempt, complete graph and immutable bundle metadata after actual merged-source
-  admission. Retain original plan bytes in live/historical selection and descriptor bytes during
-  historical revalidation; both gates/native/policy/consumer admission remain mandatory.
-
-- Make template caller/extension test fixtures use explicit UTF-8 and authored LF bytes across
-  platforms. Keep malformed UTF-8, CRLF, hostile extensions, managed drift and POSIX ownership
-  assertions intact so locale conversion cannot prevent the intended checks from executing.
-
-- Preserve exact binary file bytes on Windows in the shared bounded reader. Explicit binary
-  descriptors prevent CRLF translation and 0x1A truncation without changing identity, size,
-  type or symlink checks; JSON readers retain the original input bytes too.
-
-- Correct inactive initial reuse-v1 admission for a final merge whose SHA equals the original
-  synthetic tested commit. Keep separate original PR/current subject and producer bindings,
-  direct coherent source seals and all independent K6 admission requirements.
-
-- Bind inactive tool-fenced native lane verification to retained frozen plan, exact complete
-  owning Build and runtime bytes, with pre/post metadata/inventory/directory checks and original
-  caller drift rejection. Execution/context data confer no receipt or native success authority;
-  Add Root-only receipt binding to genuinely retained successful execution and that exact
-  three-input context, using the existing independent validation export freeze with pre/post
-  byte/identity/caller checks. Add Root-only runtime read grants preserving empty regular data
-  through original bounds/ACL/root-last transfer and complete three-input closing checks.
-  Genuine candidate reclamation/privilege handoff and real hosted lifecycle remain required.
-
-- Add inactive Root-only runtime export reclamation through independent copying with original
-  execution, full tracked-source and exact selected owning Build/plan/lane bindings. Retain
-  admission inside publication and after private ownership transfer, including named-root checks.
-  Preserve empty data through bounded private transfer; native second-account verification,
-  genuine provenance and actual hosted/workflow/upload admission remain required.
-
-- Add inactive runtime runner-to-Root execution handoff through existing closed execution-v1
-  data and fixed private publication. Retain exact nonce/source/attempt/three-input context and
-  recheck original private record, inputs and caller snapshots around receipt freezing. Shared
-  writer also rereads staged bytes after closing admission. Fixed runtime Root process/request
-  enrollment, genuine provenance and real hosted/native/workflow authority remain required.
-
-- Add required hosted Linux runtime candidate-copy/read-grant cases with actual source/private
-  ownership, empty data, independent inodes, validator-only reads and hardlink rejection before
-  copying. Existing hosted prerequisites are unchanged.
-
-- Add inactive closed mod-base.ci.runtime-envelope v1 inventory data with original Build/plan
-  bindings, ordered lane contracts and role/path validation. Preserve per-lane limits inside
-  the complete aggregate and original BP aggregate bounds; previous readers reject the new kind.
-  Bind the exact original runtime/Build selections and verify complete frozen file bytes,
-  preserving empty logs. Copy independently through private atomic publication with source/stage
-  rechecks. Native output mapping, API runtime transport and activation remain required.
-
-- Add batches of pull requests (K5), inactive in mods until a workflow calls them: `ci
-  batch-prepare` squashes up to 50 open same-repository pull requests, in the given order, onto
-  the default branch head, pushes the stack as a new `batch/<name>` branch and opens one ready
-  pull request; `ci batch-settle` closes the members after that pull request merged. The squash
-  commits are written with `git commit-tree` in a private store that no ambient Git
-  configuration reaches, under one fixed bot identity and the base commit's time, so their ids
-  follow from the base and the member heads, titles, numbers and order alone. New closed
-  `mod-base.ci.batch` v1 data (the predecessor rejects it) travels as one marker line in the
-  batch pull request's body and is only a hint: a batch is verified by building its stack again
-  and comparing ids. Conflicts, members that add nothing, forks, moved heads or bases, submodule
-  entries and paths outside the caller's protected allowed-path list stop construction; the push
-  can only create its branch. Settlement first proves the merged commit, the rebuilt stack and
-  both original gates, then closes only members still at their batched head. Both commands use
-  the invocation's token: a pull request opened with a workflow's default `GITHUB_TOKEN` starts
-  no workflows, so supply an App or automation token. Git 2.40 or later is required. The GitHub
-  client gains `patch_json`.
-  Add separate historical merged PR observations retaining exact original synthetic parents,
-  equal complete final tree and original/current protected history across merge/squash/rebase.
-  Live PR admission stays unchanged; full historical gates, reuse and settlement remain open.
-  Read original full tested seals after merge with retained historical identity and unchanged
-  run/attempt/kit/graph/upload/artifact/canonical record/owning Build checks. Complete coherent
-  native sources and reuse/settlement integration remain separately required.
-  Bind both original full seals as one pair, requiring packaged's whole owning Build descriptor
-  to equal the Build seal's actual bundle, with repeated records/source and caller snapshots.
-  Independently valid mixed generations reject; native payload and reuse admission stay required.
-  Materialize only that pair's exact original complete Build bytes, retaining original identities
-  and shared ZIP/envelope/inventory checks. Recheck both seals/source/caller inside atomic copy
-  before publication and reverify staged bytes; runtime/native/reuse authority remains separate.
-
-- Managed bootstrap bumps now plan template synchronization using the verified target kit before
-  rewriting pins. Ordinary template drift is accepted; planning rejection leaves pins unchanged.
-  Write failures after planning still reject and are not transactional rollback.
-
-- Add inactive mod-base.ci.activation v1 profile data with five closed modes and an 8 KiB reader
-  cap; new-kind compatibility explicitly rejects the predecessor reader. It introduces no
-  consumer activation, owner approval, arbitrary execution selectors or optional Pages fields.
-
-The protected Build/packaged E2E foundation is under implementation and is not enabled in any
-consumer. This is not a published release; the existing runtime version remains v1.0.3 until
-the release change. Pages formats, `ADAPTER_API` and `pixel_metrics_version` remain unchanged.
-
-- Bind selected worker Python/JDK destinations to explicitly enrolled tool roots before
-  dispatch, rejecting external aliases and unusable executable/home types without launch.
-  Protected installer provenance and complete import enrollment remain required.
-- Run root work in one process model. `tools/ci_privileged_bootstrap.py`, started by the runner
-  as `sudo -n -- <python> -I -B -S <kit>/tools/ci_privileged_bootstrap.py --operation <name>
-  --kit <kit> --kit-digest <digest> --nonce <nonce>`, re-computes kit-digest-v1 of the
-  prologue-verified kit checkout before importing from it and dispatches a closed set of
-  operations. Parent and child exchange data only through the local-only
-  `mod-base.ci.root-request` v1 kind: one private canonical request per operation with a closed
-  argument object, read by root with the private record reader after it has derived the runner
-  from the host. Root never calls the GitHub API.
-- Remove the private interpreter and kit-copy tower, which no design requirement asked for and
-  which could not work on a hosted image: the root-owned kit copy with its record and installed
-  guard, the privileged launcher, the Python archive download, inspection and installation, the
-  byte digest of tool trees with its byte-fenced worker and validator routes, the release-asset
-  download of the GitHub client, `requirements/python-ubuntu24-x64.sha256`,
-  `docs/PYTHON-INSTALLER.md` and the unreleased `mod-base.ci.kit-installation` and
-  `mod-base.ci.runtime-root-request` kinds. Runtime lane verification now uses the same
-  tool-fenced second-account route as Build verification.
-- Fence the hosted image before any worker account exists. A hosted `ubuntu-24.04` image ships
-  `/opt` with the tool cache, `/usr/share`, `/usr/local` (the head of sudo's PATH) and the JDKs
-  world-writable, the `/opt` trees with default ACLs. The new root operation `host-fence`
-  removes group/other write permission and default ACLs from those trees and `/var/lib/gems`,
-  then fails unless no world-writable non-sticky directory and no world-writable regular file
-  remains reachable on the root filesystem outside the worker boundary. Tool roots are admitted
-  by ownership and mode wherever they live (`TOOL_INSTALL_PREFIXES` and `TOOL_LINK_PREFIXES` are
-  gone), and a directory that carries a default ACL is never part of an admitted tool tree.
-- Stage the candidate's checkout through the new root operation `stage-candidate`. The staging
-  modules could never run: they asked for a `worker` role and a `worker-home` that do not exist
-  (the roles are `candidate` and `validator`), left `repository/out` to root so a build could not
-  write beside the kit overlay, and read the tested tree and the pin's release through the GitHub
-  API as root. The runner now passes the tested commit, tree and complete inventory in its private
-  request (`root_request.request_candidate_staging`); root recomputes the tree's Git name from the
-  inventory, requires the checkout to hold exactly those bytes with a HEAD detached at the tested
-  commit, and publishes tracked source, a curated `.git`, the kit overlay and an optional Gradle
-  seed for the candidate alone. `out` belongs to the candidate, the seed is optional, and a
-  populated root is never reused.
-- Add a local-only execution handoff v1 kind and private runner-to-root Build result data
-  channel, with strict binary-log/context/nonce binding and independent receipt freeze.
-  Genuine execution/native validity and enrolled root-program/import provenance remain required.
-- Add inactive pre-plan PR generation/readiness reads bound to the protected executing
-  controller, with independent PR/default rechecks. Draft observations and unavailable merges
-  remain ineligible execution evidence; deferred workflow/status integration stays pending.
-  Complete ready-PR merge authentication now brackets Git object reads with the same retained
-  generation and default/controller checks, rejecting readiness/source drift before returning.
-- Preserve Block Pops' original 8 MiB compiler-report payload limit in the inactive Build
-  envelope, separately from 4 MiB validator outputs and Quick Skin's initial transport cap.
-  Whole-export/JAR/log/archive limits are unchanged; native conformance remains required.
-- Add inactive root-side Build execution/receipt binding: require the retained successful exact
-  input digest and producer attempt, derive hook/unit from the canonical envelope, and inspect
-  read-only input bytes/ownership/inodes before and after independent receipt freeze. Native
-  domain validity, authenticated privilege bridging and final workflow/API authority stay pending.
-- Add inactive local sealed-export ZIP encoding with streamed no-follow reads, fixed stored
-  entries, the original compressed admission cap including ZIP metadata, strict independent
-  extraction/byte verification and atomic private publication. Add bounded child streaming;
-  existing whole-file APIs remain unchanged. This is not a nested GitHub artifact format or
-  proof of actual service ZIP metadata; upload/native/workflow/Linux gates remain pending.
-
-- Add strict `mod-base.build.plan` v1, separate Build adapter API 1, full-execution graph
-  contracts and inert live PR identity checks. These are validation primitives, not a working
-  Build runner or authority to publish successful statuses.
-- Add inactive complete Build numeric-ID transport with latest-attempt/full-graph/upload-window
-  admission, immutable metadata and ZIP digest checks, canonical inventory verification and
-  independent private publication. Add a fixed CI ZIP extraction entry point without widening
-  Pages limits. Newest-run selection, native validity, running target fan-in and workflow
-  integration remain incomplete; required real Linux transport fixtures remain unexecuted.
-- Add inactive same-run/attempt target partition transport for fan-in during Build execution.
-  Require protected target enrollment, a closed partial graph and successful seal/upload job;
-  retain full-graph success requirements for complete bundles and forbid target run mixing.
-  Whole-union/native policy integration and Linux execution evidence remain pending.
-- Add inactive complete ordered target-input preparation with one private atomic publication,
-  successful protected plan/policy, shared source/producer/job authentication and complete-union
-  checks. Enforce original logical entry limits across partitions and additional 4 GiB total
-  compressed-download/derived physical-input bounds. Native/runtime fan-in limits remain
-  unchanged; native aggregate/bundle integration and real Linux results are still pending.
-- Finalize the new inactive Build envelope schema 1 before first release: keep pre-upload
-  producer identity in the envelope and actual API upload window/immutable transport metadata
-  in the selected descriptor. Strict binding checks every producer field and artifact scope.
-  Reject the unreleased draft self-reported window shape; no released schema or Pages format
-  changes, and the predecessor still rejects this new kind. Gate/reuse timing audit is pending.
-- Finalize the new inactive gate/reuse schema 1 record producers before first release with
-  pre-upload identity only. Selected-descriptor binding retains exact writer/kind/unit,
-  distinct source IDs and actual source-before-record upload chronology. Reuse verification
-  start-time authentication, original graph/tree/source proof and final record transport remain
-  required and incomplete. Old local draft future-window shapes reject; released schemas stay unchanged.
-- Add inactive full-gate API chronology binding: every prerequisite finishes before protected
-  gate validation, actual selected/source upload windows match exact successful steps, and all
-  step windows lie within completed jobs. Packaged checks its owning Build's independent full
-  graph and sealing. Final transport/native/status authority and historical reuse remain pending.
-- Add inactive full tested-record numeric-ID transport with exact protected latest attempt,
-  graph/upload/metadata/digest binding, one fixed canonical root JSON file, bracketed source
-  metadata/availability and API chronology, and independent packaged owning-Build enrollment.
-  Preserve existing record/ZIP limits. Source payload/native/status authority, historical reuse
-  and real Linux execution evidence remain pending.
-- Add inactive newest exact PR Build selection using an explicit initial v1 protected generation
-  marker and status-unfiltered listing. Reject a failed newest producer, preserve pending/absent
-  as no bundle, and authenticate the successful attempt/kit/whole graph and immutable bundle.
-  Relist/recheck before return; never use older success or compile for a PR. Native payload proof,
-  and managed caller/canary wiring remain pending.
-- Add inactive 5400-second monotonic PR Build waiting with bounded observations, clipped sleeps,
-  repeated source/newest authentication and rejection of late success. API/corruption/failed-run
-  errors never become absence. Add exact-descriptor newest revalidation around consumption;
-  payload/native proof, production workflow integration and hosted canary remain required.
-- Add inactive latest-PR-Build download composition: bounded waiting, exact newest selection,
-  immutable-ID complete byte transport and newest/source revalidation inside independent atomic
-  publication. A newer producer found at final admission prevents publication; reinspect staged
-  bytes after that admission. Existing descriptor-based transport/copy signatures stay unchanged. Native sealing,
-  workflow activation and real Linux evidence remain pending.
-- Add inactive complete Build byte assembly from the exact ordered same-attempt target input
-  set. Copy declared payloads independently, verify source/stage inventories and whole-union
-  bounds, create one canonical current envelope and atomically publish the private export.
-  Preserve existing regular-file copy behavior and add a selected-file append helper. Native
-  aggregate receipts, ZIP/workflow integration and real Linux results remain pending.
-- Add bounded protected Git source inventories and descriptor-based tracked-source comparison,
-  preserving executable modes, empty files and literal tracked links. Reject undeclared paths,
-  hard links, aliases and changed bytes; generated roots do not exempt tracked leaves.
-  Add live-PR-bracketed immutable GitHub tree inventory admission with exact blob sizes and
-  directory closure, retaining both source and existing transport caps.
-  Extend source/controller reads to exact non-PR subjects in authenticated protected default
-  history, retaining distinct historical subject and live controller identities and freshness
-  checks. Request/run/nonce and full recovery authorization remain separate and unimplemented.
-  Add atomic private tracked-source materialization, with streamed bytes, exclusive output
-  publication and independent staged inventory checks; Git metadata and cache staging remain pending.
-  Isolated Python dispatchers require `-I -B`: isolated mode ignores bytecode environment settings.
-- Add fresh fixed worker-account allocation with account/home reuse rejection, primary-group and
-  sudo-policy checks, and verified private home/tmp/cache directory ownership. Host-boundary
-  lifecycle and complete worker sealing remain inactive and unfinished.
-- Add inactive protected-root candidate Build freeze: terminate the fixed UID, recheck tracked
-  source before and after independent export copying, and transfer only the private new copy
-  to runner ownership. Reject source drift, unsafe original permissions, failed execution and
-  copy identity/content changes. Required real-UID Linux cases remain unexecuted; native
-  validation, protected staging and production integration are still pending.
-- Add inactive fixed read-only plan/Build input binding for protected aggregate verification.
-  Atomically materialize the existing plan kind without new schema fields, grant fixed second-UID
-  reads and recheck exact input metadata/bytes/identity before and after execution. Retain actual
-  execution plus canonical envelope digest for verifier-output freezing. Cross-run/runtime
-  composition, native semantics and actual hosted Linux evidence remain pending.
-- Add inactive target-partition verifier composition using the same fixed read-only inputs and
-  retained execution/digest. Require exact enrolled target, partition output coverage and producer
-  attempt; complete or other-target bundles reject before launch. Align unreleased Build CI unit
-  admission with the existing artifact delimiter rule, rejecting `--` in target/lane IDs early.
-  Native witnesses, runtime/cross-run composition, workflows and hosted evidence remain pending.
-- Add explicit generic policy-runner profiles with native discovery/count parity: strict BP
-  defaults, QS start-root imports/whole-class fixture skips, complete worker results and nonzero
-  executed-suite checks. Fix repeated fixture setup after teardown for reexported classes;
-  retain native method/cleanup skip and expected-failure semantics. Bound discovery/workers and
-  per-unit UTF-8 diagnostic retention. The staged tools lock changes; no JSON schema changes.
-  Discovery/execution require the credentialless worker and verified kit imports. Full native
-  policy parity, protected integration and required real Linux UID cases remain pending.
-- Add inert protected-controller Git tree/blob source admission against native approved paths,
-  configured SHA-256 and regular Git modes, bracketed by live PR checks. Minimal import copies
-  reject changed/undeclared files and Git metadata. Additional code-source caps are 4 MiB per
-  file and 64 MiB total; complete import-root provenance and lifecycle integration remain pending.
-  Materialize retained protected source bytes into exclusive no-follow regular files in a
-  private stage, preserve Git executable modes and independently verify before atomic publication;
-  existing outputs are never replaced. Native validator execution and import enrollment remain pending.
-- Add fixed protected-controller source read handoff, with authenticated host/accounts/layout,
-  candidate termination, exact byte/mode checks before access and normalized byte/blob checks
-  afterward. Only the fixed validator group receives reads; files become 0640 and root 0750.
-  The additive source permission helper supports empty Python sources and repository paths;
-  existing export handoff keeps rejecting empty artifacts. Real Linux access evidence,
-  complete import provenance and native execution/sealing remain pending.
-- Add closed second-account verifier execution with protected dispatcher/timeout binding,
-  exact target/lane selection, source byte/permission checks before and after, existing tool
-  fencing and final UID termination. Recheck all source owner/group/modes and absent ACLs;
-  hashes alone do not prove read-only code. Execution remains inactive and requires native
-  inputs/import provenance/conformance; zero exit/logs never authorize receipts or uploads.
-- Add new inactive `mod-base.ci.validation` schema 1, explicitly rejected by the predecessor
-  reader. Bind exact protected plan/hook/unit/run/attempt/config/input context and report
-  contracts; independently verify canonical strict native JSON and exact byte inventory.
-  Add private independent verifier-output copying with staged revalidation and exclusive
-  publication. Native closed-schema semantics, UID reclamation/integration and real hosted
-  validation remain required; existing gate/envelope/Pages shapes are unchanged.
-- Add protected-root fixed verifier output freezing: terminate/lock the actual verifier,
-  admit its private 0700/0600 tree, independently copy exact context/reports and transfer only
-  the new protected copy to runner-private ownership with final metadata/content/host checks.
-  The verifier original is never chowned. Native semantics, input/import provenance, root
-  dispatch and final gate/upload integration remain pending; existing read handoffs are unchanged.
-- Add the initial hosted-Linux runner-home fence and pre-dispatch identity/mode recheck,
-  private-cwd execution and explicit host-descriptor closure. Required Linux probes cover
-  inert host files/processes, proc memory/environment, ptrace and inherited descriptors;
-  hosted execution and the complete sealing lifecycle remain unverified.
-- Add bounded host tool-tree permission/identity closure checks, including link targets and
-  ancestors, with Python/JDK path binding and full reinspection before isolated dispatch.
-  Mutable or foreign-owned installations reject. Installer provenance, complete import-root
-  enrollment, native observations and real hosted validation remain pending.
-- Add `mod-base.build.config`, `mod-base.build.envelope`, `mod-base.ci.selection`, `mod-base.ci.gate` and
-  `mod-base.ci.reuse` v1 with strict immutable descriptors, complete plan coverage and direct
-  original-source reference checks. Separate `mb-ci-*` names remain outside Pages rotation.
-  Plans retain all declared native reports and bounded logs rather than requiring one report
-  per lane. Add exact target-union and canonical frozen-byte inventory checks. Worker freezing,
-  API/domain authentication, workflow integration and reuse execution are still pending.
-  Add atomic independent Build export copying with streamed hash comparison and staged
-  inventory revalidation; ownership reclamation and second-account native sealing remain pending.
-  Add protected Linux-root-only read-group handoff for fresh private copies, removing inherited
-  ACLs and opening root traversal last; identity admission and full lifecycle wiring remain pending.
-  Bind Build read handoff to the fixed copy and actual runner/validator accounts, with candidate
-  termination, copy/envelope/host rechecks and private failure cleanup. Native validation and
-  the complete protected lifecycle remain inactive and unfinished.
-- Replace universal predecessor readability with an exhaustive per-kind ledger, bidirectional
-  unchanged-format checks and explicit unsupported-kind rejection against a digest-bound
-  v1.0.3 reader snapshot. Existing kinds remain schema 1.
-- Start the inactive disposable-account port with explicit bounded environments, dedicated
-  account binding and real/effective UID termination/locking. Add required hosted Linux account
-  integration tests to every Python CI leg. The complete worker lifecycle and Linux proof remain
-  pending; no consumer begins executing through these primitives.
-- Add inactive bounded dispatcher execution, failure/cancellation cleanup and orphan-pipe
-  termination. Preserve raw bounded diagnostics and render logs with terminal/modern/legacy
-  Actions-command escaping; a visible prefix alone does not neutralize legacy commands.
-  Account termination rechecks and kills processes after lock/expiry under the original
-  sweep deadline; pre-lock quiescence alone cannot authorize sealing.
-- Managed `docs/ai/shared/PUBLIC-EVIDENCE.md` clarifies per-kind schema evolution and strict
-  optional-field compatibility. A future kit bump synchronizes it; no consumer is changed here.
+- Add `BUILD_ADAPTER_API = 1`, separate from the Pages adapter: eight hooks derive the plan
+  and runtime values, run policy/target/lane work, and verify target/Build/runtime exports.
+  A protected hashed adapter closure supplies validation; mod hooks write native files only.
+- Add thirteen strict document kinds at `schema_version: 1`: `mod-base.build.config`,
+  `mod-base.build.plan`, `mod-base.build.envelope`, `mod-base.ci.runtime-envelope`,
+  `mod-base.ci.validation`, `mod-base.ci.selection`, `mod-base.ci.results`,
+  `mod-base.ci.gate`, `mod-base.ci.reuse`, `mod-base.ci.execution`,
+  `mod-base.ci.root-request`, `mod-base.ci.activation` and `mod-base.ci.batch`.
+  The previous release rejects these new kinds; existing Pages schemas, `ADAPTER_API`
+  and `PIXEL_METRICS_VERSION` are unchanged.
+- Add `ci subject`, `worker-prepare`, `plan`, `worker-stage`, `worker-run`, `worker-seal`,
+  `worker-validate` and `worker-finish`. Protected orchestration admits the exact PR merge
+  or default-branch subject and runs candidate code in a disposable account without tokens.
+  A second account runs the protected verifier before any sealed artifact is uploaded.
+- Fence hosted Linux tools before creating accounts. Closed root operations verify the kit
+  digest, stage source/Build/kit inputs, prove tracked sources unchanged, freeze exports and
+  seal validation reports through private requests. Account cleanup revokes user managers,
+  linger, cron and at jobs as well as processes; an error prevents successful sealing.
+- Add `ci assemble` for the exact union of target partitions and `ci aggregate` for the
+  packaged results index. The index authenticates every lane's descriptor and receipt hashes
+  without combining all lane bytes into one archive. Complete Builds require their validation
+  record and expected native reports; commands bind the loaded protected config digest.
+- Add `ci select-build` and `ci fetch-build`: select the newest exact Build, pass the canonical
+  selection between jobs of the same attempt, and fetch its archive by numeric id and digest.
+  Candidate-checkout subject derivation costs one request; a lane fetch costs two including
+  storage. Gates repeat the live source/newest-run observations before sealing.
+- Add `ci seal-gate` and read-only `ci gate-status`. Full caller/callee graphs, upload chronology,
+  attempts, descriptors and paired native receipts determine gate intents. Required statuses
+  are published only by the managed caller's native job holding the mod's App credentials.
+- Add reusable `build.yml`, `select-build.yml`, `packaged-e2e.yml` and `gate-status.yml`, with
+  pinned actions, per-job read permissions, sealed uploads and always-run worker cleanup.
+  Build runs one target per runner; packaged E2E runs one lane per runner against that Build.
+- Add the managed callers `mod-base-guard.yml`, `mod-base-build.yml`,
+  `mod-base-packaged-e2e.yml` and `mod-base-gate-status.yml`. They bind the protected caller
+  and kit references, defer drafts, filter PRs to the canonical base and render the single pin.
+  Managed `.gitattributes` now forces LF for all four, including Windows clones.
+- Add activation modes `disabled`, `shadow`, `shared-build`, `shared-build-and-e2e` and
+  `reviewed-rollback`, checked by `template check/sync/init`; add `template activation` and
+  `template transition`. Mode transitions use their own PR at an unchanged pin. Bootstrap
+  bump checks target-kit support and restores pin files if its write phase fails.
+- Add `ci batch-prepare` and `ci batch-settle`: reproduce ordered native Git changes on the
+  current base, open a batch, then verify its merged tree and both gate records before closing
+  unchanged members. Up to 50 members; expired original evidence exits 3.
+- Add `ci reuse-admit` to protected-push planning/selection. Identical tested tree, policy,
+  plan, kit and retained original gates admit reuse; normal misses run full gates and corrupt
+  evidence/API failures reject. Reuse gates re-admit and write `ci-reuse.json`, a direct
+  reference to original PR gates that renews no artifact retention.
+- Bind policy digests to the activation manifest and managed callers as well as adapter/config
+  and kit bytes, so control-plane changes require full post-merge gates. Retain original
+  merged Build/gate readers; original runtime consumers must use the results index and lanes.
+- Accept native export names with spaces and optional target-scoped SBOM/report outputs.
+  Wait at most 15 seconds/four observations for a pending test merge; stale bases use
+  `ci-pr-base-outdated` and request a branch update. Allow two seconds of upload-clock skew
+  while keeping other chronology exact. Failed-jobs-only mixed attempts are refused.
+- Pin API command caps and workflow-derived generation costs: synthetic 211, Quick Skin 411,
+  Block Pops 313, including one final status evaluation and storage GETs, with no waiting.
+  Pending selection polls add one each. `MAX_CI_GENERATION_REQUESTS = 440` is a test-only
+  regression budget; structural 256/256 plans exceed the repository's 1,000 REST/hour allowance.
+  These are FakeGitHub kit-traffic measurements, excluding third-party Actions and retries.
+- Add native parity/graph fixtures and required Python 3.11–3.13 ordinary, hosted worker,
+  deferred-execution and full command-chain CI jobs. The pipeline exercises real Git, accounts,
+  hooks, root operations and artifacts with fake GitHub, plus corruption/missing/stale/draft controls.
+- Keep retention at one day for targets, seven for Build/lane/results, 90 for gates/reuse.
+  Owner review remains for common 512 MiB archives, whole-lane 512-file/256 MiB bounds and
+  Quick Skin's 4 MiB native-report cap. No limit is raised because a pipeline fails.
+- Operator prerequisites: ratify the design/ADR, complete K7 and release; then provide native
+  adapters, lane packages before fencing and cache restore/save (current Gradle seeds are empty).
+  Provision `mod-base-gate` with `MOD_BASE_GATE_APP_CLIENT_ID` and
+  `MOD_BASE_GATE_APP_PRIVATE_KEY` before managing the status caller. Transition admission
+  remains an operator route; batch commands need reviewed paths/procedure and App credentials.
+- Adoption constraints: candidate staging currently supplies the protected kit pin; a future
+  candidate pin fails bootstrap matching and needs implementation before Q/B uses that route.
+  Per-hook timeout admission does not guarantee whole-job fit. Both remain documented expected
+  failures. Runtime reuse consumers remain Q9/B6; no K7, consumer or GitHub setting is changed.
 
 ## v1.0.3
 
