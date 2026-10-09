@@ -47,7 +47,8 @@ def runtime_selection_sha256(profile: str, lanes: list[dict[str, Any]]) -> str:
 
 
 def build_plan(*, subject: dict[str, Any], config: BuildConfig, inventory: bytes, scenario_contract: bytes,
-               plan_inputs: Mapping[str, bytes], derived: bytes) -> dict[str, Any]:
+               plan_inputs: Mapping[str, bytes], derived: bytes,
+               candidate_kit: dict[str, str] | None = None) -> dict[str, Any]:
     """The complete, validated ``mod-base.build.plan`` of ``subject``.
 
     ``inventory``, ``scenario_contract`` and the values of ``plan_inputs`` are the bytes of the
@@ -80,6 +81,8 @@ def build_plan(*, subject: dict[str, Any], config: BuildConfig, inventory: bytes
     plan = {"kind": "mod-base.build.plan", "schema_version": SCHEMA_VERSIONS["mod-base.build.plan"],
             "build_adapter_api": BUILD_ADAPTER_API, "identity": identity, "profile": profile,
             "plan_inputs": extra, "targets": units["targets"], "lanes": units["lanes"]}
+    if candidate_kit is not None:
+        plan["candidate_kit"] = dict(candidate_kit)
     plan["plan_sha256"] = plan_sha256(plan)
     validate_plan(plan)
     check(len(canonical_json(plan)) <= limits.MAX_CI_PLAN_BYTES, "$.plan", "exceeds the plan byte cap")
@@ -114,4 +117,5 @@ def plan_outputs(plan: dict[str, Any]) -> dict[str, str]:
     """The workflow outputs of ``ci plan``: ``plan_sha256`` and the two matrices as JSON arrays."""
 
     return {"plan_sha256": plan["plan_sha256"],
+            "candidate_kit_sha": plan.get("candidate_kit", {}).get("sha", ""),
             **{name: canonical_json(ids).decode("utf-8").rstrip("\n") for name, ids in matrices(plan).items()}}

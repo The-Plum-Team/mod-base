@@ -12,6 +12,13 @@ from tests.ci_request_budget import COSTS, WAITING_POLLS, generation_breakdown
 
 
 class GenerationBudgetTests(unittest.TestCase):
+    def test_candidate_pin_upgrade_adds_one_release_admission_per_run(self) -> None:
+        for targets, lanes, extra, total in ((2, 3, 1, 220), (10, 20, 0, 322), (17, 34, 1, 420)):
+            with self.subTest(targets=targets):
+                result = generation_breakdown(targets=targets, lanes=lanes, extra_inputs=extra, candidate_upgrade=True)
+                self.assertEqual(sum(result.values()), total)
+                self.assertLessEqual(total, limits.MAX_CI_GENERATION_REQUESTS)
+
     def test_every_nonzero_route_names_the_test_that_pins_it(self) -> None:
         for route, cost in COSTS.items():
             module, owner, method = cost.proof.split(".")

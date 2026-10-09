@@ -2664,7 +2664,7 @@ class LinuxLifecycleCommandTests(unittest.TestCase):
         self.assertEqual((self.state / "ci-plan.json").read_bytes(), canonical_json(expected))
         self.assertEqual(self.owner(self.state / "ci-plan.json")[2], 0o600)
         self.assertEqual(self.output.read_text(encoding="utf-8"),
-                         f"tested_sha={h.TESTED_SHA}\npr_number=7\nplan_sha256={expected['plan_sha256']}\n"
+                         f"tested_sha={h.TESTED_SHA}\npr_number=7\nplan_sha256={expected['plan_sha256']}\ncandidate_kit_sha=\n"
                          'targets=["1.20.1","1.21.1"]\nlanes=["fabric-1.20.1","forge-1.20.1","fabric-1.21.1"]\n')
         # Rule 4: the tested tree and one blob per candidate file, through a client with the pinned budget.
         self.assertEqual(self.api.request_count, 4 + 1 + len(sources))

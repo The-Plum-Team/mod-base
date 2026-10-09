@@ -35,7 +35,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:b5e1ab4bbf237c35883da3811e19c26cdbc0b4f60666a98e5b2ee19db0dd6a29"
+  MB_KIT_TREE_DIGEST: "sha256:09daef8f849493cf187d8acc58a9d8cb92a548d0bbafa04c83b247e6d812e80e"
 
 jobs:
   select:
@@ -157,6 +157,12 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --producer packaged --pr "" --github-output "$GITHUB_OUTPUT"
+      - name: Check out the tested candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.subject.outputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
       - name: Fence the host and prepare the worker accounts
         id: prepare
         shell: bash
@@ -178,7 +184,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --github-output "$GITHUB_OUTPUT"
+            --pin-candidate candidate --github-output "$GITHUB_OUTPUT"
       - name: Admit post-merge reuse
         id: reuse
         if: github.event_name == 'push'

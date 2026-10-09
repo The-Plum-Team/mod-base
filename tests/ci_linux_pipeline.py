@@ -16,8 +16,14 @@ class LinuxPipelineTests(unittest.TestCase):
     cleanup = hosted.LinuxLifecycleCommandTests.cleanup
 
     def test_pull_request_generation(self) -> None:
+        self.generation(upgrade=False)
+
+    def test_candidate_kit_upgrade_generation(self) -> None:
+        self.generation(upgrade=True)
+
+    def generation(self, *, upgrade: bool) -> None:
         started = time.monotonic()
-        pipeline = Pipeline(self, self.temporary, self.api, self.pull)
+        pipeline = Pipeline(self, self.temporary, self.api, self.pull, upgrade=upgrade)
         pipeline.begin("build")
         planned = pipeline.job("build", "plan")
         self.assertEqual(planned.outputs["mode"], "full")
@@ -45,6 +51,11 @@ class LinuxPipelineTests(unittest.TestCase):
         self.assertEqual({gate: (value["context"], value["state"]) for gate, value in intents["gates"].items()},
                          {gate: (context, "success") for gate, context in contexts.items()})
         pipeline.complete("status")
+        self.assertEqual(sum(count for _, _, count in pipeline.requests), 220 if upgrade else 211)
+        if upgrade:
+            self.assertTrue(pipeline.future_resolved)
+            self.assertEqual(pipeline.plan["identity"]["kit"]["sha"], pipeline.pin)
+            self.assertEqual(pipeline.plan["candidate_kit"]["sha"], pipeline.future_pin.sha)
         controls = (
             ("altered-lane", "packaged-e2e/gate", "seal-gate", pipeline.altered_lane,
              "the results index lists other lane artifacts"),

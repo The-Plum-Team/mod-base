@@ -10,6 +10,14 @@ document shape changes. The compatibility decision of every kind against the pre
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
 with the archived reader in `tests/fixtures/previous_release/`.
 
+The unreleased v1 Build plan optionally carries `candidate_kit: {sha, version}` when
+candidate tests use a different released kit. The plan hash binds it; `identity.kit`
+always names the executing protected kit. Same-pin plans omit it and retain their
+existing bytes. Older strict readers reject the new field: this capability must first
+be present in the protected executing release before a consumer can use the upgrade
+route. This optional extension does not promise that an older implementation can
+admit a newer digest algorithm or lock representation.
+
 Every document the kit reads or writes, its exact fields and the structural rules
 `mod_base.model.documents` (and `mod_base.config` for the config) enforce. The validators are
 the normative definition; this page explains them. A valid example of every kind lives in

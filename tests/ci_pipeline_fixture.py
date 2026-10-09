@@ -27,6 +27,7 @@ from mod_base import __version__, cli, runtime, workflow
 from mod_base.build_ci import commands
 from tests import ci_lifecycle_fixture as fixture
 from tests import ci_mod_harness as h
+from tests import ci_future_kit
 from tests.ci_request_budget import command_route, generation_breakdown, request_cost
 from tests.test_workflow_ci_policy import CI_COMMAND, CI_INPUTS, ci_callee, step_verb
 from tests.test_workflow_policy import ShellHarness, load_yaml, outputs
@@ -72,11 +73,13 @@ class Captured:
 class Pipeline:
     """One PR generation, retaining exactly the artifacts and outputs its jobs produced."""
 
-    def __init__(self, test: Any, root: Path, api: Any, pull: dict[str, Any]) -> None:
+    def __init__(self, test: Any, root: Path, api: Any, pull: dict[str, Any], *, upgrade: bool = False) -> None:
         self.test, self.root, self.api = test, root, api
         self.clock = datetime(2026, 10, 8, tzinfo=timezone.utc)
         self.requests: list[tuple[str, str, int]] = []
         self.first_fence = len(FENCE_LAUNCHES)
+        self.upgrade = upgrade
+        self.future_resolved = False
         self.runs: dict[str, dict[str, Any]] = {}
         self.listings: dict[str, list[dict[str, Any]]] = {}
         self.artifacts: dict[str, tuple[dict[str, Any], bytes]] = {}
@@ -92,6 +95,11 @@ class Pipeline:
         fixture.git(self.kit, "add", "-A")
         fixture.git(self.kit, "commit", "-q", "-m", "kit under test")
         self.pin = fixture.git(self.kit, "rev-parse", "HEAD")
+        self.future = root / "future-kit-source"
+        if upgrade:
+            self.future_pin, self.future_digest = ci_future_kit.future_kit(self.kit, self.future, candidate_only=True)
+            fixture.git(self.future, "merge-base", "--is-ancestor", self.pin, self.future_pin.sha)
+            ci_future_kit.release(api, self.future_pin)
         self.mod = h.materialize(root / "mod-source")
         activation = {"kind": "mod-base.ci.activation", "schema_version": 1, "repository": h.REPOSITORY,
                       "profile": h.build_config()["profile"], "mode": "shared-build-and-e2e", "rollback_from": None}
@@ -105,6 +113,33 @@ class Pipeline:
         fixture.git(self.mod, "add", "-A")
         fixture.git(self.mod, "commit", "-q", "-m", "protected controller")
         self.controller = fixture.git(self.mod, "rev-parse", "HEAD")
+        controller_tree = fixture.git(self.mod, "rev-parse", "HEAD^{tree}")
+        if upgrade:
+            for relative in managed:
+                path = self.mod / relative
+                path.write_text(path.read_text(encoding="utf-8").replace(self.pin, self.future_pin.sha)
+                                .replace("# v" + __version__, "# " + self.future_pin.version),
+                                encoding="utf-8", newline="\n")
+            shutil.copyfile(self.future / "template/managed/scripts/ci/mod_base_kit.py",
+                            self.mod / "scripts/ci/mod_base_kit.py")
+            policy = self.mod / "scripts/ci/policy_suite.py"
+            policy.write_text(policy.read_text(encoding="utf-8") + '''
+def _future_kit_resolves(root):
+    import importlib.util, sys
+    spec = importlib.util.spec_from_file_location("candidate_bootstrap", root / "scripts/ci/mod_base_kit.py")
+    bootstrap = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = bootstrap
+    spec.loader.exec_module(bootstrap)
+    import os
+    kit = bootstrap.kit_path(root, dict(os.environ))
+    assert kit == root / "out/mod-base-kit"
+    sys.path.insert(0, str(kit / "src"))
+    import mod_base
+    assert mod_base.CANDIDATE_FUTURE_KIT and mod_base.__version__ == "1.0.4"
+    print("FUTURE_KIT_RESOLVED " + str(kit))
+CHECKS += (_future_kit_resolves,)
+''', encoding="utf-8", newline="\n")
+            fixture.git(self.mod, "add", "-A")
         fixture.git(self.mod, "commit", "-q", "--allow-empty", "-m", "candidate head")
         self.head = fixture.git(self.mod, "rev-parse", "HEAD")
         self.tree = fixture.git(self.mod, "rev-parse", "HEAD^{tree}")
@@ -114,8 +149,8 @@ class Pipeline:
                      "head": {**pull["head"], "sha": self.head},
                      "base": {**pull["base"], "sha": self.controller}}
         h.seed_pull_request(api, self.pull)
-        api.set_branch(h.BRANCH, self.controller, self.tree)
-        api.add_commit(self.controller, self.tree, parents=[])
+        api.set_branch(h.BRANCH, self.controller, controller_tree)
+        api.add_commit(self.controller, controller_tree, parents=[])
         api.add_commit(self.head, self.tree, parents=[self.controller])
         api.add_commit(self.tested, self.tree, parents=[self.controller, self.head])
         rows = []
@@ -277,7 +312,7 @@ class Pipeline:
                 elif item.get("uses", "").startswith("actions/checkout@"):
                     options = item["with"]
                     pin = self.resolve(options["ref"], context)
-                    source = self.kit if options["path"] == "kit" else self.mod
+                    source = {"kit": self.kit, "candidate-kit": self.future}.get(options["path"], self.mod)
                     self.checkout(source, workspace / options["path"], pin)
                 elif item.get("uses", "").startswith("actions/upload-artifact@"):
                     self.upload(producer, item["with"], context)
@@ -313,12 +348,21 @@ class Pipeline:
                             count = self.api.request_count - before
                             self.requests.append((label, verb, count))
                             self.test.assertEqual((code, stderr), (0, ""), f"{label} / {verb}: {stdout}\n{stderr}")
+                            if self.upgrade and verb == "worker-run" and job_id == "policy":
+                                self.test.assertIn("FUTURE_KIT_RESOLVED", stdout)
+                                self.future_resolved = True
+                            if self.upgrade and verb == "worker-stage":
+                                stage = json.loads((temporary / "mb-state/worker-stage.json").read_bytes())
+                                self.test.assertEqual(stage["kit"], {"sha": self.future_pin.sha, "version": "1.0.4",
+                                                                    "tree_digest": self.future_digest})
                             if verb == "plan" and self.plan is None:
                                 self.plan = json.loads((temporary / "mb-state/ci-plan.json").read_bytes())
                             if self.plan:
                                 cost = request_cost(command_route(verb, item["run"], callee),
                                                     targets=len(self.plan["targets"]), lanes=len(self.plan["lanes"]),
                                                     extra_inputs=len(self.plan.get("plan_inputs", [])))
+                                if self.upgrade and verb == "plan" and "--expect-sha256" not in argv:
+                                    cost += 3
                                 self.test.assertEqual(count, cost, f"{label}/{verb} request count")
                 if "id" in item:
                     context[f"steps.{item['id']}.outcome"] = conclusion
@@ -376,7 +420,7 @@ class Pipeline:
             key = "/".join(job.split("/")[:2])
             totals[key] = totals.get(key, 0) + count
         expected = generation_breakdown(targets=len(self.plan["targets"]), lanes=len(self.plan["lanes"]),
-                                        extra_inputs=len(self.plan["plan_inputs"]))
+                                        extra_inputs=len(self.plan["plan_inputs"]), candidate_upgrade=self.upgrade)
         self.test.assertEqual(totals, {key: expected[key] for key in totals})
         self.test.assertEqual(self.fences, sum(verb == "worker-prepare" for _, verb, _ in self.requests))
         print("job | requests | command counts")

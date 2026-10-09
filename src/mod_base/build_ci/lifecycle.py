@@ -60,7 +60,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from mod_base.build_ci import adapter, identity, planning
+from mod_base.build_ci import adapter, candidate_kit, identity, planning
 from mod_base.build_ci.authenticate import run_head
 from mod_base.build_ci.checkout import read_objects
 from mod_base.build_ci.config import BuildConfig, load_build_config
@@ -109,7 +109,7 @@ from mod_base.io.tree import authenticate_tree_private_access, copy_regular_data
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.model.validators import Bool, Int, List, Nullable, Obj, Str, check
-from mod_base.pin import (ACTIONS_DIR, DIGESTED_DIRS, LOCKED_DIRS, STAMP_NAME, Pin, kit_tree_digest, stamp_document,
+from mod_base.pin import (ACTIONS_DIR, DIGESTED_DIRS, LOCKED_DIRS, STAMP_NAME, Pin, kit_tree_digest, parse_pin, stamp_document,
                           verify_staged_files)
 from mod_base.runtime import Invocation
 from mod_base.workflow import ci_producer
@@ -526,7 +526,7 @@ def run_protected_hook(job: Job, worker: Worker, hook: str, *, plan: dict[str, A
 
 
 def derive_plan(job: Job, worker: Worker, sources: Mapping[str, bytes], *, expected_sha256: str | None,
-                log: Callable[[str], object]) -> dict[str, Any]:
+                log: Callable[[str], object], candidate_pin: dict[str, str] | None = None) -> dict[str, Any]:
     """``ci plan``: derive, bind and record the plan of this job.
 
     ``sources`` is what :func:`api_candidate_files` or :func:`checkout_candidate_files` read: the
@@ -560,7 +560,8 @@ def derive_plan(job: Job, worker: Worker, sources: Mapping[str, bytes], *, expec
                                        owner_uid=boundary.uid, owner_gid=boundary.gid,
                                        max_bytes=limits.MAX_CI_PLAN_SOURCE_BYTES, label="derived plan")
         plan = planning.build_plan(subject=job.subject, config=job.config, inventory=inventory,
-                                   scenario_contract=scenario_contract, plan_inputs=extra, derived=derived)
+                                   scenario_contract=scenario_contract, plan_inputs=extra, derived=derived,
+                                   candidate_kit=candidate_pin)
         planning.require_plan(plan, subject=job.subject, expected_sha256=expected_sha256)
         replace_plan_inputs(boundary=boundary, validator=validator, sources=sources, plan=plan)
         _root(job, worker.python, "grant-validation-inputs",
@@ -673,29 +674,32 @@ def checkout_inventory(checkout: Path, job: Job) -> tuple[GitSourceEntry, ...]:
     return inventory
 
 
-def stage_kit_overlay(job: Job, output: Path) -> Pin:
+def stage_kit_overlay(job: Job, output: Path, *, supplied_kit: Path | None = None,
+                      supplied_pin: Pin | None = None, supplied_digest: str | None = None) -> Pin:
     """Runner-only: stage the verified kit at the new directory ``output`` as a mod's bootstrap does.
 
     The copy holds the digested directories, ``template/``, ``tools/`` and ``actions/`` of the kit
-    checkout this command executes (regular files only, none executable) and the stamp
-    ``MOD_BASE_KIT.json`` for the kit commit and version of the subject. It must have the verified
+    checkout this command executes, or the separately verified ``supplied_kit`` with its pin and
+    digest (regular files only, none executable), and the stamp ``MOD_BASE_KIT.json`` for that kit.
+    It must have the verified
     kit-digest-v1 and match the staged-file locks. Returns the pin the stamp names; root admits the
     overlay against it again before it copies it to the candidate's ``out/mod-base-kit``.
     """
 
     kit = job.subject["kit"]
-    pin = Pin(kit["sha"], "v" + kit["version"], ())
+    pin = supplied_pin or Pin(kit["sha"], "v" + kit["version"], ())
+    root, digest = supplied_kit or job.kit_root, supplied_digest or job.kit_digest
 
     def writer(stage: Path, stage_fd: int) -> None:
         for top in _KIT_DIRECTORIES:
             os.mkdir(top, 0o700, dir_fd=stage_fd)
             descriptor = os.open(top, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=stage_fd)
             try:
-                copy_regular_data_files(job.kit_root / top, descriptor, **_KIT_BOUNDS)
+                copy_regular_data_files(root / top, descriptor, **_KIT_BOUNDS)
             finally:
                 os.close(descriptor)
-        write_new(stage_fd, STAMP_NAME, canonical_json(stamp_document(pin, job.kit_digest)))
-        check(kit_tree_digest(stage) == job.kit_digest, "$.kit", "the staged kit differs from the verified checkout")
+        write_new(stage_fd, STAMP_NAME, canonical_json(stamp_document(pin, digest)))
+        check(kit_tree_digest(stage) == digest, "$.kit", "the staged kit differs from the verified checkout")
         verify_staged_files(stage)
 
     try:
@@ -706,7 +710,7 @@ def stage_kit_overlay(job: Job, output: Path) -> Pin:
 
 
 def stage_candidate(job: Job, worker: Worker, plan: dict[str, Any], checkout: Path, *, gradle_seed: Path | None,
-                    bundle: bool) -> dict[str, Any]:
+                    bundle: bool, future_kit: Path | None = None) -> dict[str, Any]:
     """``ci worker-stage``: give the candidate its checkout, the kit and, for a lane, the Build.
 
     The runner's ``checkout`` must be detached at the tested commit and hold exactly the tested
@@ -727,16 +731,27 @@ def stage_candidate(job: Job, worker: Worker, plan: dict[str, Any], checkout: Pa
     seed = None if gradle_seed is None else Path(os.path.abspath(gradle_seed))
     inventory = checkout_inventory(checkout, job)
     verify_source_copy(checkout, inventory=inventory)
+    supplied = plan.get("candidate_kit", job.subject["kit"])
+    pin = Pin(supplied["sha"], "v" + supplied["version"], ())
+    kit_root, kit_digest = job.kit_root, job.kit_digest
+    if "candidate_kit" in plan:
+        actual_pin = parse_pin(checkout)
+        check((pin.sha, pin.version) == (actual_pin.sha, actual_pin.version), "$.candidate_kit",
+              "candidate pin differs from the protected plan's admitted kit")
+        check(future_kit is not None, "$.candidate_kit", "the admitted candidate kit needs its separate pinned checkout")
+        kit_root = Path(os.path.abspath(future_kit))
+        kit_digest = candidate_kit.verify_future_checkout(kit_root, pin)
     with resting(worker.accounts):
         envelope = _complete_build(worker, plan) if bundle else None
         try:
             with tempfile.TemporaryDirectory(prefix="mb-ci-stage-", dir=job.state) as temporary:
                 overlay = Path(temporary) / "kit"
-                pin = stage_kit_overlay(job, overlay)
+                pin = stage_kit_overlay(job, overlay, supplied_kit=kit_root, supplied_pin=pin,
+                                        supplied_digest=kit_digest)
                 _root(job, worker.python, "stage-candidate", request_candidate_staging(
                     boundary=worker.boundary, candidate=candidate, repository=job.subject["repository"],
                     tested_sha=job.subject["tested_sha"], tested_tree=job.subject["tested_tree"],
-                    inventory=inventory, source=checkout, overlay=overlay, pin=pin, expected_digest=job.kit_digest,
+                    inventory=inventory, source=checkout, overlay=overlay, pin=pin, expected_digest=kit_digest,
                     gradle_seed=seed))
         except OSError as error:
             raise identity.StateError(f"cannot hold the staged kit in the state directory: "
@@ -748,7 +763,7 @@ def stage_candidate(job: Job, worker: Worker, plan: dict[str, Any], checkout: Pa
     stage = {"candidate": checkout.as_posix(), "tested_sha": job.subject["tested_sha"],
              "tested_tree": job.subject["tested_tree"],
              "source": {"files": len(inventory), "bytes": sum(entry.size for entry in inventory)},
-             "kit": {"sha": pin.sha, "version": pin.version[1:], "tree_digest": job.kit_digest},
+             "kit": {"sha": pin.sha, "version": pin.version[1:], "tree_digest": kit_digest},
              "gradle_seed": seed is not None,
              "bundle": None if envelope is None else {
                  "path": job.config.data["bundle"]["path"], "envelope_sha256": canonical_sha256(envelope),

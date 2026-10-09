@@ -142,7 +142,7 @@ KIT: dict[str, tuple[Any, str]] = {
                                         "size, and room for retries and further listing pages"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),
     "MAX_CI_WORKER_RECORD_BYTES": (256 * KIB, "the private worker record of one job"),
-    "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation without a candidate checkout may spend"),
+    "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation and initial changed-release admission may spend"),
     "CI_GIT_READ_TIMEOUT_SECONDS": (60.0, "one object read from a checkout of the job"),
     "MAX_CI_GIT_ANSWER_BYTES": (4 * KIB, "one object id or tree entry read from a checkout of the job"),
     "MAX_CI_GIT_COMMIT_BYTES": (1 * MIB, "one commit object read whole from a checkout of the job: header, "

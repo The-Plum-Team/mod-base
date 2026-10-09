@@ -866,7 +866,8 @@ class PlanCommandTests(JobCase):
         self.received = []
         self.runs = getattr(self, "runs", 0) + 1
 
-        def derive(job, worker, files, *, expected_sha256, log):
+        def derive(job, worker, files, *, expected_sha256, log, candidate_pin=None):
+            self.assertIsNone(candidate_pin)
             self.received.append((worker, files, expected_sha256))
             sandbox = h.Sandbox(self.temporary / f"pure-{self.runs}", protected=self.mod)
             sandbox.subject = job.subject
@@ -890,7 +891,7 @@ class PlanCommandTests(JobCase):
         lines = self.output.read_text(encoding="utf-8").splitlines()
         self.assertEqual(lines[:2], [f"tested_sha={h.TESTED_SHA}", "pr_number=7"])
         self.assertRegex(lines[2], r"^plan_sha256=[0-9a-f]{64}$")
-        self.assertEqual(lines[3:], ['targets=["1.20.1","1.21.1"]',
+        self.assertEqual(lines[3:], ['candidate_kit_sha=', 'targets=["1.20.1","1.21.1"]',
                                      'lanes=["fabric-1.20.1","forge-1.20.1","fabric-1.21.1"]'])
         self.assertEqual(stdout, f"plan: {lines[2].split('=')[1]} with 2 targets and 3 lanes\n")
 
@@ -908,7 +909,7 @@ class PlanCommandTests(JobCase):
         self.assertEqual((self.api.request_count, self.commands.budgets),
                          (SUBJECT_REQUESTS, [limits.MAX_CI_SUBJECT_REQUESTS]))
         self.assertEqual(self.run_plan("--candidate", str(checkout))[0], 0)
-        self.assertEqual(self.output.read_text(encoding="utf-8").count("\n"), 5)
+        self.assertEqual(self.output.read_text(encoding="utf-8").count("\n"), 6)
         self.assertEqual((self.api.request_count, self.commands.budgets),
                          (SUBJECT_REQUESTS, [limits.MAX_CI_SUBJECT_REQUESTS]))
 

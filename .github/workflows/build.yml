@@ -27,7 +27,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:b5e1ab4bbf237c35883da3811e19c26cdbc0b4f60666a98e5b2ee19db0dd6a29"
+  MB_KIT_TREE_DIGEST: "sha256:09daef8f849493cf187d8acc58a9d8cb92a548d0bbafa04c83b247e6d812e80e"
 
 jobs:
   plan:
@@ -153,6 +153,12 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --producer build --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Check out the tested candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.subject.outputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
       - name: Fence the host and prepare the worker accounts
         id: prepare
         shell: bash
@@ -174,7 +180,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --github-output "$GITHUB_OUTPUT"
+            --pin-candidate candidate --github-output "$GITHUB_OUTPUT"
       - name: Admit post-merge reuse
         id: reuse
         if: github.event_name == 'push'
@@ -334,6 +340,7 @@ jobs:
             --roles candidate+validator --python "$interpreter" \
             --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
       - name: Rederive the protected plan
+        id: plan
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -349,7 +356,15 @@ jobs:
             fail "the candidate checkout is not the planned tested commit"
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+            --pin-candidate candidate --candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+      - name: Check out the admitted candidate kit
+        if: steps.plan.outputs.candidate_kit_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ steps.plan.outputs.candidate_kit_sha }}
+          path: candidate-kit
+          persist-credentials: false
       - name: Stage the candidate for its worker
         shell: bash
         run: |
@@ -357,7 +372,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci worker-stage --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --candidate candidate
+            --candidate candidate --future-kit candidate-kit
       - name: Run the protected policy suite
         shell: bash
         run: |
@@ -525,6 +540,7 @@ jobs:
             --roles candidate+validator --python "$interpreter" \
             --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
       - name: Rederive the protected plan
+        id: plan
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -540,7 +556,15 @@ jobs:
             fail "the candidate checkout is not the planned tested commit"
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+            --pin-candidate candidate --candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+      - name: Check out the admitted candidate kit
+        if: steps.plan.outputs.candidate_kit_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ steps.plan.outputs.candidate_kit_sha }}
+          path: candidate-kit
+          persist-credentials: false
       - name: Stage the candidate for its worker
         shell: bash
         run: |
@@ -548,7 +572,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci worker-stage --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --candidate candidate
+            --candidate candidate --future-kit candidate-kit
       - name: Build the target as the candidate
         shell: bash
         env:
@@ -719,6 +743,12 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --producer build --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Check out the tested candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.subject.outputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
       - name: Fence the host and prepare the worker accounts
         id: prepare
         shell: bash
@@ -731,6 +761,7 @@ jobs:
             --roles validator --python "$interpreter" \
             --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
       - name: Rederive the protected plan
+        id: plan
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -742,7 +773,7 @@ jobs:
           [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed planned digest"
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+            --pin-candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
       - name: Assemble the exact target union
         shell: bash
         env:
@@ -898,6 +929,12 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --producer build --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Check out the tested candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.subject.outputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
       - name: Fence the host and prepare the worker accounts
         id: prepare
         shell: bash
@@ -910,6 +947,7 @@ jobs:
             --roles validator --python "$interpreter" \
             --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
       - name: Rederive the protected plan
+        id: plan
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -921,7 +959,7 @@ jobs:
           [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed planned digest"
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
+            --pin-candidate candidate --expect-sha256 "$PLAN_SHA256" --github-output "$GITHUB_OUTPUT"
       - name: Validate frozen native exports
         shell: bash
         env:

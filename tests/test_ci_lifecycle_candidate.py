@@ -23,7 +23,7 @@ from pathlib import Path
 from unittest import mock
 
 from mod_base import __version__, runtime
-from mod_base.build_ci import identity, lifecycle, worker_overlay
+from mod_base.build_ci import candidate_kit, identity, lifecycle, worker_overlay
 from mod_base.build_ci.host import HostBoundary
 from mod_base.build_ci.root_request_operations import candidate_generated_roots
 from mod_base.build_ci.source import verify_source_copy
@@ -39,6 +39,7 @@ from mod_base.pin import (ACTIONS_LOCK, STAGED_LOCK, STAMP_NAME, actions_listing
 from tests import ci_candidate_fixture as candidate_fixture
 from tests import ci_lifecycle_fixture as fixture
 from tests import ci_mod_harness as h
+from tests import ci_future_kit
 
 SUBJECT_REQUESTS = 4
 ROOT = "/tmp/mod-base-sandbox-boundary/mod-base-worker"
@@ -211,7 +212,7 @@ class InventoryTests(CandidateCase):
 
 
 class KitOverlayTests(CandidateCase):
-    def resolve_staged_candidate(self, sha: str, version: str) -> None:
+    def resolve_staged_candidate(self, sha: str, version: str, *, future: Path | None = None) -> None:
         """Run the managed bootstrap over the actual overlay a candidate job supplies."""
         tested = h.materialize(self.temporary / "tested")
         (tested / ".github/workflows/kit.yml").write_text(
@@ -219,14 +220,22 @@ class KitOverlayTests(CandidateCase):
             f"    uses: The-Plum-Team/mod-base/.github/workflows/build.yml@{sha} # {version}\n",
             encoding="utf-8", newline="\n")
         job = self.begin(tested)
-        # Even a candidate pin whose immutable tag and ancestry pass the existing
-        # protected admission cannot resolve the overlay of a different executing pin.
+        # Release admission and staging use the executing verifier; the candidate bootstrap
+        # then resolves the actual supplied kit against the candidate's complete pin.
         api = FakeGitHub(repository="The-Plum-Team/mod-base")
         api.add_compare(sha, "main", {"status": "ahead", "behind_by": 0, "ahead_by": 1})
         api.add_ref("tags/" + version, sha, annotated_tag_sha="5" * 40)
         verify_released(parse_pin(self.checkout), api)
         overlay = self.checkout / "out/mod-base-kit"
-        lifecycle.stage_kit_overlay(job, overlay)
+        admitted = candidate_kit.planned_pin(self.checkout, job.subject, api=api)
+        if future is None:
+            self.assertIsNone(admitted)
+            lifecycle.stage_kit_overlay(job, overlay)
+        else:
+            pin = parse_pin(self.checkout)
+            digest = candidate_kit.verify_future_checkout(future, pin)
+            lifecycle.stage_kit_overlay(job, overlay, supplied_kit=future, supplied_pin=pin, supplied_digest=digest)
+            self.assertNotEqual(digest, job.kit_digest)
         result = subprocess.run(
             (sys.executable, "-I", "-B", str(job.kit_root / "template/managed/scripts/ci/mod_base_kit.py"),
              "path", "--repo", str(self.checkout)),
@@ -239,13 +248,10 @@ class KitOverlayTests(CandidateCase):
     def test_an_unchanged_candidate_pin_resolves_the_lifecycle_overlay(self) -> None:
         self.resolve_staged_candidate(h.KIT_SHA, "v" + __version__)
 
-    # Scope decision: ordinary K1-K6 generations keep the protected pin. Supporting a
-    # candidate's future pin needs separate overlay admission before Q/B adopts that
-    # upgrade route; do not relax bootstrap verification or change the executing pin.
-    # See BUILD-PROTOCOL.md, "Candidate kit pin limitation".
-    @unittest.expectedFailure  # Candidate overlay admission must distinguish the future pin from the executing pin.
     def test_a_candidate_kit_bump_resolves_the_lifecycle_overlay(self) -> None:
-        self.resolve_staged_candidate("4" * 40, "v1.0.4")
+        future = self.temporary / "future-kit"
+        pin, _ = ci_future_kit.future_kit(runtime.kit_root(), future)
+        self.resolve_staged_candidate(pin.sha, pin.version, future=future)
 
     def test_the_staged_kit_is_the_verified_checkout_with_the_stamp_root_admits(self) -> None:
         job = self.begin()

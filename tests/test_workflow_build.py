@@ -20,7 +20,7 @@ from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.model import grammar
 from mod_base.model import limits as lim
 from tests.helpers import ci_graph_jobs, ci_plan, ci_push_plan
-from tests.test_workflow_ci_policy import CANDIDATE_CHECKOUT, JDKS, SAMPLES, CiStepRunner, ci_callee
+from tests.test_workflow_ci_policy import CANDIDATE_CHECKOUT, FUTURE_KIT_CHECKOUT, JDKS, SAMPLES, CiStepRunner, ci_callee
 from tests.test_workflow_policy import PROLOGUE, UPLOAD, parse_kit_argv, require_tools, step
 
 SUBJECT = "Authenticate the tested subject"
@@ -37,11 +37,11 @@ FINISH = "Terminate and lock the worker accounts"
 SEAL, SEND = workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP
 #: The steps of each job, in order: section 5 of the architecture, per job type.
 STEPS = {
-    "plan": [*PROLOGUE, SUBJECT, PREPARE, PLAN, REUSE, FINISH],
-    "policy": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, STAGE, POLICY, LOCK, FINISH],
-    "target": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, STAGE, COMPILE, LOCK, SEAL, SEND, FINISH],
-    "assemble": [*PROLOGUE, SUBJECT, PREPARE, REPLAN, ASSEMBLE, SEAL, SEND, FINISH],
-    "gate": [*PROLOGUE, SUBJECT, PREPARE, REPLAN, SEAL, SEND, FINISH],
+    "plan": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, REUSE, FINISH],
+    "policy": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, FUTURE_KIT_CHECKOUT, STAGE, POLICY, LOCK, FINISH],
+    "target": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, FUTURE_KIT_CHECKOUT, STAGE, COMPILE, LOCK, SEAL, SEND, FINISH],
+    "assemble": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, ASSEMBLE, SEAL, SEND, FINISH],
+    "gate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, SEAL, SEND, FINISH],
 }
 NOT_REUSE = "needs.plan.outputs.mode != 'reuse'"
 PREFIX = workflow.CI_BUILD_CALL + " / "
@@ -67,7 +67,7 @@ class BuildStructureTests(unittest.TestCase):
         self.assertEqual({item["id"]: item["name"] for item in plan if "id" in item},
                          {"subject": SUBJECT, "prepare": PREPARE, "plan": PLAN, "reuse": REUSE})
         # The plan outputs are the ones the kit writes for a plan.
-        self.assertEqual(set(planning.plan_outputs(ci_plan())), {"plan_sha256", "targets", "lanes"})
+        self.assertEqual(set(planning.plan_outputs(ci_plan())), {"plan_sha256", "targets", "lanes", "candidate_kit_sha"})
 
     def test_job_graph_conditions_and_timeouts(self) -> None:
         self.assertEqual(list(self.jobs), ["plan", "policy", "target", "assemble", "gate"])
@@ -94,6 +94,8 @@ class BuildStructureTests(unittest.TestCase):
         for job_id, job in self.jobs.items():
             conditions = {item["name"]: item["if"] for item in job["steps"] if "if" in item}
             expected = {name: condition for name, condition in always.items() if name in STEPS[job_id]}
+            if job_id in ("policy", "target"):
+                expected[FUTURE_KIT_CHECKOUT] = "steps.plan.outputs.candidate_kit_sha != ''"
             with self.subTest(job=job_id):
                 self.assertEqual(conditions, {**expected, **({REUSE: "github.event_name == 'push'"}
                                                              if job_id == "plan" else {})})
@@ -253,9 +255,9 @@ class BuildShellTests(unittest.TestCase):
         # A job that holds the candidate checkout derives its subject from it and from one request.
         derived = ["ci", "subject", *job, "--producer", "build", "--pr", "17", "--candidate", "candidate", *out]
         expected = ["--expect-sha256", SAMPLES["PLAN_SHA256"], *out]
-        replan = ["ci", "plan", *job, *expected]
-        replan_candidate = ["ci", "plan", *job, "--candidate", "candidate", *expected]
-        stage = ["ci", "worker-stage", *job, "--candidate", "candidate"]
+        replan = ["ci", "plan", *job, "--pin-candidate", "candidate", *expected]
+        replan_candidate = ["ci", "plan", *job, "--pin-candidate", "candidate", "--candidate", "candidate", *expected]
+        stage = ["ci", "worker-stage", *job, "--candidate", "candidate", "--future-kit", "candidate-kit"]
         finish = ["ci", "worker-finish", *job]
 
         def prepare(roles: str) -> list[str]:
@@ -263,7 +265,7 @@ class BuildShellTests(unittest.TestCase):
                     *(word for home in JDKS.values() for word in ("--java-home", home))]
 
         self.assertEqual({job_id: self.commands(job_id) for job_id in self.jobs}, {
-            "plan": [subject, prepare("validator"), ["ci", "plan", *job, *out], ["ci", "reuse-admit", *job, *out],
+            "plan": [subject, prepare("validator"), ["ci", "plan", *job, "--pin-candidate", "candidate", *out], ["ci", "reuse-admit", *job, *out],
                      finish],
             "policy": [derived, prepare("candidate+validator"), replan_candidate, stage,
                        ["ci", "worker-run", *job, "--hook", "policy"], ["ci", "worker-seal", *job], finish],

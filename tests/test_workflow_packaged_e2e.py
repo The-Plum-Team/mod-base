@@ -24,7 +24,7 @@ from mod_base.model import grammar
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json
 from tests.helpers import ci_graph_jobs, ci_plan, ci_push_plan, ci_selection
-from tests.test_workflow_ci_policy import (CANDIDATE_CHECKOUT, JDKS, RECEIVE_STEP, SAMPLES, CiStepRunner, ci_callee,
+from tests.test_workflow_ci_policy import (CANDIDATE_CHECKOUT, FUTURE_KIT_CHECKOUT, JDKS, RECEIVE_STEP, SAMPLES, CiStepRunner, ci_callee,
                                            step_verb)
 from tests.test_workflow_policy import PROLOGUE, UPLOAD, parse_kit_argv, require_tools, step
 
@@ -44,11 +44,11 @@ SEAL, SEND = workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP
 #: The steps of each job, in order: section 5 of the architecture, per job type. The aggregate
 #: job's sealing step is ``ci aggregate`` itself: the kit indexes the lane results, no hook runs.
 STEPS = {
-    "input": [*PROLOGUE, SUBJECT, PREPARE, PLAN, SELECT, FINISH],
-    "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, RECEIVE, FETCH, STAGE, RUN, LOCK, SEAL, SEND,
+    "input": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, SELECT, FINISH],
+    "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, RECEIVE, FETCH, FUTURE_KIT_CHECKOUT, STAGE, RUN, LOCK, SEAL, SEND,
              FINISH],
-    "aggregate": [*PROLOGUE, SUBJECT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
-    "gate": [*PROLOGUE, SUBJECT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
+    "aggregate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
+    "gate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
 }
 NOT_REUSE = "inputs.mode != 'reuse'"
 PREFIX = workflow.CI_PACKAGED_CALL + " / "
@@ -88,7 +88,7 @@ class PackagedStructureTests(unittest.TestCase):
         self.assertEqual({item["id"]: item["name"] for item in steps if "id" in item},
                          {"subject": SUBJECT, "prepare": PREPARE, "plan": PLAN, "select": SELECT})
         # The plan outputs are the ones the kit writes for a plan.
-        self.assertEqual(set(planning.plan_outputs(ci_plan())), {"plan_sha256", "targets", "lanes"})
+        self.assertEqual(set(planning.plan_outputs(ci_plan())), {"plan_sha256", "targets", "lanes", "candidate_kit_sha"})
 
     def test_job_graph_conditions_and_timeouts(self) -> None:
         self.assertEqual(list(self.jobs), ["input", "lane", "aggregate", "gate"])
@@ -116,6 +116,8 @@ class PackagedStructureTests(unittest.TestCase):
         for job_id, job in self.jobs.items():
             conditions = {item["name"]: item["if"] for item in job["steps"] if "if" in item}
             expected = {name: condition for name, condition in always.items() if name in STEPS[job_id]}
+            if job_id == "lane":
+                expected[FUTURE_KIT_CHECKOUT] = "steps.plan.outputs.candidate_kit_sha != ''"
             with self.subTest(job=job_id):
                 self.assertEqual(conditions, {**expected, **({RECEIVE: NOT_REUSE} if job_id == "gate" else {})})
 
@@ -306,21 +308,21 @@ class PackagedShellTests(unittest.TestCase):
         finish = ["ci", "worker-finish", *job]
         self.assertEqual({job_id: self.commands(job_id) for job_id in self.jobs}, {
             # A pull request names no run: the kit finds its separate Build run and waits for it.
-            "input": [subject, self.prepare("validator"), ["ci", "plan", *job, *out],
+            "input": [subject, self.prepare("validator"), ["ci", "plan", *job, "--pin-candidate", "candidate", *out],
                       ["ci", "select-build", *job, "--build-run-id", "", "--wait-seconds", "5400",
                        "--output", self.selection, *out], finish],
             "lane": [derived, self.prepare("candidate+validator"),
-                     ["ci", "plan", *job, "--candidate", "candidate", *expected, *out],
+                     ["ci", "plan", *job, "--pin-candidate", "candidate", "--candidate", "candidate", *expected, *out],
                      ["ci", "fetch-build", *job, *selection],
-                     ["ci", "worker-stage", *job, "--candidate", "candidate", "--bundle"],
+                     ["ci", "worker-stage", *job, "--candidate", "candidate", "--future-kit", "candidate-kit", "--bundle"],
                      ["ci", "worker-run", *job, "--hook", "run_lane", "--unit", "lane-a"],
                      ["ci", "worker-seal", *job],
                      ["ci", "worker-validate", *job, "--hook", "verify_runtime", "--unit", "lane-a", *upload],
                      finish],
             # The kit indexes the lane results itself: no validator hook and no Build bundle here.
-            "aggregate": [subject, self.prepare("validator"), ["ci", "plan", *job, *expected, *out],
+            "aggregate": [subject, self.prepare("validator"), ["ci", "plan", *job, "--pin-candidate", "candidate", *expected, *out],
                           ["ci", "aggregate", *job, *selection, *upload], finish],
-            "gate": [subject, self.prepare("validator"), ["ci", "plan", *job, *out, *expected],
+            "gate": [subject, self.prepare("validator"), ["ci", "plan", *job, "--pin-candidate", "candidate", *out, *expected],
                      ["ci", "seal-gate", *job, "--gate", "packaged", *selection, *upload], finish],
         })
         self.assertEqual(list(JDKS), ["JAVA_HOME_17_X64", "JAVA_HOME_21_X64", "JAVA_HOME_25_X64"])
@@ -344,7 +346,7 @@ class PackagedShellTests(unittest.TestCase):
         self.assertEqual(self.commands("gate", **REUSED), [
             ["ci", "subject", *job, "--producer", "packaged", "--pr", "", *out], self.prepare("validator"),
             # The input job was skipped: there is no planned digest to expect and no selection to judge.
-            ["ci", "plan", *job, *out],
+            ["ci", "plan", *job, "--pin-candidate", "candidate", *out],
             ["ci", "seal-gate", *job, "--gate", "packaged", *self.upload], ["ci", "worker-finish", *job]])
         self.assertEqual([command[1] for command in self.commands("gate", **REUSED)],
                          list(workflow.CI_JOB_VERBS[NAME]["gate"]))

@@ -83,6 +83,7 @@ CI_ENVIRONMENT = {"build": {},
 
 #: The third checkout, present exactly in the jobs that stage and run candidate code.
 CANDIDATE_CHECKOUT = "Check out the tested candidate"
+FUTURE_KIT_CHECKOUT = "Check out the admitted candidate kit"
 CANDIDATE_VERBS = frozenset({"worker-stage", "worker-run"})
 #: The verbs that call the API: exactly the steps that run one hold the step-scoped token.
 API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate", "select-build", "fetch-build",
@@ -121,6 +122,10 @@ CONDITIONAL_STEPS = {
     ("gate-status", "evaluate", "worker-prepare"): UNSETTLED,
     ("gate-status", "evaluate", "plan"): UNSETTLED,
     ("gate-status", "evaluate", "gate-status"): UNSETTLED,
+    ("gate-status", "evaluate", CANDIDATE_CHECKOUT): UNSETTLED,
+    ("build", "policy", FUTURE_KIT_CHECKOUT): "steps.plan.outputs.candidate_kit_sha != ''",
+    ("build", "target", FUTURE_KIT_CHECKOUT): "steps.plan.outputs.candidate_kit_sha != ''",
+    ("packaged-e2e", "lane", FUTURE_KIT_CHECKOUT): "steps.plan.outputs.candidate_kit_sha != ''",
 }
 #: The verbs of a job's one ``workflow.CI_SEAL_STEP``: a hook of the validator account, a gate, or
 #: the kit's own index of the lane results (``ci aggregate`` runs no hook).
@@ -156,7 +161,7 @@ RETURNED_OUTPUT = re.compile(r"\bjobs\.([a-z][a-z0-9_-]*)\.outputs\.([A-Za-z0-9_
 #: so they are spelled out here and :func:`ci_verb_outputs` reads the same from the commands.
 CI_VERB_OUTPUTS = {
     "subject": frozenset({"tested_sha", "pr_number"}),
-    "plan": frozenset({"plan_sha256", "targets", "lanes"}),
+    "plan": frozenset({"plan_sha256", "targets", "lanes", "candidate_kit_sha"}),
     "reuse-admit": frozenset({"mode", "reason"}),
     "select-build": frozenset({"found", "run_id", "selection"}),
     "gate-status": frozenset({"settled", "intents"}),
@@ -164,7 +169,7 @@ CI_VERB_OUTPUTS = {
 DOCUMENT_KEYS = {"name", "on", "permissions", "env", "jobs"}
 JOB_KEYS = {"name", "needs", "if", "runs-on", "timeout-minutes", "permissions", "outputs", "strategy", "steps"}
 RUN_STEP_KEYS = {"name", "id", "if", "shell", "env", "run"}
-USES_STEP_KEYS = {"name", "uses", "with"}
+USES_STEP_KEYS = {"name", "uses", "with", "if"}
 
 #: The one difference between the Pages binding step and the Build/E2E one: which workflow of the
 #: canonical branch may call the job.
@@ -659,8 +664,8 @@ class CiCalleePolicyTests(unittest.TestCase):
             checkouts = [item["name"] for item in steps if str(item.get("uses", "")).startswith("actions/checkout@")]
             with self.subTest(callee=name, job=job_id):
                 self.assertEqual([item["name"] for item in steps[:len(PROLOGUE)]], list(PROLOGUE))
-                self.assertEqual(checkouts, [PROLOGUE[1], PROLOGUE[2], *([CANDIDATE_CHECKOUT] if candidate else [])],
-                                 "the two prologue checkouts, and the candidate exactly where its code is staged")
+                self.assertEqual(checkouts, [PROLOGUE[1], PROLOGUE[2], CANDIDATE_CHECKOUT,
+                                             *([FUTURE_KIT_CHECKOUT] if candidate else [])])
                 for item in steps:
                     keys = USES_STEP_KEYS if "uses" in item else RUN_STEP_KEYS
                     self.assertLessEqual(set(item), keys, item["name"])
@@ -717,6 +722,22 @@ class CiCalleePolicyTests(unittest.TestCase):
                 if CANDIDATE_VERBS & set(workflow.CI_JOB_VERBS[name][job_id]):
                     self.assertEqual(steps[len(PROLOGUE)], {"name": CANDIDATE_CHECKOUT, "uses": CHECKOUT, "with": {
                         "ref": CANDIDATE_REF[name], "path": "candidate", "persist-credentials": "false"}})
+                    future = step(steps, FUTURE_KIT_CHECKOUT)
+                    self.assertEqual(future, {"name": FUTURE_KIT_CHECKOUT,
+                        "if": "steps.plan.outputs.candidate_kit_sha != ''", "uses": CHECKOUT, "with": {
+                            "repository": "The-Plum-Team/mod-base", "ref": "${{ steps.plan.outputs.candidate_kit_sha }}",
+                            "path": "candidate-kit", "persist-credentials": "false"}})
+                    self.assertLess(next(i for i, item in enumerate(steps) if step_verb(item) == "plan"), steps.index(future))
+                    self.assertLess(steps.index(future), next(i for i, item in enumerate(steps) if step_verb(item) == "worker-stage"))
+                else:
+                    expected = {"name": CANDIDATE_CHECKOUT, "uses": CHECKOUT, "with": {
+                        "ref": "${{ steps.subject.outputs.tested_sha }}", "path": "candidate", "persist-credentials": "false"}}
+                    if name == "gate-status":
+                        expected["if"] = UNSETTLED
+                    self.assertEqual(step(steps, CANDIDATE_CHECKOUT), expected)
+                    self.assertLess(next(i for i, item in enumerate(steps) if step_verb(item) == "subject"),
+                                    steps.index(step(steps, CANDIDATE_CHECKOUT)))
+                self.assertIn("--pin-candidate candidate", next(item["run"] for item in steps if step_verb(item) == "plan"))
 
     def test_every_kit_invocation_is_isolated_and_the_next_verb_of_its_job(self) -> None:
         for name, job_id, job in iter_ci_jobs():
@@ -884,7 +905,7 @@ class CiCalleePolicyTests(unittest.TestCase):
             subject = next(item for item in steps if step_verb(item) == "subject")
             words = subject["run"].splitlines()[-1].split()
             with self.subTest(callee=name, job=job_id):
-                self.assertEqual("--candidate" in words, CANDIDATE_CHECKOUT in names)
+                self.assertEqual("--candidate" in words, names.index(CANDIDATE_CHECKOUT) < names.index(subject["name"]))
                 if "--candidate" not in words:
                     continue
                 derived.add((name, job_id))

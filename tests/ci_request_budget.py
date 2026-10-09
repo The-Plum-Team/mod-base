@@ -79,7 +79,7 @@ def command_route(verb: str, script: str, workflow: str) -> str:
 
 
 def generation_breakdown(*, targets: int, lanes: int, extra_inputs: int = 0,
-                         polls: int = WAITING_POLLS) -> dict[str, int]:
+                         polls: int = WAITING_POLLS, candidate_upgrade: bool = False) -> dict[str, int]:
     """Requests per job of Build, packaged E2E and one final status evaluation, from their YAML.
 
     Above 100 jobs/artifacts this is a strict lower bound: further listing pages add requests.
@@ -102,4 +102,7 @@ def generation_breakdown(*, targets: int, lanes: int, extra_inputs: int = 0,
                 request_cost(command_route(verb, item["run"], workflow), targets=targets, lanes=lanes,
                              extra_inputs=extra_inputs, polls=polls)
                 for item in job["steps"] if (verb := step_verb(item)) is not None)
+            if candidate_upgrade and (workflow, job_id) in {
+                    ("build", "plan"), ("packaged-e2e", "input"), ("gate-status", "evaluate")}:
+                result[f"{workflow}/{job_id}"] += 3
     return result

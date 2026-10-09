@@ -244,7 +244,7 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(planning.matrices(plan), {"targets": ["target-z", "target-a"], "lanes": ["lane-a", "lane-z"]})
         outputs = planning.plan_outputs(plan)
         self.assertEqual(outputs, {"plan_sha256": plan["plan_sha256"], "targets": '["target-z","target-a"]',
-                                   "lanes": '["lane-a","lane-z"]'})
+                                   "lanes": '["lane-a","lane-z"]', "candidate_kit_sha": ""})
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "output"
             cli.write_github_output(path, outputs)

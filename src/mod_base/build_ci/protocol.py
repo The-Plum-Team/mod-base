@@ -145,7 +145,7 @@ _PLAN = Obj({
     "plan_inputs": List(_PLAN_INPUT, max_items=lim.MAX_CI_PLAN_INPUTS, unique_by=lambda item: item["name"]),
     **_UNIT_FIELDS,
     "plan_sha256": SHA256,
-})
+}, {"candidate_kit": Obj({"sha": SHA1, "version": Str(g.VERSION, max_len=20)})})
 
 
 def plan_sha256(document: dict[str, Any]) -> str:

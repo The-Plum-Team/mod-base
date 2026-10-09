@@ -7,12 +7,14 @@ Each is one job step run by the runner, after ``ci subject`` created ``--state``
   fences the host and allocates the job's disposable accounts. ``--python`` is the interpreter
   hooks and root operations run with; every ``--java-home`` is a JDK the job installed (the first
   one is a hook's ``JAVA_HOME``).
-* ``plan [--candidate DIR] [--expect-sha256 HEX] [--github-output FILE]`` runs ``derive_plan`` and
+* ``plan [--candidate DIR] [--pin-candidate DIR] [--expect-sha256 HEX] [--github-output FILE]`` runs ``derive_plan`` and
   writes ``<state>/ci-plan.json``. The candidate files the protected config names come from the
   Git objects of the candidate checkout ``DIR`` when the job has one, otherwise from the API. ``--expect-sha256`` is
   the plan hash another job of the generation derived: a different plan fails. Outputs
-  ``plan_sha256`` and the JSON arrays ``targets`` and ``lanes``.
-* ``worker-stage --candidate DIR [--gradle-seed DIR] [--bundle]`` gives the candidate its own copy
+  ``plan_sha256``, ``candidate_kit_sha`` (empty at the executing pin), and the JSON arrays
+  ``targets`` and ``lanes``. Every workflow supplies ``--pin-candidate``: protected code reads all
+  its pin references and admits a changed release once, or binds it to ``--expect-sha256``.
+* ``worker-stage --candidate DIR [--future-kit DIR] [--gradle-seed DIR] [--bundle]`` gives the candidate its own copy
   of the tested commit from the runner's checkout ``DIR`` (which must be detached at that commit
   and hold nothing else), with the verified kit as ``out/mod-base-kit`` and, when given, a Gradle
   cache seed. ``--bundle`` (lane jobs) also places the complete Build of ``sealed-build/`` where
@@ -46,10 +48,11 @@ import argparse
 import sys
 
 from mod_base import cli, runtime
-from mod_base.build_ci import adapter, commands, lifecycle, planning
+from mod_base.build_ci import adapter, candidate_kit, commands, lifecycle, planning
 from mod_base.build_ci.host import _canonical_path
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
+from mod_base.pin import Pin, verify_released
 
 
 def _tool_path(value: str) -> str:
@@ -86,6 +89,8 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
                       help="the candidate checkout; without it the candidate files are read from the API")
     plan.add_argument("--expect-sha256", type=PLAN_SHA256, default=None, metavar="HEX",
                       help="fail unless the derived plan has this hash")
+    plan.add_argument("--pin-candidate", type=cli.PATH, default=None, metavar="DIR",
+                      help="the tested checkout whose complete kit pin is admitted and bound into the plan")
     plan.add_argument("--github-output", type=cli.PATH, default=None, metavar="F")
     plan.set_defaults(handler=run_plan)
 
@@ -97,6 +102,8 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
                        help="a restored Gradle cache (caches/ and wrapper/) the candidate's own is seeded from")
     stage.add_argument("--bundle", action="store_true",
                        help="also place the complete Build of sealed-build/ in the checkout (lane jobs)")
+    stage.add_argument("--future-kit", type=cli.PATH, default=None, metavar="DIR",
+                       help="separate pinned checkout of the plan's candidate kit, treated only as bytes")
     stage.set_defaults(handler=run_worker_stage)
 
     run = verbs.add_parser("worker-run", help="run the one candidate hook of the job and record how it ended")
@@ -140,12 +147,21 @@ def run_plan(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
     job = lifecycle.open_job(invocation, args.state)
     worker = lifecycle.open_worker(job)
+    api = None
     if args.candidate is None:
-        sources = lifecycle.api_candidate_files(
-            commands.api_client(invocation, max_requests=limits.MAX_CI_PLAN_REQUESTS), job)
+        api = commands.api_client(invocation, max_requests=limits.MAX_CI_PLAN_REQUESTS)
+        sources = lifecycle.api_candidate_files(api, job)
     else:
         sources = lifecycle.checkout_candidate_files(args.candidate, job)
-    plan = lifecycle.derive_plan(job, worker, sources, expected_sha256=args.expect_sha256, log=sys.stdout.write)
+    candidate_pin = None
+    if args.pin_candidate is not None:
+        candidate_pin = candidate_kit.planned_pin(args.pin_candidate, job.subject,
+                                                  api=api if args.expect_sha256 is None else None)
+        if candidate_pin is not None and args.expect_sha256 is None and api is None:
+            api = commands.api_client(invocation, max_requests=limits.MAX_CI_PLAN_REQUESTS)
+            verify_released(Pin(candidate_pin["sha"], "v" + candidate_pin["version"], ()), api)
+    plan = lifecycle.derive_plan(job, worker, sources, expected_sha256=args.expect_sha256,
+                                 log=sys.stdout.write, candidate_pin=candidate_pin)
     cli.write_github_output(args.github_output, planning.plan_outputs(plan))
     sys.stdout.write(f"plan: {plan['plan_sha256']} with {len(plan['targets'])} targets and "
                      f"{len(plan['lanes'])} lanes\n")
@@ -157,7 +173,7 @@ def run_worker_stage(args: argparse.Namespace) -> int:
     job = lifecycle.open_job(invocation, args.state)
     worker = lifecycle.open_worker(job)
     stage = lifecycle.stage_candidate(job, worker, lifecycle.read_plan(job), args.candidate,
-                                      gradle_seed=args.gradle_seed, bundle=args.bundle)
+                                      gradle_seed=args.gradle_seed, bundle=args.bundle, future_kit=args.future_kit)
     extras = (["a Gradle seed"] if stage["gradle_seed"] else []) + (
         [] if stage["bundle"] is None else [f"the Build of {stage['bundle']['files']} files at {stage['bundle']['path']}"])
     sys.stdout.write(f"worker-stage: {stage['source']['files']} tracked files of {stage['tested_sha']} and kit "

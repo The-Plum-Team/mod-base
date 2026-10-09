@@ -28,7 +28,7 @@ SELECT = "Select the exact Build source"
 FINISH = "Terminate and lock the worker accounts"
 #: The steps of the one job, in order: subject, prepare and plan like every job, then its two own
 #: verbs (admit reuse, else select) and the sweep.
-STEPS = [*PROLOGUE, SUBJECT, PREPARE, PLAN, REUSE, SELECT, FINISH]
+STEPS = [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, REUSE, SELECT, FINISH]
 ON_PUSH = "github.event_name == 'push'"
 NOT_REUSE = "steps.reuse.outputs.mode != 'reuse'"
 #: What the jobs API calls the job, and the calling job when its ``if`` skipped the call.
@@ -76,7 +76,7 @@ class SelectBuildStructureTests(unittest.TestCase):
             REUSE: ON_PUSH, SELECT: NOT_REUSE,
             FINISH: "${{ always() && steps.subject.outcome == 'success' }}"})
         names = [item["name"] for item in steps]
-        for absent in (CANDIDATE_CHECKOUT, workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP):
+        for absent in (workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP):
             self.assertNotIn(absent, names, "the selection stages no candidate and seals nothing")
         self.assertNotIn(NAME, workflow.CI_JOB_ARTIFACTS)
 
@@ -164,6 +164,8 @@ class SelectBuildShellTests(unittest.TestCase):
         out = ["--github-output", str(self.runner.output)]
         issued = []
         for item in self.steps[len(PROLOGUE):]:
+            if "run" not in item:
+                continue
             outcome = self.runner.run(item)
             self.assertEqual(outcome.result.returncode, 0, f"{item['name']}: {outcome.result.stderr}")
             issued.extend(outcome.commands)
@@ -171,7 +173,7 @@ class SelectBuildShellTests(unittest.TestCase):
             ["ci", "subject", *job, "--producer", "packaged", "--pr", "", *out],
             ["ci", "worker-prepare", *job, "--roles", "validator", "--python", self.runner.python,
              *(word for home in JDKS.values() for word in ("--java-home", home))],
-            ["ci", "plan", *job, *out],
+            ["ci", "plan", *job, "--pin-candidate", "candidate", *out],
             ["ci", "reuse-admit", *job, *out],
             # No run is named and nothing is waited for: the exact Build of this subject exists or
             # it does not. The record stays in the job's private state.
@@ -197,6 +199,8 @@ class SelectBuildShellTests(unittest.TestCase):
             self.assertNotEqual(outcome.result.returncode, 0, home)
             self.assertEqual(outcome.commands, [], "an image without one of the JDKs prepares no worker")
         for item in self.steps[len(PROLOGUE):]:
+            if "run" not in item:
+                continue
             with self.subTest(step=item["name"]):
                 outcome = self.runner.run(item, STUB_PYTHON3_SCRIPT="raise SystemExit(3)")
                 self.assertEqual(outcome.result.returncode, 3, "the step's status is the kit's")

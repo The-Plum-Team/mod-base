@@ -213,7 +213,8 @@ MAX_CI_DERIVED_SUBJECT_REQUESTS = 4
 MAX_CI_WORKER_RECORD_BYTES = 256 * KIB
 #: API requests of one ``ci plan`` without a candidate checkout: the tested tree and one blob per
 #: candidate file, so 3 without extra plan inputs and at most 11; the rest is room for retried
-#: attempts. With a checkout it spends none.
+#: attempts and the first job's changed candidate release admission (comparison, ref and
+#: bounded tag peeling). Replanning against the first job's hash adds no release requests.
 MAX_CI_PLAN_REQUESTS = 24
 #: One read (``rev-parse``, ``ls-tree``, ``cat-file``) of the object store of a job's checkout.
 CI_GIT_READ_TIMEOUT_SECONDS = 60.0

@@ -34,7 +34,7 @@ EVALUATE = "Evaluate the protected gates"
 FINISH = "Terminate and lock the worker accounts"
 #: The steps of the one job, in order: the settling call, then (only when it could not settle)
 #: subject, prepare and plan like every job, the evaluation with that plan, and the sweep.
-STEPS = [*PROLOGUE, SETTLE, SUBJECT, PREPARE, PLAN, EVALUATE, FINISH]
+STEPS = [*PROLOGUE, SETTLE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, EVALUATE, FINISH]
 SWEEP = "${{ always() && steps.subject.outcome == 'success' }}"
 #: What the jobs API calls the job, and the calling job when its ``if`` skipped the call.
 API_NAME = workflow.CI_STATUS_CALL + " / " + workflow.CI_STATUS_JOBS[JOB]
@@ -100,14 +100,14 @@ class GateStatusStructureTests(unittest.TestCase):
     def test_everything_after_the_settling_call_depends_on_its_answer(self) -> None:
         self.assertEqual([item["name"] for item in self.steps], STEPS)
         self.assertEqual({item["name"]: item["if"] for item in self.steps if "if" in item}, {
-            SUBJECT: UNSETTLED, PREPARE: UNSETTLED, PLAN: UNSETTLED, EVALUATE: UNSETTLED, FINISH: SWEEP})
+            SUBJECT: UNSETTLED, CANDIDATE_CHECKOUT: UNSETTLED, PREPARE: UNSETTLED, PLAN: UNSETTLED, EVALUATE: UNSETTLED, FINISH: SWEEP})
         self.assertEqual(UNSETTLED, "steps.settle.outputs.settled == 'false'")
         self.assertEqual(SETTLE_VERBS[(NAME, JOB)], ("gate-status",))
         names = [item["name"] for item in self.steps]
-        for absent in (CANDIDATE_CHECKOUT, workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP):
+        for absent in (workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP):
             self.assertNotIn(absent, names, "the evaluation stages no candidate and seals nothing")
         self.assertNotIn(NAME, workflow.CI_JOB_ARTIFACTS)
-        self.assertFalse(any("uses" in item for item in self.steps[len(PROLOGUE):]), "kit commands only")
+        self.assertEqual([item["name"] for item in self.steps[len(PROLOGUE):] if "uses" in item], [CANDIDATE_CHECKOUT])
 
     def test_no_step_reads_anything_but_the_two_inputs_and_its_own_token(self) -> None:
         self.assertEqual({item["name"]: sorted(item["env"]) for item in self.steps if "env" in item}, {
@@ -154,7 +154,7 @@ class GateStatusFlowTests(unittest.TestCase):
     def test_a_settled_first_call_ends_the_job_with_its_document(self) -> None:
         results, intents = self.run_flow({}, {SETTLE: {"settled": "true", "intents": "settled-document"},
                                               EVALUATE: {"intents": "never"}})
-        self.assertEqual(results, {SETTLE: "success", SUBJECT: "skipped", PREPARE: "skipped", PLAN: "skipped",
+        self.assertEqual(results, {SETTLE: "success", SUBJECT: "skipped", CANDIDATE_CHECKOUT: "skipped", PREPARE: "skipped", PLAN: "skipped",
                                    EVALUATE: "skipped", FINISH: "skipped"})
         self.assertEqual(intents, "settled-document")
 
@@ -162,7 +162,7 @@ class GateStatusFlowTests(unittest.TestCase):
         results, intents = self.run_flow({}, {SETTLE: {"settled": "false"},
                                               EVALUATE: {"intents": "verified-document"}})
         self.assertEqual(set(results.values()), {"success"})
-        self.assertEqual(list(results), [SETTLE, SUBJECT, PREPARE, PLAN, EVALUATE, FINISH])
+        self.assertEqual(list(results), [SETTLE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, EVALUATE, FINISH])
         self.assertEqual(intents, "verified-document")
 
     def test_a_failed_step_returns_no_document_and_the_sweep_follows_the_subject(self) -> None:
@@ -179,6 +179,10 @@ class GateStatusFlowTests(unittest.TestCase):
             EVALUATE: ({SETTLE: "success", SUBJECT: "success", PREPARE: "success", PLAN: "success",
                         EVALUATE: "failure", FINISH: "success"}),
         }
+        for failing, outcomes in expected.items():
+            outcomes[CANDIDATE_CHECKOUT] = "skipped" if failing in (SETTLE, SUBJECT) else "success"
+        expected[CANDIDATE_CHECKOUT] = {SETTLE: "success", SUBJECT: "success", CANDIDATE_CHECKOUT: "failure",
+                                        PREPARE: "skipped", PLAN: "skipped", EVALUATE: "skipped", FINISH: "success"}
         for failing, outcomes in expected.items():
             # A step that fails wrote nothing the job returns.
             written = {name: value for name, value in unsettled.items() if name != failing}
@@ -264,6 +268,8 @@ class GateStatusShellTests(unittest.TestCase):
         out = ["--github-output", str(self.runner.output)]
         issued = []
         for item in self.steps[len(PROLOGUE):]:
+            if "run" not in item:
+                continue
             outcome = self.runner.run(item)
             self.assertEqual(outcome.result.returncode, 0, f"{item['name']}: {outcome.result.stderr}")
             issued.extend(outcome.commands)
@@ -273,7 +279,7 @@ class GateStatusShellTests(unittest.TestCase):
             ["ci", "subject", *job, "--producer", "status", "--pr", "17", *out],
             ["ci", "worker-prepare", *job, "--roles", "validator", "--python", self.runner.python,
              *(word for home in JDKS.values() for word in ("--java-home", home))],
-            ["ci", "plan", *job, *out],
+            ["ci", "plan", *job, "--pin-candidate", "candidate", *out],
             # With the plan `ci plan` left in the state: the evaluation that can verify a gate.
             ["ci", "gate-status", *job, "--pr", "17", *out],
             ["ci", "worker-finish", *job],
@@ -311,6 +317,8 @@ class GateStatusShellTests(unittest.TestCase):
             self.assertNotEqual(outcome.result.returncode, 0, home)
             self.assertEqual(outcome.commands, [], "an image without one of the JDKs prepares no worker")
         for item in self.steps[len(PROLOGUE):]:
+            if "run" not in item:
+                continue
             with self.subTest(step=item["name"]):
                 outcome = self.runner.run(item, STUB_PYTHON3_SCRIPT="raise SystemExit(3)")
                 self.assertEqual(outcome.result.returncode, 3, "the step's status is the kit's")
