@@ -269,6 +269,10 @@ MAX_CI_HOST_MOUNTINFO_BYTES = 64 * KIB
 #: ``timeout`` enforces it), and what the command keeps of their output.
 CI_SYSTEM_PROFILE_TIMEOUT_SECONDS = 600
 MAX_CI_SYSTEM_PROFILE_LOG_BYTES = 64 * KIB
+#: How long the package manager waits for a lock another apt or dpkg holds (whole seconds, well
+#: inside the bound above), and how often it retries a failed download.
+CI_SYSTEM_PROFILE_LOCK_WAIT_SECONDS = 120
+CI_SYSTEM_PROFILE_FETCH_RETRIES = 3
 MAX_CI_SOURCE_LIST_BYTES = 64 * MIB
 MAX_CI_SOURCE_FILES = 200_000
 MAX_CI_SOURCE_ENTRIES = 250_000

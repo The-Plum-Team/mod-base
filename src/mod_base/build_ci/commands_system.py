@@ -18,7 +18,7 @@ import time
 from mod_base import cli, runtime
 from mod_base.build_ci import commands, lifecycle
 from mod_base.build_ci.config import system_profile
-from mod_base.build_ci.system_profile import install_system_profile
+from mod_base.build_ci.system_profile import SUDO, install_system_profile
 
 
 def add_verbs(verbs: argparse._SubParsersAction) -> None:
@@ -33,7 +33,7 @@ def run_system_profile(args: argparse.Namespace) -> int:
     job = lifecycle.open_job(invocation, args.state)
     name = system_profile(job.config.data)
     started = time.monotonic()
-    packages = install_system_profile(name, log=sys.stdout.write)
+    packages = install_system_profile(name, log=sys.stdout.write, sudo=SUDO)
     if name is None:
         sys.stdout.write("system-profile: the protected Build config names no system profile; nothing installed\n")
     else:

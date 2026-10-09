@@ -19,6 +19,18 @@ BUILD_GRAPH_VERSION = 1
 PACKAGED_GRAPH_VERSION = 1
 #: The native profiles a protected Build config may name.
 PROFILES = ("quick-skin", "block-pops")
+#: The kit system profiles a protected Build config may name (``runtime.system_profile``), each
+#: the sorted Ubuntu 24.04 packages ``build_ci.system_profile`` installs for it. ``xvfb-mesa`` is
+#: the union of the two native software-rendering installs (``.github/actions/run-packaged-e2e/
+#: action.yml`` of Quick Skin and of Block Pops): Quick Skin's sixteen packages, which Block Pops
+#: also installs, and Block Pops' ``libegl1`` and ``libegl-mesa0``.
+SYSTEM_PROFILES: dict[str, tuple[str, ...]] = {
+    "xvfb-mesa": (
+        "libasound2t64", "libegl-mesa0", "libegl1", "libgl1-mesa-dri", "libglx-mesa0", "libopenal1",
+        "libx11-6", "libxcursor1", "libxext6", "libxi6", "libxinerama1", "libxrandr2", "libxrender1",
+        "libxtst6", "libxxf86vm1", "mesa-utils", "xauth", "xvfb",
+    ),
+}
 #: The two producers of gate evidence. The managed caller workflow a mod runs each one from is
 #: ``workflow.CI_CALLER_WORKFLOWS[producer]``: workflow names and paths live in one module.
 PRODUCERS = ("build", "packaged")

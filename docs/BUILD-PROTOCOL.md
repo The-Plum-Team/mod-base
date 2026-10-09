@@ -247,9 +247,10 @@ A lane runs a Minecraft client under Xvfb with Mesa software rendering, which th
 lacks and the candidate, without sudo, cannot install. So the lane job alone has the step "Install
 the declared system profile" between `ci subject` and `ci worker-prepare`: `ci system-profile`
 reads `runtime.system_profile` of the protected Build config ([BUILD-ADAPTER.md](BUILD-ADAPTER.md))
-and installs the kit's fixed package tuple for that profile (`system_profile.SYSTEM_PROFILES`) as
+and installs the kit's fixed package tuple for that profile (`protocol.SYSTEM_PROFILES`) as
 root, `sudo -n` running `apt-get -q update` and then `apt-get -q install --yes
---no-install-recommends` with an environment built from nothing (`DEBIAN_FRONTEND=noninteractive`,
+--no-install-recommends` (waiting up to `CI_SYSTEM_PROFILE_LOCK_WAIT_SECONDS` for another
+apt's lock and retrying a failed download `CI_SYSTEM_PROFILE_FETCH_RETRIES` times) with an environment built from nothing (`DEBIAN_FRONTEND=noninteractive`,
 a fixed `PATH` and locale, no token), each command under root's own `timeout` of
 `CI_SYSTEM_PROFILE_TIMEOUT_SECONDS` and its output kept to the last
 `MAX_CI_SYSTEM_PROFILE_LOG_BYTES`, shown neutralised when it fails. It refuses once a worker account

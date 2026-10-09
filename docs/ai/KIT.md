@@ -36,9 +36,15 @@ These rules are specific to this code and add to the sections below:
   which mirrors the list without importing the kit. The only other `sudo` command lines are the
   fixed ones in `build_ci.worker` that create, lock, kill and enter an account, revoke its
   systemd user manager/linger and remove its cron/at jobs, and the two fixed `apt-get` lines of
-  `build_ci.system_profile`, which run before the worker boundary exists (so no request can be
-  written yet) and run no kit code as root. Root never calls
-  the GitHub API, and a request never names a program, a hook or a destination.
+  `build_ci.system_profile` (`ci system-profile`). Those two are an amendment to decision D3 by
+  choice, not by necessity: `ci worker-prepare` could request a closed `system-profile`
+  operation before `host-fence`, while no account exists yet. They stay fixed argument vectors
+  under `sudo -n`, root's `timeout` and `env -i` because that is the narrower root surface: no
+  kit code runs as root and nothing is read from a request, whereas the bootstrap would run kit
+  Python as root only to start the same package manager. `ci system-profile` passes the one
+  `sudo` path (`system_profile.SUDO`) to `install_system_profile`; only the suite passes a
+  stand-in. Root never calls the GitHub API, and a request never names a program, a hook or a
+  destination.
 - Account, `sudo` and root behaviour is tested in `tests/ci_linux_worker.py`, deferred execution
   in `tests/ci_linux_deferred.py`, the complete PR generation in `tests/ci_linux_pipeline.py`, and
   the system profile installed before the fence in `tests/ci_linux_system_profile.py`.

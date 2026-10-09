@@ -21,8 +21,7 @@ from typing import Any
 from mod_base import readable_schema_versions
 from mod_base.build_ci.activation import ACTIVATION_PATH, CALLERS
 from mod_base.build_ci.adapter import plan_input_name, plan_sources
-from mod_base.build_ci.protocol import BUILD_ADAPTER_API, PROFILES, check_output_paths, repo_path
-from mod_base.build_ci.system_profile import SYSTEM_PROFILES
+from mod_base.build_ci.protocol import BUILD_ADAPTER_API, PROFILES, SYSTEM_PROFILES, check_output_paths, repo_path
 from mod_base.errors import MbError
 from mod_base.io.secure_json import loads
 from mod_base.model import grammar as g

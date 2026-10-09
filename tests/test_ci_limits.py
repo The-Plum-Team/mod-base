@@ -180,6 +180,9 @@ KIT: dict[str, tuple[Any, str]] = {
     "CI_SYSTEM_PROFILE_TIMEOUT_SECONDS": (600, "each of the two package-manager commands of `ci system-profile` "
                                                "(root's `timeout`); the natives' install steps have only the job's"),
     "MAX_CI_SYSTEM_PROFILE_LOG_BYTES": (64 * KIB, "the last output of one of them the command keeps and shows"),
+    "CI_SYSTEM_PROFILE_LOCK_WAIT_SECONDS": (120, "apt's wait for a lock another apt or dpkg holds "
+                                                 "(`DPkg::Lock::Timeout`), inside the command's bound"),
+    "CI_SYSTEM_PROFILE_FETCH_RETRIES": (3, "apt's retries of one failed download (`Acquire::Retries`)"),
     "MAX_CI_SEED_PATH_DEPTH": (64, "components of one path inside a Gradle seed, the tree walk's own depth"),
     "MAX_CI_SOURCE_LIST_BYTES": (64 * MIB, "one Git tree listing"),
     "MAX_CI_GIT_REF_BYTES": (4 * KIB, "one loose ref"),
