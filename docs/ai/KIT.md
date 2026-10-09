@@ -37,9 +37,12 @@ These rules are specific to this code and add to the sections below:
   fixed ones in `build_ci.worker` that create, lock, kill and enter an account, revoke its
   systemd user manager/linger and remove its cron/at jobs. Root never calls
   the GitHub API, and a request never names a program, a hook or a destination.
-- Account, `sudo` and root behaviour is tested in `tests/ci_linux_worker.py` and deferred execution
-  in `tests/ci_linux_deferred.py`; the suite collects neither. CI runs each module in its own
-  GitHub-hosted job in every Python leg and the `Test` gate requires them all. Their account classes
+- Account, `sudo` and root behaviour is tested in `tests/ci_linux_worker.py`, deferred execution
+  in `tests/ci_linux_deferred.py`, and the complete PR generation in `tests/ci_linux_pipeline.py`.
+  The pipeline executes the workflow command lines, consumes the preceding jobs' real artifacts,
+  checks request budgets and exercises rejection controls. The suite collects none of these
+  modules. CI runs each module in its own GitHub-hosted job in every Python leg and the `Test`
+  gate requires them all. Their account classes
   refuse any other host (`GITHUB_ACTIONS`, `RUNNER_ENVIRONMENT=github-hosted`, passwordless `sudo`,
   `/home/runner`), create real accounts and change the modes of system trees for good: run it in
   CI or on a disposable Linux machine laid out like a hosted runner, never on a workstation. A

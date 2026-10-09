@@ -1128,16 +1128,18 @@ class KitCiWorkflowTest(unittest.TestCase):
         names = {job["name"] for job in document["jobs"].values()}
         self.assertTrue({"Test", "Workflow policy", "Front end", "Conformance (informational)"} <= names)
         self.assertEqual(document["jobs"]["test"]["strategy"]["matrix"]["python"], ["3.11", "3.12", "3.13"])
-        self.assertEqual(document["jobs"]["test-gate"]["needs"], ["test", "hosted-worker", "hosted-deferred"])
+        self.assertEqual(document["jobs"]["test-gate"]["needs"],
+                         ["test", "hosted-worker", "hosted-deferred", "hosted-pipeline"])
         self.assertEqual(document["jobs"]["conformance"]["continue-on-error"], "true")
 
     def test_account_modules_have_separate_required_python_matrices(self) -> None:
         jobs = self.document["jobs"]
         self.assertEqual({job_id: jobs[job_id]["timeout-minutes"] for job_id in
-                          ("test", "hosted-worker", "hosted-deferred")},
-                         {"test": "30", "hosted-worker": "60", "hosted-deferred": "15"})
+                          ("test", "hosted-worker", "hosted-deferred", "hosted-pipeline")},
+                         {"test": "30", "hosted-worker": "60", "hosted-deferred": "15", "hosted-pipeline": "30"})
         for job_id, module in (("hosted-worker", "ci_linux_worker"),
-                               ("hosted-deferred", "ci_linux_deferred")):
+                               ("hosted-deferred", "ci_linux_deferred"),
+                               ("hosted-pipeline", "ci_linux_pipeline")):
             with self.subTest(job=job_id):
                 job = jobs[job_id]
                 self.assertEqual(job["strategy"]["matrix"]["python"], ["3.11", "3.12", "3.13"])
