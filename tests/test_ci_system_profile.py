@@ -216,12 +216,13 @@ class SystemProfileInstallTests(unittest.TestCase):
         count = sum(path.name.startswith("call-") for path in self.record.iterdir())
         return [json.loads((self.record / f"call-{index}.json").read_bytes()) for index in range(count)]
 
-    def install(self, profile: str | None = "xvfb-mesa") -> tuple[int | None, str, str]:
+    def install(self, profile: str | None = "xvfb-mesa", *, systemd: bool = False) -> tuple[int | None, str, str]:
         """The package count (``None`` on a rejection), what was logged and the rejection."""
 
         logged: list[str] = []
         try:
-            count = system_profile.install_system_profile(profile, log=logged.append, sudo=str(self.sudo))
+            count = system_profile.install_system_profile(profile, log=logged.append, sudo=str(self.sudo),
+                                                          systemd=systemd)
         except system_profile.SystemProfileError as error:
             return None, "".join(logged), str(error)
         return count, "".join(logged), ""
@@ -238,6 +239,18 @@ class SystemProfileInstallTests(unittest.TestCase):
             {"argv": [*ROOT, "install", "--yes", "--no-install-recommends", *SYSTEM_PROFILES["xvfb-mesa"]],
              "env": environment, "cwd": "/", "stdin": False},
         ])
+
+    def test_on_systemd_the_services_apt_woke_are_stopped_again(self) -> None:
+        # The hosted image's PackageKit apt hook wakes packagekitd over D-Bus; it must not outlive the step.
+        self.assertEqual(self.install(systemd=True), (18, "", ""))
+        calls = self.calls()
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[2]["argv"], [*ROOT[:ROOT.index("/usr/bin/apt-get")], "/usr/bin/systemctl", "stop",
+                                            "packagekit.service"])
+        self.assertEqual(set(calls[2]["env"]), {"PATH", "LANG", "LC_ALL"})
+        self.mode("succeed")
+        self.assertEqual(self.install(None, systemd=True), (0, "", ""))
+        self.assertEqual(self.calls(), [])
 
     def test_no_token_or_job_variable_reaches_sudo(self) -> None:
         with mock.patch.dict(os.environ, {"GH_TOKEN": "t", "GITHUB_TOKEN": "t", "ACTIONS_RUNTIME_TOKEN": "t",

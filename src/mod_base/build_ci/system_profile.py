@@ -38,6 +38,11 @@ _ROOT_ENVIRONMENT = ("DEBIAN_FRONTEND=noninteractive", f"PATH={_PATH}", "LANG=C.
 #: The exit statuses of root's ``timeout`` when the command outlived its bound: 124 when it ended
 #: on TERM, 128 + SIGKILL when it had to be killed after the grace.
 _TIMED_OUT = (124, 137)
+#: Services the package manager starts on the hosted image without being asked: its PackageKit hook
+#: wakes ``packagekitd`` over D-Bus. None is part of a profile; stopping them leaves the host with
+#: the processes it had before the step. ``systemctl stop`` answers 5 for a unit the image lacks.
+_SETTLE_UNITS = ("packagekit.service",)
+_SETTLE_ACCEPTED = (0, 5)
 
 
 class SystemProfileError(MbError):
@@ -59,6 +64,14 @@ def system_profile_commands(name: str, *, sudo: str) -> tuple[tuple[str, ...], t
             "/usr/bin/apt-get", "-q", "-o", f"DPkg::Lock::Timeout={limits.CI_SYSTEM_PROFILE_LOCK_WAIT_SECONDS}",
             "-o", f"Acquire::Retries={limits.CI_SYSTEM_PROFILE_FETCH_RETRIES}")
     return (*root, "update"), (*root, "install", "--yes", "--no-install-recommends", *packages)
+
+
+def settle_command(*, sudo: str) -> tuple[str, ...]:
+    """The root command that stops what the package manager started on its own (``_SETTLE_UNITS``)."""
+
+    return (sudo, "-n", "--", "/usr/bin/timeout", f"--kill-after={int(limits.CI_TERMINATION_GRACE_SECONDS)}s",
+            f"{limits.CI_SYSTEM_PROFILE_TIMEOUT_SECONDS}s", "/usr/bin/env", "-i", *_ROOT_ENVIRONMENT,
+            "/usr/bin/systemctl", "stop", *_SETTLE_UNITS)
 
 
 def existing_worker_accounts() -> tuple[str, ...]:
@@ -124,7 +137,8 @@ def _stop(process: subprocess.Popen) -> str | None:
     return None
 
 
-def _run(name: str, phase: str, command: tuple[str, ...], log: Callable[[str], object]) -> None:
+def _run(name: str, phase: str, command: tuple[str, ...], log: Callable[[str], object], *,
+         tool: str = "apt-get", accepted: tuple[int, ...] = (0,)) -> None:
     """Run one root command to its end within the bound; keep the last bytes of its output and
     show them whenever it fails, a timeout included."""
 
@@ -142,16 +156,16 @@ def _run(name: str, phase: str, command: tuple[str, ...], log: Callable[[str], o
             truncated = True
 
     def failure(message: str) -> SystemProfileError:
-        return SystemProfileError(f"system profile {name}: apt-get {phase} {message} "
+        return SystemProfileError(f"system profile {name}: {tool} {phase} {message} "
                                   f"(elapsed {time.monotonic() - started:.0f}s)")
 
     def show() -> str:
         lines = tail.decode("utf-8", "replace").splitlines()
         if truncated and lines:
             lines = lines[1:]  # The first kept line may be cut.
-            log(f"[apt-get {phase}] ... earlier output not kept\n")
+            log(f"[{tool} {phase}] ... earlier output not kept\n")
         for line in lines:
-            log(f"[apt-get {phase}] {neutral_log_line(line)}\n")
+            log(f"[{tool} {phase}] {neutral_log_line(line)}\n")
         last = next((line for line in reversed(lines) if line.strip()), "")
         return single_line(neutral_log_line(last), limit=300)
 
@@ -176,13 +190,16 @@ def _run(name: str, phase: str, command: tuple[str, ...], log: Callable[[str], o
     if problem is not None:
         show()
         raise failure(problem)
-    if status != 0:
+    if status not in accepted:
         raise failure(f"exited with status {status}: {show() or 'no output'}")
 
 
-def install_system_profile(name: str | None, *, log: Callable[[str], object], sudo: str) -> int:
+def install_system_profile(name: str | None, *, log: Callable[[str], object], sudo: str,
+                           systemd: bool | None = None) -> int:
     """Install the system profile ``name`` as root through ``sudo`` and return how many packages it
-    names; ``None`` (the config names no profile) installs nothing and returns 0.
+    names; ``None`` (the config names no profile) installs nothing and returns 0. On a host whose init
+    is systemd (``systemd``; by default, whether ``/run/systemd/system`` exists) the services the
+    package manager woke on its own (``_SETTLE_UNITS``) are stopped again afterwards.
 
     Either way it refuses once a worker account exists. Package lists are refreshed first, then
     exactly the profile's packages are installed without recommendations. A command that cannot
@@ -199,4 +216,6 @@ def install_system_profile(name: str | None, *, log: Callable[[str], object], su
         return 0
     for phase, command in zip(("update", "install"), system_profile_commands(name, sudo=sudo)):
         _run(name, phase, command, log)
+    if os.path.isdir("/run/systemd/system") if systemd is None else systemd:
+        _run(name, "stop", settle_command(sudo=sudo), log, tool="systemctl", accepted=_SETTLE_ACCEPTED)
     return len(SYSTEM_PROFILES[name])
