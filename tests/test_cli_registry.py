@@ -90,6 +90,8 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                               "--github-output", "out"], {"producer": "packaged", "pr": None}),
     "ci subject status": (["ci", "subject", *REPO, "--state", "state", "--producer", "status", "--pr", "7",
                            "--github-output", "out"], {"producer": "status", "pr": 7}),
+    "ci system-profile": (["ci", "system-profile", *REPO, "--state", "state"],
+                          {"ci_command": "system-profile", "state": Path("state")}),
     "ci worker-prepare": (["ci", "worker-prepare", *REPO, "--state", "state", "--roles", "candidate+validator",
                            "--python", "/opt/python/bin/python3", "--java-home", "/opt/jdk/17",
                            "--java-home", "/opt/jdk/21"],
@@ -375,7 +377,8 @@ class CiVerbsTest(unittest.TestCase):
     def test_every_listed_module_adds_verbs_that_take_the_job_arguments(self) -> None:
         from mod_base.build_ci import commands
 
-        self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_worker",
+        self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_system",
+                              "mod_base.build_ci.commands_worker",
                               "mod_base.build_ci.commands_batch", "mod_base.build_ci.commands_packaged",
                               "mod_base.build_ci.commands_status"}, set(commands.VERB_MODULES))
         self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
@@ -383,7 +386,7 @@ class CiVerbsTest(unittest.TestCase):
             with self.subTest(module=name):
                 self.assertTrue(callable(importlib.import_module(name).add_verbs))
         verbs = self.verbs()
-        self.assertLessEqual({"subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+        self.assertLessEqual({"subject", "system-profile", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
                               "worker-validate", "worker-finish", "batch-prepare", "batch-settle", "select-build",
                               "fetch-build", "gate-status", "reuse-admit"}, set(verbs))
         for name, parser in verbs.items():

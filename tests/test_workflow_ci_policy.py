@@ -100,8 +100,12 @@ GATING_IDS = {"subject": "subject", "worker-prepare": "prepare"}
 #: The one job that issues a verb before it authenticates a subject, and that verb: the status
 #: evaluation first asks, without a plan, whether every gate is already decided (a draft, a run
 #: that has not finished or that failed). Such a step is unconditional; the job's rules for
-#: ``subject`` first, ``worker-prepare`` second and no verb twice apply to the verbs after it.
+#: ``subject`` first, ``worker-prepare`` next and no verb twice apply to the verbs after it.
 SETTLE_VERBS = {("gate-status", "evaluate"): ("gate-status",)}
+#: The verbs a job issues between its subject and its accounts, by callee and job: root work on the
+#: image that must be done before any worker account exists. Only a lane runs a client, so only a
+#: lane installs the protected config's system profile; the step is unconditional and holds no token.
+PRE_ACCOUNT_VERBS = {("packaged-e2e", "lane"): ("system-profile",)}
 #: Only when that first call could not settle does the status job authenticate, prepare, plan and
 #: evaluate again; ``'false'`` is what the call wrote, never an output that is merely missing.
 UNSETTLED = "steps.settle.outputs.settled == 'false'"
@@ -412,8 +416,8 @@ class CiRegistryTests(unittest.TestCase):
             },
             "packaged-e2e": {
                 "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
-                "lane": ("subject", "worker-prepare", "plan", "fetch-build", "worker-stage", "worker-run",
-                         "worker-seal", "worker-validate", "worker-finish"),
+                "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "worker-stage",
+                         "worker-run", "worker-seal", "worker-validate", "worker-finish"),
                 "aggregate": ("subject", "worker-prepare", "plan", "aggregate", "worker-finish"),
                 "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
             },
@@ -471,7 +475,8 @@ class CiRegistryTests(unittest.TestCase):
                     self.assertEqual(len(sealing), int(job_id in workflow.CI_JOB_ARTIFACTS.get(name, {})), job_id)
                     # What follows a settling call is a job like every other: subject, prepare, ...
                     verbs = verbs[len(SETTLE_VERBS.get((name, job_id), ())):]
-                    self.assertEqual(verbs[:2], ("subject", "worker-prepare"), job_id)
+                    before = PRE_ACCOUNT_VERBS.get((name, job_id), ())
+                    self.assertEqual(verbs[:2 + len(before)], ("subject", *before, "worker-prepare"), job_id)
                     self.assertEqual(verbs[-1], "worker-finish", job_id)
                     self.assertEqual(len(set(verbs)), len(verbs), job_id)
                 for job_id, kinds in workflow.CI_JOB_ARTIFACTS.get(name, {}).items():
@@ -892,6 +897,31 @@ class CiCalleePolicyTests(unittest.TestCase):
         for name in CI_CALLEES:
             self.assertEqual(ci_callee(name)["env"]["MB_KIT_TREE_DIGEST"], digest,
                              "run python3 tools/update_tree_digest.py --write")
+
+    def test_root_work_on_the_image_runs_between_the_subject_and_the_accounts_of_the_lane_alone(self) -> None:
+        # `ci system-profile` refuses once a worker account exists, and what it installs must be
+        # there before `ci worker-prepare` fences the image and admits its tools. It reads the
+        # protected config through the state `ci subject` wrote, and calls no API.
+        placed = set()
+        for name, job_id, job in iter_ci_jobs():
+            steps = job["steps"]
+            verbs = [step_verb(item) for item in steps]
+            before = PRE_ACCOUNT_VERBS.get((name, job_id), ())
+            with self.subTest(callee=name, job=job_id):
+                subject, prepare = verbs.index("subject"), verbs.index("worker-prepare")
+                self.assertEqual(tuple(verb for verb in verbs[subject + 1:prepare] if verb), before,
+                                 "no other kit command runs in between")
+                for verb in before:
+                    item = steps[verbs.index(verb)]
+                    placed.add((name, job_id, verb))
+                    self.assertEqual(set(item), {"name", "shell", "run"}, "unconditional, no id and no env")
+                    self.assertEqual(item["run"].splitlines()[1], SCRUB)
+                    self.assertEqual(ci_verbs(item["run"]), [verb])
+                    self.assertTrue(item["run"].rstrip().endswith('--state "$RUNNER_TEMP/mb-state"'), "no flag")
+        self.assertEqual(placed, {(name, job_id, verb) for (name, job_id), verbs in PRE_ACCOUNT_VERBS.items()
+                                  for verb in verbs})
+        self.assertEqual({verb for verbs in PRE_ACCOUNT_VERBS.values() for verb in verbs}
+                         & (API_VERBS | set(ALWAYS_VERBS) | set(GATING_IDS) | CANDIDATE_VERBS | SEAL_VERBS), set())
 
     def test_a_subject_is_derived_exactly_where_the_candidate_is_held_and_then_proven_by_the_plan(self) -> None:
         # `ci subject --candidate` spends one request instead of four or five and does not observe

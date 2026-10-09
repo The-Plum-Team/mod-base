@@ -689,12 +689,13 @@ source in the protected checkout to have its configured hash.
 | `bundle.path` | canonical repository path of the directory where a lane's checkout expects the staged Build |
 | `contexts.build`, `contexts.packaged` | the two required status contexts: trimmed printable ASCII without `<`, `>`, `{{`, `}}`, 1..100 characters, distinct ignoring case |
 | `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
+| `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.system_profile.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
 
 The config path, every adapter source, every candidate file (the inventory, the scenario contract
 and each `plan_inputs` path) and the bundle directory are
 checked as one tree: none may equal another (ignoring case), differ from one only by the case of a
 component, or lie inside another. No other key is accepted: no command, runner, permission, secret,
-matrix or scenario catalog. [BUILD-ADAPTER.md](BUILD-ADAPTER.md) describes what each field is used for.
+matrix or scenario catalog, and no package list. [BUILD-ADAPTER.md](BUILD-ADAPTER.md) describes what each field is used for.
 
 ## Batch manifest data v1
 

@@ -177,6 +177,9 @@ KIT: dict[str, tuple[Any, str]] = {
     "CI_HOST_FENCE_TIMEOUT_SECONDS": (600.0, "one administrative command of the host fence"),
     "MAX_CI_HOST_FENCE_REPORT_BYTES": (64 * KIB, "what the fence keeps of the entries it could not close"),
     "MAX_CI_HOST_MOUNTINFO_BYTES": (64 * KIB, "kernel mount table admitted before unused SDK trees are closed"),
+    "CI_SYSTEM_PROFILE_TIMEOUT_SECONDS": (600, "each of the two package-manager commands of `ci system-profile` "
+                                               "(root's `timeout`); the natives' install steps have only the job's"),
+    "MAX_CI_SYSTEM_PROFILE_LOG_BYTES": (64 * KIB, "the last output of one of them the command keeps and shows"),
     "MAX_CI_SEED_PATH_DEPTH": (64, "components of one path inside a Gradle seed, the tree walk's own depth"),
     "MAX_CI_SOURCE_LIST_BYTES": (64 * MIB, "one Git tree listing"),
     "MAX_CI_GIT_REF_BYTES": (4 * KIB, "one loose ref"),

@@ -327,6 +327,7 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
 | MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse` |
 | MB11 | `mod_base.build_ci.checkout`, `mod_base.build_ci.candidate_kit` |
+| MB11 | `mod_base.build_ci.system_profile`, `mod_base.build_ci.commands_system` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -752,6 +753,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_COMMAND_ARGUMENTS`, `MAX_CI_COMMAND_BYTES`, `CI_PROCESS_READ_BYTES`
 * `CI_ROOT_OPERATION_TIMEOUT_SECONDS`, `MAX_CI_ROOT_DIAGNOSTIC_BYTES`: The 1800-second bound of one root operation process (the bootstrap arms the same alarm on itself) and the 4 KiB of its stderr the launching runner keeps for its own single error line. No worker or hook timeout changes.
 * `CI_HOST_FENCE_TIMEOUT_SECONDS`, `MAX_CI_HOST_FENCE_REPORT_BYTES`: The 600-second bound of each of the host fence's two walks, inside the root operation's own bound, and the 64 KiB the fence keeps of each output stream of a walk: the listing of the world-writable entries that remain and the diagnostic of a command that failed. A listing that does not fit is never a clean result.
+* `CI_SYSTEM_PROFILE_TIMEOUT_SECONDS`, `MAX_CI_SYSTEM_PROFILE_LOG_BYTES`: The 600 whole seconds root's `timeout` gives each of the two package-manager commands of `ci system-profile`, and the 64 KiB of the end of its output the command keeps to show when it fails.
 * `MAX_CI_HOST_MOUNTINFO_BYTES`: The 64 KiB bound of the kernel mount table read before the host fence closes unused SDK trees. Incomplete data, invalid UTF-8, unsupported records or path escapes, and ambiguous or changed containing mounts are refusals.
 * `MAX_CI_SOURCE_LIST_BYTES`, `MAX_CI_SOURCE_FILES`, `MAX_CI_SOURCE_ENTRIES`
 * `MAX_CI_SOURCE_FILE_BYTES`, `MAX_CI_SOURCE_TREE_BYTES`, `MAX_CI_SOURCE_LINK_BYTES`
@@ -1973,7 +1975,8 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 Owner: MB11. Closed data at scripts/ci/mod-base-build.json. Protected policy must authenticate
 every source hash/path before import and confirm native timeout parity before activation.
 
-* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `plan_inputs` (0..`MAX_CI_PLAN_INPUTS` extra candidate files `{name, path}` sorted by name, each name an `adapter.plan_input_name`), `bundle.path`, the two `contexts` and the timeouts; no named path may alias or contain another.
+* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `plan_inputs` (0..`MAX_CI_PLAN_INPUTS` extra candidate files `{name, path}` sorted by name, each name an `adapter.plan_input_name`), `bundle.path`, the two `contexts` and the timeouts, and the optional `runtime: {system_profile}` (a key of `system_profile.SYSTEM_PROFILES`; absent means none); no named path may alias or contain another.
+* `def system_profile(document: dict[str, Any]) -> str | None`: The system profile a validated config names (`runtime.system_profile`), or `None` when it has no `runtime`.
 * `class BuildConfigError(MbError)`: The protected Build configuration or a source it lists cannot be trusted (reason `ci-config`).
 * `class AdapterFile`: One source of the protected adapter import closure, as read from the protected checkout.
   * fields: `path: str, sha256: str, data: bytes`
@@ -2111,6 +2114,32 @@ instead of four or five (`identity.authenticate_subject`, budget `MAX_CI_SUBJECT
 * `PULL_REQUEST`: the argparse type of `--pr`, a positive decimal as `int` or the empty string as `None`.
 * `def add_verbs(verbs: argparse._SubParsersAction) -> None`
 * `def run_subject(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.commands_system`
+
+Owner: MB11. `ci system-profile --repo DIR --config F --state DIR`: the packaged `lane` job's step
+between `ci subject` and `ci worker-prepare`. It binds the job (`lifecycle.open_job`), reads
+`runtime.system_profile` of the protected Build config and installs that profile as root
+(`system_profile.install_system_profile`); a config that names none installs nothing. Either way it
+refuses once a worker account exists. No API request; one summary line on success.
+
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`
+* `def run_system_profile(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.system_profile`
+
+Owner: MB11. Kit-defined system profiles: the Ubuntu 24.04 packages a packaged lane needs (Xvfb
+and Mesa software rendering for a Minecraft client), named by a mod's protected config and never
+listed by it. The packages are installed as root before the host fence and before any worker
+account exists, so the fence and the tool admission that follow cover them like the rest of the
+image.
+
+* `SYSTEM_PROFILES`: Profile name -> its sorted tuple of package names. `xvfb-mesa` is the union of both mods' native installs (`.github/actions/run-packaged-e2e/action.yml`): `libasound2t64`, `libegl-mesa0`, `libegl1`, `libgl1-mesa-dri`, `libglx-mesa0`, `libopenal1`, `libx11-6`, `libxcursor1`, `libxext6`, `libxi6`, `libxinerama1`, `libxrandr2`, `libxrender1`, `libxtst6`, `libxxf86vm1`, `mesa-utils`, `xauth`, `xvfb`. `config.validate_build_config` admits exactly its keys.
+* `SUDO`: `/usr/bin/sudo`, the one way to root; read at each call.
+* `class SystemProfileError(MbError)`: The system profile cannot be installed, or not now (reason `ci-system-profile`).
+* `def system_profile_commands(name: str) -> tuple[tuple[str, ...], tuple[str, ...]]`: The two root commands of profile `name`: `sudo -n -- /usr/bin/timeout --kill-after=<grace>s <CI_SYSTEM_PROFILE_TIMEOUT_SECONDS>s /usr/bin/env -i DEBIAN_FRONTEND=noninteractive PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/apt-get -q` followed by `update`, then by `install --yes --no-install-recommends` and the profile's packages. An unknown name is a `SystemProfileError`.
+* `def existing_worker_accounts() -> tuple[str, ...]`: The names of `worker.WORKER_ACCOUNTS` that exist in the passwd database, in role order (Linux only).
+* `def install_system_profile(name: str | None, *, log: Callable[[str], object]) -> int`: Refuse when a worker account exists; for `None` install nothing and return 0; otherwise run both commands in order with stdin closed, working directory `/` and only `PATH`, `LANG` and `LC_ALL` in sudo's environment, and return the number of packages. A command that cannot start, exits non-zero, or outlives root's bound (exit 124) or this process's deadline (that bound plus twice `CI_TERMINATION_GRACE_SECONDS`, after which it is killed) is a `SystemProfileError` naming the phase; the last `MAX_CI_SYSTEM_PROFILE_LOG_BYTES` of its combined output go to `log` line by line through `worker.neutral_log_line`, and its last line ends the error message.
 
 ## `mod_base.build_ci.lifecycle`
 
@@ -2344,6 +2373,7 @@ account operations explicitly reject.
 * `def prepare_worker_boundary(*, runner_environment: str) -> None`: Exclusively create the fixed runner-owned traversal root on a protected caller-admitted GitHub-hosted Linux runner; reject preexisting identities/paths. This does not restrict the rest of the host.
 * `def terminate_worker(account: WorkerAccount) -> None`: On a systemd host, disable the account's linger and stop its user manager, runtime directory and session slice; reset only units observed in the dead `failed` state, then require inactive state and absence of the linger/runtime paths. Double real/effective UID sweeps and mandatory lock/expiry are followed by a second revocation, removal of that account's cron/at jobs and post-lock quiescence checks. Every phase is attempted despite earlier failures; the first error is preserved and forbids success. The original grace applies normally; a mandatory sweep gets a fresh grace for emergency cleanup when an earlier failed phase exhausted it. Fixed administrative sudo commands target only the authenticated account; at job ids come from the bounded root queue listing.
 * `def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Run one dispatcher as the account and always terminate and lock its UID. The dispatcher starts with a umask of 077 (set inside the account, because `sudo`'s session applies the login umask). Only a zero exit of a dispatcher that left no running process behind returns; a failure, a timeout, a signal or a leftover process raises `WorkerExecutionError` with the bounded log.
+* `def neutral_log_line(line: str) -> str`: One line of output made inert for the Actions log: terminal controls become `?`, `##[` becomes `# #[` and every run of colons is spaced out, so neither workflow command grammar survives.
 * `def render_worker_log(result: WorkerResult, *, role: str) -> str`
 
 ## `mod_base.build_ci.source`

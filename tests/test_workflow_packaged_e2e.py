@@ -30,6 +30,7 @@ from tests.test_workflow_policy import PROLOGUE, UPLOAD, parse_kit_argv, require
 
 NAME = "packaged-e2e"
 SUBJECT = "Authenticate the tested subject"
+PROFILE = "Install the declared system profile"
 PREPARE = "Fence the host and prepare the worker accounts"
 PLAN = "Derive the protected plan"
 REPLAN = "Rederive the protected plan"
@@ -45,8 +46,8 @@ SEAL, SEND = workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP
 #: job's sealing step is ``ci aggregate`` itself: the kit indexes the lane results, no hook runs.
 STEPS = {
     "input": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, SELECT, FINISH],
-    "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, RECEIVE, FETCH, FUTURE_KIT_CHECKOUT, STAGE, RUN, LOCK, SEAL, SEND,
-             FINISH],
+    "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PROFILE, PREPARE, REPLAN, RECEIVE, FETCH, FUTURE_KIT_CHECKOUT, STAGE, RUN, LOCK,
+             SEAL, SEND, FINISH],
     "aggregate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
     "gate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
 }
@@ -311,7 +312,8 @@ class PackagedShellTests(unittest.TestCase):
             "input": [subject, self.prepare("validator"), ["ci", "plan", *job, "--pin-candidate", "candidate", *out],
                       ["ci", "select-build", *job, "--build-run-id", "", "--wait-seconds", "5400",
                        "--output", self.selection, *out], finish],
-            "lane": [derived, self.prepare("candidate+validator"),
+            # The lane alone runs a client: the image packages it needs go in before its accounts.
+            "lane": [derived, ["ci", "system-profile", *job], self.prepare("candidate+validator"),
                      ["ci", "plan", *job, "--pin-candidate", "candidate", "--candidate", "candidate", *expected, *out],
                      ["ci", "fetch-build", *job, *selection],
                      ["ci", "worker-stage", *job, "--candidate", "candidate", "--future-kit", "candidate-kit", "--bundle"],

@@ -150,9 +150,36 @@ jobs:
           set -euo pipefail
           PYTHONPATH=src python3 -m unittest -v tests.ci_linux_pipeline
 
+  hosted-system-profile:
+    name: Hosted system profile on Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out the kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the system profile as root before the host fence
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python3 -m unittest -v tests.ci_linux_system_profile
+
   test-gate:
     name: Test
-    needs: [test, hosted-worker, hosted-deferred, hosted-pipeline]
+    needs: [test, hosted-worker, hosted-deferred, hosted-pipeline, hosted-system-profile]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -165,9 +192,10 @@ jobs:
           WORKER_RESULT: ${{ needs.hosted-worker.result }}
           DEFERRED_RESULT: ${{ needs.hosted-deferred.result }}
           PIPELINE_RESULT: ${{ needs.hosted-pipeline.result }}
+          PROFILE_RESULT: ${{ needs.hosted-system-profile.result }}
         run: |
           set -euo pipefail
-          for result in "$SUITE_RESULT" "$WORKER_RESULT" "$DEFERRED_RESULT" "$PIPELINE_RESULT"; do
+          for result in "$SUITE_RESULT" "$WORKER_RESULT" "$DEFERRED_RESULT" "$PIPELINE_RESULT" "$PROFILE_RESULT"; do
             [[ "$result" == success ]] || { printf 'A test matrix finished with %s.\n' "$result" >&2; exit 1; }
           done
 

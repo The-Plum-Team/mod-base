@@ -265,6 +265,10 @@ MAX_CI_ROOT_DIAGNOSTIC_BYTES = 4 * KIB
 CI_HOST_FENCE_TIMEOUT_SECONDS = 600.0
 MAX_CI_HOST_FENCE_REPORT_BYTES = 64 * KIB
 MAX_CI_HOST_MOUNTINFO_BYTES = 64 * KIB
+#: Each of the two package-manager commands of ``ci system-profile`` (whole seconds: root's
+#: ``timeout`` enforces it), and what the command keeps of their output.
+CI_SYSTEM_PROFILE_TIMEOUT_SECONDS = 600
+MAX_CI_SYSTEM_PROFILE_LOG_BYTES = 64 * KIB
 MAX_CI_SOURCE_LIST_BYTES = 64 * MIB
 MAX_CI_SOURCE_FILES = 200_000
 MAX_CI_SOURCE_ENTRIES = 250_000

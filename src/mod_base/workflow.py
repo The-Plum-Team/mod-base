@@ -94,7 +94,8 @@ CI_UPLOAD_STEP = "Upload sealed outputs"
 #: is given. The ``aggregate`` job's sealing step is ``ci aggregate`` itself. The
 #: status job issues ``gate-status`` twice: first with ``--settle``, before any subject, and
 #: again with the plan when that first call could not settle (the four steps between and the
-#: second call are skipped when it could).
+#: second call are skipped when it could). Only the ``lane`` job runs a client and installs the
+#: protected config's system profile, between its subject and its accounts.
 CI_JOB_VERBS = {
     "build": {
         "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
@@ -110,8 +111,8 @@ CI_JOB_VERBS = {
     },
     "packaged-e2e": {
         "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
-        "lane": ("subject", "worker-prepare", "plan", "fetch-build", "worker-stage", "worker-run", "worker-seal",
-                 "worker-validate", "worker-finish"),
+        "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "worker-stage", "worker-run",
+                 "worker-seal", "worker-validate", "worker-finish"),
         "aggregate": ("subject", "worker-prepare", "plan", "aggregate", "worker-finish"),
         "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
     },

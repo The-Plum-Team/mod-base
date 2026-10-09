@@ -54,8 +54,8 @@ COSTS = {
 }
 #: These commands execute local protected work and cannot create an API client. PR reuse admission
 #: is tested to return full without a request. The hosted generation pins all their observed zeros.
-LOCAL_VERBS = frozenset({"worker-prepare", "worker-stage", "worker-run", "worker-seal", "worker-validate",
-                         "worker-finish", "reuse-admit"})
+LOCAL_VERBS = frozenset({"system-profile", "worker-prepare", "worker-stage", "worker-run", "worker-seal",
+                         "worker-validate", "worker-finish", "reuse-admit"})
 
 
 def request_cost(route: str, *, targets: int = 1, lanes: int = 1, extra_inputs: int = 0,

@@ -703,6 +703,17 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
     return WorkerResult(code, bytes(captured), truncated)
 
 
+def neutral_log_line(line: str) -> str:
+    """One line of output made inert for the Actions log: terminal controls become ``?`` and
+    modern and legacy workflow command markers are broken up."""
+
+    safe = "".join(character if character == "\t" or (32 <= ord(character) < 127 or ord(character) >= 160)
+                   else "?" for character in line)
+    # Legacy ##[ commands are recognized even after a visible prefix. Escape both
+    # grammars, including whole colon runs so replacement cannot recreate adjacent ::.
+    return re.sub(r":{2,}", lambda match: " ".join(match.group()), safe.replace("##[", "# #["))
+
+
 def render_worker_log(result: WorkerResult, *, role: str) -> str:
     """Neutralize modern/legacy Actions command markers and terminal controls on every line."""
 
@@ -712,12 +723,7 @@ def render_worker_log(result: WorkerResult, *, role: str) -> str:
     check(isinstance(role, str) and role in WORKER_ACCOUNTS, "$.role", "unknown worker role")
     lines = []
     for line in result.log.decode("utf-8", "replace").splitlines():
-        safe = "".join(character if character == "\t" or (32 <= ord(character) < 127 or ord(character) >= 160)
-                       else "?" for character in line)
-        # Legacy ##[ commands are recognized even after a visible prefix. Escape both
-        # grammars, including whole colon runs so replacement cannot recreate adjacent ::.
-        safe = re.sub(r":{2,}", lambda match: " ".join(match.group()), safe.replace("##[", "# #["))
-        lines.append(f"[{role}] {safe}\n")
+        lines.append(f"[{role}] {neutral_log_line(line)}\n")
     if result.truncated:
         lines.append(f"[{role}] output exceeded the bounded capture and was truncated\n")
     return "".join(lines)

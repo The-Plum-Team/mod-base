@@ -3,7 +3,8 @@
 ``scripts/ci/mod-base-build.json`` names the adapter entry points and their hashed import closure,
 the candidate files a plan is derived from (the inventory, the scenario contract and up to
 ``limits.MAX_CI_PLAN_INPUTS`` extra ``plan_inputs``), where a lane's checkout expects the staged
-Build, the two required status contexts and the native timeouts. :func:`validate_build_config` is the
+Build, the two required status contexts, the native timeouts and, optionally, the kit system profile
+a lane installs before its accounts exist (:func:`system_profile`). :func:`validate_build_config` is the
 pure schema; :func:`load_build_config` reads the file from the protected checkout the prologue
 verified and requires every listed source there to have its configured hash, so its result is the
 complete protected adapter that planning hashes into the policy digest. It also records the mod's
@@ -21,6 +22,7 @@ from mod_base import readable_schema_versions
 from mod_base.build_ci.activation import ACTIVATION_PATH, CALLERS
 from mod_base.build_ci.adapter import plan_input_name, plan_sources
 from mod_base.build_ci.protocol import BUILD_ADAPTER_API, PROFILES, check_output_paths, repo_path
+from mod_base.build_ci.system_profile import SYSTEM_PROFILES
 from mod_base.errors import MbError
 from mod_base.io.secure_json import loads
 from mod_base.model import grammar as g
@@ -69,11 +71,16 @@ _CONFIG = Obj({
     "contexts": Obj({"build": _context, "packaged": _context}),
     "timeouts": Obj({key: Int(1, lim.MAX_CI_WORKER_TIMEOUT_SECONDS)
                      for key in ("policy_seconds", "target_seconds", "runtime_seconds", "validator_seconds")}),
+}, {
+    # Optional within schema 1: what a lane job installs on the image before its accounts exist,
+    # named, never listed. Absent means none.
+    "runtime": Obj({"system_profile": Str(choices=tuple(SYSTEM_PROFILES))}),
 })
 
 
 def validate_build_config(document: Any, *, path: str = "$") -> dict[str, Any]:
-    """Data only: no matrix/scenario catalog, shell program, runner, permission or secret field."""
+    """Data only: no matrix/scenario catalog, shell program, runner, permission, package list or
+    secret field."""
 
     _CONFIG(document, path)
     adapter = document["adapter"]
@@ -95,6 +102,12 @@ def validate_build_config(document: Any, *, path: str = "$") -> dict[str, Any]:
     check(contexts["build"].casefold() != contexts["packaged"].casefold(), f"{path}.contexts",
           "Build and packaged contexts must be distinct")
     return document
+
+
+def system_profile(document: dict[str, Any]) -> str | None:
+    """The kit system profile a validated config names (``runtime.system_profile``), or ``None``."""
+
+    return document["runtime"]["system_profile"] if "runtime" in document else None
 
 
 @dataclass(frozen=True)

@@ -35,6 +35,9 @@ K7's release candidate and managed-caller canary are required before adoption.
   packaged results index. The index authenticates every lane's descriptor and receipt hashes
   without combining all lane bytes into one archive. Complete Builds require their validation
   record and expected native reports; commands bind the loaded protected config digest.
+- Add the optional `runtime.system_profile` to `mod-base.build.config` (schema 1) and
+  `ci system-profile`: a packaged lane installs the named kit profile (`xvfb-mesa`, Xvfb and Mesa
+  software rendering) as root before the host fence and its accounts. Mods name it, never packages.
 - Add `ci select-build` and `ci fetch-build`: select the newest exact Build, pass the canonical
   selection between jobs of the same attempt, and fetch its archive by numeric id and digest.
   Candidate-checkout subject derivation costs one request; a lane fetch costs two including

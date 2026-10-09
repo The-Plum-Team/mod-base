@@ -27,6 +27,7 @@ protected default branch, never from a pull request.
 | `bundle.path` | the directory, relative to a lane's checkout, where the verified Build is staged before `run_lane`. It must not lie inside `out/mod-base-kit` (or contain it), and the tested tree must not track it |
 | `contexts.build`, `contexts.packaged` | the two required status contexts |
 | `timeouts` | `validator_seconds` for every protected hook, `policy_seconds`, `target_seconds` and `runtime_seconds` for the three candidate hooks |
+| `runtime.system_profile` | optional: the kit system profile a lane job installs as root before its accounts exist, by name. `xvfb-mesa` is Xvfb, `xauth`, Mesa's software GL and EGL and the audio and X client libraries a Minecraft client loads: the union of both mods' native installs. The mod never lists packages; without `runtime` nothing is installed, and `runtime` without a profile, an unknown profile or another key is refused |
 
 The config bytes, the listed files, the pinned kit, the graph versions and the mod's own control
 files (`site/mod-base-build-activation.json` and the four `mod-base-*.yml` caller workflows, each by

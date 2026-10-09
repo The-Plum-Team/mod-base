@@ -35,10 +35,13 @@ These rules are specific to this code and add to the sections below:
   requested by a private `mod-base.ci.root-request` and run by `tools/ci_privileged_bootstrap.py`,
   which mirrors the list without importing the kit. The only other `sudo` command lines are the
   fixed ones in `build_ci.worker` that create, lock, kill and enter an account, revoke its
-  systemd user manager/linger and remove its cron/at jobs. Root never calls
+  systemd user manager/linger and remove its cron/at jobs, and the two fixed `apt-get` lines of
+  `build_ci.system_profile`, which run before the worker boundary exists (so no request can be
+  written yet) and run no kit code as root. Root never calls
   the GitHub API, and a request never names a program, a hook or a destination.
 - Account, `sudo` and root behaviour is tested in `tests/ci_linux_worker.py`, deferred execution
-  in `tests/ci_linux_deferred.py`, and the complete PR generation in `tests/ci_linux_pipeline.py`.
+  in `tests/ci_linux_deferred.py`, the complete PR generation in `tests/ci_linux_pipeline.py`, and
+  the system profile installed before the fence in `tests/ci_linux_system_profile.py`.
   The pipeline executes the workflow command lines, consumes the preceding jobs' real artifacts,
   checks request budgets and exercises rejection controls. The suite collects none of these
   modules. CI runs each module in its own GitHub-hosted job in every Python leg and the `Test`
