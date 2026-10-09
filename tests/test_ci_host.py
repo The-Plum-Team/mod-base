@@ -297,6 +297,64 @@ class HostFenceCommandTests(unittest.TestCase):
         os.link(private / "cache.lock", loose / "alias")
         self.assertIn(str(loose / "alias"), self.entries())
 
+    def test_closed_sdk_is_not_walked_and_a_writable_hard_link_alias_is_still_rejected(self):
+        leaf = self.tree / "toolcache/Python/bin/python3"
+        host._close_unused_image_tree(str(self.tree))
+        self.assertEqual(stat.S_IMODE(self.tree.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o777)
+        host._close_writable_trees((str(self.tree),), closed_trees=(str(self.tree),))
+        self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o777)
+        self.assertTrue(self.default_acls())  # The inaccessible contents were not visited.
+        self.assertEqual(self.entries(), [])
+        alias = self.base / "alias"
+        os.link(leaf, alias)
+        leaf.chmod(0o660)  # Group write, without other write, is enough for a future ACL identity.
+        self.assertEqual(self.entries(), [str(alias)])
+        leaf.chmod(0o640)
+        self.assertEqual(self.entries(), [])
+
+    def test_other_private_directories_keep_the_original_complete_repair(self):
+        self.tree.chmod(0o700)
+        host._close_writable_trees((str(self.tree),))
+        self.assertEqual(stat.S_IMODE((self.tree / "toolcache/Python/bin/python3").stat().st_mode), 0o755)
+        self.assertEqual(self.default_acls(), [])
+
+    def test_closure_never_follows_a_symlink(self):
+        link = self.base / "sdk-link"
+        link.symlink_to(self.tree, target_is_directory=True)
+        with self.assertRaisesRegex(MbError, "non-directory or symlink"):
+            host._close_unused_image_tree(str(link))
+        self.assertEqual(stat.S_IMODE(self.tree.stat().st_mode), 0o777)
+
+    def test_mount_records_are_bounded_strict_and_decode_kernel_escapes_once(self):
+        valid = b"1 0 8:1 / / rw,relatime - ext4 /dev/root rw\n"
+        self.assertEqual(host._parse_mounts(valid)[0].root, host.PurePosixPath("/"))
+        escaped = b"2 1 8:1 /with\\040space /literal\\134040 ro - ext4 /dev/root rw\n"
+        item = host._parse_mounts(escaped)[0]
+        self.assertEqual(str(item.root), "/with space")
+        self.assertEqual(str(item.point), "/literal\\040")
+        self.assertFalse(item.writable)
+        for raw in (b"", valid[:-1], valid.replace(b" / ", b" /../ ", 1),
+                    valid.replace(b" / ", b" /bad\\777 ", 1), valid.replace(b"relatime", b"\xff"),
+                    valid.replace(b"rw,relatime", b"rw,ro"), valid.replace(b" - ", b" "),
+                    b"x" * (limits.MAX_CI_HOST_MOUNTINFO_BYTES + 1)):
+            with self.subTest(raw=raw[:80]), self.assertRaises(MbError):
+                host._parse_mounts(raw)
+
+    def test_mount_alias_proof_maps_the_sdk_through_its_containing_filesystem_root(self):
+        raw = (b"1 0 8:1 / / rw - ext4 /dev/root rw\n"
+               b"2 1 8:2 /installed /opt rw - ext4 /dev/tools rw\n"
+               b"3 1 8:2 /installed/sdk /var/lib/whole rw - ext4 /dev/tools rw\n")
+        self.assertTrue(host._admit_closed_tree_mounts("/opt/sdk", os.makedev(8, 2), host._parse_mounts(raw)))
+        alias = b"4 1 8:2 /installed/sdk/bin /var/lib/alias rw - ext4 /dev/tools rw\n"
+        with self.assertRaisesRegex(MbError, "writable descendant mount alias"):
+            host._admit_closed_tree_mounts("/opt/sdk", os.makedev(8, 2), host._parse_mounts(raw + alias))
+        for safe in (alias.replace(b" rw -", b" ro -"), alias.replace(b"/var/lib/alias", b"/opt/sdk/alias"),
+                     alias.replace(b"8:2", b"8:3")):
+            self.assertTrue(host._admit_closed_tree_mounts("/opt/sdk", os.makedev(8, 2), host._parse_mounts(raw + safe)))
+        hidden_alias = alias.replace(b"/installed/sdk/bin", b"/private/hard-link").replace(b"/var/lib/alias", b"/dev/shm/alias")
+        self.assertFalse(host._admit_closed_tree_mounts("/opt/sdk", os.makedev(8, 2), host._parse_mounts(raw + hidden_alias)))
+
     def test_mount_points_of_other_filesystems_are_not_root_filesystem_entries(self):
         if not os.path.ismount("/dev/shm") or not stat.S_IMODE(os.stat("/dev/shm").st_mode) & stat.S_IWOTH:
             self.skipTest("no world-writable tmpfs mount to look at")

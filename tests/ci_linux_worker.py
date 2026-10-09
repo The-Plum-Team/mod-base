@@ -328,6 +328,182 @@ class LinuxHostFenceTests(HostedWorkerCase):
         with self.assertRaisesRegex(MbError, "default ACL"):
             inspect_worker_toolchains(boundary=self.host_boundary, roots=(str(prefix),))
 
+    def sdk_standin(self):
+        """One inert child of a fixed unused SDK; never remove an existing image SDK."""
+        sdk = Path("/usr/local/lib/android")
+        created = not sdk.exists()
+        if created:
+            command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "--", str(sdk))
+        self.assertFalse(sdk.is_symlink())
+        self.assertTrue(sdk.is_dir())
+        root = sdk / f"mod-base-fence-standin-{os.getpid()}-{len(self.planted)}"
+        command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "--", str(root))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0777", "--", str(root))
+        self.planted.append(root)
+        if created:
+            def remove_created_sdk():
+                command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--", str(root))
+                # Refuse to remove the top if anything other than our inert fixture arrived.
+                command("/usr/bin/sudo", "-n", "/usr/bin/rmdir", "--", str(sdk))
+            self.addCleanup(remove_created_sdk)
+        return sdk, root
+
+    def test_unused_sdk_is_closed_without_walking_it_and_real_accounts_cannot_enter(self):
+        sdk, root = self.sdk_standin()
+        leaf = root / "inert-tool"
+        command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(leaf))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0777", "--", str(leaf))
+        command("/usr/bin/sudo", "-n", "/usr/bin/setfacl", "-d", "-m", "o::rwx", str(root))
+        owner = sdk.stat().st_uid
+        fence_host(self.host_boundary)
+        self.assertEqual((sdk.stat().st_uid, stat.S_IMODE(sdk.stat().st_mode)), (owner, 0o700))
+        for path in (root, leaf):
+            self.assertEqual(command("/usr/bin/sudo", "-n", "/usr/bin/stat", "--format=%a", "--",
+                                     str(path)).stdout.strip(), b"777")
+        self.assertIn(b"default:other::rwx", command("/usr/bin/sudo", "-n", "/usr/bin/getfacl", "-cp",
+                                                    "--", str(root)).stdout)
+        self.allocate_accounts()
+        for role in WORKER_ACCOUNTS:
+            with self.subTest(role=role):
+                self.assertEqual(self.as_worker(role, "/usr/bin/test", "-x", str(sdk), accepted=(0, 1)).returncode, 1)
+                self.assertEqual(self.as_worker(role, "/usr/bin/cat", str(leaf), accepted=(0, 1)).returncode, 1)
+                self.assertEqual(self.as_worker(role, "/usr/bin/truncate", "-s", "0", str(leaf),
+                                                accepted=(0, 1)).returncode, 1)
+                self.assertEqual(self.as_worker(role, "/usr/bin/touch", str(root / "replacement"),
+                                                accepted=(0, 1)).returncode, 1)
+                self.assertEqual(self.as_worker(role, "/usr/bin/test", "-w", str(sdk.parent),
+                                                accepted=(0, 1)).returncode, 1)
+
+    def test_hard_link_acl_aliases_of_a_closed_sdk_fail_before_accounts_are_recreated(self):
+        import grp
+        import pwd
+        from mod_base.build_ci.root_request import root_request_path
+
+        _, root = self.sdk_standin()
+        fence_host(self.host_boundary)
+        account = allocate_worker_account("candidate")
+        self.accounts.append(("candidate", account.uid, account.gid))
+        outside = Path("/var/lib") / f"mod-base-fence-aliases-{os.getpid()}"
+        command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "--", str(outside))
+        self.planted.append(outside)
+        for kind in ("owning-group", "named-user", "named-group"):
+            source, alias = root / kind, outside / kind
+            command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(source))
+            command("/usr/bin/sudo", "-n", "/usr/bin/ln", "--", str(source), str(alias))
+            command("/usr/bin/sudo", "-n", "/usr/bin/setfacl", "-b", "--", str(alias))
+            command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0640", "--", str(alias))
+            if kind == "owning-group":
+                command("/usr/bin/sudo", "-n", "/usr/bin/chown", f"0:{account.gid}", "--", str(alias))
+                command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0660", "--", str(alias))
+            else:
+                entry = f"u:{account.uid}:rw" if kind == "named-user" else f"g:{account.gid}:rw"
+                command("/usr/bin/sudo", "-n", "/usr/bin/setfacl", "-m", entry, "--", str(alias))
+            # The kernel, under the actual candidate UID, demonstrates each masked write grant.
+            self.assertEqual(self.as_worker("candidate", "/usr/bin/truncate", "-s", "1", str(alias)).returncode, 0)
+            self.assertEqual(alias.stat().st_size, 1)
+            self.assertEqual(alias.stat().st_nlink, 2)
+        terminate_worker(account)
+        command("/usr/bin/sudo", "-n", "/usr/sbin/userdel", WORKER_ACCOUNTS["candidate"])
+        self.accounts.clear()
+        with self.assertRaises(KeyError):
+            pwd.getpwuid(account.uid)
+        with self.assertRaises(KeyError):
+            grp.getgrgid(account.gid)
+        shutil.rmtree(Path(str(root_request_path("host-fence"))))
+        with self.assertRaisesRegex(MbError, "host fence left 3 world-writable or aliased group-writable"):
+            fence_host(self.host_boundary)
+        for role in WORKER_ACCOUNTS:
+            with self.assertRaises(KeyError):
+                pwd.getpwnam(WORKER_ACCOUNTS[role])
+        for alias in outside.iterdir():
+            self.assertEqual(stat.S_IMODE(alias.stat().st_mode), 0o660)
+
+    def test_bind_mount_of_a_closed_sdk_descendant_is_refused_but_its_whole_tree_stays_closed(self):
+        from mod_base.build_ci import host as host_module
+        from mod_base.build_ci.root_request import root_request_path
+
+        sdk, root = self.sdk_standin()
+        leaf = root / "single-link"
+        command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(leaf))
+        outside = Path("/var/lib") / f"mod-base-fence-mounts-{os.getpid()}"
+        whole, alias = outside / "whole", outside / "single"
+        command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "--", str(outside), str(whole))
+        command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(alias))
+
+        def remove_mounts():
+            # Never recursively remove a possible mount point: failure to unmount keeps the
+            # fixture for diagnosis and cannot recurse into the image SDK it aliases.
+            for path in (alias, whole):
+                if any(str(mount.point) == str(path) for mount in host_module._host_mounts()):
+                    command("/usr/bin/sudo", "-n", "/usr/bin/umount", "--", str(path))
+            command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--", str(outside))
+
+        self.addCleanup(remove_mounts)
+        command("/usr/bin/sudo", "-n", "/usr/bin/mount", "--bind", str(sdk), str(whole))
+        fence_host(self.host_boundary)
+        account = allocate_worker_account("candidate")
+        self.accounts.append(("candidate", account.uid, account.gid))
+        self.assertEqual(self.as_worker("candidate", "/usr/bin/test", "-x", str(whole),
+                                       accepted=(0, 1)).returncode, 1)
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0640", "--", str(leaf))
+        command("/usr/bin/sudo", "-n", "/usr/bin/setfacl", "-m", f"u:{account.uid}:rw", "--", str(leaf))
+        command("/usr/bin/sudo", "-n", "/usr/bin/mount", "--bind", str(leaf), str(alias))
+        self.assertEqual(alias.stat().st_nlink, 1)
+        self.assertEqual(self.as_worker("candidate", "/usr/bin/truncate", "-s", "1", str(alias)).returncode, 0)
+        terminate_worker(account)
+        command("/usr/bin/sudo", "-n", "/usr/sbin/userdel", WORKER_ACCOUNTS["candidate"])
+        self.accounts.clear()
+        shutil.rmtree(Path(str(root_request_path("host-fence"))))
+        with self.assertRaisesRegex(MbError, "writable descendant mount alias outside its closure"):
+            fence_host(self.host_boundary)
+
+    def test_hidden_hard_link_bind_alias_keeps_full_sdk_repair_and_loses_real_account_write(self):
+        from mod_base.build_ci import host as host_module
+        from mod_base.build_ci.root_request import root_request_path
+
+        sdk, root = self.sdk_standin()
+        fence_host(self.host_boundary)
+        account = allocate_worker_account("candidate")
+        self.accounts.append(("candidate", account.uid, account.gid))
+        source = root / "inert-tool"
+        hidden = Path("/var/lib") / f"mod-base-fence-hidden-alias-{os.getpid()}"
+        mounted = Path("/dev/shm") / f"mod-base-fence-hidden-mount-{os.getpid()}"
+        self.assertNotEqual(Path("/dev/shm").stat().st_dev, sdk.stat().st_dev)
+        command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "-m", "0700", "--", str(hidden))
+        self.planted.append(hidden)
+        command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(source), str(mounted))
+
+        def remove_mount():
+            if any(str(mount.point) == str(mounted) for mount in host_module._host_mounts()):
+                command("/usr/bin/sudo", "-n", "/usr/bin/umount", "--", str(mounted))
+            command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-f", "--", str(mounted))
+
+        self.addCleanup(remove_mount)
+        command("/usr/bin/sudo", "-n", "/usr/bin/ln", "--", str(source), str(hidden / "alias"))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0640", "--", str(source))
+        command("/usr/bin/sudo", "-n", "/usr/bin/setfacl", "-m", f"u:{account.uid}:rw", "--", str(source))
+        command("/usr/bin/sudo", "-n", "/usr/bin/mount", "--bind", str(hidden / "alias"), str(mounted))
+        self.assertEqual(mounted.stat().st_nlink, 2)
+        self.assertEqual(self.as_worker("candidate", "/usr/bin/truncate", "-s", "1", str(mounted)).returncode, 0)
+        # The source hard link is hidden behind an existing owner's private directory; the bind
+        # alias is below tmpfs, outside the root proof's -xdev walk. Only full SDK repair caps it.
+        self.assertFalse(host_module._admit_closed_tree_mounts(str(sdk), sdk.stat().st_dev,
+                                                              host_module._host_mounts()))
+        terminate_worker(account)
+        command("/usr/bin/sudo", "-n", "/usr/sbin/userdel", WORKER_ACCOUNTS["candidate"])
+        self.accounts.clear()
+        command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--", str(self.root / "candidate-home"))
+        shutil.rmtree(Path(str(root_request_path("host-fence"))))
+        fence_host(self.host_boundary)
+        self.assertIn(str(sdk), _FENCE_TIMINGS[-1]["walked_closed"])
+        self.assertEqual(stat.S_IMODE(mounted.stat().st_mode), 0o640)
+        replacement = allocate_worker_account("candidate")
+        self.accounts.append(("candidate", replacement.uid, replacement.gid))
+        self.assertEqual(replacement.uid, account.uid)
+        self.assertEqual(self.as_worker("candidate", "/usr/bin/truncate", "-s", "2", str(mounted),
+                                       accepted=(0, 1)).returncode, 1)
+        self.assertEqual(mounted.stat().st_size, 1)
+
     def test_fence_refuses_to_run_once_a_worker_account_exists(self):
         fence_host_once(self.host_boundary)
         self.allocate_accounts()

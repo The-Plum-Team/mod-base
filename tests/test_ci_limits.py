@@ -176,6 +176,7 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_ROOT_DIAGNOSTIC_BYTES": (4 * KIB, "the stderr a failed root operation may report"),
     "CI_HOST_FENCE_TIMEOUT_SECONDS": (600.0, "one administrative command of the host fence"),
     "MAX_CI_HOST_FENCE_REPORT_BYTES": (64 * KIB, "what the fence keeps of the entries it could not close"),
+    "MAX_CI_HOST_MOUNTINFO_BYTES": (64 * KIB, "kernel mount table admitted before unused SDK trees are closed"),
     "MAX_CI_SEED_PATH_DEPTH": (64, "components of one path inside a Gradle seed, the tree walk's own depth"),
     "MAX_CI_SOURCE_LIST_BYTES": (64 * MIB, "one Git tree listing"),
     "MAX_CI_GIT_REF_BYTES": (4 * KIB, "one loose ref"),
