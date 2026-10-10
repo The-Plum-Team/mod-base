@@ -580,6 +580,14 @@ def download_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: d
     return document
 
 
+def artifact_gone(error: ApiError) -> bool:
+    """Whether an API failure is GitHub saying that an artifact is gone: a read of its numeric id
+    (its metadata or its archive) that answers 404 or 410. Every other API failure is no statement
+    about evidence."""
+
+    return error.status in (404, 410) and error.method == "GET" and _ARTIFACT_PATH.fullmatch(error.path) is not None
+
+
 @contextlib.contextmanager
 def _original_evidence() -> Iterator[None]:
     """Report an original artifact that is gone as :class:`OriginalUnavailable`.
@@ -593,7 +601,7 @@ def _original_evidence() -> Iterator[None]:
     except ArtifactUnavailable as error:
         raise OriginalUnavailable(f"original evidence is gone: {error}") from error
     except ApiError as error:
-        if error.status not in (404, 410) or error.method != "GET" or _ARTIFACT_PATH.fullmatch(error.path) is None:
+        if not artifact_gone(error):
             raise
         raise OriginalUnavailable(f"original evidence is gone: GitHub answers {error.status} for "
                                   f"{error.path}") from error

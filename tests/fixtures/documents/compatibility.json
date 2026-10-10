@@ -1,8 +1,8 @@
 {
   "baseline": {
-    "commit": "f30b5b6576c3c4fbc2b43219a8a2d67b5dd2a51f",
-    "source_sha256": "d6be45c0d1ed34200df9850b6a7dc443696f058d0659e6e0452b9aea325cf7a0",
-    "tag": "v1.1.1"
+    "commit": "57f2f12679207486f80bc332fb3901f639c74a3c",
+    "source_sha256": "7250c2a904724bde6533039c733c607d55b384c4190c39df5e8302bc5e928f79",
+    "tag": "v1.1.2"
   },
   "kinds": {
     "mod-base.build": {

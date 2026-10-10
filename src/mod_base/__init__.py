@@ -8,7 +8,7 @@ the previous one (the N/N-1 rule); for ``schema_version`` 1 that is exactly ``{1
 
 from __future__ import annotations
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 #: Adapter protocol version this kit calls (SPEC §4.2). Adapters declare ``ADAPTER_API``.
 ADAPTER_API = 1

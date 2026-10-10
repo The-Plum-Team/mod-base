@@ -481,6 +481,62 @@ class GateStatusTests(GateStatusTestCase):
                 self.refused(world, world.planned(), "request-budget")
                 self.assertEqual(world.api.request_count, budget)
 
+    def test_an_artifact_github_says_is_gone_is_a_failure_and_any_other_api_failure_is_not(self) -> None:
+        # The canary deleted the Build bundle while the packaged run was selecting it (K7 case F1):
+        # the status runs crashed on the 404 of its numeric id and published nothing at all.
+        def failing(world: StatusWorld, target: str, failure: ApiError, method: str = "get_json"):
+            original = getattr(world.api, method)
+
+            def call(path, **arguments):
+                if path == target:
+                    raise failure
+                return original(path, **arguments)
+
+            return patch.object(world.api, method, side_effect=call)
+
+        def gone(path: str, status_: int) -> ApiError:
+            return ApiError(f"GitHub API GET {path} failed: HTTP {status_}", status=status_, method="GET", path=path)
+
+        def description(label: str, artifact_id: int, status_: int) -> str:
+            return f"the newest {label} run was rejected: artifact {artifact_id} it needs is gone (HTTP {status_})"
+
+        world = self.world().gated()
+        bundle = world.documents["build"]["artifacts"][0]["artifact"]["id"]
+        self.assertEqual(world.documents["packaged"]["owning_build"]["artifact"]["id"], bundle)
+        path = f"/repos/{h.REPOSITORY}/actions/artifacts/{bundle}"
+        for status_ in (404, 410):
+            # Both gates need the bundle: the Build gate sealed it and the packaged gate consumed it.
+            world = self.world().gated()
+            with self.subTest(status=status_), failing(world, path, gone(path, status_)):
+                self.assertEqual(self.states(self.intents(world, world.planned())),
+                                 {"build": ("failure", description("Build", bundle, status_), run_url(42)),
+                                  "packaged": ("failure", description("packaged E2E", bundle, status_),
+                                               run_url(43))})
+        # Case F1 itself: the packaged run failed without the bundle; both gates are decided.
+        world = self.world().gated()
+        world.later_packaged()
+        with failing(world, path, gone(path, 404)):
+            self.assertEqual(self.states(self.intents(world, world.planned())),
+                             {"build": ("failure", description("Build", bundle, 404), run_url(42)),
+                              "packaged": ("failure", "the newest packaged E2E run failed or was cancelled",
+                                           run_url(45))})
+        # A tested record that goes between its metadata read and its download says the same.
+        for gate, run_id in (("build", 42), ("packaged", 43)):
+            world = self.world().gated()
+            seal = world.seals[gate]["artifact"]["id"]
+            path = f"/repos/{h.REPOSITORY}/actions/artifacts/{seal}/zip"
+            with self.subTest(gate=gate), failing(world, path, gone(path, 404), "download"):
+                states = self.states(self.intents(world, world.planned()))
+            label = "Build" if gate == "build" else "packaged E2E"
+            self.assertEqual(states[gate], ("failure", description(label, seal, 404), run_url(run_id)))
+        # Any other failure, of an artifact or of a 404 elsewhere, is still no state.
+        for path, status_ in ((f"/repos/{h.REPOSITORY}/actions/artifacts/{bundle}", 403),
+                              (f"/repos/{h.REPOSITORY}/actions/artifacts/{bundle}", 500),
+                              (f"/repos/{h.REPOSITORY}/actions/runs/42", 404), (PULL, 404)):
+            world = self.world().gated()
+            with self.subTest(path=path, status=status_), failing(world, path, gone(path, status_)):
+                self.refused(world, world.planned(), "github-api")
+
     def test_a_closed_foreign_or_unknown_pull_request_is_refused(self) -> None:
         world = self.world().gated()
         fork = {**world.pr["head"], "repo": {"full_name": "fork/synthetic-mod"}}
