@@ -5,6 +5,106 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.1.0
+
+Adds the protected Build and packaged E2E pipeline (design steps K1–K6). Nothing changes for a
+mod until it adds a Build adapter and an activation manifest; Pages, its schemas, `ADAPTER_API`
+and `pixel_metrics_version` 1 are unchanged. The tag is the K7 release candidate: mods pin it only
+after its canary is green and its GitHub Release is published.
+
+- Add `BUILD_ADAPTER_API = 1`, separate from the Pages adapter: eight hooks derive the plan
+  and runtime values, run policy/target/lane work, and verify target/Build/runtime exports.
+  A protected hashed adapter closure supplies validation; mod hooks write native files only.
+- Add thirteen strict document kinds at `schema_version: 1`: `mod-base.build.config`,
+  `mod-base.build.plan`, `mod-base.build.envelope`, `mod-base.ci.runtime-envelope`,
+  `mod-base.ci.validation`, `mod-base.ci.selection`, `mod-base.ci.results`,
+  `mod-base.ci.gate`, `mod-base.ci.reuse`, `mod-base.ci.execution`,
+  `mod-base.ci.root-request`, `mod-base.ci.activation` and `mod-base.ci.batch`.
+  The previous release rejects these new kinds; existing Pages schemas, `ADAPTER_API`
+  and `PIXEL_METRICS_VERSION` are unchanged.
+- Add `ci subject`, `worker-prepare`, `plan`, `worker-stage`, `worker-run`, `worker-seal`,
+  `worker-validate` and `worker-finish`. Protected orchestration admits the exact PR merge
+  or default-branch subject and runs candidate code in a disposable account without tokens.
+  A second account runs the protected verifier before any sealed artifact is uploaded.
+- Fence hosted Linux tools before creating accounts. Closed root operations verify the kit
+  digest, stage source/Build/kit inputs, prove tracked sources unchanged, freeze exports and
+  seal validation reports through private requests. Account cleanup revokes user managers,
+  linger, cron and at jobs as well as processes; an error prevents successful sealing.
+  Admit linked JDK certificates through stable ancestor identity/type/permissions while keeping
+  full tool stamps and race checks; unrelated `/etc` timestamp changes no longer reject admission.
+- Admit a changed candidate kit pin once per run, bind it into the optional v1 plan field
+  `candidate_kit`, and use a separate pinned checkout for candidate-only execution. Protected
+  code verifies release tag, main ancestry, commit, own digest and both locks; the executing kit
+  retains all privileged work. Stage/root record formats and the job graph stay unchanged;
+  checkout steps are added. Released rollbacks use the same checks. Older strict plan readers
+  and unsupported digest/lock formats require a compatibility-first protected release.
+- Reduce host-fence traversal by closing only unused Android, CodeQL, .NET and Swift SDK roots.
+  Prove closure against real accounts, ACL/hard-link and bind-mount aliases; retain full repair
+  when a mount is ambiguous. All other repair coverage and existing deadlines remain intact.
+  Bound mountinfo to 64 KiB and report first-fence phase/tree timings in every hosted CI job.
+- Add `ci assemble` for the exact union of target partitions and `ci aggregate` for the
+  packaged results index. The index authenticates every lane's descriptor and receipt hashes
+  without combining all lane bytes into one archive. Complete Builds require their validation
+  record and expected native reports; commands bind the loaded protected config digest.
+- Add the optional `runtime.system_profile` to `mod-base.build.config` (schema 1) and
+  `ci system-profile`: a packaged lane installs the named kit profile (`xvfb-mesa`, Xvfb and Mesa
+  software rendering) as root before the host fence and its accounts. Mods name it, never packages.
+- Add `ci select-build` and `ci fetch-build`: select the newest exact Build, pass the canonical
+  selection between jobs of the same attempt, and fetch its archive by numeric id and digest.
+  Candidate-checkout subject derivation costs one request; a lane fetch costs two including
+  storage. Gates repeat the live source/newest-run observations before sealing.
+- Add `ci seal-gate` and read-only `ci gate-status`. Full caller/callee graphs, upload chronology,
+  attempts, descriptors and paired native receipts determine gate intents. Required statuses
+  are published only by the managed caller's native job holding the mod's App credentials.
+- Add reusable `build.yml`, `select-build.yml`, `packaged-e2e.yml` and `gate-status.yml`, with
+  pinned actions, per-job read permissions, sealed uploads and always-run worker cleanup.
+  Build runs one target per runner; packaged E2E runs one lane per runner against that Build.
+- Add the managed callers `mod-base-guard.yml`, `mod-base-build.yml`,
+  `mod-base-packaged-e2e.yml` and `mod-base-gate-status.yml`. They bind the protected caller
+  and kit references, defer drafts, filter PRs to the canonical base and render the single pin.
+  Managed `.gitattributes` now forces LF for all four, including Windows clones.
+- Add activation modes `disabled`, `shadow`, `shared-build`, `shared-build-and-e2e` and
+  `reviewed-rollback`, checked by `template check/sync/init`; add `template activation` and
+  `template transition`. Mode transitions use their own PR at an unchanged pin. Bootstrap
+  bump checks target-kit support and restores pin files if its write phase fails.
+- Add `ci batch-prepare` and `ci batch-settle`: reproduce ordered native Git changes on the
+  current base, open a batch, then verify its merged tree and both gate records before closing
+  unchanged members. Up to 50 members; expired original evidence exits 3.
+- Add `ci reuse-admit` to protected-push planning/selection. Identical tested tree, policy,
+  plan, kit and retained original gates admit reuse; normal misses run full gates and corrupt
+  evidence/API failures reject. Reuse gates re-admit and write `ci-reuse.json`, a direct
+  reference to original PR gates that renews no artifact retention.
+- Bind policy digests to the activation manifest and managed callers as well as adapter/config
+  and kit bytes, so control-plane changes require full post-merge gates. Retain original
+  merged Build/gate readers; original runtime consumers must use the results index and lanes.
+- Accept native export names with spaces and optional target-scoped SBOM/report outputs.
+  Wait at most 15 seconds/four observations for a pending test merge; stale bases use
+  `ci-pr-base-outdated` and request a branch update. Allow two seconds of upload-clock skew
+  while keeping other chronology exact. Failed-jobs-only mixed attempts are refused.
+- Pin API command caps and workflow-derived generation costs: synthetic 211, Quick Skin 411,
+  Block Pops 313, including one final status evaluation and storage GETs, with no waiting.
+  Changed candidate pins cost 220/420/322 respectively in the pinned annotated-tag case;
+  matrix workers verify the plan locally without repeating release admission.
+  Pending selection polls add one each. `MAX_CI_GENERATION_REQUESTS = 440` is a test-only
+  regression budget; structural 256/256 plans exceed the repository's 1,000 REST/hour allowance.
+  These are FakeGitHub kit-traffic measurements, excluding third-party Actions and retries.
+- Add native parity/graph fixtures and required Python 3.11–3.13 ordinary, hosted worker,
+  deferred-execution and full command-chain CI jobs. The pipeline exercises real Git, accounts,
+  hooks, root operations and artifacts with fake GitHub, plus corruption/missing/stale/draft controls.
+  Both the ordinary and future-kit generations traverse the complete command chain; the future
+  kit differs and refuses execution by protected or validator accounts.
+- Keep retention at one day for targets, seven for Build/lane/results, 90 for gates/reuse.
+  Owner review remains for common 512 MiB archives, whole-lane 512-file/256 MiB bounds and
+  Quick Skin's 4 MiB native-report cap. Protocol and artifact bounds are not raised for failures.
+- Operator prerequisites: ratify the design/ADR, complete K7 and release; then provide native
+  adapters and, where wanted, cache restore/save (current Gradle seeds are empty).
+  Provision `mod-base-gate` with `MOD_BASE_GATE_APP_CLIENT_ID` and
+  `MOD_BASE_GATE_APP_PRIVATE_KEY` before managing the status caller. Transition admission
+  remains an operator route; batch commands need reviewed paths/procedure and App credentials.
+- Adoption constraints: per-hook timeout admission does not guarantee whole-job fit and remains
+  the one documented expected failure. The candidate-pin regression now passes. Runtime reuse
+  consumers remain Q9/B6.
+
 ## v1.0.3
 
 A front-end release: every validated capture of the E2E gallery has its own URL. Schema versions

@@ -322,6 +322,54 @@ class ExtractTests(BoundedZipTestCase):
         self.assertEqual("zip-rejected", ZipRejected("x").reason)
 
 
+class ExportNameTests(BoundedZipTestCase):
+    """A sealed Build or runtime export keeps the mod's own file names; a Pages archive never does."""
+
+    REAL = {"ci-envelope.json": b"{}\n", "files/Quick Skin - Fabric - 1.20.1-3.1.0+build.5.jar": b"production",
+            "harness/BlockPops E2E - NeoForge - 1.21.1-0.0.0.jar": b"harness", "sbom/quick-skin.cdx.json": b"{}"}
+
+    def routes(self, data: bytes) -> dict:
+        return {"build": lambda destination: bounded_zip.extract_build(data, destination),
+                "lane": lambda destination: bounded_zip.extract_runtime(data, destination, scope="lane"),
+                "complete": lambda destination: bounded_zip.extract_runtime(data, destination, scope="complete")}
+
+    def test_build_and_runtime_archives_keep_real_file_names(self) -> None:
+        data = archive(self.REAL)
+        for label, route in self.routes(data).items():
+            with self.subTest(route=label):
+                destination = self.destination()
+                self.assertEqual(route(destination), sorted(self.REAL))
+                self.assertEqual({name: (destination / name).read_bytes() for name in self.REAL}, self.REAL)
+        # Pages names are the kit's own: a space or a "+" is still no bundle path.
+        self.assert_rejected(data, "unsafe entry name")
+        self.assert_rejected(archive({"v1.0.0+build.7.png": b"x"}), "unsafe entry name")
+
+    def test_names_outside_the_export_grammar_are_refused_on_every_route(self) -> None:
+        for name in (" leading.jar", "trailing.jar ", "double  space.jar", ".hidden.jar", "files/.git/config",
+                     "trailing.", "files/tab\tname.jar", "café.jar", "colon:name.jar", "../escape.jar",
+                     "/absolute.jar", "files//a.jar", "files/./a.jar", "x" * 129):
+            data = archive({name: b"x"})
+            for label, route in self.routes(data).items():
+                destination = self.destination()
+                with self.subTest(name=name, route=label), self.assertRaisesRegex(ZipRejected, "unsafe entry name"):
+                    route(destination)
+                self.assertFalse(destination.exists())
+
+    def test_real_names_that_differ_only_in_case_never_extract(self) -> None:
+        for entries in ({"files/Quick Skin - Fabric.jar": b"x", "files/QUICK SKIN - FABRIC.jar": b"y"},
+                        {"Files/Quick Skin.jar": b"x", "files/BlockPops.jar": b"y"}):
+            for label, route in self.routes(archive(entries)).items():
+                with self.subTest(names=sorted(entries), route=label), self.assertRaisesRegex(ZipRejected, "case folding"):
+                    route(self.destination())
+
+    def test_a_pages_archive_keeps_its_dotfiles_which_no_export_holds(self) -> None:
+        data = archive({".nojekyll": b"x", "index.html": b"<html></html>"})
+        self.assertEqual(extract(data, self.destination(), LIMITS), [".nojekyll", "index.html"])
+        for label, route in self.routes(data).items():
+            with self.subTest(route=label), self.assertRaisesRegex(ZipRejected, "unsafe entry name"):
+                route(self.destination())
+
+
 class CentralDirectoryBoundTests(BoundedZipTestCase):
     def test_counts_and_sizes_beyond_the_limits_are_refused_before_zipfile_parses(self) -> None:
         data = archive({"a.txt": b"a"})

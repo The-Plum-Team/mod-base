@@ -1,0 +1,258 @@
+{
+  "build": {
+    "bundle": {
+      "artifact": {
+        "bytes": 202156378,
+        "digest": "sha256:3a5c5b8086a01ef3cede07f1c7bef7b5bdbcfbac449b57e0ab56b24241818043",
+        "id": 11400090462,
+        "name": "staged-release-bundle"
+      },
+      "expanded_bytes": 202143356,
+      "files": 70,
+      "largest_jar_bytes": 5533168,
+      "other_files": {
+        "artifacts.json": 30848,
+        "sbom/quick-skin.cdx.json": 47632
+      }
+    },
+    "event": "pull_request",
+    "run_attempt": 1,
+    "run_id": 37435530842
+  },
+  "measured_on": "2026-10-08",
+  "packaged": {
+    "event": "pull_request",
+    "lanes": [
+      {
+        "bytes": 28267899,
+        "name": "packaged-e2e-fabric-1_20_1--1_20_1--pr-behavior"
+      },
+      {
+        "bytes": 29072604,
+        "name": "packaged-e2e-fabric-1_21_1--1_21_1--pr-behavior"
+      },
+      {
+        "bytes": 29875320,
+        "name": "packaged-e2e-fabric-1_21_10--1_21_10--pr-behavior"
+      },
+      {
+        "bytes": 48159114,
+        "name": "packaged-e2e-fabric-1_21_11--1_21_11--pr-behavior"
+      },
+      {
+        "bytes": 26547542,
+        "name": "packaged-e2e-fabric-1_21_2--1_21_2--pr-behavior"
+      },
+      {
+        "bytes": 26539213,
+        "name": "packaged-e2e-fabric-1_21_3--1_21_3--pr-behavior"
+      },
+      {
+        "bytes": 27137569,
+        "name": "packaged-e2e-fabric-1_21_4--1_21_4--pr-behavior"
+      },
+      {
+        "bytes": 27201895,
+        "name": "packaged-e2e-fabric-1_21_5--1_21_5--pr-behavior"
+      },
+      {
+        "bytes": 35880318,
+        "name": "packaged-e2e-fabric-1_21_6--1_21_6--pr-behavior"
+      },
+      {
+        "bytes": 35875676,
+        "name": "packaged-e2e-fabric-1_21_7--1_21_7--pr-behavior"
+      },
+      {
+        "bytes": 35879948,
+        "name": "packaged-e2e-fabric-1_21_8--1_21_8--pr-behavior"
+      },
+      {
+        "bytes": 29871894,
+        "name": "packaged-e2e-fabric-1_21_9--1_21_9--pr-behavior"
+      },
+      {
+        "bytes": 50660802,
+        "name": "packaged-e2e-fabric-26_1--26_1--pr-behavior"
+      },
+      {
+        "bytes": 50667251,
+        "name": "packaged-e2e-fabric-26_1_1--26_1_1--pr-behavior"
+      },
+      {
+        "bytes": 50665450,
+        "name": "packaged-e2e-fabric-26_1_2--26_1_2--pr-behavior"
+      },
+      {
+        "bytes": 45792716,
+        "name": "packaged-e2e-fabric-26_2--26_2--pr-behavior"
+      },
+      {
+        "bytes": 48704831,
+        "name": "packaged-e2e-fabric-26_3--26_3--pr-behavior"
+      },
+      {
+        "bytes": 28230352,
+        "name": "packaged-e2e-forge-1_20_1--1_20_1--pr-behavior"
+      },
+      {
+        "bytes": 28968544,
+        "name": "packaged-e2e-neoforge-1_21_1--1_21_1--pr-behavior"
+      },
+      {
+        "bytes": 29675425,
+        "name": "packaged-e2e-neoforge-1_21_10--1_21_10--pr-behavior"
+      },
+      {
+        "bytes": 47983964,
+        "name": "packaged-e2e-neoforge-1_21_11--1_21_11--pr-behavior"
+      },
+      {
+        "bytes": 26439092,
+        "name": "packaged-e2e-neoforge-1_21_2--1_21_2--pr-behavior"
+      },
+      {
+        "bytes": 26448211,
+        "name": "packaged-e2e-neoforge-1_21_3--1_21_3--pr-behavior"
+      },
+      {
+        "bytes": 27015411,
+        "name": "packaged-e2e-neoforge-1_21_4--1_21_4--pr-behavior"
+      },
+      {
+        "bytes": 27103546,
+        "name": "packaged-e2e-neoforge-1_21_5--1_21_5--pr-behavior"
+      },
+      {
+        "bytes": 35661062,
+        "name": "packaged-e2e-neoforge-1_21_6--1_21_6--pr-behavior"
+      },
+      {
+        "bytes": 35667234,
+        "name": "packaged-e2e-neoforge-1_21_7--1_21_7--pr-behavior"
+      },
+      {
+        "bytes": 35667398,
+        "name": "packaged-e2e-neoforge-1_21_8--1_21_8--pr-behavior"
+      },
+      {
+        "bytes": 29683128,
+        "name": "packaged-e2e-neoforge-1_21_9--1_21_9--pr-behavior"
+      },
+      {
+        "bytes": 50447332,
+        "name": "packaged-e2e-neoforge-26_1--26_1--pr-behavior"
+      },
+      {
+        "bytes": 50451512,
+        "name": "packaged-e2e-neoforge-26_1_1--26_1_1--pr-behavior"
+      },
+      {
+        "bytes": 50477454,
+        "name": "packaged-e2e-neoforge-26_1_2--26_1_2--pr-behavior"
+      },
+      {
+        "bytes": 45737772,
+        "name": "packaged-e2e-neoforge-26_2--26_2--pr-behavior"
+      },
+      {
+        "bytes": 48734565,
+        "name": "packaged-e2e-neoforge-26_3--26_3--pr-behavior"
+      }
+    ],
+    "run_attempt": 1,
+    "run_id": 37435530757,
+    "samples": [
+      {
+        "artifact": {
+          "bytes": 50667251,
+          "digest": "sha256:8069f7e09fd5f3ea87afffba9eb46ed6ea429f7c8ee52a20754c879bb52a083a",
+          "id": 11399714832,
+          "name": "packaged-e2e-fabric-26_1_1--26_1_1--pr-behavior"
+        },
+        "deepest_path": 5,
+        "evidence_profiles": {
+          "fabric-26.1.1--26.1.1--feature-navigation": {
+            "bytes": 570620,
+            "files": 9
+          },
+          "fabric-26.1.1--26.1.1--full": {
+            "bytes": 35111010,
+            "files": 74
+          },
+          "fabric-26.1.1--26.1.1--phase0-smoke": {
+            "bytes": 1477988,
+            "files": 8
+          },
+          "fabric-26.1.1--26.1.1--propagation": {
+            "bytes": 3214816,
+            "files": 12
+          },
+          "fabric-26.1.1--26.1.1--propagation-live": {
+            "bytes": 7897533,
+            "files": 17
+          },
+          "fabric-26.1.1--26.1.1--server-policy": {
+            "bytes": 2258228,
+            "files": 9
+          },
+          "fabric-26.1.1--26.1.1--session": {
+            "bytes": 4596137,
+            "files": 9
+          }
+        },
+        "expanded_bytes": 55243601,
+        "files": 141,
+        "largest_log_bytes": 101838,
+        "largest_png_bytes": 2585171,
+        "longest_path_chars": 128
+      },
+      {
+        "artifact": {
+          "bytes": 26439092,
+          "digest": "sha256:0d7115661a9dfccb2ce477a579716c3f27cb9bbc953e79d9ee10e5b611939819",
+          "id": 11400242423,
+          "name": "packaged-e2e-neoforge-1_21_2--1_21_2--pr-behavior"
+        },
+        "deepest_path": 5,
+        "evidence_profiles": {
+          "neoforge-1.21.2--1.21.2--feature-navigation": {
+            "bytes": 597936,
+            "files": 9
+          },
+          "neoforge-1.21.2--1.21.2--full": {
+            "bytes": 19944126,
+            "files": 74
+          },
+          "neoforge-1.21.2--1.21.2--phase0-smoke": {
+            "bytes": 721063,
+            "files": 7
+          },
+          "neoforge-1.21.2--1.21.2--propagation": {
+            "bytes": 1586701,
+            "files": 12
+          },
+          "neoforge-1.21.2--1.21.2--propagation-live": {
+            "bytes": 3814480,
+            "files": 17
+          },
+          "neoforge-1.21.2--1.21.2--server-policy": {
+            "bytes": 1144298,
+            "files": 9
+          },
+          "neoforge-1.21.2--1.21.2--session": {
+            "bytes": 3103843,
+            "files": 9
+          }
+        },
+        "expanded_bytes": 31029883,
+        "files": 140,
+        "largest_log_bytes": 125647,
+        "largest_png_bytes": 1637837,
+        "longest_path_chars": 130
+      }
+    ]
+  },
+  "tested_sha": "b55bb8cc21d6a7696226b30334ece8e4917f9e6b",
+  "tested_tree": "0dcc51f8f3648364eae58d95a947058dcdf41702"
+}

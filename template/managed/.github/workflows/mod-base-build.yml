@@ -1,0 +1,69 @@
+# mod-base managed: Build caller, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-build.yml
+name: mod-base Build
+
+# The protected Build of a pull request (the workflow of the default branch runs it, never the
+# pull request's own copy), of a push to the default branch and of a manual request there. The
+# guard binds the run to the pin before the kit's Build workflow is called. A draft pull request
+# gets the deferral job alone: no kit job, no candidate code, no result. This file holds no secret
+# and passes none on; candidate code runs only inside the kit's sandbox, without any token.
+on:
+  pull_request_target:
+    branches: ["{{BRANCH}}"]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: ["{{BRANCH}}"]
+  workflow_dispatch: {}
+
+permissions: {}
+
+# A new generation of a pull request (a push, a draft conversion, a readiness event) cancels the
+# one before it. A push to the default branch waits for the generation before it and replaces an
+# older one that is still waiting; a manual request has a group of its own.
+concurrency:
+  group: >-
+    build-gate-${{ github.workflow }}-${{ github.event.pull_request.number ||
+    (github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.ref, github.run_id)) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  guard:
+    name: Verify pinned mod-base
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/mod-base-guard.yml
+    with:
+      callees: build
+
+  deferred:
+    name: Build deferred for draft
+    needs: guard
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Report the draft deferral
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          fail() { printf 'Build deferral: %s\n' "$1" >&2; exit 1; }
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed pull request number"
+          printf 'Build deferred: pull request #%s is a draft, so no Build ran and this head has no %s\n' \
+            "$PR_NUMBER" "Build result. Mark the pull request ready for review to start one." |
+            tee -a "$GITHUB_STEP_SUMMARY"
+
+  shared:
+    name: Shared Build
+    needs: guard
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.draft == false
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: The-Plum-Team/mod-base/.github/workflows/build.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.guard.outputs.kit-sha }}
+      pr-number: ${{ format('{0}', github.event.pull_request.number) }}

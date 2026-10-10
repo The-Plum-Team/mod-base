@@ -1,0 +1,144 @@
+# mod-base managed: guard workflow, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-guard.yml
+name: mod-base guard
+
+# The caller-owned defence of the managed Build, packaged E2E and gate status callers. Each calls
+# it first and as a local workflow, so GitHub lists this file in the run's referenced_workflows at
+# the commit the caller itself ran from: the controller commit, which a pull_request_target run
+# names nowhere else. Before any kit code runs, the one job admits the event, checks out the
+# protected mod at github.sha and binds the run to the single pin of its workflows: the pin this
+# file was rendered for, a released commit of the kit's main branch, and the only kit commit the
+# run references. It runs this shell and the mod's managed bootstrap, nothing else, and its token
+# only reads.
+on:
+  workflow_call:
+    inputs:
+      callees:
+        description: The kit workflows the calling workflow calls, in the order of its jobs
+        required: true
+        type: string
+    outputs:
+      kit-sha:
+        description: The mod-base commit this mod pins, bound to this run
+        value: ${{ jobs.verify.outputs.kit-sha }}
+
+permissions: {}
+
+env:
+  MB_KIT_SHA: "{{PIN}}"
+  MB_KIT_VERSION: "{{VERSION}}"
+
+jobs:
+  verify:
+    name: Authenticate the pinned kit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      kit-sha: ${{ steps.bind.outputs.kit-sha }}
+    steps:
+      - name: Verify the pin, kit reachability and referenced workflows
+        id: bind
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CALLEES: ${{ inputs.callees }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Pinned mod-base: %s\n' "$1" >&2; exit 1; }
+          # The calling workflow, the kit workflows it declares and the events that start it are
+          # closed lists. The gate status caller tests nothing and is started by other events
+          # than the two callers whose runs it evaluates.
+          case "$CALLEES" in
+            build) caller=.github/workflows/mod-base-build.yml ;;
+            "select-build build packaged-e2e") caller=.github/workflows/mod-base-packaged-e2e.yml ;;
+            gate-status) caller=.github/workflows/mod-base-gate-status.yml ;;
+            *) fail "the calling workflow declares kit workflows outside the closed list" ;;
+          esac
+          if [[ "$CALLEES" == gate-status ]]; then
+            case "$GITHUB_EVENT_NAME" in
+              workflow_run | pull_request_target | schedule | workflow_dispatch) ;;
+              *) fail "the gate status caller runs only on workflow_run, pull_request_target, schedule or workflow_dispatch" ;;
+            esac
+          else
+            case "$GITHUB_EVENT_NAME" in
+              pull_request_target | push | workflow_dispatch) ;;
+              *) fail "the Build and packaged E2E callers run only on pull_request_target, push or workflow_dispatch" ;;
+            esac
+          fi
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "malformed run identity"
+          [[ "$MB_KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "this guard was rendered without a pin"
+          default_branch="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY" --jq .default_branch)" ||
+            fail "cannot read the default branch"
+          [[ "$GITHUB_REF" == "refs/heads/$default_branch" ]] || fail "the managed callers run only for the default branch"
+          [[ "$GITHUB_EVENT_NAME" != pull_request_target || "${GITHUB_BASE_REF:-}" == "$default_branch" ]] ||
+            fail "the pull request does not target the default branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/$caller@refs/heads/$default_branch" ]] ||
+            fail "the calling workflow is not the default branch's $caller"
+          # A pull_request_target run reports the pull request's head; its controller commit is
+          # bound below, through this guard's own entry in referenced_workflows.
+          run="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")" ||
+            fail "cannot read this run"
+          jq -e --argjson id "$GITHUB_RUN_ID" --arg path "$caller" --arg event "$GITHUB_EVENT_NAME" \
+              --arg sha "$GITHUB_SHA" --arg branch "$default_branch" --arg repository "$GITHUB_REPOSITORY" '
+                .id == $id and .path == $path and .event == $event and ($event == "pull_request_target" or
+                  (.head_sha == $sha and .head_branch == $branch and .head_repository.full_name == $repository))' \
+              <<< "$run" > /dev/null || fail "this run is not the default branch's $caller at github.sha"
+          # The protected mod at github.sha. The read-only token reaches the one fetch through its
+          # environment and is never written to the checkout; no hook, template, system or global
+          # Git configuration takes part.
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          credential="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 --wrap=0)"
+          printf '::add-mask::%s\n' "$credential"
+          git init --quiet --template= mod
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.$GITHUB_SERVER_URL/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" \
+            git -C mod -c core.hooksPath=/dev/null -c protocol.version=2 fetch --quiet --depth=1 --no-tags \
+            --no-recurse-submodules "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA" ||
+            fail "cannot fetch the protected mod at github.sha"
+          [[ "$(git -C mod rev-parse --verify --quiet 'FETCH_HEAD^{commit}')" == "$GITHUB_SHA" ]] ||
+            fail "the fetched commit is not github.sha"
+          git -C mod -c core.hooksPath=/dev/null -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD ||
+            fail "cannot check out the protected mod"
+          # The single pin of the protected workflows is the pin this guard was rendered for.
+          pin="$(python3 -I -B mod/scripts/ci/mod_base_kit.py pin --repo mod)" ||
+            fail "the protected mod does not carry one mod-base pin"
+          [[ "$pin" == "$MB_KIT_SHA $MB_KIT_VERSION" ]] ||
+            fail "the pin of the protected workflows is not the pin this guard was rendered for"
+          # The run references this guard at github.sha and kit workflows of this caller at the
+          # pin: no other entry, no other commit, no repeat. A kit workflow whose calling job has
+          # not started may be absent; an entry that is present is never taken on trust.
+          jq -e --arg guard "$GITHUB_REPOSITORY/.github/workflows/mod-base-guard.yml" --arg head "$GITHUB_SHA" \
+              --arg kit "$MB_KIT_SHA" --arg callees "$CALLEES" '
+                ([{path: "\($guard)@\($head)", sha: $head}] + [$callees | split(" ")[] |
+                  {path: "The-Plum-Team/mod-base/.github/workflows/\(.).yml@\($kit)", sha: $kit}]) as $admitted |
+                [.referenced_workflows[] | {path, sha}] |
+                (. - $admitted) == [] and (unique | length) == length and any(.[]; . == $admitted[0])' \
+              <<< "$run" > /dev/null ||
+            fail "the run does not reference exactly this guard at github.sha and the pinned mod-base workflows"
+          # The pin is the released tag's commit and reachable from the kit's main branch.
+          verified="$(python3 -I -B mod/scripts/ci/mod_base_kit.py verify --network --repo mod)" ||
+            fail "the pin is not a released commit of the mod-base main branch"
+          [[ "$verified" == "$pin" ]] || fail "the verified pin is not the pin that was read"
+          printf 'kit-sha=%s\n' "$MB_KIT_SHA" >> "$GITHUB_OUTPUT"

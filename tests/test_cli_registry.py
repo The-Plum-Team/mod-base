@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import importlib
 import io
 import sys
 import tempfile
@@ -27,6 +29,9 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
     "template sync": (["template", "sync", "--repo", "mod", "--write"], {"write": True}),
     "template init": (["template", "init", "--repo", "mod", "--seed", "--from-config", "c.json"],
                       {"seed": True, "from_config": Path("c.json")}),
+    "template activation": (["template", "activation", "--repo", "mod"], {"template_command": "activation"}),
+    "template transition": (["template", "transition", "--repo", "candidate", "--base", "mod"],
+                            {"template_command": "transition", "base": Path("mod")}),
     "expect": (["expect", *REPO, "--key", "mc1.20.1", "--tested-run-json", "t.json", "--extensions", "e.json",
                 "--output", "x.json"], {"key": "mc1.20.1", "tested_run_json": Path("t.json")}),
     "prepare": ([
@@ -74,6 +79,101 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                     {"keys": ("mc1.20.1", "mc26.3"), "families": True}),
     "conformance all": (["conformance", "--repo", "mod", "--all"], {"all_keys": True, "keys": None}),
     "budget": (["budget"], {}),
+    "ci subject": (["ci", "subject", *REPO, "--state", "state", "--producer", "build", "--pr", "7",
+                    "--github-output", "out"],
+                   {"ci_command": "subject", "state": Path("state"), "producer": "build", "pr": 7,
+                    "candidate": None, "github_output": Path("out")}),
+    "ci subject candidate": (["ci", "subject", *REPO, "--state", "state", "--producer", "packaged", "--pr", "7",
+                              "--candidate", "candidate", "--github-output", "out"],
+                             {"producer": "packaged", "pr": 7, "candidate": Path("candidate")}),
+    "ci subject protected": (["ci", "subject", *REPO, "--state", "state", "--producer", "packaged", "--pr", "",
+                              "--github-output", "out"], {"producer": "packaged", "pr": None}),
+    "ci subject status": (["ci", "subject", *REPO, "--state", "state", "--producer", "status", "--pr", "7",
+                           "--github-output", "out"], {"producer": "status", "pr": 7}),
+    "ci system-profile": (["ci", "system-profile", *REPO, "--state", "state"],
+                          {"ci_command": "system-profile", "state": Path("state")}),
+    "ci worker-prepare": (["ci", "worker-prepare", *REPO, "--state", "state", "--roles", "candidate+validator",
+                           "--python", "/opt/python/bin/python3", "--java-home", "/opt/jdk/17",
+                           "--java-home", "/opt/jdk/21"],
+                          {"ci_command": "worker-prepare", "state": Path("state"), "roles": "candidate+validator",
+                           "python": "/opt/python/bin/python3", "java_home": ["/opt/jdk/17", "/opt/jdk/21"]}),
+    "ci worker-prepare validator": (["ci", "worker-prepare", *REPO, "--state", "state", "--roles", "validator",
+                                     "--python", "/opt/python/bin/python3"], {"roles": "validator", "java_home": []}),
+    "ci plan": (["ci", "plan", *REPO, "--state", "state"],
+                {"ci_command": "plan", "state": Path("state"), "candidate": None, "expect_sha256": None,
+                 "github_output": None}),
+    "ci plan candidate": (["ci", "plan", *REPO, "--state", "state", "--candidate", "candidate",
+                           "--expect-sha256", "ab" * 32, "--github-output", "out"],
+                          {"candidate": Path("candidate"), "expect_sha256": "ab" * 32, "github_output": Path("out")}),
+    "ci plan kit pin": (["ci", "plan", *REPO, "--state", "state", "--pin-candidate", "candidate"],
+                         {"pin_candidate": Path("candidate")}),
+    "ci worker-stage": (["ci", "worker-stage", *REPO, "--state", "state", "--candidate", "candidate"],
+                        {"ci_command": "worker-stage", "state": Path("state"), "candidate": Path("candidate"),
+                         "gradle_seed": None, "bundle": False}),
+    "ci worker-stage lane": (["ci", "worker-stage", *REPO, "--state", "state", "--candidate", "candidate",
+                              "--gradle-seed", "seed", "--bundle"], {"gradle_seed": Path("seed"), "bundle": True}),
+    "ci worker-stage future kit": (["ci", "worker-stage", *REPO, "--state", "state", "--candidate", "candidate",
+                                    "--future-kit", "candidate-kit"], {"future_kit": Path("candidate-kit")}),
+    "ci worker-run": (["ci", "worker-run", *REPO, "--state", "state", "--hook", "policy"],
+                      {"ci_command": "worker-run", "state": Path("state"), "hook": "policy", "unit": None}),
+    "ci worker-run target": (["ci", "worker-run", *REPO, "--state", "state", "--hook", "build_target",
+                              "--unit", "1.20.1"], {"hook": "build_target", "unit": "1.20.1"}),
+    "ci worker-run lane": (["ci", "worker-run", *REPO, "--state", "state", "--hook", "run_lane",
+                            "--unit", "fabric-1.20.1"], {"hook": "run_lane", "unit": "fabric-1.20.1"}),
+    "ci worker-seal": (["ci", "worker-seal", *REPO, "--state", "state"],
+                       {"ci_command": "worker-seal", "state": Path("state")}),
+    "ci worker-finish": (["ci", "worker-finish", *REPO, "--state", "state"],
+                         {"ci_command": "worker-finish", "state": Path("state")}),
+    "ci assemble": (["ci", "assemble", *REPO, "--state", "state"], {"ci_command": "assemble", "state": Path("state")}),
+    "ci aggregate": (["ci", "aggregate", *REPO, "--state", "state", "--selection", "selection.json",
+                      "--output", "upload"],
+                     {"ci_command": "aggregate", "state": Path("state"), "selection": Path("selection.json"),
+                      "output": Path("upload")}),
+    "ci seal-gate": (["ci", "seal-gate", *REPO, "--state", "state", "--gate", "build", "--output", "upload"],
+                     {"ci_command": "seal-gate", "state": Path("state"), "gate": "build", "selection": None,
+                      "output": Path("upload")}),
+    "ci seal-gate packaged": (["ci", "seal-gate", *REPO, "--state", "state", "--gate", "packaged",
+                               "--selection", "selection.json", "--output", "upload"],
+                              {"gate": "packaged", "selection": Path("selection.json"), "output": Path("upload")}),
+    "ci worker-validate target": (["ci", "worker-validate", *REPO, "--state", "state", "--hook", "verify_target",
+                                   "--unit", "1.20.1", "--output", "upload"],
+                                  {"ci_command": "worker-validate", "state": Path("state"), "hook": "verify_target",
+                                   "unit": "1.20.1", "output": Path("upload")}),
+    "ci worker-validate build": (["ci", "worker-validate", *REPO, "--state", "state", "--hook", "verify_build",
+                                  "--output", "upload"], {"hook": "verify_build", "unit": None}),
+    "ci worker-validate lane": (["ci", "worker-validate", *REPO, "--state", "state", "--hook", "verify_runtime",
+                                 "--unit", "fabric-1.20.1", "--output", "upload"],
+                                {"hook": "verify_runtime", "unit": "fabric-1.20.1"}),
+    "ci reuse-admit": (["ci", "reuse-admit", *REPO, "--state", "state", "--github-output", "out"],
+                       {"ci_command": "reuse-admit", "state": Path("state"), "github_output": Path("out")}),
+    "ci batch-prepare": (["ci", "batch-prepare", *REPO, "--state", "state", "--name", "run-1", "--allowed-paths",
+                          "allowed.json", "--dry-run", "--github-output", "out", "12", "7"],
+                         {"ci_command": "batch-prepare", "state": Path("state"), "name": "run-1",
+                          "allowed_paths": Path("allowed.json"), "dry_run": True, "github_output": Path("out"),
+                          "pulls": [12, 7]}),
+    "ci batch-settle": (["ci", "batch-settle", *REPO, "--state", "state", "--pr", "9", "--plan", "plan.json",
+                         "--build-seal", "build.json", "--packaged-seal", "packaged.json", "--delete-branches"],
+                        {"ci_command": "batch-settle", "state": Path("state"), "pr": 9, "plan": Path("plan.json"),
+                         "build_seal": Path("build.json"), "packaged_seal": Path("packaged.json"),
+                         "delete_branches": True, "github_output": None}),
+    "ci select-build": (["ci", "select-build", *REPO, "--state", "state", "--output", "selection.json",
+                         "--github-output", "out"],
+                        {"ci_command": "select-build", "state": Path("state"), "wait_seconds": 5400,
+                         "build_run_id": None, "output": Path("selection.json"), "github_output": Path("out")}),
+    "ci select-build pull request": (["ci", "select-build", *REPO, "--state", "state", "--wait-seconds", "600",
+                                      "--build-run-id", "", "--output", "s.json", "--github-output", "out"],
+                                     {"wait_seconds": 600, "build_run_id": None}),
+    "ci select-build named": (["ci", "select-build", *REPO, "--state", "state", "--build-run-id", "42",
+                               "--output", "s.json", "--github-output", "out"], {"build_run_id": 42}),
+    "ci select-build same run": (["ci", "select-build", *REPO, "--state", "state", "--build-run-id", "same-run",
+                                  "--output", "s.json", "--github-output", "out"], {"build_run_id": "same-run"}),
+    "ci fetch-build": (["ci", "fetch-build", *REPO, "--state", "state", "--selection", "selection.json"],
+                       {"ci_command": "fetch-build", "state": Path("state"), "selection": Path("selection.json")}),
+    "ci gate-status": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--github-output", "out"],
+                       {"ci_command": "gate-status", "state": Path("state"), "pr": 7, "settle": False,
+                        "github_output": Path("out")}),
+    "ci gate-status settle": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--settle",
+                               "--github-output", "out"], {"pr": 7, "settle": True}),
 }
 
 
@@ -93,7 +193,9 @@ class SurfaceTest(unittest.TestCase):
         self.assertEqual(set(cli.COMMANDS), {
             "pin", "digest", "template", "expect", "prepare", "anchor", "family", "admit", "select", "download",
             "authenticate", "compose", "compact", "validate", "build", "refresh", "rotate", "conformance", "budget",
+            "ci",
         })
+        self.assertEqual(cli.COMMANDS["ci"], "mod_base.build_ci.commands")
         self.assertEqual(cli.COMMANDS["download"], "mod_base.github.commands")
         self.assertEqual(cli.COMMANDS["admit"], "mod_base.pages.commands_control")
         self.assertEqual(cli.COMMANDS["build"], "mod_base.pages.commands_build")
@@ -134,6 +236,105 @@ class SurfaceTest(unittest.TestCase):
              "--expected-coverage-sha", SHA, "--output", "o"],
             ["prepare", "--repo", "m"],
             ["compose", *REPO, "--key", "k1", "--selected", "d", "--output", "o"],
+            ["ci"],
+            ["ci", "deploy"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "release", "--pr", "7", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "0", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "seven", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--producer", "build", "--pr", "7", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "7"],
+            ["ci", "subject", "--state", "s", "--producer", "build", "--pr", "7", "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "7", "--candidate", "",
+             "--github-output", "o"],
+            ["ci", "subject", *REPO, "--state", "s", "--producer", "build", "--pr", "7", "--candidate",
+             "--github-output", "o"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--python", "/opt/python/bin/python3"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "validator"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "candidate", "--python", "/opt/python/bin/python3"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "validator", "--python", "python3"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "validator", "--python", "/opt/x/../python3"],
+            ["ci", "worker-prepare", *REPO, "--state", "s", "--roles", "validator", "--python", "/opt/python/bin/python3",
+             "--java-home", "jdk"],
+            ["ci", "worker-prepare", *REPO, "--roles", "validator", "--python", "/opt/python/bin/python3"],
+            ["ci", "plan", *REPO],
+            ["ci", "plan", *REPO, "--state", "s", "--expect-sha256", "AB" * 32],
+            ["ci", "plan", *REPO, "--state", "s", "--expect-sha256", "ab" * 31],
+            ["ci", "plan", *REPO, "--state", "s", "--candidate", ""],
+            ["ci", "plan", *REPO, "--state", "s", "--roles", "validator"],
+            ["ci", "worker-stage", *REPO, "--state", "s"],
+            ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", ""],
+            ["ci", "worker-stage", *REPO, "--candidate", "candidate"],
+            ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--bundle", "build/release"],
+            ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--gradle-seed"],
+            ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--overlay", "kit"],
+            ["ci", "worker-run", *REPO, "--state", "s"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "1.20.1"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "derive_runtime", "--unit", "fabric-1.20.1"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "build_target", "--unit", "Fabric 1.20.1"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "build_target", "--unit", "a--b"],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "run_lane", "--unit", ""],
+            ["ci", "worker-run", *REPO, "--state", "s", "--hook", "policy", "--command", "sh"],
+            ["ci", "worker-run", *REPO, "--hook", "policy"],
+            ["ci", "worker-seal", *REPO],
+            ["ci", "worker-seal", *REPO, "--state", "s", "--export", "build/release"],
+            ["ci", "worker-seal", *REPO, "--state", "s", "--hook", "build_target"],
+            ["ci", "worker-finish", *REPO],
+            ["ci", "worker-finish", "--state", "s"],
+            ["ci", "worker-finish", *REPO, "--state", "s", "--python", "/opt/python/bin/python3"],
+            ["ci", "assemble", *REPO],
+            ["ci", "assemble", *REPO, "--state", "s", "--output", "o"],
+            ["ci", "aggregate", *REPO, "--state", "s"],
+            ["ci", "aggregate", *REPO, "--output", "o"],
+            ["ci", "aggregate", *REPO, "--state", "s", "--output", "o"],
+            ["ci", "aggregate", *REPO, "--state", "s", "--output", "o", "--selection", ""],
+            ["ci", "aggregate", *REPO, "--state", "s", "--output", "o", "--selection", "f", "--build-run-id", "42"],
+            ["ci", "seal-gate", *REPO, "--state", "s", "--gate", "build"],
+            ["ci", "seal-gate", *REPO, "--state", "s", "--output", "o"],
+            ["ci", "seal-gate", *REPO, "--state", "s", "--gate", "reuse", "--output", "o"],
+            ["ci", "seal-gate", *REPO, "--state", "s", "--gate", "build", "--output", "o", "--mode", "full"],
+            ["ci", "seal-gate", *REPO, "--state", "s", "--gate", "packaged", "--output", "o", "--selection", ""],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_build"],
+            ["ci", "worker-validate", *REPO, "--hook", "verify_build", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "derive_plan", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "Target", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "a--b", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "", "--output", "o"],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_build", "--output", ""],
+            ["ci", "worker-validate", *REPO, "--state", "s", "--hook", "verify_build", "--output", "o",
+             "--github-output", "out"],
+            ["ci", "reuse-admit", *REPO, "--state", "s"],
+            ["ci", "reuse-admit", *REPO, "--github-output", "o"],
+            ["ci", "reuse-admit", *REPO, "--state", "s", "--github-output", "o", "--mode", "reuse"],
+            ["ci", "reuse-admit", *REPO, "--state", "s", "--github-output", "o", "--pr", "7"],
+            ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "run-1", "--allowed-paths", "a.json"],
+            ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "Run/1", "--allowed-paths", "a.json", "7"],
+            ["ci", "batch-prepare", *REPO, "--name", "run-1", "--allowed-paths", "a.json", "7"],
+            ["ci", "batch-settle", *REPO, "--state", "s", "--pr", "0", "--plan", "p", "--build-seal", "b",
+             "--packaged-seal", "e"],
+            ["ci", "batch-settle", *REPO, "--state", "s", "--pr", "9", "--plan", "p", "--build-seal", "b"],
+            ["ci", "select-build", *REPO, "--state", "s", "--output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--output", "o", "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--build-run-id", "latest", "--output", "o",
+             "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--build-run-id", "0", "--output", "o",
+             "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--wait-seconds", "5401", "--output", "o",
+             "--github-output", "o"],
+            ["ci", "select-build", *REPO, "--state", "s", "--wait-seconds", "0", "--output", "o",
+             "--github-output", "o"],
+            ["ci", "fetch-build", *REPO, "--state", "s"],
+            ["ci", "fetch-build", *REPO, "--selection", "f"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "0", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "7", "--settle", "true", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "7", "--settle=1", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--settle", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--github-output", "o"],
+            ["ci", "gate-status", *REPO, "--state", "s", "--pr", "7"],
+            ["ci", "gate-status", *REPO, "--pr", "7", "--github-output", "o"],
         ]
         for argv in bad:
             with self.subTest(argv=argv), self.assertRaises(MbError) as caught:
@@ -160,6 +361,64 @@ class SurfaceTest(unittest.TestCase):
         code, _, stderr = run(["deploy"])
         self.assertEqual(code, 2)
         self.assertIn("unknown command 'deploy'", stderr)
+
+
+class CiVerbsTest(unittest.TestCase):
+    """``ci`` gathers its verbs from the modules ``build_ci.commands.VERB_MODULES`` lists."""
+
+    @staticmethod
+    def verbs() -> dict[str, argparse.ArgumentParser]:
+        def choices(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
+            (action,) = [action for action in parser._actions if isinstance(action, argparse._SubParsersAction)]
+            return dict(action.choices)
+
+        return choices(choices(cli.build_parser("ci"))["ci"])
+
+    def test_every_listed_module_adds_verbs_that_take_the_job_arguments(self) -> None:
+        from mod_base.build_ci import commands
+
+        self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_system",
+                              "mod_base.build_ci.commands_worker",
+                              "mod_base.build_ci.commands_batch", "mod_base.build_ci.commands_packaged",
+                              "mod_base.build_ci.commands_status"}, set(commands.VERB_MODULES))
+        self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
+        for name in commands.VERB_MODULES:
+            with self.subTest(module=name):
+                self.assertTrue(callable(importlib.import_module(name).add_verbs))
+        verbs = self.verbs()
+        self.assertLessEqual({"subject", "system-profile", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+                              "worker-validate", "worker-finish", "batch-prepare", "batch-settle", "select-build",
+                              "fetch-build", "gate-status", "reuse-admit"}, set(verbs))
+        for name, parser in verbs.items():
+            options = {option for action in parser._actions for option in action.option_strings}
+            with self.subTest(verb=name):
+                self.assertTrue(callable(parser.get_default("handler")))
+                self.assertLessEqual({"--repo", "--config", "--state"}, options)
+                self.assertIs(type(parser), cli.KitArgumentParser)
+
+    def test_the_verbs_of_a_module_come_from_its_add_verbs(self) -> None:
+        from mod_base.build_ci import commands
+
+        module = types.ModuleType("fake_verbs")
+
+        def add_verbs(verbs) -> None:
+            parser = verbs.add_parser("probe")
+            commands.add_job_arguments(parser)
+            parser.set_defaults(handler=lambda args: 0)
+
+        module.add_verbs = add_verbs  # type: ignore[attr-defined]
+        # Exactly this one name is registered and removed. mock.patch.dict(sys.modules, ...) would put
+        # the whole table back, and so also forget every verb module `ci` first imports in here while
+        # the mod_base.build_ci package keeps each one as an attribute. Whatever this process imports
+        # next then mixes two copies of them: `from mod_base.build_ci import batch` is the forgotten
+        # copy, `from mod_base.build_ci.batch_git import ...` executes a second one.
+        sys.modules["fake_verbs"] = module
+        self.addCleanup(sys.modules.pop, "fake_verbs", None)
+        with mock.patch.object(commands, "VERB_MODULES", (*commands.VERB_MODULES, "fake_verbs")):
+            self.assertLessEqual({"subject", "probe"}, set(self.verbs()))
+            namespace = parse(["ci", "probe", "--repo", "mod", "--state", "state"])
+            self.assertEqual((namespace.ci_command, namespace.state, namespace.config), ("probe", Path("state"), None))
+            self.assertEqual(run(["ci", "probe", "--repo", "mod"])[0], 2)
 
 
 class UnavailableGroupTest(unittest.TestCase):

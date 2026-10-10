@@ -35,6 +35,23 @@ VERSION = re.compile(r"^(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9]
 #: Opaque evidence identifiers: frame_id, capture_id, comparison_id, pair_id, reference ids.
 IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$")
 ARTIFACT_NODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$")
+CI_UNIT_ID = re.compile(r"^(?!.*--)[a-z0-9][a-z0-9._-]{0,79}$")
+CI_ENVELOPE_NAME = "ci-envelope.json"
+CI_ARCHIVE_NAME = "ci-export.zip"
+CI_GATE_NAME = "ci-gate.json"
+CI_REUSE_NAME = "ci-reuse.json"
+CI_RESULTS_NAME = "ci-results.json"
+CI_SELECTION_NAME = "ci-selection.json"
+CI_PLAN_NAME = "ci-plan.json"
+CI_VALIDATION_NAME = "ci-validation.json"
+CI_EXECUTION_NAME = "ci-execution.json"
+CI_ROOT_REQUEST_NAME = "ci-root-request.json"
+#: The closed set of operations the root bootstrap dispatches (``tools/ci_privileged_bootstrap.py``
+#: mirrors it without importing the kit). A request never selects code outside this set.
+CI_ROOT_OPERATIONS = ("host-fence", "stage-candidate", "freeze-build-validation", "freeze-runtime-validation",
+                      "grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs",
+                      "stage-bundle", "take-derived-runtime", "verify-candidate-source", "freeze-build-export",
+                      "freeze-runtime-export", "grant-build-validation", "grant-runtime-validation")
 MINECRAFT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$")
 LOADER = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SCENARIO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
@@ -50,6 +67,11 @@ MAX_EXTENSION_NAME_LENGTH = 80
 EVENT = re.compile(r"^[a-z_]{1,40}$")
 WORKFLOW_PATH = re.compile(r"^\.github/workflows/[A-Za-z0-9._-]{1,100}\.ya?ml$")
 RFC3339Z = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+#: The shapes the Actions API writes a time in: ``Z`` or a numeric offset, with or without a fraction.
+ACTIONS_TIMESTAMP = re.compile(
+    r"^(?P<second>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.[0-9]{1,9})?"
+    r"(?P<zone>Z|[+-][0-9]{2}:[0-9]{2})$"
+)
 POSITIVE_DECIMAL = re.compile(r"^[1-9][0-9]{0,18}$")
 RUN_URL = re.compile(f"^https://github\\.com/{_REPOSITORY}/actions/runs/[1-9][0-9]{{0,18}}$")
 WORKFLOW_REF = re.compile(
@@ -58,6 +80,11 @@ WORKFLOW_REF = re.compile(
 )
 #: A bundle-relative path: ASCII components, no ".", "..", empty or hidden-traversal component.
 _PATH_COMPONENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$|^\.[A-Za-z0-9_][A-Za-z0-9._-]{0,126}$")
+#: A component of a sealed CI export path, which keeps the mod's own file names
+#: (``Quick Skin - Fabric - 1.21.4-1.0.0.jar``): at most 128 characters like a bundle component,
+#: also "+" and single inner spaces, never a space or a dot at either end. So none is ".", "..",
+#: hidden (".git") or a name Windows would trim.
+_EXPORT_COMPONENT = re.compile(r"^[A-Za-z0-9_+-](?:(?:[A-Za-z0-9._+-]| (?! )){0,126}[A-Za-z0-9_+-])?$")
 
 ARTIFACT_PREFIX = "mb-"
 PROMOTION_NAME = "mb-promotion"
@@ -138,15 +165,33 @@ def require_positive_int(value: object, label: str, *, maximum: int = limits.MAX
     return value
 
 
-def is_bundle_path(value: object) -> bool:
-    """True for a canonical bundle-relative POSIX path (no absolute, ``..``, ``.``, ``\\`` or NUL)."""
-
+def _is_bounded_path(value: object, component: re.Pattern[str]) -> bool:
     if not isinstance(value, str) or not value or len(value) > limits.MAX_BUNDLE_PATH_CHARS:
         return False
     parts = value.split("/")
     if len(parts) > limits.MAX_BUNDLE_PATH_DEPTH:
         return False
-    return all(_PATH_COMPONENT.fullmatch(part) is not None for part in parts)
+    return all(component.fullmatch(part) is not None for part in parts)
+
+
+def is_bundle_path(value: object) -> bool:
+    """True for a canonical bundle-relative POSIX path (no absolute, ``..``, ``.``, ``\\`` or NUL)."""
+
+    return _is_bounded_path(value, _PATH_COMPONENT)
+
+
+CI_BATCH_BRANCH_PREFIX = 'batch/'
+#: The name a new batch is given: its branch is ``batch/<name>`` (see :func:`is_batch_branch`).
+CI_BATCH_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+CI_RUNTIME_ENVELOPE_NAME = 'ci-runtime-envelope.json'
+CI_RUNTIME_INPUT_FORMAT = 'mod-base.runtime-validation-input-v1'
+
+
+def is_batch_branch(value: object) -> bool:
+    """A bounded batch/* Git branch with no invalid ref components or final dot/slash."""
+    return (is_match(BRANCH, value) and value.startswith(CI_BATCH_BRANCH_PREFIX)
+            and not value.endswith(('/', '.'))
+            and all(not part.startswith('.') and not part.endswith('.lock') for part in value.split('/')))
 
 
 def is_repo_path(value: object) -> bool:
@@ -158,6 +203,27 @@ def is_repo_path(value: object) -> bool:
     return all(part.lower() != ".git" for part in value.split("/"))  # type: ignore[union-attr]
 
 
+def is_export_path(value: object) -> bool:
+    """True for a canonical path inside a sealed CI export: the length and depth bounds of a bundle
+    path, components of ASCII letters, digits, ``._-+`` and single inner spaces, none starting or
+    ending with a space or a dot. A Pages bundle path stays narrower (:func:`is_bundle_path`), and
+    names that differ only in case are for the inventory holding them to refuse."""
+
+    return _is_bounded_path(value, _EXPORT_COMPONENT)
+
+
+def is_seed_path(value: object) -> bool:
+    """True for a structurally safe relative path inside a Gradle seed: no NUL, no empty, ``.`` or
+    ``..`` component, at most ``limits.MAX_CI_SEED_PATH_DEPTH`` of them. A cache names its entries
+    freely (``1.20.1+build.10``, ``~``, ``@``, ``%``, spaces, any case), so there is no name grammar:
+    links, special files, counts and sizes are for the tree walk to refuse."""
+
+    if not isinstance(value, str) or "\x00" in value:
+        return False
+    parts = value.split("/", limits.MAX_CI_SEED_PATH_DEPTH)
+    return len(parts) <= limits.MAX_CI_SEED_PATH_DEPTH and all(part not in ("", ".", "..") for part in parts)
+
+
 def parse_timestamp(value: object, label: str = "timestamp") -> datetime:
     """Parse a GitHub ``YYYY-MM-DDTHH:MM:SSZ`` timestamp into an aware UTC datetime."""
 
@@ -167,6 +233,25 @@ def parse_timestamp(value: object, label: str = "timestamp") -> datetime:
         return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)  # type: ignore[arg-type]
     except ValueError as exc:
         raise _fail(f"{label} is not a real calendar time") from exc
+
+
+def normalize_timestamp(value: object, label: str = "timestamp") -> str:
+    """Return an Actions API time as whole-second UTC ``YYYY-MM-DDTHH:MM:SSZ``.
+
+    Job, step and artifact times arrive as ``…Z``, with fractional seconds or with a numeric offset.
+    The fraction is dropped and the offset applied, so the result is the one form the kit stores,
+    and two results compare as text in time order. Anything else raises MbError."""
+
+    match = ACTIONS_TIMESTAMP.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise _fail(f"{label} must be an RFC 3339 timestamp")
+    zone = "+00:00" if match["zone"] == "Z" else match["zone"]
+    try:
+        moment = datetime.fromisoformat(match["second"] + zone).astimezone(timezone.utc)
+    except (ValueError, OverflowError) as exc:
+        raise _fail(f"{label} is not a real calendar time") from exc
+    return (f"{moment.year:04d}-{moment.month:02d}-{moment.day:02d}"
+            f"T{moment.hour:02d}:{moment.minute:02d}:{moment.second:02d}Z")
 
 
 @dataclass(frozen=True)
@@ -361,6 +446,61 @@ def require_artifact_name(name: object, kind: str) -> ArtifactName:
 
 
 def is_kit_artifact_name(name: object) -> bool:
-    """True only for names this kit may create, list, download or retire."""
+    """True only for names the Pages pipeline may create, list, download or retire."""
 
     return parse_artifact_name(name) is not None
+
+
+# Build artifacts have their own closed grammar. The Pages parser deliberately does not
+# recognize them: Pages rotation must not acquire authority over these retained source bytes.
+CI_ARTIFACT_PREFIXES = {
+    "target": "mb-ci-target", "build": "mb-ci-build", "runtime": "mb-ci-runtime",
+    "results": "mb-ci-results", "tested": "mb-ci-tested", "reuse": "mb-ci-reuse",
+}
+
+
+@dataclass(frozen=True)
+class CIArtifactName:
+    kind: str
+    name: str
+    run_id: int
+    run_attempt: int
+    unit_id: str | None = None
+
+
+def ci_artifact_name(kind: str, run_id: int, run_attempt: int, unit_id: str | None = None) -> str:
+    """Attempt-specific CI names; a name never establishes a tested identity by itself."""
+
+    if not isinstance(kind, str) or kind not in CI_ARTIFACT_PREFIXES:
+        raise _fail("unknown CI artifact kind")
+    require_positive_int(run_id, "CI run id")
+    require_positive_int(run_attempt, "CI attempt", maximum=limits.MAX_RUN_ATTEMPT)
+    if kind in {"target", "runtime", "tested"}:
+        require(CI_UNIT_ID, unit_id, "CI unit id")
+        if kind == "tested" and unit_id not in {"build", "packaged"}:
+            raise _fail("tested CI artifact must name build or packaged")
+    elif unit_id is not None:
+        raise _fail("aggregate CI artifact has no unit id")
+    name = f"{CI_ARTIFACT_PREFIXES[kind]}--{run_id}--a{run_attempt}"
+    return _finish(name + (f"--{unit_id}" if unit_id is not None else ""))
+
+
+def parse_ci_artifact_name(name: object) -> CIArtifactName | None:
+    if (not isinstance(name, str) or not name.isascii()
+            or len(name) > limits.MAX_ARTIFACT_NAME_BYTES):
+        return None
+    parts = name.split("--")
+    if len(parts) not in {3, 4}:
+        return None
+    prefixes = {prefix: kind for kind, prefix in CI_ARTIFACT_PREFIXES.items()}
+    kind = prefixes.get(parts[0])
+    run_id, attempt = _parse_run_id(parts[1]), _parse_attempt(parts[2])
+    if kind is None or run_id is None or attempt is None:
+        return None
+    unit = parts[3] if len(parts) == 4 else None
+    try:
+        if ci_artifact_name(kind, run_id, attempt, unit) != name:
+            return None
+    except MbError:
+        return None
+    return CIArtifactName(kind, name, run_id, attempt, unit)

@@ -1,0 +1,151 @@
+{
+  "build": {
+    "conclusion": "success",
+    "event": "pull_request_target",
+    "head_branch": "fix/first-person-held-item-parity",
+    "head_sha": "0716ede82edcdc9c3c0deacbf71713b8c1eb3c9b",
+    "jobs": [
+      {
+        "conclusion": "skipped",
+        "name": "Attest exact tested build tree"
+      },
+      {
+        "conclusion": "success",
+        "name": "Build and verify"
+      },
+      {
+        "conclusion": "success",
+        "name": "Build immutable release bundle"
+      },
+      {
+        "conclusion": "success",
+        "name": "Resolve authoritative build matrix"
+      }
+    ],
+    "run_attempt": 1,
+    "run_id": 37501309423,
+    "workflow": ".github/workflows/build-gate.yml",
+    "workflow_blob": "3e7e3d196b0a7796bcb1566be0bf2f28551ea458",
+    "workflow_name": "Build gate"
+  },
+  "packaged": {
+    "conclusion": "success",
+    "event": "pull_request_target",
+    "head_branch": "fix/first-person-held-item-parity",
+    "head_sha": "0716ede82edcdc9c3c0deacbf71713b8c1eb3c9b",
+    "jobs": [
+      {
+        "conclusion": "skipped",
+        "name": "Attest exact tested packaged tree"
+      },
+      {
+        "conclusion": "success",
+        "name": "Build immutable E2E input bundle"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Curate current-head public evidence (advisory)"
+      },
+      {
+        "conclusion": "success",
+        "name": "Packaged E2E gate"
+      },
+      {
+        "conclusion": "success",
+        "name": "Resolve authoritative packaged matrix"
+      },
+      {
+        "conclusion": "success",
+        "name": "Validate and aggregate packaged evidence"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_20_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_4--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_5--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_6--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_7--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_8--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-26_1_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-26_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-26_3--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "forge-1_20_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_4--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_5--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_6--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_7--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_8--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-26_1_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-26_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-26_3--pr-behavior - contract scenarios"
+      }
+    ],
+    "run_attempt": 1,
+    "run_id": 37501309439,
+    "workflow": ".github/workflows/on-demand-e2e.yml",
+    "workflow_blob": "06a854666371c92645cdeb86e00eea4da987d923",
+    "workflow_name": "Packaged E2E"
+  },
+  "templates": {
+    "lane": "{runtime_id} - contract scenarios"
+  }
+}

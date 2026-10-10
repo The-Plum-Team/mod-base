@@ -1,0 +1,134 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 112398926100,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa26100",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398926100",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398926100",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:00:02Z",
+      "started_at": "2026-10-07T10:00:05Z",
+      "completed_at": "2026-10-07T10:00:20Z",
+      "name": "Verify pinned mod-base / Authenticate the pinned kit",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:00:05.000Z",
+          "completed_at": "2026-10-07T10:00:05.000Z"
+        },
+        {
+          "name": "Verify the pin, kit reachability and referenced workflows",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:00:06.000Z",
+          "completed_at": "2026-10-07T10:00:19.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:00:20.000Z",
+          "completed_at": "2026-10-07T10:00:20.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398926100",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132592,
+      "runner_name": "GitHub Actions 1000132592",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 112398927643,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa27643",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398927643",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398927643",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T10:00:22Z",
+      "started_at": "2026-10-07T10:00:22Z",
+      "completed_at": "2026-10-07T10:00:30Z",
+      "name": "Build deferred for draft",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-07T10:00:22.000Z",
+          "completed_at": "2026-10-07T10:00:22.000Z"
+        },
+        {
+          "name": "Report the draft deferral",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-07T10:00:23.000Z",
+          "completed_at": "2026-10-07T10:00:29.000Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-07T10:00:30.000Z",
+          "completed_at": "2026-10-07T10:00:30.000Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398927643",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000132593,
+      "runner_name": "GitHub Actions 1000132593",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 112398929186,
+      "run_id": 42,
+      "workflow_name": "Build",
+      "head_branch": "feature/example",
+      "run_url": "https://api.github.com/repos/example/mod/actions/runs/42",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOQIc_SM8AAAAa29186",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "url": "https://api.github.com/repos/example/mod/actions/jobs/112398929186",
+      "html_url": "https://github.com/example/mod/actions/runs/42/job/112398929186",
+      "status": "completed",
+      "conclusion": "skipped",
+      "created_at": "2026-10-07T10:00:21Z",
+      "started_at": "2026-10-07T10:00:21Z",
+      "completed_at": "2026-10-07T10:00:21Z",
+      "name": "Shared Build",
+      "steps": [],
+      "check_run_url": "https://api.github.com/repos/example/mod/check-runs/112398929186",
+      "labels": [],
+      "runner_id": null,
+      "runner_name": null,
+      "runner_group_id": null,
+      "runner_group_name": null
+    }
+  ]
+}

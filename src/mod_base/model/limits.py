@@ -66,6 +66,8 @@ MAX_IMAGE_PIXELS = 20_000_000
 MAX_IMAGE_DIMENSION = 16_384
 MAX_SITE_BYTES = 1 * GIB
 MAX_SITE_FILES = 8192
+#: Characters and components of one bundle path. A sealed CI export path keeps both bounds and
+#: only widens the component grammar (``grammar.is_export_path``).
 MAX_BUNDLE_PATH_CHARS = 300
 MAX_BUNDLE_PATH_DEPTH = 16
 
@@ -183,6 +185,219 @@ MAX_LABEL_ENTRIES = 256
 MAX_COPY_PARAGRAPHS = 16
 MAX_TEMPLATE_PATHS = 32
 
+# -- Protected Build/packaged runtime (independent from Pages budgets) -----------------------------
+MAX_CI_PLAN_BYTES = 4 * MIB
+#: One candidate file a plan is derived from (the release inventory, the scenario contract, or an
+#: extra plan input the protected Build config names).
+MAX_CI_PLAN_SOURCE_BYTES = 4 * MIB
+#: Extra candidate files a protected Build config may name for plan derivation (``plan_inputs``).
+#: Quick Skin needs one: ``gradle.properties`` holds the mod version its JAR names carry.
+MAX_CI_PLAN_INPUTS = 8
+#: The private ``identity.json`` state record ``ci subject`` writes.
+MAX_CI_IDENTITY_BYTES = 16 * KIB
+#: Pending GitHub test merges: four observations over at most fifteen seconds. The ordinary
+#: subject route spends three requests per observation, the checkout route one. Both share
+#: their existing hard request cap with retries; a ready subject never polls again.
+CI_TEST_MERGE_WAIT_SECONDS = 15
+CI_TEST_MERGE_POLL_SECONDS = 5
+MAX_CI_TEST_MERGE_POLLS = CI_TEST_MERGE_WAIT_SECONDS // CI_TEST_MERGE_POLL_SECONDS + 1
+#: API requests of one ``ci subject``: a pull request costs 4, a protected subject 5; the rest is
+#: room for pending-merge observations and retried attempts.
+MAX_CI_SUBJECT_REQUESTS = 16
+#: API requests of one ``ci subject --candidate``, the subject of a job that holds the candidate
+#: checkout: one, the pull request or the head of the default branch; the rest is room for the
+#: retried attempts or pending-merge observations.
+MAX_CI_DERIVED_SUBJECT_REQUESTS = 4
+#: The private ``worker.json`` state record ``ci worker-prepare`` writes: the accounts, the tool
+#: receipt and at most ``MAX_CI_TOOL_ROOTS`` paths of ``MAX_CI_TOOL_PATH_BYTES`` each, twice.
+MAX_CI_WORKER_RECORD_BYTES = 256 * KIB
+#: API requests of one ``ci plan`` without a candidate checkout: the tested tree and one blob per
+#: candidate file, so 3 without extra plan inputs and at most 11; the rest is room for retried
+#: attempts and the first job's changed candidate release admission (comparison, ref and
+#: bounded tag peeling). Replanning against the first job's hash adds no release requests.
+MAX_CI_PLAN_REQUESTS = 24
+#: One read (``rev-parse``, ``ls-tree``, ``cat-file``) of the object store of a job's checkout.
+CI_GIT_READ_TIMEOUT_SECONDS = 60.0
+#: What such a read answers besides an object: one object id, or one tree entry with its path.
+MAX_CI_GIT_ANSWER_BYTES = 4 * KIB
+#: One commit object read whole from a checkout: its header lines, a signature and its message.
+#: A squashed pull request carries its description and every commit subject, tens of KiB at most.
+MAX_CI_GIT_COMMIT_BYTES = 1 * MIB
+#: ``validation-input/``: the candidate files a plan is derived from (the inventory, the scenario
+#: contract and the extra plan inputs) and, once it exists, the plan.
+MAX_CI_PLAN_INPUT_FILES = 3 + MAX_CI_PLAN_INPUTS
+MAX_CI_PLAN_INPUT_ENTRIES = MAX_CI_PLAN_INPUT_FILES + 1  # MB1 entry caps count the root.
+MAX_CI_PLAN_INPUT_BYTES = MAX_CI_PLAN_BYTES + (2 + MAX_CI_PLAN_INPUTS) * MAX_CI_PLAN_SOURCE_BYTES
+MAX_CI_PRIVATE_RECORD_ENTRIES = 2  # MB1 entry caps count the root: the directory plus its one leaf.
+MAX_CI_POLICY_TESTS = 100000
+MAX_CI_POLICY_WORKERS = 256
+MAX_CI_ENVELOPE_BYTES = 4 * MIB
+MAX_CI_RECORD_BYTES = 4 * MIB
+MAX_CI_ARTIFACTS_PER_GATE = MAX_JOBS_PER_ATTEMPT
+MAX_CI_CONFIG_BYTES = 1 * MIB
+#: Characters of one required status context a protected Build config names.
+MAX_CI_STATUS_CONTEXT_CHARS = 100
+MAX_CI_ACTIVATION_BYTES = 8 * KIB
+MAX_CI_ADAPTER_FILE_BYTES = 4 * MIB
+MAX_CI_ADAPTER_TREE_BYTES = 64 * MIB
+MAX_CI_ADAPTER_FILES = 256
+MAX_CI_WORKER_TIMEOUT_SECONDS = 6 * 60 * 60
+MAX_CI_ENV_VALUE_BYTES = 128 * KIB
+MAX_CI_ENV_BYTES = 256 * KIB
+MAX_CI_CONTROL_OUTPUT_BYTES = 16 * KIB
+MAX_CI_TOOL_PATH_BYTES = 4 * KIB
+MAX_CI_TOOL_ROOTS = 16
+MAX_CI_TOOL_SYMLINK_HOPS = 40
+MAX_CI_TOOL_TREE_DEPTH = 64
+MAX_CI_KIT_INSTALL_ENTRIES = 40_000
+MAX_CI_KIT_INSTALL_FILES = 20_000
+MAX_CI_KIT_INSTALL_BYTES = 512 * MIB
+MAX_CI_FILE_ID = (1 << 64) - 1
+MIN_CI_WORKER_UID = 1000
+MAX_CI_UNIX_ID = (1 << 32) - 2  # Linux uid_t/gid_t; exclude the all-ones no-change sentinel.
+CI_TERMINATION_GRACE_SECONDS = 15.0
+CI_TERMINATION_POLL_SECONDS = 0.25
+MAX_CI_COMMAND_ARGUMENTS = 256
+MAX_CI_COMMAND_BYTES = 256 * KIB
+CI_PROCESS_READ_BYTES = 64 * KIB
+CI_ROOT_OPERATION_TIMEOUT_SECONDS = 1800.0
+MAX_CI_ROOT_DIAGNOSTIC_BYTES = 4 * KIB
+CI_HOST_FENCE_TIMEOUT_SECONDS = 600.0
+MAX_CI_HOST_FENCE_REPORT_BYTES = 64 * KIB
+MAX_CI_HOST_MOUNTINFO_BYTES = 64 * KIB
+#: Each of the two package-manager commands of ``ci system-profile`` (whole seconds: root's
+#: ``timeout`` enforces it), and what the command keeps of their output.
+CI_SYSTEM_PROFILE_TIMEOUT_SECONDS = 600
+MAX_CI_SYSTEM_PROFILE_LOG_BYTES = 64 * KIB
+#: How long the package manager waits for a lock another apt or dpkg holds (whole seconds, well
+#: inside the bound above), and how often it retries a failed download.
+CI_SYSTEM_PROFILE_LOCK_WAIT_SECONDS = 120
+CI_SYSTEM_PROFILE_FETCH_RETRIES = 3
+MAX_CI_SOURCE_LIST_BYTES = 64 * MIB
+MAX_CI_SOURCE_FILES = 200_000
+MAX_CI_SOURCE_ENTRIES = 250_000
+MAX_CI_SOURCE_FILE_BYTES = 2 * GIB
+MAX_CI_SOURCE_TREE_BYTES = 20 * GIB
+MAX_CI_SOURCE_LINK_BYTES = 4 * KIB
+#: Components of one Gradle seed path (``grammar.is_seed_path``). A cache carries no name grammar,
+#: so ``MAX_BUNDLE_PATH_DEPTH`` does not apply: a dependency is already eight components deep
+#: (``caches/modules-2/files-2.1/<group>/<module>/<version>/<hash>/<file>``) and an unpacked
+#: transform output can add a whole package tree. No MB1 walk descends further
+#: (``io.tree.MAX_WALK_DEPTH``).
+MAX_CI_SEED_PATH_DEPTH = 64
+MAX_CI_GIT_METADATA_FILES = MAX_CI_SOURCE_FILES
+MAX_CI_GIT_METADATA_ENTRIES = MAX_CI_SOURCE_ENTRIES
+MAX_CI_GIT_METADATA_FILE_BYTES = MAX_CI_SOURCE_FILE_BYTES
+MAX_CI_GIT_METADATA_TREE_BYTES = MAX_CI_SOURCE_TREE_BYTES
+MAX_CI_GIT_REF_BYTES = 4 * KIB
+MAX_CI_GIT_REF_LIST_BYTES = 64 * MIB
+MAX_CI_TARGETS = 256
+MAX_CI_BUILD_RUNS = 1000
+MAX_CI_LANES = 256
+MAX_CI_OUTPUTS_PER_TARGET = 1024
+MAX_CI_OBLIGATIONS_PER_LANE = 1024
+CI_BUILD_WAIT_SECONDS = 5400
+CI_BUILD_POLL_SECONDS = 60
+MAX_CI_BUILD_POLLS = CI_BUILD_WAIT_SECONDS // CI_BUILD_POLL_SECONDS + 1
+#: API requests of one ``ci select-build``. A pull request whose Build is complete costs 17, and
+#: one more for every poll before that (91 polls at most, one a minute); a protected subject costs
+#: 15. The rest is for retried attempts and for the further pages of a run with over 100 jobs.
+MAX_CI_SELECT_BUILD_REQUESTS = MAX_CI_BUILD_POLLS + 64
+#: ``ci fetch-build`` sends one REST request for the selected archive and one credential-free
+#: storage request; the rest is for retries. Freshness is the input job's and the gate's decision.
+MAX_CI_FETCH_BUILD_REQUESTS = 8
+#: Regression budget for one generation of either enrolled native profile, including the
+#: credential-free artifact storage GETs and one final status evaluation, without waiting polls.
+#: Enforced by tests/test_ci_generation_budget.py, not a runtime plan-admission rule.
+MAX_CI_GENERATION_REQUESTS = 440
+#: API requests of one ``ci gate-status`` (45 with both runs complete); the rest is for retries and
+#: pages.
+MAX_CI_GATE_STATUS_REQUESTS = 96
+#: The description of a status intent: GitHub's own bound for a commit status description.
+MAX_CI_STATUS_DESCRIPTION_CHARS = 140
+#: ``ci assemble`` sends 15 requests and 2 per target (archive REST redirect and storage GET;
+#: metadata is already authenticated from the listing), 49 for 17 targets;
+#: the rest is for retries and for the further pages of a run that lists more than 100 jobs or
+#: artifacts.
+MAX_CI_ASSEMBLE_REQUESTS = 48 + 3 * MAX_CI_TARGETS
+#: ``ci seal-gate`` sends 15 requests for a Build gate, 23 for the packaged gate of a pull request
+#: and 47 for the gate of a reuse run, which decides the reuse again (``gate.seal_reuse``), whatever
+#: the number of targets and lanes; the rest is for retries and for the further pages of a run that
+#: lists more than 100 jobs or artifacts.
+MAX_CI_GATE_REQUESTS = 96
+#: Pull requests GitHub associates with one pushed commit: one page of that listing. A merge commit
+#: has one; more than a page is no merge post-merge reuse attributes (``reuse.admit_post_merge_reuse``).
+MAX_CI_COMMIT_PULLS = 100
+#: ``ci reuse-admit`` sends 38 requests for an admitted reuse, 1 for a direct push and 11 when the
+#: merged tree differs, whatever the number of targets and lanes; the rest is for retries and for
+#: the further pages of a run that lists more than 100 jobs or artifacts.
+MAX_CI_REUSE_ADMIT_REQUESTS = 96
+#: ``ci aggregate`` sends 13 requests and 2 per lane (archive REST redirect and storage GET;
+#: metadata is already authenticated from the listing), 81 for 34 lanes; the
+#: rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
+MAX_CI_AGGREGATE_REQUESTS = 48 + 3 * MAX_CI_LANES
+MAX_CI_BATCH_MEMBERS = 50
+#: A batch manifest travels in the body of its pull request, which GitHub bounds at 65,536; the
+#: whole body, the marker inside it and the decoded document share this bound.
+MAX_CI_BATCH_DOCUMENT_BYTES = 64 * KIB
+MAX_CI_BATCH_PUSH_RECEIPT_BYTES = 4096
+#: A member's pull-request title (GitHub's own bound); it becomes the subject of its squash commit.
+MAX_CI_BATCH_TITLE_CHARS = 256
+#: Entries of the allowed-path list a caller hands to the batch constructor.
+MAX_CI_BATCH_ALLOWED_PATHS = 4096
+#: Paths one refusal names (a conflict, a rename that was followed).
+MAX_CI_BATCH_REPORTED_PATHS = 20
+CI_BATCH_GIT_TIMEOUT_SECONDS = 120
+#: One fetch or push of the batch store.
+CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS = 600
+MAX_CI_BATCH_GIT_OUTPUT_BYTES = MAX_CI_SOURCE_LIST_BYTES
+#: ``ci batch-prepare`` sends 10 requests plus 3 per member (160 for 50); the rest is for retries.
+MAX_CI_BATCH_PREPARE_REQUESTS = 16 + 4 * MAX_CI_BATCH_MEMBERS
+#: ``ci batch-settle`` sends 3 requests, the 28 of ``transport.download_merged_gate_pair`` for both
+#: original gates and at most 5 per member (281 for 50). The rest is for retries and for the further
+#: pages of a run that lists more than 100 jobs or artifacts.
+MAX_CI_BATCH_SETTLE_REQUESTS = 48 + 6 * MAX_CI_BATCH_MEMBERS
+#: The archive of one ``mb-ci-*`` artifact of any kind and profile: Quick Skin's bundle admission
+#: cap, which is tighter than the 2 GiB Block Pops' evaluator admits (``tests/test_ci_limits.py``).
+MAX_CI_BUNDLE_COMPRESSED_BYTES = 512 * MIB
+#: Artifact-service creation time versus runner upload-step time only. Seal/job ordering and
+#: artifact expiry remain exact; the two services may disagree by a couple of seconds.
+CI_ARTIFACT_UPLOAD_SKEW_SECONDS = 2
+MAX_CI_EXPORT_FILES = 10_000
+MAX_CI_EXPORT_ENTRIES = 20_000
+MAX_CI_EXPORT_FILE_BYTES = GIB
+MAX_CI_EXPORT_TREE_BYTES = 2 * GIB
+# Additional complete-target transport bounds, independent of native/runtime fan-in limits.
+MAX_CI_TARGET_DOWNLOAD_BYTES = 4 * GIB
+MAX_CI_TARGET_INPUT_ENTRIES = (MAX_CI_EXPORT_FILES + MAX_CI_TARGETS) * (MAX_BUNDLE_PATH_DEPTH + 1) + 1
+#: One lane's whole runtime export. The mods apply these numbers to each evidence profile (one
+#: scenario of a lane), so a lane with several scenarios is counted more strictly here.
+MAX_CI_RUNTIME_FILES = 512
+MAX_CI_RUNTIME_BYTES = 256 * MIB
+# Original Block Pops aggregate fan-in bounds; lane limits above remain unchanged.
+MAX_CI_RUNTIME_AGGREGATE_FILES = 4096
+MAX_CI_RUNTIME_AGGREGATE_BYTES = 512 * MIB
+MAX_CI_RUNTIME_ENVELOPE_BYTES = 4 * MIB
+# One private root request: the largest operation carries a tested-tree inventory (JSON rows are wider
+# than the Git listing they come from), a plan, the owning Build and one runtime envelope.
+MAX_CI_ROOT_REQUEST_BYTES = (2 * MAX_CI_SOURCE_LIST_BYTES + MAX_CI_PLAN_BYTES + MAX_CI_ENVELOPE_BYTES
+                             + MAX_CI_RUNTIME_ENVELOPE_BYTES + MAX_CI_RECORD_BYTES + 2 * MIB)
+# Complete logical closure, including every legal directory prefix and the envelope.
+MAX_CI_RUNTIME_ENTRIES = (MAX_CI_RUNTIME_AGGREGATE_FILES + 1) * (MAX_BUNDLE_PATH_DEPTH + 1) + 1
+MAX_CI_REPORT_BYTES = 4 * MIB
+# Original Build input reports and new validator-output reports have separate contracts.
+MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE = {"quick-skin": 4 * MIB, "block-pops": 8 * MIB}
+#: One ``sbom`` output of a Build export: what Quick Skin's own SBOM reader admits. Block Pops
+#: stages none, and an SBOM is optional in a plan.
+MAX_CI_SBOM_BYTES = 16 * MIB
+MAX_CI_LOG_BYTES = 16 * MIB
+MAX_CI_EXECUTION_LOG_CHARS = 4 * ((MAX_CI_LOG_BYTES + 2) // 3)
+MAX_CI_EXECUTION_BYTES = MAX_CI_EXECUTION_LOG_CHARS + 64 * KIB
+MAX_CI_PNG_BYTES = 32 * MIB
+#: A production or harness JAR as one export file. Its entry count and its expanded and nested-archive
+#: limits stay with the mod's own protected verifier, which is the code that opens it.
+MAX_CI_JAR_BYTES = 256 * MIB
+
 # -- Retention (days) per artifact kind (SPEC §3.0 artifact table) ---------------------------------
 RETENTION_DAYS = {
     "handoff": 1,
@@ -196,3 +411,14 @@ RETENTION_DAYS = {
 }
 MAX_ANCHOR_RETENTION_DAYS = 90
 MAX_BASELINE_RETENTION_DAYS = 90
+#: Retention (days) of every ``mb-ci-*`` artifact kind (``grammar.CI_ARTIFACT_PREFIXES``): transient
+#: target partitions one day, staged Build bundles and raw runtime artifacts seven, sealed tested and
+#: reuse records ninety. Pages rotation never sees these names.
+CI_RETENTION_DAYS = {
+    "target": 1,
+    "build": 7,
+    "runtime": 7,
+    "results": 7,
+    "tested": 90,
+    "reuse": 90,
+}

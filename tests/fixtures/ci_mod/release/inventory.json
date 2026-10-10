@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "mod": {
+    "name": "Synthetic Mod",
+    "version_property": "mod_version",
+    "harness_version": "0.0.0"
+  },
+  "targets": [
+    {
+      "minecraft": "1.20.1",
+      "java": 17,
+      "loaders": [
+        "fabric",
+        "forge"
+      ],
+      "sbom": true
+    },
+    {
+      "minecraft": "1.21.1",
+      "java": 21,
+      "loaders": [
+        "fabric"
+      ],
+      "sbom": false
+    }
+  ],
+  "faults": []
+}

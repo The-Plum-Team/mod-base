@@ -9,10 +9,14 @@ directory before any byte is inflated and again while streaming. Whatever :mod:`
 for a hostile archive surfaces as :class:`ZipRejected`. Extraction publishes through
 :func:`mod_base.io.atomic_directory.atomic_directory`, so ``destination`` must not exist.
 
-Every file name must also be a canonical bundle path (:func:`mod_base.model.grammar.is_bundle_path`,
-the grammar every manifest inventory uses), NFC-normalized, and unique even under case folding
-(including every parent component), so an archive can never create two names a case-insensitive
-filesystem would merge. Empty files are refused (no kit bundle has one). A ``Path`` archive is
+Every file name must also be a path the archive's :class:`mod_base.io.tree.PathRule` admits: a
+canonical bundle path for a Pages artifact (:func:`mod_base.model.grammar.is_bundle_path`, the
+grammar every manifest inventory uses) and an export path for a sealed Build or runtime export
+(:func:`mod_base.model.grammar.is_export_path`, which keeps the mod's own file names such as
+``files/Quick Skin - Fabric - 1.20.1-3.1.0.jar``). Under either rule a name is NFC-normalized and
+unique even under case folding (including every parent component), so an archive can never create
+two names a case-insensitive filesystem would merge. Pages/Build refuse empty files; the fixed
+runtime route preserves logs and requires subsequent envelope/native role admission. A ``Path`` archive is
 read through one ``O_NOFOLLOW`` descriptor bound to the regular file that was inspected. The
 central directory itself is bounded from its end record before :mod:`zipfile` allocates one
 object per entry, so a directory of millions of tiny entries is refused without being parsed.
@@ -33,6 +37,7 @@ from typing import BinaryIO
 
 from mod_base.errors import MbError
 from mod_base.io import atomic_directory as atomic
+from mod_base.io.tree import BUNDLE_PATHS, EXPORT_PATHS, PathRule
 from mod_base.model import grammar, limits
 
 OWNER = "MB1"
@@ -117,7 +122,7 @@ class _Entry:
     directory: bool
 
 
-def _check_limits(limits_: ExtractionLimits) -> None:
+def _check_limits(limits_: ExtractionLimits, maximum_entries: int = limits.MAX_ZIP_ENTRIES) -> None:
     if not isinstance(limits_, ExtractionLimits):
         raise ZipRejected("extraction limits must be an ExtractionLimits")
     values = (limits_.max_entries, limits_.max_total_bytes, limits_.max_entry_bytes, limits_.max_ratio)
@@ -125,14 +130,16 @@ def _check_limits(limits_: ExtractionLimits) -> None:
         raise ZipRejected("extraction limits must be positive integers")
     if limits_.max_ratio > limits.MAX_ZIP_RATIO:
         raise ZipRejected(f"extraction ratio may not exceed {limits.MAX_ZIP_RATIO}")
-    if limits_.max_entries > limits.MAX_ZIP_ENTRIES:
-        raise ZipRejected(f"extraction entries may not exceed {limits.MAX_ZIP_ENTRIES}")
+    if limits_.max_entries > maximum_entries:
+        raise ZipRejected(f"extraction entries may not exceed {maximum_entries}")
     if limits_.suffixes is not None and (not limits_.suffixes or any(
             not isinstance(suffix, str) or not suffix.startswith(".") for suffix in limits_.suffixes)):
         raise ZipRejected("extraction suffixes must be non-empty '.ext' strings")
 
 
-def _safe_name(info: zipfile.ZipInfo) -> tuple[str, bool]:
+def _safe_name(info: zipfile.ZipInfo, rule: PathRule) -> tuple[str, bool]:
+    """``(name, whether it is a directory entry)`` of one entry whose stored name ``rule`` admits."""
+
     raw = info.filename
     directory = raw.endswith("/")
     candidate = raw[:-1] if directory else raw
@@ -140,7 +147,7 @@ def _safe_name(info: zipfile.ZipInfo) -> tuple[str, bool]:
     if (info.orig_filename != raw or not candidate or len(raw.encode("utf-8", "surrogatepass")) > _MAX_NAME_BYTES
             or any(ord(character) < 32 or ord(character) == 127 for character in raw)
             or "\\" in raw or ":" in raw or unicodedata.normalize("NFC", raw) != raw
-            or candidate.startswith("/") or not grammar.is_bundle_path(candidate)):
+            or candidate.startswith("/") or not rule.is_safe(candidate)):
         raise ZipRejected(f"archive has an unsafe entry name {raw[:120]!r}")
     return candidate, directory
 
@@ -168,23 +175,27 @@ def _span(info: zipfile.ZipInfo) -> int:
     return _LOCAL_HEADER_BYTES + len(info.filename) + info.compress_size
 
 
-def _inspect(package: zipfile.ZipFile, limits_: ExtractionLimits, archive_size: int) -> tuple[list[_Entry], int]:
+def _inspect(package: zipfile.ZipFile, limits_: ExtractionLimits, archive_size: int, *, rule: PathRule,
+             allow_empty: bool = False, max_files: int | None = None) -> tuple[list[_Entry], int]:
     """Validate the whole central directory before any byte is inflated.
 
     Every entry's local header, name and compressed data must lie inside the ``archive_size`` bytes
     (so no hostile offset, such as a Zip64 value of ``2**63``, ever reaches a seek) and no two
-    entries may share bytes (the "overlapped entries" zip bomb). Names are ASCII by then, so a
-    name's length is its stored byte count."""
+    entries may share bytes (the "overlapped entries" zip bomb). ``rule`` admits every name; names
+    that differ only in case are refused here even where a tree walk of that rule tolerates them.
+    Names are ASCII by then, so a name's length is its stored byte count."""
 
     infos = package.infolist()
     if not infos or len(infos) > limits_.max_entries:
         raise ZipRejected(f"archive entry count {len(infos)} is outside 1..{limits_.max_entries}")
+    if max_files is not None and sum(not info.is_dir() for info in infos) > max_files:
+        raise ZipRejected("runtime archive exceeds its file-count bound")
     entries: list[_Entry] = []
     folded: dict[str, str] = {}
     kinds: dict[str, bool] = {}
     total = 0
     for info in infos:
-        name, directory = _safe_name(info)
+        name, directory = _safe_name(info, rule)
         parts = name.split("/")
         for depth in range(1, len(parts) + 1):
             prefix = "/".join(parts[:depth])
@@ -202,9 +213,10 @@ def _inspect(package: zipfile.ZipFile, limits_: ExtractionLimits, archive_size: 
             if info.file_size or info.compress_size > 2:
                 raise ZipRejected(f"archive directory entry carries data: {name!r}")
         else:
-            if not 0 < info.file_size <= limits_.max_entry_bytes:
-                raise ZipRejected(f"archive entry size is outside 1..{limits_.max_entry_bytes}: {name!r}")
-            if info.compress_size <= 0 or info.file_size > info.compress_size * limits_.max_ratio:
+            minimum = 0 if allow_empty else 1
+            if not minimum <= info.file_size <= limits_.max_entry_bytes:
+                raise ZipRejected(f"archive entry size is outside {minimum}..{limits_.max_entry_bytes}: {name!r}")
+            if (info.compress_size <= 0 and info.file_size > 0) or info.file_size > info.compress_size * limits_.max_ratio:
                 raise ZipRejected(f"archive entry compression ratio exceeds {limits_.max_ratio}: {name!r}")
             if info.compress_type == zipfile.ZIP_STORED and info.compress_size != info.file_size:
                 raise ZipRejected(f"stored archive entry sizes disagree: {name!r}")
@@ -301,12 +313,17 @@ def _check_central_directory(stream: BinaryIO, limits_: ExtractionLimits) -> int
 
 
 def archive_limit(limits_: ExtractionLimits) -> int:
+    """Largest archive accepted by the existing Pages extraction limits."""
+    return _archive_limit(limits_, limits.MAX_ZIP_ENTRIES)
+
+
+def _archive_limit(limits_: ExtractionLimits, maximum_entries: int) -> int:
     """The largest archive (compressed bytes) ``limits_`` accept: stored data plus headers and slack.
 
     Validates ``limits_`` first, so a downloader can refuse an oversized artifact from its metadata
     before fetching a byte."""
 
-    _check_limits(limits_)
+    _check_limits(limits_, maximum_entries)
     return limits_.max_total_bytes + limits_.max_total_bytes // 512 + limits_.max_entries * 1024 + _ARCHIVE_SLACK_BYTES
 
 
@@ -330,8 +347,12 @@ def artifact_limit(kind: str, *, max_total_bytes: int | None = None) -> int:
     return min(archive_limit(bounds), limits.MAX_ARTIFACT_BYTES)
 
 
-def _archive_stream(archive: Path | bytes, limits_: ExtractionLimits) -> BinaryIO:
-    maximum = archive_limit(limits_)
+def _archive_stream(archive: Path | bytes, limits_: ExtractionLimits,
+                    maximum_entries: int = limits.MAX_ZIP_ENTRIES, *,
+                    max_archive_bytes: int | None = None) -> BinaryIO:
+    maximum = _archive_limit(limits_, maximum_entries)
+    if max_archive_bytes is not None:
+        maximum = min(maximum, max_archive_bytes)
     if isinstance(archive, (bytes, bytearray)):
         if not 0 < len(archive) <= maximum:
             raise ZipRejected(f"archive size is outside 1..{maximum} bytes")
@@ -363,10 +384,58 @@ def extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits)
     """Validate and extract ``archive`` into the new directory ``destination``.
 
     Returns the extracted relative file paths, sorted. Raises :class:`ZipRejected` for any
-    policy violation; on failure ``destination`` does not exist.
+    policy violation; on failure ``destination`` does not exist. Every name is a canonical bundle
+    path: this route extracts the Pages artifacts, whose file names the kit chooses.
     """
 
-    stream = _archive_stream(archive, limits_)
+    return _extract(archive, destination, limits_, limits.MAX_ZIP_ENTRIES, rule=BUNDLE_PATHS)
+
+
+def extract_build(archive: Path | bytes, destination: Path) -> list[str]:
+    """Extract a Build export with fixed CI bounds; Pages limits remain unchanged.
+
+    Entry names are export paths (``tree.EXPORT_PATHS``): the names the mod staged its files under."""
+
+    # The export entry cap already includes its envelope and root; the validation record and
+    # its reports are beside that export in the uploaded artifact.
+    records = (grammar.CI_VALIDATION_NAME,)
+    entries = limits.MAX_CI_EXPORT_ENTRIES + len(records) + limits.MAX_CI_TARGETS
+    bounds = ExtractionLimits(entries,
+                              limits.MAX_CI_EXPORT_TREE_BYTES + limits.MAX_CI_ENVELOPE_BYTES
+                              + limits.MAX_CI_RECORD_BYTES + limits.MAX_CI_TARGETS * limits.MAX_CI_REPORT_BYTES,
+                              limits.MAX_CI_EXPORT_FILE_BYTES)
+    return _extract(archive, destination, bounds, entries, rule=EXPORT_PATHS)
+
+
+def extract_runtime(archive: Path | bytes, destination: Path, *, scope: str) -> list[str]:
+    """Extract fixed lane/complete runtime data; empty logs need subsequent native/byte admission.
+
+    This route alone allows empty files. Existing Pages/Build contracts retain nonempty files.
+    Every transport must independently bind exact envelope, native roles and original producers.
+    Entry names are export paths (``tree.EXPORT_PATHS``), as in the sealed tree they were read from.
+    """
+    if type(scope) is not str or scope not in ('lane', 'complete'):
+        raise ZipRejected('runtime archive scope must be lane or complete')
+    lane = scope == 'lane'
+    files = limits.MAX_CI_RUNTIME_FILES if lane else limits.MAX_CI_RUNTIME_AGGREGATE_FILES
+    total = limits.MAX_CI_RUNTIME_BYTES if lane else limits.MAX_CI_RUNTIME_AGGREGATE_BYTES
+    records = (grammar.CI_RUNTIME_ENVELOPE_NAME, grammar.CI_VALIDATION_NAME)
+    reports = 1 if lane else limits.MAX_CI_LANES
+    # MAX_CI_RUNTIME_ENTRIES already counts the runtime envelope and the tree's root.
+    entries = limits.MAX_CI_RUNTIME_ENTRIES + len((grammar.CI_VALIDATION_NAME,)) + reports
+    bounds = ExtractionLimits(entries,
+                              total + limits.MAX_CI_RUNTIME_ENVELOPE_BYTES + limits.MAX_CI_RECORD_BYTES
+                              + reports * limits.MAX_CI_REPORT_BYTES,
+                              max(limits.MAX_CI_PNG_BYTES, limits.MAX_CI_RUNTIME_ENVELOPE_BYTES))
+    return _extract(archive, destination, bounds, entries, rule=EXPORT_PATHS,
+                    allow_empty=True, max_files=files + len(records) + reports,
+                    max_archive_bytes=limits.MAX_CI_BUNDLE_COMPRESSED_BYTES)
+
+
+def _extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits,
+             maximum_entries: int, *, rule: PathRule, allow_empty: bool = False, max_files: int | None = None,
+             max_archive_bytes: int | None = None) -> list[str]:
+    stream = _archive_stream(archive, limits_, maximum_entries, max_archive_bytes=max_archive_bytes)
     with stream:
         try:
             archive_size = _check_central_directory(stream, limits_)
@@ -375,7 +444,8 @@ def extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits)
             raise ZipRejected(f"archive is not a valid ZIP: {type(exc).__name__}") from exc
         with package:
             try:
-                entries, declared = _inspect(package, limits_, archive_size)
+                entries, declared = _inspect(package, limits_, archive_size, rule=rule, allow_empty=allow_empty,
+                                             max_files=max_files)
             except (ValueError, OverflowError, zipfile.BadZipFile) as exc:
                 raise ZipRejected(f"archive directory is malformed: {type(exc).__name__}") from exc
 

@@ -12,12 +12,16 @@
 # managed region included) byte for byte with the kit's template and reads the others line by
 # line. Git for Windows' default `core.autocrlf=true` would check them out with CRLF line endings
 # and fail that check on a clean clone, so they are always checked out with LF, whatever the local
-# setting. The list is exactly the template manifest's managed and fragment paths.
+# setting. The list is the manifest's managed and fragment paths plus the four Build/E2E callers.
 /.gitattributes text eol=lf
 /.gitignore text eol=lf
 /.github/CODEOWNERS text eol=lf
 /.github/dependabot.yml text eol=lf
 /.github/pull_request_template.md text eol=lf
+/.github/workflows/mod-base-build.yml text eol=lf
+/.github/workflows/mod-base-gate-status.yml text eol=lf
+/.github/workflows/mod-base-guard.yml text eol=lf
+/.github/workflows/mod-base-packaged-e2e.yml text eol=lf
 /.github/workflows/pages.yml text eol=lf
 /AGENTS.md text eol=lf
 /docs/ai/shared/PUBLIC-EVIDENCE.md text eol=lf

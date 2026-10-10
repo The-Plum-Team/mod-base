@@ -10,6 +10,60 @@ describes the design, [SECURITY-MODEL.md](../SECURITY-MODEL.md) the trust bounda
 [OPERATIONS.md](../OPERATIONS.md) the owner and release procedures, and [docs/adr](../adr/) the
 decisions behind them.
 
+## The protected Build and packaged-E2E pipeline
+
+`src/mod_base/build_ci/`, the kit workflows `build.yml`, `select-build.yml`, `packaged-e2e.yml` and
+`gate-status.yml`, the managed callers `template/managed/.github/workflows/mod-base-*.yml` and the
+`ci` command are one unreleased pipeline that no mod runs yet. Before touching any of it, read
+[BUILD-PROTOCOL.md](../BUILD-PROTOCOL.md) (the reference: identity, records, job graphs, the steps
+of a job, root operations), [BUILD-E2E-PROGRESS.md](../BUILD-E2E-PROGRESS.md) (what exists, what
+remains, what is still moving), [BUILD-ADAPTER.md](../BUILD-ADAPTER.md) (what a mod provides) and
+[ADR 0007](../adr/0007-protected-build-and-packaged-runtime.md) (the decisions and their reasons).
+These rules are specific to this code and add to the sections below:
+
+- Compose. Every function is reachable from a `ci` verb (`build_ci/commands_*.py`, listed in
+  `commands.VERB_MODULES`) and every verb from a workflow step, one verb to a step, or from a
+  documented operator entry. Do not add a primitive that nothing calls.
+- A mod never writes a kit-format document. Its hooks write native files at the paths of the
+  adapter contract; protected kit code inventories, hashes and binds them.
+- Read immutable objects once and budget every command. A commit, tree or blob named by SHA and
+  the job list of a completed attempt are read once per command (`reads.CommandReads`); mutable
+  state is read at the start and again immediately before the effect (`reads.Watch`). A command
+  builds its client with `commands.api_client(..., max_requests=...)` from a limit of
+  `model/limits.py`, and a test pins the request count of a typical case.
+- Root work goes through the closed operations only: one entry of `grammar.CI_ROOT_OPERATIONS`,
+  requested by a private `mod-base.ci.root-request` and run by `tools/ci_privileged_bootstrap.py`,
+  which mirrors the list without importing the kit. The only other `sudo` command lines are the
+  fixed ones in `build_ci.worker` that create, lock, kill and enter an account, revoke its
+  systemd user manager/linger and remove its cron/at jobs, and the two fixed `apt-get` lines of
+  `build_ci.system_profile` (`ci system-profile`). Those two are an amendment to decision D3 by
+  choice, not by necessity: `ci worker-prepare` could request a closed `system-profile`
+  operation before `host-fence`, while no account exists yet. They stay fixed argument vectors
+  under `sudo -n`, root's `timeout` and `env -i` because that is the narrower root surface: no
+  kit code runs as root and nothing is read from a request, whereas the bootstrap would run kit
+  Python as root only to start the same package manager. `ci system-profile` passes the one
+  `sudo` path (`system_profile.SUDO`) to `install_system_profile`; only the suite passes a
+  stand-in. Root never calls the GitHub API, and a request never names a program, a hook or a
+  destination.
+- Account, `sudo` and root behaviour is tested in `tests/ci_linux_worker.py`, deferred execution
+  in `tests/ci_linux_deferred.py`, the complete PR generation in `tests/ci_linux_pipeline.py`, and
+  the system profile installed before the fence in `tests/ci_linux_system_profile.py`.
+  The pipeline executes the workflow command lines, consumes the preceding jobs' real artifacts,
+  checks request budgets and exercises rejection controls. The suite collects none of these
+  modules. CI runs each module in its own GitHub-hosted job in every Python leg and the `Test`
+  gate requires them all. Their account classes
+  refuse any other host (`GITHUB_ACTIONS`, `RUNNER_ENVIRONMENT=github-hosted`, passwordless `sudo`,
+  `/home/runner`), create real accounts and change the modes of system trees for good: run it in
+  CI or on a disposable Linux machine laid out like a hosted runner, never on a workstation. A
+  suite test may fake the GitHub API (`mod_base.github.fake.FakeGitHub`) and nothing else this
+  code owns.
+- Every `...CI_...` constant of `model/limits.py` needs a row in `tests/test_ci_limits.py` saying
+  what it bounds, and kit code must use it. No bound is raised because a pipeline fails.
+- The workflows are policed through the registry tables of `workflow.py` (the `CI_CALLEE_*` and
+  `CI_JOB_*` tables: workflows, callers, jobs, verbs, artifacts, permissions), to which
+  `tests/test_workflow_ci_policy.py` holds the YAML: change a table and its workflow together.
+  Job names are part of the graph contract (`build_ci/graph.py`, `tests/fixtures/ci_graphs/`).
+
 ## What a kit change reaches
 
 - The kit runs in consumer mods only at the single commit each mod pins, and only after a
@@ -70,10 +124,32 @@ version decision, never a silent edit:
   `model/limits.py`, artifact names only from `model/grammar.py`, job names only from
   `workflow.py`. No `shell=True`, no `eval`, no network access outside `mod_base.github` and the
   bootstrap's documented fetch.
+  Bounded byte readers must use binary descriptors on platforms that translate text reads;
+  CRLF and 0x1A are payload bytes, never implicit normalization or end-of-file markers.
 - Match the style of the ported lineage code: plain typed functions and dataclasses, explicit
   errors, docstrings where the reason is not obvious, no dead code.
 
 ## Workflows and composites
+
+The workflows the kit renders with a mod's pin are enrolled in `template.tool.RENDERED_CALLERS`, a
+closed registry in code: neither `template/manifest.json` nor a mod's data can enrol a caller, move
+one or choose its renderer. The Pages caller is a manifest entry, always managed, and keeps its
+region of mod-local `ext-` jobs. The four Build/E2E callers (`mod-base-guard.yml`,
+`mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`) are enrolled in code
+alone and rendered whole from `{{PIN}}`, `{{VERSION}}` and `{{BRANCH}}` (the mod's
+`canonical_branch`): they have no extension region and `template.deferred` cannot name them. Which
+of them a mod has is decided by the mode of its activation manifest alone
+(`site/mod-base-build-activation.json`, `build_ci.activation.MANAGED_CALLERS`). `template check`,
+`sync` and `init` read it first, check a managed caller like any managed file and report a caller
+outside its mode as `forbidden`; a Build configuration without a manifest is an error, and a mod
+with neither is not checked for these callers at all. A mode changes only along
+`activation.TRANSITIONS`, in a pull request of its own at an unchanged pin (`build_ci.transition`,
+`template transition`), and a mode is data, not owner approval. While a mode manages callers,
+`.github/dependabot.yml` must ignore the third-party actions they pin. The bootstrap's `bump`
+refuses a target kit that cannot read the manifest while a mode other than `disabled` is active,
+requires that kit's `template sync` plan to raise no error before it rewrites any pin, and
+restores every workflow and action file when its write phase fails.
+[OPERATIONS.md](../OPERATIONS.md#builde2e-activation-and-rollback) has the procedure.
 
 - Every `uses:` is pinned to a full commit SHA with its `# vX.Y.Z` comment. The kit never
   references itself (`uses: The-Plum-Team/mod-base...`) outside `canary/`, which is copied into the
@@ -102,6 +178,10 @@ the package (`tests/__init__.py` exists), use fakes instead of the network (`mod
 local bare Git repositories for fetches) and write only inside temporary directories. A test that
 needs a missing kit file fails; it skips only for a missing platform tool such as `bash` or
 `sha256sum`.
+Prepare byte-sensitive template/caller fixtures with explicit UTF-8 and authored LF writes,
+preserving intentionally hostile CRLF/encoding cases. Locale/newline conversion must not prevent
+the intended extension/drift/security assertion from executing. Keep POSIX mode/symlink tests
+intact when a Windows host cannot run them; report the actual failure instead of weakening it.
 
 ## Parallel work
 

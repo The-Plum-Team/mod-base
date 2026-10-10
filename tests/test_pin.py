@@ -686,6 +686,14 @@ class KitSource:
     def __init__(self, root: Path, home: Path) -> None:
         self.home = home
         self.work = kit_tree(root / "kit-src")
+        # Authored miniature target kit: bump now plans through these predecessor library APIs.
+        write(self.work, "src/mod_base/errors.py",
+              "def run_main(entry):\n    return entry()\n")
+        write(self.work, "src/mod_base/template/__init__.py", "")
+        write(self.work, "src/mod_base/template/tool.py",
+              "def sync(repo, *, kit_root, write):\n"
+              "    assert write is False\n"
+              "    return ['expected release drift']\n")
         os.chmod(self.work / "tools" / "kit_digest.sh", 0o644)
         write(self.work, ".gitignore", "*.egg-info/\n")
         git(self.work, "init", "-q", home=home)

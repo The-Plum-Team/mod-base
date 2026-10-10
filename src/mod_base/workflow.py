@@ -1,9 +1,12 @@
-"""THE single source of the Pages workflow, job and step display names (SPEC §5.9).
+"""THE single source of the Pages and Build/E2E workflow, job and step display names (SPEC §5.9).
 
 The jobs API reports a job of a called (reusable) workflow as ``"<caller job name> / <callee job
-name>"``; caller-owned jobs keep their bare name. Consumers must compare names with exact equality
-through :func:`find_job`; ``endswith``/``startswith`` matching is forbidden. Producer-side names are
-config (``source.handoff_job/handoff_step``, ``families[].producer.job/step``), not constants here.
+name>"``; caller-owned jobs keep their bare name, and so does a calling job that was skipped: its
+callee never expands, so the API lists that one job under the caller's name. A matrix job that is
+skipped before its matrix expands is listed once under its unexpanded YAML name. Consumers must
+compare names with exact equality through :func:`find_job`; ``endswith``/``startswith`` matching is
+forbidden. Producer-side names are config (``source.handoff_job/handoff_step``,
+``families[].producer.job/step``), not constants here.
 """
 
 from __future__ import annotations
@@ -19,6 +22,120 @@ from mod_base.model import grammar
 PAGES_WORKFLOW_NAME = "Project site"
 PAGES_WORKFLOW_PATH = ".github/workflows/pages.yml"
 PAGES_EVENTS = frozenset({"workflow_dispatch", "schedule"})
+
+# -- Build/E2E: BuildGraphV1 / PackagedGraphV1 names; public App contexts are caller-owned -----------
+#: The mod's managed local reusable guard workflow. Every run of a managed caller lists it in
+#: ``referenced_workflows`` at the commit the caller itself ran from: the run's controller commit.
+CI_GUARD_WORKFLOW_PATH = ".github/workflows/mod-base-guard.yml"
+#: Managed caller id -> its path in the mod. ``build`` and ``packaged`` are the two producers.
+CI_CALLER_WORKFLOWS = {
+    "build": ".github/workflows/mod-base-build.yml",
+    "packaged": ".github/workflows/mod-base-packaged-e2e.yml",
+    "status": ".github/workflows/mod-base-gate-status.yml",
+}
+#: Build/E2E callee workflow id -> its path inside the kit repository (never ``CALLEE_WORKFLOWS``).
+CI_CALLEE_WORKFLOWS = {
+    "build": ".github/workflows/build.yml",
+    "select-build": ".github/workflows/select-build.yml",
+    "packaged-e2e": ".github/workflows/packaged-e2e.yml",
+    "gate-status": ".github/workflows/gate-status.yml",
+}
+CI_GUARD_CALL = "Verify pinned mod-base"
+CI_BUILD_CALL = "Shared Build"
+CI_SELECT_CALL = "Select exact Build"
+CI_PACKAGED_CALL = "Shared Packaged E2E"
+CI_STATUS_CALL = "Evaluate protected gates"
+#: Managed caller id -> job key -> the bare display name of that caller-owned job.
+CI_CALLER_JOBS = {
+    "build": {"guard": CI_GUARD_CALL, "deferred": "Build deferred for draft", "shared": CI_BUILD_CALL},
+    "packaged": {"guard": CI_GUARD_CALL, "deferred": "Packaged E2E deferred for draft",
+                 "select": CI_SELECT_CALL, "rebuild": CI_BUILD_CALL, "shared": CI_PACKAGED_CALL},
+    "status": {"guard": CI_GUARD_CALL, "locate": "Locate the pull request", "evaluate": CI_STATUS_CALL,
+               "publish": "Publish protected gate statuses"},
+}
+#: Producer id -> calling job key -> the workflow it calls: ``guard`` is the mod's own
+#: ``CI_GUARD_WORKFLOW_PATH``, every other value a ``CI_CALLEE_WORKFLOWS`` id.
+CI_CALLS = {
+    "build": {"guard": "guard", "shared": "build"},
+    "packaged": {"guard": "guard", "select": "select-build", "rebuild": "build", "shared": "packaged-e2e"},
+}
+#: The calls of the status caller, in the same form. It is tabled apart because it is no producer:
+#: its run seals nothing and is nobody's evidence, so :func:`ci_producer` never answers with it.
+CI_STATUS_CALLS = {"guard": "guard", "evaluate": "gate-status"}
+#: Managed caller id -> its calls: what the job-name functions below resolve a calling job with.
+_CI_CALLER_CALLS = {**CI_CALLS, "status": CI_STATUS_CALLS}
+#: Build/E2E callee id -> the managed callers whose jobs may call it: what the binding step of its
+#: prologue admits in ``GITHUB_WORKFLOW_REF``. The three callees of the producers admit both
+#: producers (the packaged caller also builds); the status evaluation admits its own caller alone.
+CI_CALLEE_CALLERS = {
+    "build": ("build", "packaged"),
+    "select-build": ("build", "packaged"),
+    "packaged-e2e": ("build", "packaged"),
+    "gate-status": ("status",),
+}
+CI_GUARD_JOBS = {"verify": "Authenticate the pinned kit"}
+CI_BUILD_JOBS = {"plan": "Plan protected Build", "policy": "Verify protected policy",
+                 "target": "Compile target {id}", "assemble": "Seal complete Build bundle",
+                 "gate": "Verify complete Build"}
+CI_SELECT_JOBS = {"select": "Select exact Build source"}
+CI_PACKAGED_JOBS = {"input": "Authenticate exact Build", "lane": "Run packaged lane {id}",
+                    "aggregate": "Seal complete packaged results", "gate": "Verify complete packaged E2E"}
+CI_STATUS_JOBS = {"evaluate": "Evaluate gate states"}
+#: Called workflow id (a ``CI_CALLS`` or ``CI_STATUS_CALLS`` value) -> job key -> its ``name:`` template.
+CI_CALLEE_JOBS = {"guard": CI_GUARD_JOBS, "build": CI_BUILD_JOBS, "select-build": CI_SELECT_JOBS,
+                  "packaged-e2e": CI_PACKAGED_JOBS, "gate-status": CI_STATUS_JOBS}
+CI_SEAL_STEP = "Validate frozen native exports"
+CI_UPLOAD_STEP = "Upload sealed outputs"
+#: Build/E2E callee id -> job key -> the ``ci`` verbs its steps issue after the Build controller
+#: prologue, one verb per step and in step order. A callee enters this table and the two below
+#: with its workflow file; all four are written. Only the ``input`` job of a packaged run selects
+#: a Build: its selection record reaches every later job as a job output, which a step without
+#: a kit command writes to the file the job's ``fetch-build``, ``aggregate`` or ``seal-gate``
+#: is given. The ``aggregate`` job's sealing step is ``ci aggregate`` itself. The
+#: status job issues ``gate-status`` twice: first with ``--settle``, before any subject, and
+#: again with the plan when that first call could not settle (the four steps between and the
+#: second call are skipped when it could). Only the ``lane`` job runs a client and installs the
+#: protected config's system profile, between its subject and its accounts.
+CI_JOB_VERBS = {
+    "build": {
+        "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
+        "policy": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+                   "worker-finish"),
+        "target": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
+                   "worker-validate", "worker-finish"),
+        "assemble": ("subject", "worker-prepare", "plan", "assemble", "worker-validate", "worker-finish"),
+        "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
+    },
+    "select-build": {
+        "select": ("subject", "worker-prepare", "plan", "reuse-admit", "select-build", "worker-finish"),
+    },
+    "packaged-e2e": {
+        "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
+        "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "worker-stage", "worker-run",
+                 "worker-seal", "worker-validate", "worker-finish"),
+        "aggregate": ("subject", "worker-prepare", "plan", "aggregate", "worker-finish"),
+        "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
+    },
+    "gate-status": {
+        "evaluate": ("gate-status", "subject", "worker-prepare", "plan", "gate-status", "worker-finish"),
+    },
+}
+#: Build/E2E callee id -> sealing job key -> callee mode -> the kind (``grammar.ci_artifact_name``)
+#: of the one artifact the job uploads in that mode. Exactly these jobs have a ``CI_SEAL_STEP``
+#: directly followed by a ``CI_UPLOAD_STEP``; ``select-build`` and ``gate-status`` have none and
+#: upload nothing.
+CI_JOB_ARTIFACTS = {
+    "build": {"target": {"full": "target"}, "assemble": {"full": "build"},
+              "gate": {"full": "tested", "reuse": "reuse"}},
+    "packaged-e2e": {"lane": {"full": "runtime"}, "aggregate": {"full": "results"},
+                     "gate": {"full": "tested", "reuse": "reuse"}},
+}
+#: Build/E2E callee id -> job key -> the complete ``permissions:`` of that job, which the calling
+#: job of a managed caller must grant.
+CI_JOB_PERMISSIONS = {
+    callee: {job: {"actions": "read", "contents": "read", "pull-requests": "read"} for job in CI_CALLEE_JOBS[callee]}
+    for callee in CI_JOB_VERBS
+}
 PAGES_CRON = "43 * * * *"
 OPERATIONS = ("manual", "deploy", "family", "rotate")
 #: The ``operation`` the caller passes to ``publish.yml`` (a schedule becomes ``recovery``).
@@ -63,7 +180,7 @@ STEPS = {
 }
 
 #: Placeholder -> the ``${{ matrix.* }}`` expression the callee YAML uses for it.
-MATRIX_EXPRESSIONS = {"key": "${{ matrix.key }}", "family": "${{ matrix.family }}"}
+MATRIX_EXPRESSIONS = {"key": "${{ matrix.key }}", "family": "${{ matrix.family }}", "id": "${{ matrix.id }}"}
 
 
 def _placeholders(template: str) -> set[str]:
@@ -78,6 +195,15 @@ def _validate_fields(template: str, fields: Mapping[str, Any]) -> None:
         grammar.require_key(fields["key"])
     if "family" in fields:
         grammar.require_family(fields["family"])
+    if "id" in fields:
+        grammar.require(grammar.CI_UNIT_ID, fields["id"], "Build/E2E unit id")
+
+
+def _yaml_template(template: str) -> str:
+    result = template
+    for field in _placeholders(template):
+        result = result.replace("{" + field + "}", MATRIX_EXPRESSIONS[field])
+    return result
 
 
 def caller_job_name(key: str) -> str:
@@ -113,10 +239,7 @@ def workflow_template_name(workflow: str, job: str) -> str:
         template = CALLEE[workflow][job]
     except KeyError:
         raise MbError(f"unknown callee job {workflow!r}/{job!r}") from None
-    result = template
-    for field in _placeholders(template):
-        result = result.replace("{" + field + "}", MATRIX_EXPRESSIONS[field])
-    return result
+    return _yaml_template(template)
 
 
 def unexpanded_api_job_name(workflow: str, job: str) -> str:
@@ -126,6 +249,73 @@ def unexpanded_api_job_name(workflow: str, job: str) -> str:
     ``e2e_job_graph.UNEXPANDED_SCENARIO_JOB``). Exact equality only, like every other name."""
 
     return f"{CALLER[workflow]} / {workflow_template_name(workflow, job)}"
+
+
+def _ci_name(table: Mapping[str, Mapping[str, str]], group: str, key: str, label: str) -> str:
+    try:
+        return table[group][key]
+    except (KeyError, TypeError):
+        raise MbError(f"unknown Build/E2E {label} {group!r}/{key!r}") from None
+
+
+def ci_producer(workflow_path: str) -> str:
+    """Return the producer id (``"build"`` or ``"packaged"``) of the managed caller at
+    ``workflow_path``; any other path is not a Build/E2E producer and raises."""
+
+    for producer in CI_CALLS:
+        if CI_CALLER_WORKFLOWS[producer] == workflow_path:
+            return producer
+    raise MbError("workflow is not a managed Build/E2E producer caller", reason="job-graph")
+
+
+def ci_caller_job_name(caller: str, job: str) -> str:
+    """Return the bare display name of a job the managed caller ``caller`` owns, e.g.
+    ``"Build deferred for draft"``: what the jobs API reports for a caller job that has steps."""
+
+    return _ci_name(CI_CALLER_JOBS, caller, job, "caller job")
+
+
+def ci_callee_job_name(callee: str, job: str, **fields: str) -> str:
+    """Return a called workflow's own ``name:`` value with its placeholders filled (no caller prefix)."""
+
+    template = _ci_name(CI_CALLEE_JOBS, callee, job, "callee job")
+    _validate_fields(template, fields)
+    return template.format(**fields)
+
+
+def ci_api_job_name(producer: str, call: str, job: str, **fields: str) -> str:
+    """Return the name the jobs API reports for job ``job`` of the workflow that the calling job
+    ``call`` of the managed caller ``producer`` (a producer or ``status``) calls, e.g.
+    ``"Shared Build / Compile target mc1.20.1"``."""
+
+    callee = _ci_name(_CI_CALLER_CALLS, producer, call, "calling job")
+    return f"{ci_caller_job_name(producer, call)} / {ci_callee_job_name(callee, job, **fields)}"
+
+
+def ci_skipped_call_job_name(producer: str, call: str) -> str:
+    """Return the name the jobs API reports, once, for the calling job ``call`` of the managed
+    caller ``producer`` when its job-level ``if`` skipped the call: the caller's bare job name,
+    with no callee job behind it."""
+
+    _ci_name(_CI_CALLER_CALLS, producer, call, "calling job")
+    return ci_caller_job_name(producer, call)
+
+
+def ci_workflow_template_name(callee: str, job: str) -> str:
+    """Return a called workflow's job ``name:`` exactly as written in its YAML (``${{ matrix.id }}``
+    form)."""
+
+    return _yaml_template(_ci_name(CI_CALLEE_JOBS, callee, job, "callee job"))
+
+
+def ci_unexpanded_api_job_name(producer: str, call: str, job: str) -> str:
+    """Return the name the jobs API reports, once, for a matrix job of a called workflow that was
+    skipped before its matrix expanded, e.g. ``"Shared Build / Compile target ${{ matrix.id }}"``."""
+
+    template = _ci_name(CI_CALLEE_JOBS, _ci_name(_CI_CALLER_CALLS, producer, call, "calling job"), job, "callee job")
+    if not _placeholders(template):
+        raise MbError(f"Build/E2E callee job {job!r} is not a matrix job")
+    return f"{ci_caller_job_name(producer, call)} / {_yaml_template(template)}"
 
 
 def step_name(key: str) -> str:

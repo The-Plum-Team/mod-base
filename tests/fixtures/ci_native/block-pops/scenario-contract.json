@@ -1,0 +1,448 @@
+{
+  "schema_version": 1,
+  "gui_text_reference_size": [
+    1600,
+    900
+  ],
+  "scenarios": [
+    {
+      "scenario": "ui-regression",
+      "execution_profiles": [
+        "runtime-default",
+        "pr",
+        "release"
+      ],
+      "orchestration": {
+        "mode": "single-client"
+      },
+      "roles": [
+        {
+          "role": "client_a",
+          "steps": [
+            {
+              "id": "favorite_color_prompt",
+              "assertion_required": true,
+              "capture": {
+                "title": "Organic first-join favorite-color prompt",
+                "review_tier": "key",
+                "expectation": "The production server-triggered Choose Your Favorite Color modal is opaque and centered; its 4 by 4 color grid, Figure ON control, disabled Done control, text, and figure preview are crisp and unclipped.",
+                "probes": [
+                  {
+                    "kind": "opaque-stars-background",
+                    "region": [
+                      0.02,
+                      0.15,
+                      0.2,
+                      0.85
+                    ],
+                    "maximum_mean_luma": 32.0,
+                    "bright_luma": 64,
+                    "maximum_bright_fraction": 0.1
+                  },
+                  {
+                    "kind": "required-gui-text",
+                    "label": "favorite-color title and description",
+                    "box": [
+                      670,
+                      145,
+                      930,
+                      205
+                    ],
+                    "minimum_luma_exclusive": 143,
+                    "minimum_pixels": 400
+                  }
+                ]
+              }
+            },
+            {
+              "id": "favorite_color_selected",
+              "assertion_required": true,
+              "capture": {
+                "title": "Favorite color selected state",
+                "review_tier": "key",
+                "expectation": "The same favorite-color modal visibly marks purple as selected and enables Done without text bleeding, transparency, blur, or layout movement.",
+                "probes": [
+                  {
+                    "kind": "opaque-stars-background",
+                    "region": [
+                      0.02,
+                      0.15,
+                      0.2,
+                      0.85
+                    ],
+                    "maximum_mean_luma": 32.0,
+                    "bright_luma": 64,
+                    "maximum_bright_fraction": 0.1
+                  },
+                  {
+                    "kind": "required-gui-text",
+                    "label": "selected favorite-color title and description",
+                    "box": [
+                      670,
+                      145,
+                      930,
+                      205
+                    ],
+                    "minimum_luma_exclusive": 143,
+                    "minimum_pixels": 400
+                  }
+                ]
+              }
+            },
+            {
+              "id": "favorite_color_applied",
+              "assertion_required": true,
+              "capture": {
+                "title": "Favorite color round trip applied",
+                "review_tier": "all",
+                "expectation": "The real Done action has closed the modal and returned to a normal packaged world view after the server persisted and synchronized the purple World Players figure.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_screen_initial",
+              "assertion_required": true,
+              "capture": {
+                "title": "Claw machine collection screen",
+                "review_tier": "key",
+                "expectation": "The Claw Machine Configuration screen shows the real packaged One Piece selection, collection and figure grids, token controls, and footer; labels and controls are not clipped or overlapped.",
+                "probes": [
+                  {
+                    "kind": "required-gui-text",
+                    "label": "collections header",
+                    "box": [
+                      205,
+                      75,
+                      600,
+                      110
+                    ],
+                    "minimum_luma_exclusive": 143,
+                    "minimum_pixels": 200
+                  },
+                  {
+                    "kind": "required-gui-text",
+                    "label": "selected collection and figure header",
+                    "box": [
+                      790,
+                      75,
+                      1200,
+                      110
+                    ],
+                    "minimum_luma_exclusive": 143,
+                    "minimum_pixels": 300
+                  },
+                  {
+                    "kind": "required-gui-text",
+                    "label": "token availability status",
+                    "box": [
+                      400,
+                      745,
+                      1200,
+                      775
+                    ],
+                    "minimum_luma_exclusive": 143,
+                    "minimum_pixels": 250
+                  }
+                ]
+              }
+            },
+            {
+              "id": "settings_modal",
+              "assertion_required": true,
+              "capture": {
+                "title": "Claw machine settings modal",
+                "review_tier": "key",
+                "expectation": "The production Settings modal is opaque, centered over the claw-machine screen, and its server tab, sliders, buttons, and labels remain readable without token-button text bleeding through.",
+                "probes": [
+                  {
+                    "kind": "opaque-stars-background",
+                    "region": [
+                      0.31,
+                      0.5,
+                      0.39,
+                      0.61
+                    ],
+                    "maximum_mean_luma": 8.0,
+                    "bright_luma": 32,
+                    "maximum_bright_fraction": 0.01
+                  },
+                  {
+                    "kind": "required-gui-text",
+                    "label": "settings server title",
+                    "box": [
+                      720,
+                      305,
+                      900,
+                      335
+                    ],
+                    "minimum_luma_exclusive": 159,
+                    "minimum_pixels": 150
+                  },
+                  {
+                    "kind": "required-gui-text",
+                    "label": "settings slider and explanation",
+                    "box": [
+                      580,
+                      345,
+                      1020,
+                      425
+                    ],
+                    "minimum_luma_exclusive": 143,
+                    "minimum_pixels": 1200
+                  }
+                ]
+              }
+            }
+          ],
+          "comparisons": [
+            {
+              "first_step": "favorite_color_prompt",
+              "second_step": "favorite_color_selected",
+              "minimum_changed_fraction": 0.002,
+              "region": [
+                0.25,
+                0.18,
+                0.75,
+                0.82
+              ]
+            },
+            {
+              "first_step": "favorite_color_selected",
+              "second_step": "favorite_color_applied",
+              "minimum_changed_fraction": 0.005,
+              "region": [
+                0.25,
+                0.18,
+                0.75,
+                0.82
+              ]
+            },
+            {
+              "first_step": "collection_screen_initial",
+              "second_step": "settings_modal",
+              "minimum_changed_fraction": 0.005,
+              "region": [
+                0.09375,
+                0.1111,
+                0.88,
+                0.88
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": "in-world",
+      "execution_profiles": [
+        "pr",
+        "release"
+      ],
+      "orchestration": {
+        "mode": "single-client"
+      },
+      "roles": [
+        {
+          "role": "client_a",
+          "steps": [
+            {
+              "id": "favorite_color_prompt_open",
+              "assertion_required": true
+            },
+            {
+              "id": "favorite_color_dismissed",
+              "assertion_required": true
+            },
+            {
+              "id": "claw_machine_opened",
+              "assertion_required": true
+            },
+            {
+              "id": "regular_token_used",
+              "assertion_required": true
+            },
+            {
+              "id": "box_in_hand",
+              "assertion_required": true,
+              "capture": {
+                "title": "Drawn box held in first person",
+                "review_tier": "key",
+                "expectation": "First-person view in daylight holding the One Piece box the regular token just drew: the box model, its collection art and logo, and the figure inside are fully textured and correctly proportioned in the hand; the hotbar shows it selected; no missing (magenta and black) textures, floating parts, or clipping into the camera.",
+                "probes": []
+              }
+            },
+            {
+              "id": "box_placement_position",
+              "assertion_required": true
+            },
+            {
+              "id": "box_placed",
+              "assertion_required": true
+            },
+            {
+              "id": "box_placed_front",
+              "assertion_required": true,
+              "capture": {
+                "title": "Placed box from the front",
+                "review_tier": "key",
+                "expectation": "The drawn One Piece box stands on the grass seen from the front, HUD hidden: the box, its window, collection art and logo, and the figure inside are fully textured, upright, centered in the box, and correctly lit; no missing textures, z-fighting, or parts poking through the box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "box_placed_side",
+              "assertion_required": true,
+              "capture": {
+                "title": "Placed box from the side",
+                "review_tier": "all",
+                "expectation": "The same placed box seen from its side: the side art is textured and the box keeps its proportions; the figure stays inside the box; no missing textures, gaps, or parts poking through.",
+                "probes": []
+              }
+            },
+            {
+              "id": "box_placed_above",
+              "assertion_required": true,
+              "capture": {
+                "title": "Placed box from above",
+                "review_tier": "all",
+                "expectation": "The same placed box seen from above at an angle: top and front faces are textured and aligned, the figure is visible and inside the box, and the box sits flush on the grass; no missing textures or floating parts.",
+                "probes": []
+              }
+            },
+            {
+              "id": "claw_machine_in_hand",
+              "assertion_required": true,
+              "capture": {
+                "title": "Claw machine held in first person",
+                "review_tier": "key",
+                "expectation": "First-person view in daylight holding the claw machine: its cabinet, glass, claw, and base are fully textured and correctly proportioned in the hand, and the hotbar shows it selected; no missing textures or clipping into the camera.",
+                "probes": []
+              }
+            },
+            {
+              "id": "claw_machine_third_person",
+              "assertion_required": true,
+              "capture": {
+                "title": "Claw machine held in third person",
+                "review_tier": "key",
+                "expectation": "Third-person front view of the player holding the claw machine, HUD hidden: the player model and the held claw machine are fully textured, the machine sits in the player's hand at a sensible scale and angle, and nothing is missing, floating, or clipping through the player.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_adventuretime",
+              "assertion_required": true,
+              "capture": {
+                "title": "Adventure Time Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 21 placed boxes in 3 rows of up to nine, HUD hidden, one box per figure of the Adventure Time Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_alienstage",
+              "assertion_required": true,
+              "capture": {
+                "title": "Alien Stage Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 6 placed boxes in 1 row of up to nine, HUD hidden, one box per figure of the Alien Stage Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_deltarune",
+              "assertion_required": true,
+              "capture": {
+                "title": "Deltarune Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 8 placed boxes in 1 row of up to nine, HUD hidden, one box per figure of the Deltarune Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_dispatch",
+              "assertion_required": true,
+              "capture": {
+                "title": "Dispatch Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 10 placed boxes in 2 rows of up to nine, HUD hidden, one box per figure of the Dispatch Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_fnaf",
+              "assertion_required": true,
+              "capture": {
+                "title": "Five Nights at Freddy's Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 7 placed boxes in 1 row of up to nine, HUD hidden, one box per figure of the Five Nights at Freddy's Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_jojos",
+              "assertion_required": true,
+              "capture": {
+                "title": "JoJo's Bizarre Adventure Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 19 placed boxes in 3 rows of up to nine, HUD hidden, one box per figure of the JoJo's Bizarre Adventure Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_jujutsukaisen",
+              "assertion_required": true,
+              "capture": {
+                "title": "Jujutsu Kaisen Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 25 placed boxes in 3 rows of up to nine, HUD hidden, one box per figure of the Jujutsu Kaisen Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_onepiece",
+              "assertion_required": true,
+              "capture": {
+                "title": "One Piece Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 36 placed boxes in 4 rows of up to nine, HUD hidden, one box per figure of the One Piece Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_starwars",
+              "assertion_required": true,
+              "capture": {
+                "title": "Star Wars Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 31 placed boxes in 4 rows of up to nine, HUD hidden, one box per figure of the Star Wars Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_strangerthings",
+              "assertion_required": true,
+              "capture": {
+                "title": "Stranger Things Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 12 placed boxes in 2 rows of up to nine, HUD hidden, one box per figure of the Stranger Things Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            },
+            {
+              "id": "collection_supermario",
+              "assertion_required": true,
+              "capture": {
+                "title": "Super Mario Collection placed in the world",
+                "review_tier": "all",
+                "expectation": "A wall of 31 placed boxes in 4 rows of up to nine, HUD hidden, one box per figure of the Super Mario Collection: every box shows the collection's art and logo and holds a different, fully textured figure standing upright inside it; no empty boxes, missing (magenta and black) textures, duplicated figures, or figures poking through their box.",
+                "probes": []
+              }
+            }
+          ],
+          "comparisons": []
+        }
+      ]
+    }
+  ]
+}

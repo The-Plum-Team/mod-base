@@ -1,0 +1,223 @@
+name: mod-base gate-status
+
+# Reusable status evaluation callee (docs/BUILD-E2E-DESIGN.md, "Stable contexts and exact graphs").
+# The evaluate job of a mod's managed mod-base-gate-status.yml calls it for one pull request,
+# whatever started that run: a gate run that was requested or has completed, an event of the pull
+# request, the hourly reconciliation or a manual request. Its one job starts with the Build
+# controller prologue, bound to the status caller of the canonical branch, and answers one
+# question: which state may each protected gate show on the current head of the pull request?
+# It first asks without a plan (`ci gate-status --settle`): a draft, a generation that has not
+# started or is still running and a newest run that failed are decided by the pull request and
+# the run listings alone, and the job is done. Only when a newest run finished successfully does
+# the job authenticate the pull request, derive the protected plan and evaluate again, now
+# verifying the exact graph of each run and its sealed gate record against that plan; without a
+# plan no gate is ever a success. The job only reads, runs no candidate code, receives no
+# credential but its own read-only token and uploads nothing. It returns the intents document;
+# a job the caller owns publishes it with the App credentials of the mod.
+on:
+  workflow_call:
+    inputs:
+      kit-sha:
+        description: The mod-base commit the caller's guard job bound to this run
+        required: true
+        type: string
+      pr-number:
+        description: The pull request whose protected gates are evaluated
+        required: false
+        type: string
+        default: ""
+    outputs:
+      intents:
+        description: The status intents for the current head of the pull request, one canonical JSON document
+        value: ${{ jobs.evaluate.outputs.intents }}
+
+permissions: {}
+
+env:
+  MB_KIT_TREE_DIGEST: "sha256:d9bdb5d1d0192cb34c4f6c07b0e4962c061d7d6a41b5ee0ddc64afd7827b9c90"
+
+jobs:
+  evaluate:
+    name: Evaluate gate states
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      intents: ${{ steps.settle.outputs.intents || steps.evaluate.outputs.intents }}
+    steps:
+      - name: Validate call inputs before any checkout
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Invalid call input: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail kit-sha
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "event ref"
+          case "$GITHUB_EVENT_NAME" in
+            workflow_run | pull_request_target | schedule | workflow_dispatch) ;;
+            *) fail event ;;
+          esac
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail pr-number
+      - name: Check out the protected mod head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: mod
+          persist-credentials: false
+      - name: Check out the pinned mod-base kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: The-Plum-Team/mod-base
+          ref: ${{ inputs.kit-sha }}
+          path: kit
+          persist-credentials: false
+      - name: Bind the two-part implementation identity
+        shell: bash
+        env:
+          KIT_SHA: ${{ inputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Implementation identity: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$MB_KIT_TREE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "malformed MB_KIT_TREE_DIGEST literal"
+          while IFS= read -r name; do
+            [[ "$name" != GIT_* ]] || fail "GIT_* variables must not reach a privileged kit job"
+          done < <(compgen -e)
+          [[ "$(git -C mod rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail "the mod checkout is not github.sha"
+          mod_status="$(git -C mod status --porcelain --untracked-files=all)" ||
+            fail "cannot read the mod checkout status"
+          [[ -z "$mod_status" ]] || fail "the mod checkout is not clean"
+          [[ "$(git -C kit rev-parse HEAD)" == "$KIT_SHA" ]] || fail "the kit checkout is not the verified pin"
+          kit_status="$(git -C kit status --porcelain --untracked-files=all)" ||
+            fail "cannot read the kit checkout status"
+          [[ -z "$kit_status" ]] || fail "the kit checkout is not clean"
+          canonical_branch="$(jq -er '.canonical_branch | strings' mod/site/mod-base.json)" ||
+            fail "site/mod-base.json names no canonical branch"
+          [[ "$canonical_branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$canonical_branch" != /* &&
+             "$canonical_branch" != *..* && "$canonical_branch" != *//* ]] || fail "malformed canonical branch"
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mod-base-gate-status.yml@refs/heads/$canonical_branch" ]] ||
+            fail "this job is not called by the managed gate status caller of the canonical branch"
+          # >>> kit-digest-v1
+          kit_digest_v1() {
+            local root="$1" directory offending listing
+            for directory in src site requirements; do
+              if [[ ! -d "$root/$directory" || -L "$root/$directory" ]]; then
+                printf 'kit-digest-v1: %s/ is not a real directory\n' "$directory" >&2
+                return 1
+              fi
+            done
+            if ! offending="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements \( -type l \
+                -o \( ! -type f ! -type d \) -o \( -type f \( -perm -100 -o -perm -010 -o -perm -001 \) \) \
+                -o -name __pycache__ -o -name '*[!A-Za-z0-9._-]*' \) -print -quit)" || [[ -n "$offending" ]]; then
+              printf 'kit-digest-v1: refusing %q (symlink, special file, executable, __pycache__ or unsafe name)\n' \
+                "$offending" >&2
+              return 1
+            fi
+            if ! listing="$(CDPATH='' cd -- "$root" && LC_ALL=C find ./src ./site ./requirements -type f -print0 \
+                | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+                    [[ "$path" =~ ^\./[A-Za-z0-9._/-]+$ ]] || exit 1
+                    sha256sum -- "$path" || exit 1
+                  done)" || [[ -z "$listing" ]]; then
+              printf 'kit-digest-v1: cannot list the kit tree\n' >&2
+              return 1
+            fi
+            printf 'sha256:%s\n' "$(printf '%s\n' "$listing" | sha256sum | cut -d ' ' -f 1)"
+          }
+          # <<< kit-digest-v1
+          actual="$(kit_digest_v1 kit)" || fail "the kit checkout cannot be digested"
+          [[ "$actual" == "$MB_KIT_TREE_DIGEST" ]] || fail "the kit tree digest $actual differs from the callee literal"
+          printf 'MOD_BASE_KIT_SHA=%s\n' "$KIT_SHA" >> "$GITHUB_ENV"
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the hash-locked imaging dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          python3 -m pip install --only-binary=:all: --require-hashes --requirement kit/requirements/pillow.txt
+      - name: Settle the gates that need no plan
+        id: settle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci gate-status --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --pr "$PR_NUMBER" --settle --github-output "$GITHUB_OUTPUT"
+      - name: Authenticate the pull request under evaluation
+        id: subject
+        if: steps.settle.outputs.settled == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci subject --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --producer status --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Check out the tested candidate
+        if: steps.settle.outputs.settled == 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.subject.outputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Fence the host and prepare the worker accounts
+        id: prepare
+        if: steps.settle.outputs.settled == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          interpreter="$(command -v python3)"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --roles validator --python "$interpreter" \
+            --java-home "$JAVA_HOME_17_X64" --java-home "$JAVA_HOME_21_X64" --java-home "$JAVA_HOME_25_X64"
+      - name: Derive the protected plan
+        id: plan
+        if: steps.settle.outputs.settled == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci plan --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --pin-candidate candidate --github-output "$GITHUB_OUTPUT"
+      - name: Evaluate the protected gates
+        id: evaluate
+        if: steps.settle.outputs.settled == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci gate-status --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+      - name: Terminate and lock the worker accounts
+        if: ${{ always() && steps.subject.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci worker-finish --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"

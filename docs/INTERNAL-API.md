@@ -320,6 +320,14 @@ Integration-round amendments:
 | MB7 | `mod_base.pages.rotate`, `mod_base.pages.commands_rotate` |
 | MB9 | `mod_base.pin`, `mod_base.pin_commands`, `mod_base.template.tool`, `mod_base.template.commands`, `mod_base.template.lock` |
 | MB10 | `mod_base.conformance.run`, `mod_base.conformance.commands` |
+| MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject`, `mod_base.build_ci.lifecycle`, `mod_base.build_ci.commands_worker` |
+| MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.root_request_operations`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff` |
+| MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
+| MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
+| MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
+| MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse` |
+| MB11 | `mod_base.build_ci.checkout`, `mod_base.build_ci.candidate_kit` |
+| MB11 | `mod_base.build_ci.system_profile`, `mod_base.build_ci.commands_system` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -415,7 +423,7 @@ The per-process invocation context every command builds once and passes to entry
 
 Constants:
 
-* `ENVIRONMENT_NAMES = ('GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_JOB', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REF', 'GIT...`
+* `ENVIRONMENT_NAMES = ('GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_JOB', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REF', 'GIT...`: every environment name the kit consumes: GitHub's run facts, the pinned kit commit, the tokens and, for `ci worker-prepare`, the runner layout (`RUNNER_ENVIRONMENT`, `GITHUB_WORKSPACE`, `RUNNER_TEMP`).
 
 * `def kit_root() -> Path`: The root of the executing kit checkout (the directory holding ``src/``, ``site/``...).
 * `def kit_ref(sha: str) -> dict[str, str]`: Return the ``KitRef`` of the executing kit at ``sha`` (SPEC §3.0).
@@ -474,13 +482,54 @@ Constants:
 
 Owner: MB0 (implemented).
 
-THE single source of the Pages workflow, job and step display names (SPEC §5.9).
+THE single source of the Pages and Build/E2E workflow, job and step display names (SPEC §5.9).
 
 Constants:
 
 * `PAGES_WORKFLOW_NAME = 'Project site'`
 * `PAGES_WORKFLOW_PATH = '.github/workflows/pages.yml'`
 * `PAGES_EVENTS = frozenset({'schedule', 'workflow_dispatch'})`
+* `CI_GUARD_WORKFLOW_PATH = '.github/workflows/mod-base-guard.yml'`
+* `CI_CALLER_WORKFLOWS`: managed caller id (`build`, `packaged`, `status`) -> its path in the mod
+  (`.github/workflows/mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml`);
+  `build` and `packaged` are the two producers.
+* `CI_CALLEE_WORKFLOWS`: Build/E2E callee id (`build`, `select-build`, `packaged-e2e`,
+  `gate-status`) -> its path in the kit repository. Its own registry: never `CALLEE_WORKFLOWS`,
+  which stays the Pages table.
+* `CI_GUARD_CALL`, `CI_BUILD_CALL`, `CI_SELECT_CALL`, `CI_PACKAGED_CALL`, `CI_STATUS_CALL`: bare
+  names of the calling jobs (`Verify pinned mod-base`, `Shared Build`, `Select exact Build`,
+  `Shared Packaged E2E`, `Evaluate protected gates`), the prefix of every job of the workflow each
+  calls.
+* `CI_CALLER_JOBS`: managed caller id -> job key -> bare display name of that caller-owned job
+  (`build`: `guard`, `deferred`, `shared`; `packaged`: `guard`, `deferred`, `select`, `rebuild`,
+  `shared`; `status`: `guard`, `locate`, `evaluate`, `publish`).
+* `CI_CALLS`: producer id -> calling job key -> the workflow it calls: `guard` (the mod's own
+  `CI_GUARD_WORKFLOW_PATH`) or a `CI_CALLEE_WORKFLOWS` id.
+* `CI_STATUS_CALLS`: the calls of the status caller in the same form (`guard`, and `evaluate` ->
+  `gate-status`). Tabled apart because the status caller is no producer: `ci_producer` refuses it.
+* `CI_CALLEE_CALLERS`: Build/E2E callee id -> the managed callers whose jobs may call it, which is
+  what the binding step of its prologue admits: both producers for `build`, `select-build` and
+  `packaged-e2e`, the status caller alone for `gate-status`.
+* `CI_GUARD_JOBS`, `CI_BUILD_JOBS`, `CI_SELECT_JOBS`, `CI_PACKAGED_JOBS`, `CI_STATUS_JOBS`: job key
+  -> `name:` template of the guard workflow and of each kit callee; `{id}` is the target or lane.
+* `CI_CALLEE_JOBS`: called workflow id (`guard` or a `CI_CALLEE_WORKFLOWS` id) -> its job table.
+* `CI_SEAL_STEP`, `CI_UPLOAD_STEP`: exact step names of the sealing step and of the upload that
+  follows it in every target, assemble, lane, aggregate and gate job.
+* `CI_JOB_VERBS`: Build/E2E callee id -> job key -> the `ci` verbs its steps issue after the Build
+  controller prologue, one verb per step and in step order. A callee enters this table and the two
+  below with its workflow file; all four (`build`, `select-build`, `packaged-e2e`, `gate-status`)
+  are tabled. Only the `input` job of a packaged run issues `select-build`; its selection record
+  reaches the later jobs as a job output, which a step without a kit command writes to the file
+  their `fetch-build`, `aggregate` or `seal-gate` is given. The `aggregate` job's sealing step is
+  `ci aggregate` itself. The status job
+  issues `gate-status` twice: first with `--settle`, before any subject, and again with the plan
+  when that call could not settle.
+* `CI_JOB_ARTIFACTS`: Build/E2E callee id -> sealing job key -> callee mode (`full`, `reuse`) -> the
+  kind of the one artifact the job uploads in that mode. Exactly these jobs have a `CI_SEAL_STEP`
+  directly followed by a `CI_UPLOAD_STEP`; `select-build` and `gate-status` have no row and upload
+  nothing.
+* `CI_JOB_PERMISSIONS`: Build/E2E callee id -> job key -> the complete `permissions:` of that job
+  (`actions`, `contents` and `pull-requests`, each `read`), which the calling job must grant.
 * `PAGES_CRON = '43 * * * *'`
 * `OPERATIONS = ('manual', 'deploy', 'family', 'rotate')`
 * `PUBLISH_OPERATIONS = ('recovery', 'manual', 'deploy', 'family')`
@@ -492,17 +541,29 @@ Constants:
   refuses a mod job reusing one of these names).
 * `CALLEE`: callee workflow id -> job key -> its `name:` template (`callee_job_name`).
 * `STEPS`: step key -> its exact display name (`step_name`).
-* `MATRIX_EXPRESSIONS`: placeholder -> the `${{ matrix.* }}` expression the callee YAML uses.
+* `MATRIX_EXPRESSIONS`: placeholder (`key`, `family`, `id`) -> the `${{ matrix.* }}` expression the
+  callee YAML uses.
 
 * `def caller_job_name(key: str) -> str`: Return the bare display name of a caller-owned job, e.g. ``"Deploy GitHub Pages"``.
 * `def callee_job_name(workflow: str, job: str, **fields: str) -> str`: Return the callee's own ``name:`` value with its placeholders filled (no caller prefix).
 * `def api_job_name(workflow: str, job: str, **fields: str) -> str`: Return the name the jobs API reports for a callee job, e.g. ``"Publish / Collect mc1.20.1"``.
 * `def workflow_template_name(workflow: str, job: str) -> str`: Return the callee job ``name:`` exactly as written in its YAML (``${{ matrix.* }}`` form).
 * `def unexpanded_api_job_name(workflow: str, job: str) -> str`: Return the name the jobs API reports, once, for a matrix callee job that its job-level ``if`` skipped before its matrix expanded (added in the integration round; `build` accepts it only for a publication without family legs, and only `completed/skipped`).
+* `def ci_producer(workflow_path: str) -> str`: The producer id (``build`` or ``packaged``) of the managed caller at that path; any other path raises.
+* `def ci_caller_job_name(caller: str, job: str) -> str`: The bare display name of a job the managed caller owns, as the jobs API reports a caller job that has steps.
+* `def ci_callee_job_name(callee: str, job: str, **fields: str) -> str`: A called workflow's own ``name:`` with its placeholders filled (no caller prefix).
+* `def ci_api_job_name(producer: str, call: str, job: str, **fields: str) -> str`: The name the jobs API reports for a job of the workflow the producer's calling job calls: ``"<calling job> / <callee job>"``. `producer` may also be `status`, whose calls are `CI_STATUS_CALLS` (here and in the two functions below that take a calling job).
+* `def ci_skipped_call_job_name(producer: str, call: str) -> str`: The name the jobs API reports, once, for a calling job whose job-level ``if`` skipped the call: the caller's bare job name.
+* `def ci_workflow_template_name(callee: str, job: str) -> str`: A called workflow's job ``name:`` exactly as written in its YAML (``${{ matrix.id }}`` form).
+* `def ci_unexpanded_api_job_name(producer: str, call: str, job: str) -> str`: The name the jobs API reports, once, for a matrix job of a called workflow skipped before its matrix expanded.
 * `def step_name(key: str) -> str`
 * `def find_job(jobs: Sequence[Mapping[str, Any]], name: str, *, run_attempt: int) -> dict[str, Any]`: Return the single job named exactly ``name`` in ``run_attempt``.
 
 ## `mod_base.model.grammar`
+
+* `CI_BATCH_BRANCH_PREFIX`: Fixed batch/ namespace; aliases in batch preserve the released value.
+* `CI_BATCH_NAME`: The name a new batch is given (`^[a-z0-9][a-z0-9._-]{0,62}$`); its branch `batch/<name>` must also satisfy `is_batch_branch`.
+* `def is_batch_branch(value: object) -> bool`: Bounded batch/* Git branch using the existing conservative character grammar, with a nonempty suffix, no dot-started/.lock-ended components and no final dot/slash. This publication-specific check does not change existing BRANCH document grammar.
 
 Owner: MB0 (implemented).
 
@@ -511,6 +572,25 @@ Identifier grammar and the only builders/parsers of kit artifact names (SPEC §3
 Constants:
 
 * `MAX_FAMILY_LENGTH = 32`
+* `CI_UNIT_ID`: bounded opaque Build target/runtime lane identifier; no slash or command syntax.
+* `CI_ENVELOPE_NAME`: reserved outer Build envelope filename.
+* `CI_RUNTIME_ENVELOPE_NAME`: reserved outer runtime envelope filename.
+* `CI_RUNTIME_INPUT_FORMAT`: fixed local context-hash domain for retained plan/owning Build/runtime lane inputs; not another document kind or native scenario catalog.
+* `CI_ARCHIVE_NAME`: fixed local encoded export ZIP leaf, not a nested GitHub artifact format.
+* `CI_GATE_NAME`: fixed single root filename of a tested gate-record ZIP.
+* `CI_REUSE_NAME`: fixed single root filename of a reuse-reference ZIP (`mb-ci-reuse--R--aN`).
+* `CI_RESULTS_NAME`: fixed single root filename of a results-index ZIP (`mb-ci-results--R--aN`).
+* `CI_SELECTION_NAME`: the state record of the Build a packaged job selected (`mod-base.ci.selection`), which `ci select-build` writes and `ci aggregate` reads.
+* `CI_VALIDATION_NAME`: reserved verifier output record filename.
+* `CI_EXECUTION_NAME`: fixed private local runner-to-root execution record filename.
+* `CI_ROOT_REQUEST_NAME`: fixed file name of the one private request inside a root operation's request directory.
+* `CI_ROOT_OPERATIONS`: the closed, ordered set of operations the root bootstrap dispatches (`tools/ci_privileged_bootstrap.py` mirrors it without importing the kit). A request never selects code outside this set.
+* `CI_PLAN_NAME`: fixed existing-kind plan filename for protected verifier input.
+* `CI_ARTIFACT_PREFIXES`: separate attempt-specific CI name prefixes, excluded from the Pages parser.
+* `class CIArtifactName`
+  * fields: `kind: str, name: str, run_id: int, run_attempt: int, unit_id: str | None = None`
+* `def ci_artifact_name(kind: str, run_id: int, run_attempt: int, unit_id: str | None = None) -> str`
+* `def parse_ci_artifact_name(name: object) -> CIArtifactName | None`
 * `MAX_LANE_ID_LENGTH = 200`
 * `MAX_EXTENSION_NAME_LENGTH = 80`
 * `ARTIFACT_PREFIX = 'mb-'`
@@ -524,7 +604,7 @@ Compiled full-match patterns (use `is_match`/`require`; the grammar is SCHEMAS.m
 * `KEY`, `FAMILY`, `LANE_ID`, `SHA1`, `SHA256`, `DIGEST`, `BRANCH`, `REPOSITORY`, `VERSION`, `IDENT`
 * `ARTIFACT_NODE`, `MINECRAFT`, `LOADER`, `SCENARIO`, `ROLE`, `STEP`, `REVIEW_TIER`, `PROFILE`
 * `VARIANT_ID`, `NATIVE_KIND`, `CONTRACT_NAME`, `EXTENSION_NAME`, `EVENT`, `WORKFLOW_PATH`
-* `RFC3339Z`, `POSITIVE_DECIMAL`, `RUN_URL`, `WORKFLOW_REF`
+* `RFC3339Z`, `ACTIONS_TIMESTAMP`, `POSITIVE_DECIMAL`, `RUN_URL`, `WORKFLOW_REF`
 * `ARTIFACT_PREFIXES`: artifact kind -> name prefix (`mb-handoff`, `mb-anchor`, ...), the kinds
   of `ArtifactName.kind` other than `promotion` and `pages`.
 
@@ -540,7 +620,10 @@ Compiled full-match patterns (use `is_match`/`require`; the grammar is SCHEMAS.m
 * `def require_positive_int(value: object, label: str, *, maximum: int = 9223372036854775807) -> int`: Return a positive ``int`` (never ``bool``) no larger than ``maximum``.
 * `def is_bundle_path(value: object) -> bool`: True for a canonical bundle-relative POSIX path (no absolute, ``..``, ``.``, ``\`` or NUL).
 * `def is_repo_path(value: object) -> bool`: True for a repository-relative path: a bundle path none of whose components is ``.git`` (compared case-insensitively, for case-insensitive filesystems).
+* `def is_export_path(value: object) -> bool`: True for a canonical path inside a sealed CI export: the length and depth bounds of a bundle path (300 characters, 16 components of at most 128), components of ASCII letters, digits, ``._-+`` and single inner spaces, none starting or ending with a space or a dot. Pages bundle paths stay narrower; names that differ only in case are for the inventory holding them to refuse.
+* `def is_seed_path(value: object) -> bool`: True for a structurally safe relative path inside a Gradle seed: no NUL, no empty, ``.`` or ``..`` component, at most ``limits.MAX_CI_SEED_PATH_DEPTH`` of them. No name grammar: links, special files, counts and sizes are for the tree walk to refuse.
 * `def parse_timestamp(value: object, label: str = 'timestamp') -> datetime`: Parse a GitHub ``YYYY-MM-DDTHH:MM:SSZ`` timestamp into an aware UTC datetime.
+* `def normalize_timestamp(value: object, label: str = 'timestamp') -> str`: Return an Actions API time (``...Z``, fractional seconds or a numeric offset) as whole-second UTC ``YYYY-MM-DDTHH:MM:SSZ``, the one form Build/E2E records store; two results compare as text in time order.
 * `class WorkflowRef`: A parsed ``GITHUB_WORKFLOW_REF`` (``owner/repo/.github/workflows/f.yml@refs/heads/b``).
   * fields: `repository: str, path: str, branch: str`
 * `def parse_workflow_ref(value: object) -> WorkflowRef`: Parse a branch-scoped workflow ref; tags, pull refs and malformed values are rejected.
@@ -627,6 +710,81 @@ Adapter host, config and retention:
 * `MAX_ICON_BYTES`, `MAX_ICON_DIMENSION`, `MAX_PROJECT_LINKS`, `MAX_LABEL_ENTRIES`
 * `MAX_COPY_PARAGRAPHS`, `MAX_TEMPLATE_PATHS`
 * `RETENTION_DAYS`, `MAX_ANCHOR_RETENTION_DAYS`, `MAX_BASELINE_RETENTION_DAYS`
+* `CI_RETENTION_DAYS`: retention days of every `mb-ci-*` artifact kind (target 1; build, runtime and results 7; tested and reuse 90); Pages rotation never sees these names.
+
+Protected Build/runtime (independent ceilings, no change to Pages budgets):
+
+* `MAX_CI_PLAN_BYTES`, `MAX_CI_TARGETS`, `MAX_CI_BUILD_RUNS`, `MAX_CI_LANES`, `MAX_CI_OUTPUTS_PER_TARGET`
+* `MAX_CI_PLAN_SOURCE_BYTES`: 4 MiB for each candidate file a plan is derived from (the release inventory, the scenario contract, an extra plan input).
+* `MAX_CI_PLAN_INPUTS`: 8 extra candidate files a protected Build config may name under `plan_inputs` and a plan may bind.
+* `MAX_CI_IDENTITY_BYTES`: 16 KiB for the private `identity.json` state record.
+* `MAX_CI_GATE_REQUESTS`: the 96-request budget of one `ci seal-gate` (a Build gate costs 15, the packaged gate of a pull request 20 and the gate of a reuse run, which decides the reuse again, 47, whatever the number of targets and lanes).
+* `MAX_CI_COMMIT_PULLS`: 100, the pull requests GitHub associates with one pushed commit: the one page post-merge reuse reads to find the merge.
+* `MAX_CI_REUSE_ADMIT_REQUESTS`: 96, the request budget of `ci reuse-admit` (38 for an admitted reuse, 1 for a direct push, 11 when the merged tree differs, whatever the number of targets and lanes).
+* `CI_ARTIFACT_UPLOAD_SKEW_SECONDS`: Two seconds of tolerance for artifact creation versus upload-step bounds only; other chronology stays exact.
+* `CI_TEST_MERGE_WAIT_SECONDS`: Fifteen-second deadline for GitHub to compute a pending test merge.
+* `CI_TEST_MERGE_POLL_SECONDS`: Five-second interval between pending test-merge observations.
+* `MAX_CI_TEST_MERGE_POLLS`: Four observations, independently bounding the wait and request count.
+* `MAX_CI_SUBJECT_REQUESTS`: the 16-request budget of one `ci subject` (a pull request costs 4, a protected subject 5).
+* `MAX_CI_DERIVED_SUBJECT_REQUESTS`: the 4-request budget of one `ci subject --candidate`, the subject of a job that holds the candidate checkout: one request (the pull request, or the head of the default branch for a protected subject) and the retried attempts of that request.
+* `MAX_CI_STATUS_CONTEXT_CHARS`: 100 characters for one status context of the protected Build config.
+* `CI_BUILD_POLL_SECONDS`, `MAX_CI_BUILD_POLLS`: Protected 60-second polling cadence and independent 91-observation ceiling within the existing 5400-second admission budget.
+* `MAX_CI_WORKER_RECORD_BYTES`: 256 KiB for the private `worker.json` state record of `ci worker-prepare`.
+* `MAX_CI_PLAN_REQUESTS`: the 24-request budget of one `ci plan` without a candidate checkout (the tested tree and one blob per candidate file: 3 without extra plan inputs, at most 11; with a checkout the command spends none).
+* `CI_GIT_READ_TIMEOUT_SECONDS`, `MAX_CI_GIT_ANSWER_BYTES`: 60 seconds for one read of the object store of a job's checkout, and 4 KiB for what such a read answers besides an object (one object id, or one tree entry with its path).
+* `MAX_CI_GIT_COMMIT_BYTES`: 1 MiB for one commit object read whole from a checkout: its header lines, a signature and its message.
+* `MAX_CI_PLAN_INPUT_FILES`, `MAX_CI_PLAN_INPUT_ENTRIES`, `MAX_CI_PLAN_INPUT_BYTES`: The validator's input tree `validation-input/`: at most the plan, the inventory, the scenario contract and `MAX_CI_PLAN_INPUTS` extra plan inputs (11 files, 12 entries with the directory, the plan cap plus ten times the candidate file cap). A check of the tree requires exactly the files of its state, not merely at most these.
+* `MAX_CI_SELECT_BUILD_REQUESTS`: 155, the request budget of `ci select-build`: a pull request whose Build is complete costs 17 and each earlier poll of its wait one more (91 polls at most); a protected subject costs 15, or 17 plus one for each poll that found its Build run still in progress (at most 90). The rest is for retries and for the further pages of a run that lists more than 100 jobs.
+* `MAX_CI_FETCH_BUILD_REQUESTS`: 8, the request budget of `ci fetch-build` (one REST redirect and one credential-free storage GET, with room for retries).
+* `MAX_CI_GENERATION_REQUESTS`: 440, a regression budget enforced by `tests/test_ci_generation_budget.py` for the two enrolled native profiles, including one final status evaluation and no waiting polls; not runtime plan admission.
+* `MAX_CI_GATE_STATUS_REQUESTS`: 96, the request budget of `ci gate-status` (45 with both runs complete).
+* `MAX_CI_PRIVATE_RECORD_ENTRIES`: Exact entry budget of a fixed single-leaf private record directory. MB1 entry caps count the root, so the directory plus its one leaf; an empty stage stays 1.
+* `MAX_CI_POLICY_TESTS`, `MAX_CI_POLICY_WORKERS`: Policy discovery/count and worker ceilings.
+* `MAX_CI_ENVELOPE_BYTES`, `MAX_CI_RECORD_BYTES`, `MAX_CI_ARTIFACTS_PER_GATE`
+* `MAX_CI_CONFIG_BYTES`, `MAX_CI_ACTIVATION_BYTES`, `MAX_CI_ADAPTER_FILES`, `MAX_CI_WORKER_TIMEOUT_SECONDS`
+* `MAX_CI_ADAPTER_FILE_BYTES`, `MAX_CI_ADAPTER_TREE_BYTES`
+* `MAX_CI_ENV_VALUE_BYTES`, `MAX_CI_ENV_BYTES`, `MAX_CI_CONTROL_OUTPUT_BYTES`, `MAX_CI_TOOL_PATH_BYTES`
+* `MAX_CI_TOOL_ROOTS`, `MAX_CI_TOOL_SYMLINK_HOPS`, `MAX_CI_TOOL_TREE_DEPTH`
+* `MAX_CI_KIT_INSTALL_FILES`, `MAX_CI_KIT_INSTALL_BYTES`, `MAX_CI_KIT_INSTALL_ENTRIES`: Bounds of one kit tree (the checkout the root bootstrap hashes and the overlay staged for a candidate); they equal the kit-digest-v1 bounds of `mod_base.pin`.
+* `MAX_CI_FILE_ID`
+* `MAX_CI_ROOT_REQUEST_BYTES`: Cap of one private root request: twice the source-listing cap (a tested-tree inventory as JSON rows), the plan, Build envelope, runtime envelope and record caps and 2 MiB of framing. No native or artifact cap is enlarged.
+* `MIN_CI_WORKER_UID`, `CI_TERMINATION_GRACE_SECONDS`, `CI_TERMINATION_POLL_SECONDS`
+* `MAX_CI_UNIX_ID`
+* `MAX_CI_COMMAND_ARGUMENTS`, `MAX_CI_COMMAND_BYTES`, `CI_PROCESS_READ_BYTES`
+* `CI_ROOT_OPERATION_TIMEOUT_SECONDS`, `MAX_CI_ROOT_DIAGNOSTIC_BYTES`: The 1800-second bound of one root operation process (the bootstrap arms the same alarm on itself) and the 4 KiB of its stderr the launching runner keeps for its own single error line. No worker or hook timeout changes.
+* `CI_HOST_FENCE_TIMEOUT_SECONDS`, `MAX_CI_HOST_FENCE_REPORT_BYTES`: The 600-second bound of each of the host fence's two walks, inside the root operation's own bound, and the 64 KiB the fence keeps of each output stream of a walk: the listing of the world-writable entries that remain and the diagnostic of a command that failed. A listing that does not fit is never a clean result.
+* `CI_SYSTEM_PROFILE_TIMEOUT_SECONDS`, `MAX_CI_SYSTEM_PROFILE_LOG_BYTES`: The 600 whole seconds root's `timeout` gives each of the two package-manager commands of `ci system-profile`, and the 64 KiB of the end of its output the command keeps to show when it fails.
+* `CI_SYSTEM_PROFILE_LOCK_WAIT_SECONDS`, `CI_SYSTEM_PROFILE_FETCH_RETRIES`: The 120 seconds apt waits for a lock another apt or dpkg holds (`DPkg::Lock::Timeout`) and the 3 retries of a failed download (`Acquire::Retries`) in those commands.
+* `MAX_CI_HOST_MOUNTINFO_BYTES`: The 64 KiB bound of the kernel mount table read before the host fence closes unused SDK trees. Incomplete data, invalid UTF-8, unsupported records or path escapes, and ambiguous or changed containing mounts are refusals.
+* `MAX_CI_SOURCE_LIST_BYTES`, `MAX_CI_SOURCE_FILES`, `MAX_CI_SOURCE_ENTRIES`
+* `MAX_CI_SOURCE_FILE_BYTES`, `MAX_CI_SOURCE_TREE_BYTES`, `MAX_CI_SOURCE_LINK_BYTES`
+* `MAX_CI_SEED_PATH_DEPTH`: components of one Gradle seed path, which has no name grammar and so no `MAX_BUNDLE_PATH_DEPTH`
+* `MAX_CI_GIT_METADATA_FILES`, `MAX_CI_GIT_METADATA_ENTRIES`, `MAX_CI_GIT_METADATA_FILE_BYTES`
+* `MAX_CI_GIT_METADATA_TREE_BYTES`, `MAX_CI_GIT_REF_BYTES`, `MAX_CI_GIT_REF_LIST_BYTES`
+* `MAX_CI_OBLIGATIONS_PER_LANE`, `CI_BUILD_WAIT_SECONDS`, `MAX_CI_BATCH_MEMBERS`
+* `MAX_CI_BATCH_DOCUMENT_BYTES`: 64 KiB: GitHub's bound of a pull request body, in which a batch manifest travels. The whole body, the marker line inside it and the decoded document share it.
+* `MAX_CI_BATCH_PUSH_RECEIPT_BYTES`: 4 KiB closed single-ref Git porcelain observation cap; separate from worker logs and manifest transport.
+* `MAX_CI_BATCH_TITLE_CHARS`: 256, GitHub's bound of a pull request title; a member's title is the subject of its squash commit.
+* `MAX_CI_BATCH_ALLOWED_PATHS`: 4096 entries of the allowed-path list a caller hands to the batch constructor.
+* `MAX_CI_BATCH_REPORTED_PATHS`: 20 paths named by one batch refusal (a conflict, a rename that was followed).
+* `CI_BATCH_GIT_TIMEOUT_SECONDS`, `CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS`: 120 seconds for one Git plumbing call of the batch store, 600 for one fetch or push.
+* `MAX_CI_BATCH_GIT_OUTPUT_BYTES`: The output of one Git call of the batch store; the source-listing bound.
+* `MAX_CI_ASSEMBLE_REQUESTS`: 816, the request budget of `ci assemble`: it sends 15 requests and 2 per target, the two of a download (49 for 17 targets); the rest is for retries and further listing pages.
+* `MAX_CI_AGGREGATE_REQUESTS`: 816, the request budget of `ci aggregate`: it sends 13 requests and 2 per lane, the two of a download (81 for 34 lanes); the rest is for retries and further listing pages.
+* `MAX_CI_BATCH_PREPARE_REQUESTS`: 216, the request budget of `ci batch-prepare`: it sends 10 requests and 3 per member (160 for 50 members); the rest is for retries.
+* `MAX_CI_BATCH_SETTLE_REQUESTS`: 348, the request budget of `ci batch-settle`: it sends 3 requests, the 28 of `transport.download_merged_gate_pair` for both original gates and at most 5 per member (281 for 50 members); the rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
+* `MAX_CI_BUNDLE_COMPRESSED_BYTES`: 512 MiB archive cap of one `mb-ci-*` artifact of any kind and profile (`tests/test_ci_limits.py` pins every Build/E2E bound with the native bound it preserves).
+* `MAX_CI_EXPORT_FILES`, `MAX_CI_EXPORT_ENTRIES`, `MAX_CI_EXPORT_FILE_BYTES`, `MAX_CI_EXPORT_TREE_BYTES`
+* `MAX_CI_TARGET_DOWNLOAD_BYTES`, `MAX_CI_TARGET_INPUT_ENTRIES`: Additional aggregate compressed-download and physical wrapped-input bounds; do not widen native/runtime fan-in or original logical export limits.
+* `MAX_CI_RUNTIME_ENTRIES`: complete runtime logical tree closure, derived from existing file/path bounds.
+* `MAX_CI_RUNTIME_AGGREGATE_FILES`, `MAX_CI_RUNTIME_AGGREGATE_BYTES`, `MAX_CI_RUNTIME_ENVELOPE_BYTES`: original Block Pops aggregate and closed envelope bounds.
+* `MAX_CI_RUNTIME_FILES`, `MAX_CI_RUNTIME_BYTES`, `MAX_CI_REPORT_BYTES`, `MAX_CI_LOG_BYTES`
+* `MAX_CI_EXECUTION_LOG_CHARS`, `MAX_CI_EXECUTION_BYTES`: bounded canonical base64 log and whole local execution-handoff JSON; independent of artifact/receipt transport limits.
+* `MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE`: closed original Build input report byte caps by profile;
+  Block Pops 8 MiB, Quick Skin 4 MiB; independent of validator-output `MAX_CI_REPORT_BYTES`.
+* `MAX_CI_SBOM_BYTES`: 16 MiB for one `sbom` output of a Build export (Quick Skin's own SBOM reader cap; an SBOM is optional and Block Pops stages none).
+* `MAX_CI_PNG_BYTES`, `MAX_CI_JAR_BYTES`
+* `MAX_CI_STATUS_DESCRIPTION_CHARS`: 140 characters for the description of one status intent, GitHub's own bound for a commit status.
 
 ## `mod_base.model.canonical`
 
@@ -833,11 +991,32 @@ Owner: MB1.
 Bounded regular-file walks and descriptor-relative child reads (MB1).
 
 * `class TreeError(MbError)`: A directory tree is not a bounded tree of regular files (exit 2).
-* `def regular_files(root: Path, *, max_files: int, max_total_bytes: int, max_file_bytes: int, suffixes: Collection[str] | None = None) -> dict[str, int]`: Return ``{relative POSIX path: size}`` for every file under ``root`` (sorted by path).
+* `class PathRule`: The entry paths one tree may hold, relative to its root (never a link or a special file).
+  * fields: `name: str, is_safe: Callable[[object], bool], aliases: bool = False`
+* `BUNDLE_PATHS`, `REPO_PATHS`, `EXPORT_PATHS`, `SEED_PATHS`: the four rules a walk can be given through `rule`. `BUNDLE_PATHS` (`grammar.is_bundle_path`; Pages bundles and every other kit-named tree) is the default of the nonempty-file functions and `REPO_PATHS` (`grammar.is_repo_path`, no entry differing from another only in case) the default of the `regular_data` functions. `EXPORT_PATHS` (`grammar.is_export_path`, no case alias) is the rule of sealed CI exports, which keep the mod's own file names; `SEED_PATHS` (`grammar.is_seed_path`, case aliases allowed) checks structure only, for Gradle seeds.
+* `def regular_files(root: Path, *, max_files: int, max_total_bytes: int, max_file_bytes: int, suffixes: Collection[str] | None = None, rule: PathRule = BUNDLE_PATHS) -> dict[str, int]`: Return ``{relative POSIX path: size}`` for every file under ``root`` (sorted by path). Every entry path must be one ``rule`` admits.
 * `def reject_symlinks(root: Path) -> None`: Raise :class:`TreeError` if any entry at or under ``root`` is a symlink or special file.
 * `def read_child_file(root: Path, relative: str, *, max_bytes: int) -> bytes`: Read ``root/relative`` walking every component through ``O_NOFOLLOW`` directory descriptors (no symlink anywhere), stat-stable, 1..``max_bytes`` bytes.
+* `def stream_child_file(root: Path, relative: str, *, max_bytes: int, consume: Callable[[bytes], None], rule: PathRule = BUNDLE_PATHS) -> int`: Stream bounded chunks from a stat-stable single-link regular child through no-follow directory descriptors to a protected consumer, returning verified size. No whole-file allocation; caller owns root ancestry and multi-file inventory rechecks. ``relative`` must be a path ``rule`` admits (``EXPORT_PATHS`` for a sealed export's own files).
 * `def sha256_file(path: Path, *, max_bytes: int) -> str`: SHA-256 hex of one stable regular file of at most ``max_bytes`` (streamed, ``O_NOFOLLOW``).
-* `def file_records(root: Path, *, exclude: Collection[str] = (), max_files: int, max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]`: Return the exact inventory ``[{path, sha256, size}]`` of ``root`` sorted by path, leaving out the relative paths in ``exclude`` (for example ``manifest.json``).
+* `def file_records(root: Path, *, exclude: Collection[str] = (), max_files: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]`: Return the exact inventory ``[{path, sha256, size}]`` of ``root`` sorted by path, leaving out the relative paths in ``exclude`` (for example ``manifest.json``). Every entry and excluded path must be one ``rule`` admits.
+* `def privatize_source_copy(root: Path, *, tracked_paths: tuple[str, ...], source_owner_uid: int, owner_uid: int, owner_gid: int, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, max_link_bytes: int) -> list[dict[str, Any]]`: Protected Linux Root handoff of a fresh independent tracked-source copy. Require protected-owned private root and complete closed declared file/parent closure; reject opaque Git metadata and undeclared/special/hard-linked entries before mutation. Admit exact source bytes/Git modes, remove directory/file ACLs, assign private 0700 directories/executable files and 0600 nonexecutables; preserve literal link bytes and change symlink ownership without following targets. Recheck bounded metadata/ACLs, source records and held/named identity, transfer root last. Caller authenticates copy origin/accounts/ancestors and excluded writers; never apply to candidate originals or treat targets as privileged authority.
+* `def source_records(root: Path, *, tracked_paths: Collection[str], generated_roots: Collection[str], max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, max_link_bytes: int) -> list[dict[str, Any]]`: Inspect protected declared source leaves without following links; preserve empty files, Git modes, literal symlink bytes, SHA-256 and Git blob identity. Reject undeclared paths except protected generated roots; root .git remains opaque pending protected replacement.
+* `def copy_regular_files(root: Path, stage_fd: int, *, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]`: Count entries before reading content, then stream exact single-link regular-file bytes into an empty caller-owned private stage, rechecking the source inventory under ``rule``. Creates independent files and omits empty directories; caller must exclude source writers and protect output ancestors.
+* `def copy_selected_regular_files(root: Path, stage_fd: int, *, paths: tuple[str, ...], max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]`: Append exact bounded sorted unique canonical selected paths (paths ``rule`` admits) to a caller-owned private stage with no-follow exclusive creation and independent streamed files. Inspect and recheck the entire bounded source including unselected files; no replacement or linking. Caller protects both trees, authenticates/bounds the complete destination union and leaves partial failures unpublished.
+* `def regular_data_records(root: Path, *, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = REPO_PATHS) -> list[dict[str, Any]]`: Return sorted path/sha256/size records for regular data, including zero-byte files. Bound the entire directory closure before hashing; empty directories count toward the entry cap. Reject links, special files and every path ``rule`` refuses: by default case aliases, Git metadata and unsafe repository paths; with ``SEED_PATHS`` only structurally unsafe ones. Does not approve native artifacts or executable code.
+* `def selected_regular_data_records(root: Path, *, paths: tuple[str, ...], max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]`: Hash only bounded sorted unique declared regular data leaves, including zero-byte files. Bound the entire no-follow source closure before selected content reads; selected paths must be canonical repository paths, files single-link and stable with exact total/file caps. Unselected contents are not read. Caller admits selection/provenance, ancestry and excluded writers.
+* `def copy_selected_regular_data_files(root: Path, stage_fd: int, *, paths: tuple[str, ...], max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]`: Stream declared regular data leaves into an empty caller-owned private stage, preserving zero-byte files and independently created inodes; never read unselected content. Recheck selected source inventories around copying. Full no-follow source closure is bounded; caller owns protected selection, ancestry and excluded writers. Existing selected export-copy API retains its old nonempty/whole-inventory behavior.
+* `def copy_regular_data_files(root: Path, stage_fd: int, *, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = REPO_PATHS) -> list[dict[str, Any]]`: Stream regular data into an empty caller-owned private stage; preserve empty files, omit empty directories, and recheck source inventory under ``rule``. Caller excludes writers and independently admits ancestry and any required directory skeleton. Existing export copy APIs retain their nonempty-file contract.
+* `def validate_tree_entries(root: Path, *, max_entries: int) -> None`: Bound the complete no-follow regular-file/directory closure including the root before reading content; file size, hard-link and hash admission remain separate.
+* `def grant_tree_read_access(root: Path, *, source_owner_uid: int, owner_uid: int, reader_gid: int, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]`: Protected Linux-root-only permission handoff of a fresh independent private tree. Require one protected original owner, remove inherited POSIX ACLs, bind nonprivileged owner/read group, verify bytes and expose the 0750 root last. Failure restores private root traversal. Every entry path must be one ``rule`` admits. Caller authenticates identities/ancestors and excludes writers; this does not reclaim a candidate original or authorize upload.
+* `def grant_regular_data_read_access(root: Path, *, source_owner_uid: int, owner_uid: int, reader_gid: int, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = REPO_PATHS) -> list[dict[str, Any]]`: Additive bounded regular-data permission handoff preserving empty files (0750 directories, 0640 files), through the same protected Linux Root/owner/ancestor admission and ACL/root-last transfer. Independently compare all data records before/after, with supplied file/entry/byte caps; the one ``rule`` admits every entry and bounds the inventory. Preserve existing nonempty/source contracts. Private independent copy and excluded writers remain prerequisites; never apply to worker originals; no candidate reclamation/native validity/upload authority is established.
+* `def grant_source_read_access(root: Path, *, tracked_paths: tuple[str, ...], source_owner_uid: int, owner_uid: int, reader_gid: int, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int) -> list[dict[str, Any]]`: Apply the same protected-root permission transfer to an exact regular-source inventory, allowing empty files and repository paths, excluding Git metadata and links. Strip executable modes and recheck exact path/size/SHA-256/Git-blob records before exposing root traversal. Protected ownership/ancestors and excluded writers remain caller obligations.
+* `def authenticate_tree_read_access(root: Path, *, owner_uid: int, reader_gid: int, max_entries: int) -> None`: Linux read-only metadata recheck of exact 0750 directories/0640 single-link regular files, expected owner/group and absent access/default ACLs, through a bounded no-follow walk. Byte and ancestor authentication remain separate caller requirements.
+* `def authenticate_tree_private_access(root: Path, *, owner_uid: int, owner_gid: int, max_entries: int) -> None`: Linux no-follow metadata recheck of exact 0700 directories/0600 single-link regular files, owner/group and absent ACLs. Root ownership is allowed for a fresh protected copy; caller separately authenticates role/copy origin, ancestors and bytes.
+* `def privatize_tree_copy(root: Path, *, source_owner_uid: int, owner_uid: int, owner_gid: int, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = BUNDLE_PATHS) -> list[dict[str, Any]]`: Protected Linux-root-only transfer of an independent private copy to a non-root private owner. Require one protected original owner, remove ACLs, assign 0700 dirs/0600 files, verify unchanged content and transfer root last. Every entry path must be one ``rule`` admits and never Git metadata. Caller authenticates provenance/identities/ancestors/excluded writers; never reclaim a worker original through this helper.
+* `def privatize_regular_data_copy(root: Path, *, source_owner_uid: int, owner_uid: int, owner_gid: int, max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, rule: PathRule = REPO_PATHS) -> list[dict[str, Any]]`: Additive private independent-copy transfer preserving empty regular data through the existing protected Linux Root/owner/ancestor/ACL/root-last 0700/0600 mechanics. Recheck complete bounded data before/after; the one ``rule`` admits every entry and bounds the inventory. Original copy provenance and excluded writers remain mandatory. Never change a candidate original or infer native/execution/upload authority from this transfer. Existing nonempty/source contracts remain unchanged.
+* `def copy_source_files(root: Path, stage_fd: int, *, tracked_paths: Collection[str], max_files: int, max_entries: int, max_total_bytes: int, max_file_bytes: int, max_link_bytes: int) -> list[dict[str, Any]]`: Copy clean declared source into an empty private descriptor-bound stage; stream bounded bytes, preserve tracked link bytes and executable modes, omit Git metadata, and recheck source identity before returning.
 
 ## `mod_base.io.bounded_zip`
 
@@ -848,7 +1027,9 @@ Bounded ZIP extraction (MB1).
 * `class ZipRejected(MbError)`: An archive violates the extraction policy (exit 2).
 * `class ExtractionLimits`: Bounds for one archive. ``suffixes`` (when set) restricts every file name's extension.
   * fields: `max_entries: int, max_total_bytes: int, max_entry_bytes: int, max_ratio: int = 200, suffixes: frozenset[str] | None = None`
-* `def extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits) -> list[str]`: Validate and extract ``archive`` into the new directory ``destination``.
+* `def extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits) -> list[str]`: Validate and extract ``archive`` into the new directory ``destination``. Every entry name is a canonical bundle path (`tree.BUNDLE_PATHS`): the Pages artifacts, whose file names the kit chooses.
+* `def extract_build(archive: Path | bytes, destination: Path) -> list[str]`: Extract with fixed CI export bounds plus the envelope, validation record and at most one bounded report per target through the same hostile ZIP validator and exclusive publication. Entry names are export paths (`tree.EXPORT_PATHS`, the mod's own staged file names); names that differ only in case are refused as on every route. Existing Pages extract/archive_limit entry ceilings remain unchanged.
+* `def extract_runtime(archive: Path | bytes, destination: Path, *, scope: str) -> list[str]`: Extract closed lane/complete runtime data under fixed native payload bounds plus the envelope, validation record and one bounded report per lane, preserving empty logs only on this route. Entry names are export paths (`tree.EXPORT_PATHS`). Shared complete hostile ZIP checks and exclusive publication remain; exact canonical envelope/bytes/native role admission is separately mandatory. Existing Pages/Build nonempty-file contracts and limits are unchanged.
 
 Frozen for other units (integration round):
 
@@ -892,6 +1073,7 @@ Constants:
   * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`: GET every page (``per_page=100``) until a short page (a full page reaching ``total_count`` is confirmed by the next) and return the concatenated ``field`` arrays (or the top-level arrays when ``field`` is None). More than ``max_items`` rows or a non-object row raises :class:`ApiError`; a snapshot whose ``total_count`` disagrees with the rows (or changes between pages), or whose rows repeat an ``id``, is read again from page 1 and raises :class:`InconsistentListing` only after ``limits.LISTING_READ_ATTEMPTS`` such reads.
   * `read_listing(self, read: Callable[[], _T]) -> _T`: ``read()`` (one complete listing through this client) re-run by :func:`read_consistently` with this client's ``sleep`` until it raises no :class:`InconsistentListing`.
   * `post_json(self, path: str, payload: Mapping[str, Any]) -> Any`: POST canonical JSON; requires ``writable``. Returns decoded JSON or None for 204.
+  * `patch_json(self, path: str, payload: Mapping[str, Any]) -> Any`: PATCH canonical JSON; requires ``writable``. Returns the decoded JSON of the 200 answer; any other status raises.
   * `delete(self, path: str) -> None`: DELETE ``path``; requires ``writable``. 204 is success; anything else raises.
   * `download(self, path: str, *, max_bytes: int) -> bytes`: GET a binary endpoint (artifact ZIP) that answers with one redirect: the redirect is followed exactly once to an https URL with the ``Authorization`` header stripped; the body is read to at most ``max_bytes``.
   * `rate_limit_snapshot(self) -> dict[str, int]`: ``GET /rate_limit`` projected to numeric ``core`` counters: ``limit``, ``used``, ``remaining``, ``reset`` (the ``budget`` command; never tokens or headers).
@@ -910,6 +1092,7 @@ Workflow-run reads and exact run validation (MB1).
 * `def validate_run(run: Mapping[str, Any], *, repository: str, workflow_path: str, events: Collection[str], head_branch: str | None = None, head_sha: str | None = None, workflow_id: int | None = None, require_success: bool = True, display_title: str | None = None) -> None`: Require exact provenance: ``path``, ``event`` in ``events``, ``head_repository.full_name``, and (when given) ``head_branch``, ``head_sha``, ``workflow_id``, ``display_title``; with ``require_success`` also ``status == "completed"`` and ``conclusion == "success"``. Raises :class:`mod_base.errors.MbError` on any difference.
 * `def run_order(run: Mapping[str, Any]) -> tuple[datetime, int, int]`: ``(created_at, id, run_attempt)`` after strict shape validation (a total dispatch order).
 * `def referenced_kit_sha(run: Mapping[str, Any], *, kit_repository: str = 'The-Plum-Team/mod-base') -> str`: The single kit SHA a run resolved: every ``referenced_workflows[]`` entry whose ``path`` starts with ``<kit_repository>/.github/workflows/`` must end in ``@<sha>`` equal to its ``sha``, and exactly one distinct 40-hex SHA must result (SPEC §1.2 step 3).
+* `def referenced_workflows(run: Mapping[str, Any]) -> list[tuple[str, str]]`: Every ``referenced_workflows[]`` entry as ``(workflow, sha)`` in listing order: ``workflow`` is ``<owner>/<repo>/.github/workflows/<file>`` and ``sha`` the 40-hex commit the run resolved it at. An entry not pinned to its own SHA, or malformed, raises. GitHub lists a called workflow whether or not its calling job ran, in no fixed order.
 * `def workflow_runs(api: GitHubApi, workflow_path: str, *, branch: str | None = None, head_sha: str | None = None, event: str | None = None, status: str | None = None, max_items: int = 1000) -> list[dict[str, Any]]`: List runs of ``workflow_path`` (by file name) newest first with the given filters; the response ``total_count`` must equal the listed rows when it is at most ``max_items``. Beyond ``max_items`` runs, or beyond the ``limits.MAX_FILTERED_RUNS_LISTED`` newest runs GitHub lists for a filtered search, the read must list exactly that many rows; otherwise only a short page ends it. A snapshot whose ``total_count`` changes between pages or disagrees with its rows, or that repeats a run, is read again through ``api.read_listing`` (``limits.LISTING_READ_ATTEMPTS`` reads at most).
 * `def wait_for_completion(api: GitHubApi, run_id: int, *, attempts: int = 30, interval: float = 2.0, sleep: Callable[[float], None] = sleep) -> dict[str, Any]`: Poll a run until ``status == "completed"`` (at most ``attempts`` reads); raise otherwise.
 * `def run_record(run: Mapping[str, Any], claim: Mapping[str, Any], *, require_controller_head: bool = True) -> dict[str, Any]`: Build the ``RunRecord`` (SPEC §3.0) for an authenticated API ``run`` and its ``RunClaim``: the claim's run id/attempt/workflow path must equal the run's; ``head_sha``, ``event``, ``created_at``, ``conclusion`` (``success``) and ``display_title`` come from the run. The result validates as ``documents.run_record``.
@@ -964,6 +1147,7 @@ Repository contents, Git objects and reachability reads (MB1).
 * `def commit_tree(api: GitHubApi, commit: str) -> str`: The tree SHA of ``commit`` (``/git/commits/{sha}``).
 * `def file_at(api: GitHubApi, path: str, ref: str, *, max_bytes: int) -> bytes`: Bytes of ``path`` at commit ``ref`` (contents API, base64 decoded strictly, size and Git blob SHA re-verified).
 * `def tree(api: GitHubApi, sha: str, *, recursive: bool = True) -> list[dict[str, Any]]`: Entries of a Git tree; ``truncated`` must be false.
+* `def exact_tree(api: GitHubApi, sha: str, *, recursive: bool = True) -> list[dict[str, Any]]`: Require the exact requested tree SHA with all existing bounded complete-tree entry validation; never use the legacy commit-alias fallback.
 * `def blob(api: GitHubApi, oid: str, *, max_bytes: int) -> bytes`: A Git blob by id, base64-decoded, with its Git object id recomputed and compared.
 * `def compare(api: GitHubApi, base: str, head: str, *, repository: str | None = None) -> dict[str, Any]`: ``GET /repos/{repository or api.repository}/compare/{base}...{head}`` projected to ``{status, ahead_by, behind_by}`` with validated types.
 
@@ -985,6 +1169,7 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
   * `add_tree(self, sha: str, entries: Sequence[Mapping[str, Any]], *, truncated: bool = False, repository: str | None = None) -> None`: Seed ``/git/trees/{sha}`` (``contents.tree``, ``tools/verify_action_tree.py``): ``entries`` are the API's ``{path, mode, type, sha, size?}`` rows; ``truncated`` seeds a truncated listing, which consumers must refuse.
   * `add_blob(self, data: bytes, *, oid: str | None = None, repository: str | None = None) -> str`: Seed ``/git/blobs/{oid}`` (``contents.blob``) and return its oid: the Git blob id of ``data`` unless ``oid`` forces another one (a corrupt object the reader must reject).
   * `add_ref(self, ref: str, sha: str, *, annotated_tag_sha: str | None = None, repository: str | None = None) -> None`: Seed ``/git/ref/{ref}`` (``ref`` like ``tags/v1.0.0`` or ``heads/main``). With ``annotated_tag_sha`` the ref points at that tag object, which peels to ``sha`` through ``/git/tags/{annotated_tag_sha}`` (``pin.verify``'s tag peel).
+  * `add_pull(self, record: Mapping[str, Any]) -> None`: Seed (or replace) ``/repos/{own}/pulls/{number}``: one pull request as the API reports it, kept verbatim. ``POST /pulls`` creates the next number from a seeded head ref and base branch, ``PATCH /pulls/{number}`` changes ``state``, ``title`` or ``body``, ``POST /issues/{number}/comments`` answers for a seeded pull request and ``DELETE /git/refs/{ref}`` removes a seeded ref (with its branch); each needs a writable fake and is recorded in ``mutations``.
   * `add_response(self, path: str, payload: Any, *, params: Mapping[str, str | int] | None = None) -> None`: Seed the exact JSON body of one GET ``path`` (with exactly ``params``) that no typed seeder covers; a request for an unseeded path answers 404 like the API.
   * `skew_listing(self, path: str, *, responses: int, offset: int = 1) -> None`: Serve the next ``responses`` responses of the listing ``path`` (any parameters) with a ``total_count`` ``offset`` rows off the rows it lists, as GitHub's eventually consistent listing does while a sibling job uploads.
   * `during_listing(self, path: str, action: Callable[[], None], *, after_pages: int = 1) -> None`: Run ``action`` once, right after the listing ``path`` served its ``after_pages``-th response from now: an upload or deletion landing between two pages of one read.
@@ -997,6 +1182,7 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
   * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`
   * `read_listing(self, read: Callable[[], _T]) -> _T`
   * `post_json(self, path: str, payload: Mapping[str, Any]) -> Any`
+  * `patch_json(self, path: str, payload: Mapping[str, Any]) -> Any`
   * `delete(self, path: str) -> None`
   * `download(self, path: str, *, max_bytes: int) -> bytes`
   * `rate_limit_snapshot(self) -> dict[str, int]`
@@ -1492,6 +1678,7 @@ Constants:
 
 * `KIT_TOKEN = 'The-Plum-Team/mod-base'`
 * `DIGESTED_DIRS = ('src', 'site', 'requirements')`
+* `KIT_PATH_NAME`: Frozen ASCII kit-digest-v1 path regex; privileged copy discovery uses the same path spelling contract.
 * `STAMP_NAME = 'MOD_BASE_KIT.json'`
 * `OVERLAY_PATH = 'out/mod-base-kit'`
 
@@ -1502,6 +1689,7 @@ Constants:
 * `def verify(repo: Path, *, network: bool, api: GitHubApi | None = None) -> Pin`: Pin consistency; with ``network`` also ``compare/<pin>...main`` is ``ahead|identical`` with ``behind_by == 0`` and ``git/ref/tags/<version>`` peels to the pin (``api`` required).
 * `def kit_tree_digest(root: Path) -> str`: ``sha256:<hex>`` kit-digest-v1 of ``root`` (the kit checkout root).
 * `def kit_path(repo: Path, environ: Mapping[str, str]) -> Path`: Resolve the kit root for ``repo`` in the bootstrap order (overlay stamp, env, user cache, anonymous fetch), verifying each candidate; raise :class:`mod_base.errors.Unavailable`.
+* `def stamp_document(pin: Pin, digest: str) -> dict[str, Any]`: Construct the existing canonical kit-stamp data fields for an independently admitted pin/digest; construction alone grants no checkout, release or execution authority.
 * `def read_stamp(directory: Path) -> dict[str, Any]`: Read and validate ``MOD_BASE_KIT.json`` (``mod-base.kit-stamp`` v1) in ``directory``.
 
 Frozen for other units (integration round):
@@ -1537,9 +1725,40 @@ Owner: MB9.
 
 ``template check|sync|init`` (MB9, SPEC §8.2).
 
+Every workflow the kit renders with the mod's pin is a `RenderedCaller` of `RENDERED_CALLERS`,
+which is code: manifest data can neither enrol a caller, remap one nor choose its renderer, and a
+template the pin parser would read (a workflow, or an `action.yml` below `.github/actions`) may
+hold `{{PIN}}`/`{{VERSION}}` only when it is enrolled. The Pages caller is a manifest entry,
+rendered `pages-extension` and always managed. The four Build/E2E callers of
+`build_ci.activation.CALLERS` are enrolled in code alone (never in the manifest), rendered `pinned`
+(the whole file, no extension region) and managed only in the activation modes that list them.
+`check`, `sync` and `init` read the activation state first: a mod with neither an activation
+manifest nor a Build configuration is handled exactly as before those callers existed; with a
+manifest, a caller its mode manages is checked and written like a managed file and any other must
+not exist (`forbidden`); `sync` never deletes one. To add or replace a caller template, put it at
+`template/managed/<path>` and enrol its path in `build_ci.activation.CALLERS` and
+`MANAGED_CALLERS`; a new way of rendering is a new `RENDERERS` entry with its three functions.
+A `pinned` caller template may also hold `{{BRANCH}}`, filled in with `canonical_branch` of the
+mod's `site/mod-base.json` and validated with `grammar.BRANCH`: GitHub reads the branch filter of a
+`push` trigger as a literal. The placeholders are a closed set per renderer; a caller template
+holding any other `{{NAME}}` token is refused by every verb, and a caller whose branch differs
+from the configuration is drift like any other byte.
+
 Constants:
 
 * `MANIFEST_PATH = 'template/manifest.json'`
+* `PAGES_PLACEHOLDERS = ('{{PIN}}', '{{VERSION}}')`: every placeholder the `pages-extension` renderer fills in.
+* `PINNED_PLACEHOLDERS = ('{{PIN}}', '{{VERSION}}', '{{BRANCH}}')`: every placeholder the `pinned` renderer fills in; `{{BRANCH}}` is optional in a template.
+* `RENDERERS = ('pages-extension', 'pinned')`: every renderer a `RenderedCaller` may name; one of another name is an error in every verb, never a byte-identical managed file.
+* `RENDERED_CALLERS`: the closed registry, a tuple of `RenderedCaller`: the Pages caller, then one record per `build_ci.activation.CALLERS` path with `modes = build_ci.activation.managing_modes(path)`.
+
+* `class RenderedCaller`: One rendered workflow: its path in the mod, its template source below ``template/``, its renderer and the activation modes that manage it (``None``: a manifest entry, managed whatever the activation).
+  * fields: `path: str, source: str, renderer: str, modes: frozenset[str] | None`
+* `def load_template_activation(repo: Path) -> dict[str, Any] | None`: The mod's validated activation manifest, or ``None`` for a mod with neither the manifest nor a Build configuration. Read bounded without following symlinks and bound to the repository and profile of ``scripts/ci/mod-base-build.json``; a Build configuration without a manifest is an error, so a deleted manifest is never taken for ``disabled``.
+* `def activation_bytes(repo: Path) -> bytes | None`: The bytes of the manifest ``load_template_activation`` accepts (``None`` where it returns ``None``).
+* `def expected_callers(kit_root: Path, pin: Pin, activation: dict[str, Any] | None, branch: str | None = None) -> dict[str, bytes | None]`: What every Build/E2E caller path must hold for a validated manifest, a pin and the mod's canonical branch (``canonical_branch``): the template of ``kit_root`` rendered with the pin and the branch where the mode manages the caller, ``None`` where the file must not exist. ``kit_root`` must be the kit the pin names. A managed caller whose template names the branch cannot be rendered without one, and a ``branch`` that is no branch name is refused.
+* `def canonical_branch(repo: Path) -> str | None`: The branch the callers of the mod at ``repo`` are rendered for: ``canonical_branch`` of its validated ``site/mod-base.json``, or ``None`` for a repository without that file.
+* `def caller_files(repo: Path) -> dict[str, bytes]`: The bytes of every Build/E2E caller path that exists in ``repo``, each a bounded regular file reached without symlinks.
 
 * `class Drift`: One difference: ``kind`` is ``missing``, ``changed``, ``fragment``, ``agents``, ``links``, ``forbidden`` or ``extension``; ``detail`` is a bounded unified diff or message.
   * fields: `path: str, kind: str, detail: str`
@@ -1563,12 +1782,19 @@ Frozen for other units (integration round):
 
 Owner: MB9 (register() implemented by MB0; handlers dispatch to the entry points).
 
-``template check|sync|init`` (MB9). Flags are frozen by SPEC §2.2; exit 2 on drift.
+``template check|sync|init|activation|transition`` (MB9). Flags are frozen by SPEC §2.2; exit 2 on
+drift. `template activation --repo DIR` and `template transition --repo DIR --base DIR` are
+additive (v1.1.0): the first validates the mod's activation manifest and prints `state`,
+`repository`, `profile`, `rollback_from`, `managed` and `next` lines; the second admits the change
+from the protected base checkout to the candidate (`build_ci.transition`) and prints `transition`,
+`pin` and `managed` lines. Both exit 2 on a refusal.
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run_check(args: argparse.Namespace) -> int`
 * `def run_sync(args: argparse.Namespace) -> int`
 * `def run_init(args: argparse.Namespace) -> int`
+* `def run_activation(args: argparse.Namespace) -> int`
+* `def run_transition(args: argparse.Namespace) -> int`
 
 ## `mod_base.template.lock`
 
@@ -1608,3 +1834,1077 @@ Owner: MB10 (register() implemented by MB0; handlers dispatch to the entry point
 
 * `def register(subparsers: argparse._SubParsersAction) -> None`
 * `def run(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.protocol`
+
+Owner: MB11. The Build adapter API version and pure identity and plan validation; see
+BUILD-PROTOCOL.md ("Identity" and "Document kinds"). The hook contract itself is
+`mod_base.build_ci.adapter`.
+
+* `BUILD_ADAPTER_API = 1`
+* `BUILD_GRAPH_VERSION = 1`
+* `PACKAGED_GRAPH_VERSION = 1`
+* `PROFILES = ('quick-skin', 'block-pops')`
+* `SYSTEM_PROFILES`: The kit system profiles a protected Build config may name, profile name -> its sorted tuple of Ubuntu 24.04 package names, installed by `system_profile.install_system_profile`. `xvfb-mesa` is the union of both mods' native installs (`.github/actions/run-packaged-e2e/action.yml`): `libasound2t64`, `libegl-mesa0`, `libegl1`, `libgl1-mesa-dri`, `libglx-mesa0`, `libopenal1`, `libx11-6`, `libxcursor1`, `libxext6`, `libxi6`, `libxinerama1`, `libxrandr2`, `libxrender1`, `libxtst6`, `libxxf86vm1`, `mesa-utils`, `xauth`, `xvfb`. `config.validate_build_config` admits exactly its keys; it lives here so the pure schema does not import the execution module.
+* `PRODUCERS = ('build', 'packaged')`: the two producers; the managed caller of each is `workflow.CI_CALLER_WORKFLOWS[producer]`.
+* `OUTPUT_ROLES`: production, harness, SBOM, native reports and retained build logs.
+* `LANE_OUTPUT_ROLES = ('production', 'harness')`: the two JARs every lane has exactly once; never target-scoped.
+* `SINGLE_OUTPUT_ROLES = ('production', 'harness', 'sbom')`: roles one lane, or one target as a whole, holds at most once.
+* `SHA1`, `SHA256`, `REPO`, `BRANCH`, `ID`, `WORKFLOW`: the field validators of an identity and a plan (commit, digest, repository, branch, unit id, workflow path).
+* `def repo_path(value: Any, path: str) -> str`: a canonical repository-relative path (`grammar.is_repo_path`).
+* `def export_path(value: Any, path: str) -> str`: a canonical export path (`grammar.is_export_path`); every planned output is one.
+* `def validate_subject(value: Any, path: str = '$') -> dict[str, Any]`: An identity before planning: every field of `validate_identity` except `policy_sha256`, `inventory_blob`, `inventory_sha256`, `scenario_sha256` and `runtime_selection_sha256`, with the same cross-field rules.
+* `def validate_identity(value: Any, path: str = '$') -> dict[str, Any]`
+* `def subject_of(identity: dict[str, Any]) -> dict[str, Any]`: The subject part of a complete identity.
+* `def plan_sha256(document: dict[str, Any]) -> str`
+* `def check_output_paths(paths: list[str], path: str) -> None`
+* `def check_output_scope(output: dict[str, Any], path: str) -> None`: An output (`{lane_id, role, ...}`, of a plan or of a Build envelope) is one lane's or, with a null `lane_id`, its target's as a whole; a production or harness JAR is always one lane's.
+* `def validate_plan_units(value: Any, path: str = '$') -> dict[str, Any]`: Exactly `{targets, lanes}` in the plan's shape with every plan rule that needs no identity: what a protected adapter derives. Every lane has exactly one production and one harness output; an SBOM is optional (at most one per lane and one per target as a whole); every target has a native report; an output's `lane_id` is a lane of its own target or null for the target as a whole; paths are unique across all targets.
+* `def validate_plan(document: Any, *, path: str = '$') -> dict[str, Any]`
+
+## `mod_base.build_ci.graph`
+
+Owner: MB11. Exact job graphs of the managed Build and packaged-E2E callers: the exact multiset of
+the jobs the caller owns and the jobs of every workflow it calls, each with one conclusion, as a
+function of the producer, one closed mode and the plan. Never chosen to fit observed jobs. Literal
+API listings of every mode are in `tests/fixtures/ci_graphs`; how GitHub names a skipped call and a
+skipped unexpanded matrix, and which workflows a run lists as referenced, is confirmed only by a
+hosted canary.
+
+* `BUILD_MODES = ('full', 'deferred', 'reuse')`
+* `PACKAGED_MODES = ('pull-request', 'deferred', 'selected', 'rebuilt', 'reuse')`
+* `class BuildGraphV1`: a run of the managed Build caller in one mode of `BUILD_MODES`. `jobs` is
+  the exact sorted `[{name, conclusion}]`; `sealed_jobs` the jobs that seal and upload (gates
+  included); `sha256` the digest a producer record carries as `graph_sha256`; `called` every kit
+  callee the caller references -> whether its calling job runs in this mode; `prerequisites` the
+  successful jobs that must finish before a gate job validates.
+  * fields: `mode: str = 'full'`
+  * `jobs(self, plan: dict[str, Any]) -> list[dict[str, str]]`
+  * `sealed_jobs(self, plan: dict[str, Any]) -> list[str]`
+  * `sha256(self, plan: dict[str, Any]) -> str`
+  * `called(self) -> dict[str, bool]`
+  * `prerequisites(self, plan: dict[str, Any], gate_job: str) -> list[str]`
+* `class PackagedGraphV1`: the same for the managed packaged-E2E caller and `PACKAGED_MODES`.
+  * fields: `mode: str = 'pull-request'`
+  * `jobs(self, plan: dict[str, Any]) -> list[dict[str, str]]`
+  * `sealed_jobs(self, plan: dict[str, Any]) -> list[str]`
+  * `sha256(self, plan: dict[str, Any]) -> str`
+  * `called(self) -> dict[str, bool]`
+  * `prerequisites(self, plan: dict[str, Any], gate_job: str) -> list[str]`
+* `def run_graph(producer: str, mode: str) -> BuildGraphV1 | PackagedGraphV1`: The graph contract of ``producer`` (``build`` or ``packaged``) in ``mode``.
+* `def job_name(producer: str, callee: str, job: str, unit_id: str | None = None) -> str`: The API name of a job of a kit workflow in a run of that producer; ``unit_id`` is the target or lane of a matrix job.
+* `def upload_job_name(producer: str, kind: str, unit_id: str | None) -> str`: The API name of the job that uploads that artifact kind in a run of that producer.
+* `def gate_mode(producer: str, gate: str, plan: dict[str, Any], digest: str) -> str`: The mode a gate's producer record was sealed in: the one admissible mode of ``records.GATE_MODES`` whose exact graph for the plan has that digest. Settled before any job is read.
+* `def authenticate_referenced_workflows(references: Sequence[tuple[str, str]], *, identity: dict[str, Any], producer: str, mode: str) -> None`: Bind a producer run to its controller commit and kit pin: the guard workflow at ``controller_sha``, every kit callee whose calling job runs in that mode at the pinned kit SHA, optionally the caller's skipped callees at the same SHA, no other entry and no repeat.
+* `def sealed_upload(job: dict[str, Any]) -> tuple[str, str]`: The upload window of a sealing job as whole-second UTC text: one successful seal step finished before one successful upload step started, both inside the successful job.
+* `def require_graph(jobs: list[dict[str, Any]], *, plan: dict[str, Any], producer: str, mode: str, run_attempt: int) -> str`: Require the jobs of a completed attempt to be exactly that graph, every sealing job sealed before it uploaded; return the graph digest.
+* `def require_partial_graph(jobs: list[dict[str, Any]], *, plan: dict[str, Any], producer: str, mode: str, run_attempt: int, finished: list[str]) -> None`: Admit the jobs of a still-running attempt for an in-run reader: no unenrolled or repeated job, and every job named in ``finished`` completed as the graph expects. Never proof that the remaining jobs succeed.
+* `def authenticate_graph(api: GitHubApi, *, plan: dict[str, Any], producer: str, mode: str, run_id: int, run_attempt: int) -> str`: Read one attempt's jobs and require the exact completed graph; a graph check only, not run, source or artifact admission.
+* `def authenticate_gate_timeline(api: GitHubApi, *, document: dict[str, Any], descriptor: dict[str, Any], plan: dict[str, Any]) -> str`: Bind a tested record to the exact graph of its mode and to real execution times: every prerequisite job finished before the gate's seal step started, the gate's upload window is the descriptor's, and every source artifact's window is its producing job's actual upload. A Build consumed from another run needs that run's own exact full graph, finished first. Run/source/pin authority, artifact metadata and bytes remain separate.
+
+## `mod_base.build_ci.authenticate`
+
+Owner: MB11. Inert live and historical source authentication; never publishes a status. Every
+function is one observation: a caller that acts on it observes again immediately before its effect
+(`mod_base.build_ci.reads.Watch`). Passing a `mod_base.build_ci.reads.CommandReads` as `api` reads
+each Git object once per command.
+
+* `class PrGeneration`: Frozen live readiness/source observation, not execution evidence.
+  * fields: `repository: str, pr_number: int, base_branch: str, base_sha: str, controller_tree: str, head_branch: str, head_sha: str, draft: bool, merge_sha: str | None, mergeable: bool | None`
+* `class MergedPr`: Frozen historical PR/tested/final Git observations, not policy, gate, reuse or settlement authority.
+  * fields: `repository: str, pr_number: int, identity_sha256: str, merged_sha: str, merged_tree: str, merged_parents: tuple[str, ...], merged_at: str, controller_sha: str`
+* `def run_head(identity: dict[str, Any]) -> tuple[str, str, str]`: ``(head_sha, head_branch, head_repository)`` GitHub records on every run and artifact a managed caller produces for the identity: a pull request's head commit, branch and source repository, or the default-branch commit a protected push or dispatch runs from, which must also be its tested commit.
+* `def authenticate_merged_pr_identity(api: GitHubApi, identity: dict[str, Any], *, controller_sha: str, merged_sha: str) -> MergedPr`: Bind an independently admitted original PR identity and current controller/final SHA to a closed merged same-repository PR, the original synthetic merge with exact ordered parents, an equal complete final tree and original/current protected history, in one pass. The identity is copied on entry. Live admission remains separate; full historical gates, native policy/pin, source seals and writer/owner approval remain required.
+* `def read_pr_generation(api: GitHubApi, *, pr_number: int, controller_sha: str) -> PrGeneration`: One read of the repository, its default head and an open same-repository PR against the executing controller. Draft and unavailable merge states do not authorize workers; ready merge/policy/plan admission remains independent.
+* `def read_pr_on_base(api: GitHubApi, *, pr_number: int, base_branch: str, controller_sha: str, controller_tree: str) -> PrGeneration`: The same observation of the pull request alone, in one request, against a base the caller holds from sources of its own: the protected base branch, the executing controller commit and its tree (returned as given). The pull request is checked as in `read_pr_generation`; that the branch is the default branch and the controller still its head is not observed. Malformed arguments are refused before the request.
+* `def authenticate_pr_identity(api: GitHubApi, identity: dict[str, Any]) -> None`: Check the ready PR generation and protected default/base, then the exact ordered merge parents and tree of the tested commit, in one pass. Does not establish native policy, approval, bytes or status authority.
+* `def authenticate_source_identity(api: GitHubApi, identity: dict[str, Any]) -> None`: Dispatch to ready-PR authentication or authenticate an exact non-PR Git commit/tree/ordered parents in protected default history against the live controller, in one pass. Request/run/profile authorization and full recovery policy remain caller obligations.
+
+## `mod_base.build_ci.reads`
+
+Owner: MB11. How one Build/E2E command reads GitHub: immutable objects once, mutable state at the
+start of the command and again immediately before its effect.
+
+* `class CommandReads`: One command's reads through its one budgeted client. It offers the client's
+  read surface, so it is passed wherever a client is read from. A commit, tree or blob named by SHA
+  and a comparison of two SHAs are fetched once; so is the job list of an attempt that `run` saw
+  completed. Everything else reaches the client every time.
+  * `@classmethod of(cls, api: GitHubApi | CommandReads) -> CommandReads`
+  * `repository` (property) -> `str`
+  * `request_count` (property) -> `int`
+  * `get_json(self, path: str, *, params: Mapping[str, str | int] | None = None) -> Any`
+  * `paginate(self, path: str, *, field: str | None, params: Mapping[str, str | int] | None = None, max_items: int) -> list[dict[str, Any]]`
+  * `read_listing(self, read: Callable[[], _T]) -> _T`
+  * `download(self, path: str, *, max_bytes: int) -> bytes`
+  * `run(self, run_id: int) -> dict[str, Any]`
+  * `attempt_jobs(self, run_id: int, run_attempt: int) -> list[dict[str, Any]]`
+* `class Watch`: The mutable state one effect depends on. `read` performs a read the first time its
+  key is asked for and answers from that observation afterwards; `recheck`, called immediately
+  before the effect, performs every read again and requires the same answers.
+  * `read(self, key: tuple[Any, ...], reader: Callable[[], _T]) -> _T`
+  * `recheck(self) -> None`
+
+## `mod_base.build_ci.records`
+
+Owner: MB11. Strict evidence records with exact identity/attempt/coverage checks. Structural
+validity alone is never status authority. Full admission supplies a protected plan and independently
+authenticates the API, graph, native witnesses and actual frozen bytes.
+
+* `GATE_MODES`: gate -> producer (the managed caller whose run sealed it) -> the run modes that end
+  in that gate's receipt: `build` from a `full` Build run or a `rebuilt` packaged run; `packaged`
+  from a `pull-request`, `selected` or `rebuilt` packaged run. Deferred and reuse runs seal none.
+* `def validate_descriptor(value: Any, path: str = '$') -> dict[str, Any]`: A producer is a run of a managed caller, recorded under the pull request's head commit or, for a protected push or dispatch, the commit it both runs from and tests. Runtime, results and packaged-gate artifacts come from the packaged caller; a pull request's Build artifacts from its Build caller. Times are whole-second UTC.
+* `def validate_build_envelope(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: Files are export paths with `lane_id` null for a file of the target as a whole (`protocol.check_output_scope`); every output role has its own size bound (JAR, `MAX_CI_SBOM_BYTES`, the profile's native-report bound, `MAX_CI_LOG_BYTES`). With a plan the files equal the exact planned outputs of the target or of the whole Build, scope included.
+* `def bind_build_envelope(envelope: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Strictly bind pre-upload producer identity, full plan/profile and artifact scope/target to a selected descriptor retaining actual API window and immutable artifact metadata. Pure structural binding; API authentication and native validity remain independently required.
+* `def validate_source_selection(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
+* `def bind_source_selection(document: dict[str, Any], *, plan: dict[str, Any], run_id: int, run_attempt: int, workflow_path: str) -> dict[str, Any]`: Bind a selection record to the plan and to the run attempt that consumes it: only the attempt of the packaged caller that requested it (so a rerun of failed jobs alone never inherits an earlier attempt's Build); a rebuilt Build serves the run attempt that built it, every other Build comes from a separate run of the Build caller. Structural; the consumer authenticates the Build through the API again.
+* `def build_source_selection(*, plan: dict[str, Any], request: dict[str, Any], build: dict[str, Any], envelope: dict[str, Any]) -> dict[str, Any]`: The `mod-base.ci.selection` record of the exact Build one packaged run attempt consumes: the plan's binding, the request (`run_id`, `run_attempt`, `nonce`, `workflow_path`, `workflow_ref`), the authenticated descriptor of the complete bundle and the canonical SHA-256 of the envelope read from its verified bytes; bound with `bind_source_selection` before it is returned.
+* `def validate_gate_receipt(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
+* `def bind_gate_receipt(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Bind a pre-upload full gate receipt to its selected tested-record identity/unit and actual upload window; all source uploads precede record upload and source IDs cannot collide with the record. Full API/native execution proof remains separate.
+* `def gate_receipt(*, plan: dict[str, Any], producer: dict[str, Any], gate: str, mode: str, artifacts: list[dict[str, Any]], owning_build: dict[str, Any] | None, native_receipts: list[dict[str, Any]]) -> dict[str, Any]`: The receipt the gate job of `producer` (an attempt's identity, without an upload window) seals for `plan`: a new `mod-base.ci.gate` document, valid for the plan and independent of its arguments. Writing one proves nothing; the gate authenticates what it names first (`gate.seal_gate`).
+* `def validate_results_index(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.results` v1, the complete packaged results of one attempt as an index of its lanes: the sealing attempt (always the packaged caller), the owning Build (the one the run rebuilt, or one of a separate Build run) with its envelope's SHA-256, and for every lane its runtime artifact of the same attempt, the SHA-256 of the runtime envelope and of the validation record inside it and of the lane's verification report. With a plan the lanes are exactly the planned ones with their native contracts, in plan order.
+* `def results_index(*, plan: dict[str, Any], producer: dict[str, Any], owning_build: dict[str, Any], build_envelope_sha256: str, lanes: list[dict[str, Any]]) -> dict[str, Any]`: The results index the aggregating job of `producer` seals for `plan`: a new `mod-base.ci.results` document, valid for the plan and independent of its arguments. `lanes` holds `descriptor`, `envelope_sha256`, `validation_sha256` and `report_sha256` of every planned lane in plan order; ids and native contracts are the plan's. The job authenticates each lane first (`gate.seal_results`).
+* `def bind_results_index(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Bind a results index to the results artifact it was read from: same sealing attempt, the artifact kind `results`, no id shared with a lane or the owning Build, and every one of them uploaded before the index.
+* `def original_plan(plan: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]`: `plan` under another subject's `identity`: the same profile, plan inputs, targets and lanes, bound by a hash of its own. The gates of a merged pull request were sealed for the work a push plans exactly when the plan hash of their records is the hash of the push's plan under the pull request's identity.
+* `def validate_reuse_reference(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.reuse` v1: the covered merge (a non-PR subject on the default branch), the reuse run that sealed the reference (always a push) and `source`, the original pull-request identity, plan hash and profile with the descriptors of both original tested records. Covered and original agree in repository, protected caller, kit pin, complete tested tree, policy digest, inventory, scenario contract, runtime selection, graph version and profile; a seal is always a direct tested record, never another reference; the two seals come from different runs. With the covered `plan` the original plan hash must be that of `original_plan`. Structure only.
+* `def reuse_reference(*, plan: dict[str, Any], producer: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]`: The reference the gate job of `producer` (a reuse run's identity, without an upload window) seals for the covered `plan`: a new `mod-base.ci.reuse` document, valid for the plan and independent of its arguments. `source` is what `reuse.admit_post_merge_reuse` authenticated. It renews no retention.
+* `def bind_reuse_reference(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]`: Bind a reuse reference to the reuse artifact it was read from: the same run sealed both, no id is shared with an original seal and both seals were uploaded before the reference. That the original runs had finished before the reuse gate started, their graphs, the merged tree and every artifact's availability are proven by whoever reads the reference (`mod_base.build_ci.reuse`).
+
+## `mod_base.build_ci.config`
+
+* `BUILD_CONFIG_PATH`: Fixed scripts/ci/mod-base-build.json; controller retains the same public alias.
+
+Owner: MB11. Closed data at scripts/ci/mod-base-build.json. Protected policy must authenticate
+every source hash/path before import and confirm native timeout parity before activation.
+
+* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `plan_inputs` (0..`MAX_CI_PLAN_INPUTS` extra candidate files `{name, path}` sorted by name, each name an `adapter.plan_input_name`), `bundle.path`, the two `contexts` and the timeouts, and the optional `runtime: {system_profile}` (a key of `protocol.SYSTEM_PROFILES`; absent means none); no named path may alias or contain another.
+* `def system_profile(document: dict[str, Any]) -> str | None`: The system profile a validated config names (`runtime.system_profile`), or `None` when it has no `runtime`.
+* `class BuildConfigError(MbError)`: The protected Build configuration or a source it lists cannot be trusted (reason `ci-config`).
+* `class AdapterFile`: One source of the protected adapter import closure, as read from the protected checkout.
+  * fields: `path: str, sha256: str, data: bytes`
+* `CONTROL_PATHS`: The mod's own control files beside the config and the adapter closure: `activation.ACTIVATION_PATH` and the four `activation.CALLERS`, in that order.
+* `class ControlFile`: One control file of the protected checkout: its path and the SHA-256 of its bytes, or `None` for a file the checkout does not have.
+  * fields: `path: str, sha256: str | None`
+* `class BuildConfig`: A validated protected Build config with the exact bytes of everything it lists; `files` is the closure in the config's order and `control` the state of every path of `CONTROL_PATHS` in the same checkout.
+  * fields: `data: dict[str, Any], raw: bytes, sha256: str, files: tuple[AdapterFile, ...], control: tuple[ControlFile, ...]`
+* `def load_build_config(repo_root: Path, *, repository: str) -> BuildConfig`: Read the config of `repository` from the protected mod checkout and every source it lists, without crossing a symlink; each source must have its configured SHA-256, within the per-file and whole-closure byte caps. Each control file is recorded as it is: absent, or a regular file of at most `MAX_WORKFLOW_FILE_BYTES` reached without crossing a symlink. The result is the input of `identity.policy_sha256` and of the validator's adapter copy.
+
+## `mod_base.build_ci.adapter`
+
+Owner: MB11. The Build adapter contract (`BUILD_ADAPTER_API = 1`, docs/BUILD-ADAPTER.md): the closed
+hooks, their argv and extra environment, the fixed file names and the strict parsers of what a hook
+writes. It imports no worker module; `tests/test_ci_adapter.py` pins its directories to theirs.
+
+* `class AdapterError(MbError)`: A hook was requested outside the closed adapter contract (reason `ci-adapter`).
+* `class Hook`: One hook of the contract: the worker account that runs it (`validator` hooks are the protected ones), the plan unit a run is for (`target`, `lane` or `None`) and the key of the config's `timeouts`.
+  * fields: `name: str, role: str, unit: str | None, timeout: str`
+* `HOOKS`: hook name -> `Hook`, all eight: `derive_plan`, `policy`, `build_target`, `verify_target`, `verify_build`, `derive_runtime`, `run_lane`, `verify_runtime`.
+* `PROTECTED_HOOKS = ('derive_plan', 'verify_target', 'verify_build', 'derive_runtime', 'verify_runtime')`
+* `CANDIDATE_HOOKS = ('policy', 'build_target', 'run_lane')`
+* `UNIT_ENVIRONMENT = {'target': 'MB_TARGET_ID', 'lane': 'MB_LANE_ID'}`
+* `RUNTIME_VALUES = ('E2E_ROW_JSON', 'E2E_SCENARIOS')`
+* `INVENTORY_INPUT = 'inventory'`
+* `SCENARIO_INPUT = 'scenario-contract'`
+* `PLAN_INPUT = 'ci-plan.json'`
+* `RESERVED_INPUT_NAMES = frozenset({'inventory', 'scenario-contract', 'ci-plan.json'})`: the names of `validation-input/` the kit gives out itself.
+* `PLAN_OUTPUT = 'plan.json'`
+* `RUNTIME_OUTPUT = 'runtime.json'`
+* `REPORT_SUFFIX = '.json'`
+* `RESERVED_UNIT_IDS = frozenset({'plan', 'runtime', 'ci-validation'})`
+* `CHECKOUT_DIRECTORY = {'validator': 'controller', 'candidate': 'repository'}`
+* `HOME_DIRECTORY = {'validator': 'validator-home', 'candidate': 'candidate-home'}`
+* `INPUT_DIRECTORY = 'validation-input'`
+* `SEALED_BUILD_DIRECTORY = 'sealed-build'`
+* `SEALED_RUNTIME_DIRECTORY = 'sealed-runtime'`
+* `OUTPUT_DIRECTORY = 'validation'`
+* `EXPORT_DIRECTORY = 'export'`
+* `def hook_command(hook: str, *, python: str, checkout: str, dispatcher: str) -> tuple[str, ...]`: The fixed argv `(python, '-I', '-B', '<checkout>/<dispatcher>', '--hook', hook)`; `checkout` is the role's checkout directory and `dispatcher` the config's `adapter.dispatcher`.
+* `def hook_values(hook: str, *, unit_id: str | None = None, runtime: Mapping[str, str] | None = None) -> dict[str, str]`: The extra environment of one hook run beyond `worker.worker_environment`'s fixed names: the unit id under `UNIT_ENVIRONMENT`, and for `run_lane` only the parsed `derive_runtime` values.
+* `def hook_timeout_seconds(hook: str, config: Mapping[str, Any]) -> int`: The timeout the validated protected config sets for the hook.
+* `def plan_unit(plan: dict[str, Any], hook: str, unit_id: str | None) -> dict[str, Any] | None`: The target or lane of the protected plan a hook run is for; a unit outside the plan is a rejection.
+* `def plan_input_name(value: Any, path: str) -> str`: The validator of the name a config gives an extra plan input: a `protocol.ID` token that is not one of `RESERVED_INPUT_NAMES`.
+* `def plan_sources(config: Mapping[str, Any]) -> dict[str, str]`: `{staged name: repository path}` of every candidate file a plan is derived from, in staging order: `inventory`, `scenario-contract`, then the config's `plan_inputs` by name. `config` is the validated config document. A job stages the blob of each path at the tested tree under its name in `validation-input/` and passes the same bytes to `planning.build_plan`.
+* `def hook_inputs(hook: str, config: Mapping[str, Any]) -> tuple[str, ...]`: The files of `validation-input/` a protected hook may read: every candidate file of `plan_sources(config)`, and for every hook after `derive_plan` the plan first. Empty for a candidate hook.
+* `def hook_outputs(hook: str, *, plan: dict[str, Any] | None = None, unit_id: str | None = None) -> tuple[str, ...]`: The exact files a protected hook must leave in `validation/`: `plan.json`, `runtime.json`, or `<unit id>.json` per verified unit (for `verify_build` every target, in plan order).
+* `def target_outputs(plan: dict[str, Any], target_id: str) -> tuple[str, ...]`: The exact files `build_target` must leave below `export/` for one target, sorted.
+* `def parse_derived_plan(data: bytes) -> dict[str, Any]`: Strictly decode `derive_plan`'s `plan.json` (at most `MAX_CI_PLAN_BYTES`): `protocol.validate_plan_units` and no reserved unit id.
+* `def parse_runtime_values(data: bytes) -> dict[str, str]`: Strictly decode `derive_runtime`'s `runtime.json` (at most `MAX_CI_REPORT_BYTES`): `{"values": {...}}` holding exactly `RUNTIME_VALUES`, each non-blank text without control characters of at most `MAX_CI_ENV_VALUE_BYTES` bytes.
+
+## `mod_base.build_ci.checkout`
+
+Owner: MB11. Reads of the Git objects of a job's checkouts (the protected mod at the controller
+commit, the candidate at the tested commit), by plumbing; no working file is read here.
+One closed Git serves every such read: `ci subject --candidate` (`identity.derive_subject`) and
+`ci plan --candidate` (`lifecycle.checkout_candidate_files`). A commit is read as the bytes of its
+object, which must hash to its name, because Git's own reading of a commit can be changed inside
+the repository: `--no-replace-objects` keeps a replacement ref out, but a grafts file and the
+shallow boundary of every `actions/checkout` clone still change the parents Git reports, and
+`cat-file` prints an object without comparing it with the name it is stored under.
+
+* `GIT = '/usr/bin/git'`
+* `class CheckoutError(MbError)`: A checkout's Git objects cannot be read, or are not the objects their names say (exit 2, reason `git`).
+* `class Commit`: One commit as its own object states it: its name, its tree and its ordered parents.
+  * fields: `sha: str, tree: str, parents: tuple[str, ...]`
+* `def read_objects(checkout: Path, *arguments: str, max_bytes: int) -> bytes`: One read of a checkout's object store: `/usr/bin/git --git-dir=<checkout>/.git --no-replace-objects -c core.hooksPath=/dev/null <arguments>` with a fixed environment (no system or global configuration, no replacement objects, no lazy fetch, no prompt), no stdin, a timeout of `CI_GIT_READ_TIMEOUT_SECONDS` and at most `max_bytes` of output. `<checkout>/.git` must be a real directory: a link or a file that points elsewhere is refused, although Git would follow both. Only `rev-parse`, `ls-tree` and `cat-file` are ever passed. A failing Git or a longer answer is a `CheckoutError`.
+* `def head_commit(checkout: Path) -> Commit`: The commit `HEAD` of `checkout` names, proven by its own bytes: `HEAD` is resolved to an object name without reading the object and the object's size is asked first (at most `MAX_CI_GIT_COMMIT_BYTES`); the object is then read whole as a commit and must hash to that name, so `HEAD` names the commit itself (a branch at it is fine, a tag of it is not). The tree is the first header line and the parents are the `parent` lines directly after it, in order; either header anywhere else in the header block is a rejection. The parents need not be present (a shallow checkout holds the one commit), and no replacement ref, grafts file, shallow boundary or object stored under another object's name changes the result; the last is a rejection.
+
+## `mod_base.build_ci.identity`
+
+Owner: MB11. What `ci subject` does: authenticate the tested subject through the API and keep it in
+the job's private state directory. A pull request is observed once alongside the live default
+branch; a protected subject reads the default branch again before returning. The commit object
+is read once. Besides the two
+gates there is a third producer, `status`: the status caller's evaluation job, whose subject is
+always the pull request `--pr` names, on every event that starts that caller. Its controller is
+the default-branch commit the run executes, so it derives the identity (and the plan) the Build
+and the packaged run of the generation derived. A job that holds the candidate checkout (`ci
+subject --candidate`: the policy, target and lane jobs) derives the same record from its
+environment, from the commits its two checkouts are at and from one request (`derive_subject`),
+and proves it by reproducing the plan hash of the job of its run that authenticated in full.
+
+* `IDENTITY_NAME = 'identity.json'`
+* `PULL_REQUEST_EVENT = 'pull_request_target'`
+* `PROTECTED_EVENTS = ('push', 'workflow_dispatch', 'schedule')`
+* `STATUS_PRODUCER = 'status'`: the producer of the status caller's evaluation job; never a `protocol.PRODUCERS` gate.
+* `STATUS_EVENTS = ('workflow_run', 'pull_request_target', 'schedule', 'workflow_dispatch')`: the events that start a run of the status caller.
+* `SUBJECT_PRODUCERS = ('build', 'packaged', 'status')`: what `ci subject --producer` accepts.
+* `POLICY_FORMAT = 'mod-base.build.policy-v1'`
+* `class SubjectError(MbError)`: The subject of this job cannot be authenticated (reason `ci-subject`; `draft`, `no-test-merge` and `controller-moved` for those three cases).
+* `class StateError(MbError)`: The job's private state directory or one of its records cannot be trusted (reason `ci-state`).
+* `def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The managed callers a job of `producer` may run from: its own, and for Build jobs of a protected subject also the packaged caller (its `rebuild` job). A `status` job runs from the status caller alone and only for a pull request (no caller otherwise).
+* `def run_events(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The events a job of `producer` may run on: `pull_request_target` for a gate's pull request and `PROTECTED_EVENTS` for its protected subject; `STATUS_EVENTS` for the pull request of a `status` job, which has no protected subject (no event).
+* `def validate_subject_record(document: Any, path: str = '$') -> dict[str, Any]`: The closed identity record `{producer, event, workflow_path, controller_tree, subject}`; `subject` is `protocol.validate_subject` and always names the Build caller as `controller_workflow`. The producer is one of `SUBJECT_PRODUCERS`, and its event and caller are those `run_events` and `run_workflows` admit for the subject.
+* `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None, wait_for_merge: bool = False) -> dict[str, Any]`: With `wait_for_merge` (the `ci subject` command), wait boundedly for a pending merge; drafts, conflicts and source changes still reject. Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. For the `status` producer `pr_number` is the pull request under evaluation on any of `STATUS_EVENTS`, authenticated like a gate's (the live default branch must be the executing commit and the pull request's base), never None. The environment's claims are checked before the first request; 4 requests for a pull request, 5 otherwise; nothing is written.
+* `def derive_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None, candidate: Path, wait_for_merge: bool = False) -> dict[str, Any]`: With `wait_for_merge` (the command), repeat only pending pull observations within the same hard request cap. The same identity record, byte for byte, for a job that holds the candidate checkout `candidate`, from one request. The environment is admitted as in `authenticate_subject` and the base branch is the mod's canonical branch, which the run and its caller must name; the mod checkout's `HEAD` must be the executing controller commit and gives the controller tree; the candidate's `HEAD` gives the tested commit, its tree and its ordered parents (`checkout.head_commit` for both: the commit's own bytes, hashed to its name). All of that is settled before the one request, which is made last: the pull request (`authenticate.read_pr_on_base`: open, not a draft, same repository, based on that branch at the controller, its test merge the commit the candidate is at), or for a protected subject the head of the canonical branch, which must still be the executing commit both checkouts are at. Not observed: that the canonical branch is the default branch and, for a pull request, that the controller is still its head. A job therefore uses this only when it then requires the plan hash of a job of its run that authenticated in full (`ci plan --expect-sha256`; `tests/test_workflow_ci_policy.py` holds the callees to that). `producer` is `build` or `packaged`: a status job holds no candidate checkout. Nothing is written.
+* `def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str`: The closed protected-policy digest: canonical SHA-256 of `{format: POLICY_FORMAT, build_adapter_api, graph_versions: {build, packaged}, kit: subject.kit, config_sha256, adapter_files: [{path, sha256}], control_files: [{path, sha256 | null}]}`. It changes with the protected Build config bytes, any source of the adapter closure, the bytes or the presence of a control file (`config.CONTROL_PATHS`: the activation manifest and the caller workflows), the kit pin or tree digest, the adapter API or a graph version, and with nothing else.
+* `def create_state(state: Path) -> None`: Create the job's private state directory (mode 0700); an existing path is never adopted.
+* `def write_state_record(state: Path, name: str, raw: bytes) -> None`: Create `<state>/<name>` (mode 0600) in an existing private state directory; never replaces a record.
+* `def read_state_record(state: Path, name: str, *, max_bytes: int) -> bytes`: Bytes of `<state>/<name>`. The directory is this user's with mode 0700, the record a single-link regular file of this user with mode 0600 and 1..`max_bytes` bytes, unchanged while read.
+* `def write_subject(state: Path, record: dict[str, Any]) -> None`: Create the state directory and write the validated record as canonical JSON to `<state>/identity.json`.
+* `def read_subject(state: Path) -> dict[str, Any]`: The identity record, strictly decoded, validated and required to be canonical.
+
+## `mod_base.build_ci.planning`
+
+Owner: MB11. Pure functions that turn a subject, the protected config and one `derive_plan` result
+into the protected plan. Running the hook belongs to the job (`ci plan`).
+
+* `class PlanError(MbError)`: A plan is not the one this job must work on (reason `ci-plan`; `plan-mismatch` for another hash than the expected one).
+* `def runtime_selection_sha256(profile: str, lanes: list[dict[str, Any]]) -> str`: Canonical SHA-256 of `{profile, lanes}`, that is every derived lane with its native contract and ordered obligations.
+* `def build_plan(*, subject: dict[str, Any], config: BuildConfig, inventory: bytes, scenario_contract: bytes, plan_inputs: Mapping[str, bytes], derived: bytes, candidate_kit: dict[str, str] | None = None) -> dict[str, Any]`: The complete validated `mod-base.build.plan`, built from the subject plus `policy_sha256` (`identity.policy_sha256`), the inventory's Git blob id and SHA-256, the scenario contract's SHA-256 and `runtime_selection_sha256`; the config's profile; `plan_inputs` as `[{name, sha256}]` in the config's order; the parsed `derive_plan` units; `plan_sha256`. An optional separately admitted `candidate_kit` is included in the plan hash while the executing kit identity is unchanged. `inventory`, `scenario_contract` and the values of `plan_inputs` are the candidate Git blobs at the tested tree (1..`MAX_CI_PLAN_SOURCE_BYTES` bytes each), exactly what the hook was given; `plan_inputs` has one entry for every name of the config's `plan_inputs` and no other (`{}` when the config names none).
+* `def require_plan(plan: dict[str, Any], *, subject: dict[str, Any], expected_sha256: str | None = None) -> dict[str, Any]`: Require a valid plan of exactly this subject and, when given, the expected `plan_sha256` (`ci plan --expect-sha256`).
+* `def matrices(plan: dict[str, Any]) -> dict[str, list[str]]`: The ids of `{targets, lanes}` in plan order.
+* `def plan_outputs(plan: dict[str, Any]) -> dict[str, str]`: The workflow outputs `plan_sha256`, `candidate_kit_sha` (empty for the executing pin), `targets` and `lanes` (single-line JSON arrays of ids).
+
+## `mod_base.build_ci.commands`
+
+Owner: MB11. The top-level `ci` command. Each work area lists its verb module in `VERB_MODULES`.
+
+* `VERB_MODULES`: the modules whose `add_verbs(verbs)` adds verbs to `ci`, one line per work area.
+* `def register(subparsers: argparse._SubParsersAction) -> None`
+* `def add_job_arguments(parser: argparse.ArgumentParser) -> None`: Add what every verb takes: `--repo`, `--config` and the required `--state DIR`.
+* `def api_client(invocation: runtime.Invocation, *, max_requests: int, writable: bool = False) -> github_api.GitHubApi`: The API client of one command, bounded to `max_requests` requests in all; read-only unless the verb writes to GitHub and passes `writable=True`.
+
+## `mod_base.build_ci.commands_subject`
+
+Owner: MB11. `ci subject --repo DIR --config F --state DIR --producer build|packaged --pr N [--candidate DIR] --github-output F`:
+authenticates the subject, creates `--state` with `identity.json` and outputs `tested_sha` and
+`pr_number` (`--pr` and the output are empty for a protected subject). With `--candidate DIR`, the
+candidate checkout of a job that has one, the same record is derived from that checkout, the mod
+checkout and one request (`identity.derive_subject`, budget `MAX_CI_DERIVED_SUBJECT_REQUESTS`)
+instead of four or five (`identity.authenticate_subject`, budget `MAX_CI_SUBJECT_REQUESTS`).
+
+* `PULL_REQUEST`: the argparse type of `--pr`, a positive decimal as `int` or the empty string as `None`.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`
+* `def run_subject(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.commands_system`
+
+Owner: MB11. `ci system-profile --repo DIR --config F --state DIR`: the packaged `lane` job's step
+between `ci subject` and `ci worker-prepare`. It binds the job (`lifecycle.open_job`), reads
+`runtime.system_profile` of the protected Build config and installs that profile as root
+(`system_profile.install_system_profile`); a config that names none installs nothing. Either way it
+refuses once a worker account exists. No API request; one summary line on success.
+
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`
+* `def run_system_profile(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.system_profile`
+
+Owner: MB11. Kit-defined system profiles: the Ubuntu 24.04 packages a packaged lane needs (Xvfb
+and Mesa software rendering for a Minecraft client), named by a mod's protected config and never
+listed by it. The packages are installed as root before the host fence and before any worker
+account exists, so the fence and the tool admission that follow cover them like the rest of the
+image.
+
+* `SUDO = '/usr/bin/sudo'`: The one way to root; `ci system-profile` passes it to `install_system_profile` (only the suite passes a stand-in).
+* `class SystemProfileError(MbError)`: The system profile cannot be installed, or not now (reason `ci-system-profile`).
+* `def system_profile_commands(name: str, *, sudo: str) -> tuple[tuple[str, ...], tuple[str, ...]]`: The two root commands of profile `name` (packages from `protocol.SYSTEM_PROFILES`): `<sudo> -n -- /usr/bin/timeout --kill-after=<grace>s <CI_SYSTEM_PROFILE_TIMEOUT_SECONDS>s /usr/bin/env -i DEBIAN_FRONTEND=noninteractive PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/apt-get -q -o DPkg::Lock::Timeout=<CI_SYSTEM_PROFILE_LOCK_WAIT_SECONDS> -o Acquire::Retries=<CI_SYSTEM_PROFILE_FETCH_RETRIES>` followed by `update`, then by `install --yes --no-install-recommends` and the profile's packages. An unknown name is a `SystemProfileError`.
+* `def existing_worker_accounts() -> tuple[str, ...]`: The names of `worker.WORKER_ACCOUNTS` that exist in the passwd database, in role order (Linux only).
+* `def settle_command(*, sudo: str) -> tuple[str, ...]`: The root command, with the same `sudo`, `timeout` and `env -i` prefix as the two install commands, that runs `/usr/bin/systemctl stop packagekit.service`: the service the hosted image's PackageKit apt hook wakes over D-Bus during an install, which no profile asks for.
+* `def install_system_profile(name: str | None, *, log: Callable[[str], object], sudo: str, systemd: bool | None = None) -> int`: Refuse when a worker account exists; for `None` install nothing and return 0; otherwise run both commands through `sudo` in order, then, on a systemd host (`systemd`; by default whether `/run/systemd/system` exists), `settle_command`, accepting its exit 0 or 5 (unit absent) with stdin closed, working directory `/` and only `PATH`, `LANG` and `LC_ALL` in sudo's environment, and return the number of packages. A command that cannot start, exits non-zero, or outlives root's bound (exit 124, or 137 when root's `timeout` had to kill it) or this process's deadline (that bound plus twice `CI_TERMINATION_GRACE_SECONDS`, after which it gets TERM, which sudo relays, and KILL after the grace) is a `SystemProfileError` naming the phase; on every failure, a timeout included, the last `MAX_CI_SYSTEM_PROFILE_LOG_BYTES` of its combined output go to `log` line by line through `worker.neutral_log_line`, and on a non-zero exit its last line ends the error message.
+
+## `mod_base.build_ci.lifecycle`
+
+Owner: MB11. The worker lifecycle of one Build or packaged job, as the `ci worker-*` and `ci plan`
+commands compose it. Every step is one command run by the runner; the steps share the job's
+private state directory and the fixed worker root. State records are canonical JSON, written once
+and read strictly: `worker-host.json` (`{"boundary"}`: the runner home as it was, written before
+anything is changed), `worker.json` (`{"boundary", "accounts": {"candidate": {"uid", "gid"} | null,
+"validator": {"uid", "gid"}}, "python", "java_homes", "tools": {"roots", "metadata_sha256", "files",
+"entries", "total_bytes"}, "config_sha256"}`), `ci-plan.json` (the plan), `worker-stage.json`
+(`{"candidate", "tested_sha", "tested_tree", "source": {"files", "bytes"}, "kit": {"sha", "version",
+"tree_digest"}, "gradle_seed", "bundle": {"path", "envelope_sha256", "files"} | null}`: what the
+candidate was staged from), `worker-run.json` (`{"hook", "unit_id", "succeeded", "error",
+"returncode", "truncated", "log_bytes", "log_sha256"}`: how the one candidate hook ended, written
+also when it failed) and `worker-seal.json` (`{"hook", "unit_id", "export": "build" | "runtime" |
+null, "envelope_sha256", "files"}`: what was frozen). A lane job also reads `ci-selection.json`,
+which `ci fetch-build` writes. Between two hook runs both accounts are terminated and locked.
+
+* `HOST_NAME = 'worker-host.json'`
+* `WORKER_NAME = 'worker.json'`
+* `PLAN_NAME = 'ci-plan.json'`
+* `ROLE_SETS`: `ci worker-prepare --roles` value -> the roles a job allocates, in allocation order (`validator`, `candidate+validator`).
+* `class LifecycleError(MbError)`: A job step was asked for in a state the lifecycle does not allow (exit 2, reason `ci-lifecycle`; a failed read of the candidate checkout has reason `git`).
+* `class Job`: What a lifecycle command knows of its job once `ci subject` has run.
+  * fields: `state: Path, record: dict[str, Any], config: BuildConfig, sources: ControllerSources, kit_root: Path, kit_digest: str, run_id: int, run_attempt: int`
+  * `subject` (property) -> `dict[str, Any]`
+* `class Worker`: The prepared worker of a job, as `worker.json` records it; `accounts` holds the allocated roles only.
+  * fields: `boundary: HostBoundary, accounts: Mapping[str, WorkerAccount], python: str, java_homes: tuple[str, ...], tools: ToolTreeProof, config_sha256: str`
+  * `validator` (property) -> `WorkerAccount`
+  * `java_home` (property) -> `str | None`
+* `def open_job(invocation: Invocation, state: Path) -> Job`: Bind a command to the job `ci subject` authenticated: the state must belong to the executing repository, controller commit and kit (version and recomputed tree digest); the protected Build config and its adapter closure are read from the verified mod checkout (`config.load_build_config`, `controller.checkout_controller_sources`); the run id and attempt come from the invocation. No API read.
+* `def read_worker(state: Path) -> Worker`: The strictly decoded `worker.json`: closed shape, canonical paths, and accounts that differ in user and group from the runner and from each other. The host is not consulted.
+* `def open_worker(job: Job) -> Worker`: `read_worker` checked against the host: the protected config digest is the recorded one, the runner home is still fenced, every recorded account is the live one, a role the job did not allocate has no account, and the admitted tool trees are unchanged (`toolchain.authenticate_toolchains`: the interpreter in them is what the command runs as root next). Fails after `ci worker-finish` reopened the home.
+* `def read_plan(job: Job) -> dict[str, Any]`: The strictly decoded `ci-plan.json`: canonical, valid and of exactly the job's subject.
+* `def rest_workers(accounts: Mapping[str, WorkerAccount]) -> None`: Terminate and lock every account, each one even when another fails; raise the first failure.
+* `def resting(accounts: Mapping[str, WorkerAccount]) -> Iterator[None]`: Context manager: whatever the block does, every account of `accounts` (read when the block ends) ends terminated and locked. A failure of the block is the one reported.
+* `def tool_roots(python: str, java_homes: tuple[str, ...]) -> tuple[str, ...]`: The tool trees a job's hooks execute from: the prefix of `<prefix>/bin/<interpreter>` as named and as its links resolve, then every JDK home, without repeats. Naming only; `toolchain.inspect_worker_toolchains` admits them.
+* `def prepare_worker(invocation: Invocation, job: Job, *, roles: tuple[str, ...], python: str, java_homes: tuple[str, ...]) -> Worker`: `ci worker-prepare`. Admit the hosted layout (`RUNNER_ENVIRONMENT`, `GITHUB_WORKSPACE`, `RUNNER_TEMP`) and write `worker-host.json` before anything is changed (a second prepare of the job stops there); create the worker boundary; close the runner home; run the `host-fence` root operation; admit the tool trees and bind the interpreter and every JDK to them; allocate the accounts; copy the protected adapter closure into `controller/` and run `grant-controller`; leave every account terminated and locked; write `worker.json`. A failure leaves the home closed and the allocated accounts locked.
+* `def api_candidate_files(api: GitHubApi, job: Job) -> dict[str, bytes]`: The candidate files a plan is derived from, read from the API at the tested tree: staged name -> bytes, in the order of `adapter.plan_sources` (the inventory, the scenario contract, then the extra plan inputs). One request for the recursive tree and one per file. A path must be a regular file of 1 byte to `MAX_CI_PLAN_SOURCE_BYTES` below real directories.
+* `def checkout_candidate_files(checkout: Path, job: Job) -> dict[str, bytes]`: The same mapping from the Git objects of the candidate checkout, never from its working files and without a request: `HEAD` must be the tested commit with the tested tree, a path must be a regular file in that commit's tree, and each blob's id is recomputed. Git runs as `/usr/bin/git` with a fixed environment: no system or global configuration, no replacement objects, no lazy fetch, no hooks.
+* `def run_protected_hook(job: Job, worker: Worker, hook: str, *, plan: dict[str, Any] | None, unit_id: str | None, log: Callable[[str], object]) -> WorkerResult`: Run one protected hook as the validator (`controller.execute_controller_validator`; `plan` is `None` only for `derive_plan`) with the job's interpreter, first JDK, tool receipt and run identity, and pass its neutralised log to `log`, also when the hook fails.
+* `def derive_plan(job: Job, worker: Worker, sources: Mapping[str, bytes], *, expected_sha256: str | None, log: Callable[[str], object], candidate_pin: dict[str, str] | None = None) -> dict[str, Any]`: `ci plan`. `sources` is what one of the two readers above returned and must hold exactly the candidate files the protected config names. Stage them in `validation-input/`, run `grant-plan-inputs`, run `derive_plan` as the validator, run `take-derived-plan`, build the plan (`planning.build_plan`), require `expected_sha256` when given, stage the complete input root again with the plan and run `grant-validation-inputs`, write `ci-plan.json`. Refused when the job already has a plan. Every account ends terminated and locked whatever happens; no plan record exists after a failure.
+* `STAGE_NAME = 'worker-stage.json'`
+* `RUN_NAME = 'worker-run.json'`
+* `SEAL_NAME = 'worker-seal.json'`
+* `SELECTION_NAME = 'ci-selection.json'`: the selection record `ci fetch-build` keeps in the state of a lane job (a `mod-base.ci.selection`).
+* `HOOK_PRODUCERS`: candidate hook -> the producer whose job runs it (`policy` and `build_target`: `build`; `run_lane`: `packaged`). Its keys are the `--hook` choices of `ci worker-run`.
+* `HOOK_EXPORTS`: candidate hook -> what its seal freezes (`build_target`: `build`, `run_lane`: `runtime`, `policy`: `None`).
+* `def read_stage(job: Job) -> dict[str, Any]`: The strictly decoded `worker-stage.json`, which must name the tested commit and tree of the job's subject.
+* `def read_run(job: Job) -> dict[str, Any]`: The strictly decoded `worker-run.json`: a successful run has a zero exit and no error, a failed one an error line; the unit is a target, a lane or `None` as the hook requires.
+* `def read_seal(job: Job) -> dict[str, Any]`: The strictly decoded `worker-seal.json`: the export is the one its hook produces, with an envelope hash and a file count unless nothing is exported.
+* `def read_selection(job: Job, plan: dict[str, Any]) -> dict[str, Any]`: The strictly decoded `ci-selection.json` (`records.validate_source_selection` for `plan`), which must have been requested by this run attempt of the job's caller.
+* `def checkout_inventory(checkout: Path, job: Job) -> tuple[GitSourceEntry, ...]`: The complete inventory of the tested tree from the Git objects of the candidate checkout (`git ls-tree -r -l -z --full-tree`, bounded by `MAX_CI_SOURCE_LIST_BYTES`, same fixed Git environment as `checkout_candidate_files`). `HEAD` must hold the tested commit id itself (detached) and that commit the tested tree; the listing is bound to the tree by recomputing the tree's object name. The working files are not read.
+* `def stage_kit_overlay(job: Job, output: Path, *, supplied_kit: Path | None = None, supplied_pin: Pin | None = None, supplied_digest: str | None = None) -> Pin`: Runner-only. Create `output` as a staged kit of the verified checkout: `src/`, `site/`, `requirements/`, `template/`, `tools/` and `actions/` (regular files as 0644) and `MOD_BASE_KIT.json` for the supplied kit commit/version (the executing kit when the optional supplied arguments are absent). The copy must have the verified kit-digest-v1 and match the staged-file locks. Returns the pin the stamp names.
+* `def stage_candidate(job: Job, worker: Worker, plan: dict[str, Any], checkout: Path, *, gradle_seed: Path | None, bundle: bool, future_kit: Path | None = None) -> dict[str, Any]`: `ci worker-stage`. Require the checkout to be detached at the tested commit and to hold exactly the tested tree (`checkout_inventory`, `source.verify_source_copy`: nothing untracked, ignored files included); stage the kit in a temporary directory of the state; a plan with `candidate_kit` requires the matching candidate pin and separately verified `future_kit` checkout; run `stage-candidate` with that supplied SHA/version/digest; with `bundle`, read the complete Build of `sealed-build/` (`exports.inspect_complete_build`) and run `stage-bundle`. Every account ends terminated and locked. Writes and returns `worker-stage.json`; refused when the job has no candidate account or was staged before.
+* `def derive_runtime(job: Job, worker: Worker, plan: dict[str, Any], lane_id: str, *, log: Callable[[str], object]) -> dict[str, str]`: Run `derive_runtime` as the validator for one lane, run `take-derived-runtime`, read the runner's private copy in `derived-runtime/` and decode it (`adapter.parse_runtime_values`). Once per job.
+* `def run_candidate_hook(job: Job, worker: Worker, plan: dict[str, Any], hook: str, *, unit_id: str | None, log: Callable[[str], object]) -> dict[str, Any]`: `ci worker-run`. Require the stage record, no earlier run, a unit of the plan, the producer of `HOOK_PRODUCERS` and, for `run_lane`, a staged Build. A lane first gets its values from `derive_runtime`. Run the dispatcher of the candidate's own `repository/` copy as the candidate (`toolchain.execute_tool_fenced_worker`) with the timeout of the protected config, `JAVA_HOME` set to the first JDK and `MB_JAVA_HOMES` to every one, each bound to the admitted tool trees first. Pass the neutralised log to `log`; leave every account terminated and locked; write `worker-run.json` also for a hook that failed, hung, left a process behind or could not start, then raise that failure. Returns the record of a successful run.
+* `def seal_worker(invocation: Invocation, state: Path) -> tuple[dict[str, Any], dict[str, Any] | None]`: `ci worker-seal`. Terminate and lock the candidate before any record is read (a job without one is refused). Without a run record: a rejection. After a run recorded as failed: `(run, None)`, nothing sealed. After a successful run: read the inventory again from the staged checkout and have root prove the tracked sources unchanged, then `verify-candidate-source` alone (`policy`), `freeze-build-export` (`build_target`; the producer identity is the executing run in mode `full`, or `rebuilt` inside the packaged caller) or `freeze-runtime-export` (`run_lane`; the Build is the staged one of `sealed-build/`, the owning Build the selection's, the mode `pull-request`, `selected` or `rebuilt`). The sealed copy is read back and must carry that producer. Writes `worker-seal.json` and returns `(run, seal)`; once per job.
+* `def finish_worker(state: Path) -> dict[str, Any]`: `ci worker-finish`. Terminate and lock every worker account the host has (an entry that cannot be authenticated is locked by name and fails the command); require that neither owns a process once both are locked; then restore the runner home from `worker-host.json`. A home whose accounts could not all be stopped stays closed. Safe to run twice, after a failed prepare and without one. Returns `{"accounts": {role: "locked" | "absent"}, "home_mode": int | None}`.
+* `VALIDATION_HOOKS`: `ci worker-validate --hook` value -> the roles the job of that verification allocated: `verify_target` and `verify_runtime` run where a candidate produced the export (candidate and validator), `verify_build` in the assembling job (the validator alone).
+* `def validation_unit(plan: dict[str, Any], *, hook: str, unit_id: str | None, roles: tuple[str, ...]) -> dict[str, Any] | None`: The target or lane of the plan that `hook` verifies in a job that allocated `roles` (`None` for `verify_build`). A hook that seals nothing, a unit outside the plan, a unit for `verify_build` or none for the other two, and other accounts than `VALIDATION_HOOKS[hook]` are rejections.
+* `def validate_export(job: Job, worker: Worker, *, hook: str, unit_id: str | None, output: Path, log: Callable[[str], object]) -> dict[str, Any]`: `ci worker-validate`. Refuse an existing `output` before anything else; read the plan and settle hook, unit and roles (`validation_unit`); read the sealed input (`inputs.read_sealed_build` with `inputs.build_input_sha256` for a target's partition or the complete Build, which must still be the runner's private export of this run attempt; `runtime_inputs.read_sealed_runtime` for a lane and its complete owning Build); run `grant-build-validation` for a Build the validator does not read yet and, for a lane, `grant-runtime-validation`; run the hook through `run_protected_hook` inside `inputs.execute_frozen_build_validator` or `runtime_inputs.execute_frozen_runtime_validator`; publish the execution record (`handoff.record_build_validation_execution`, `runtime_handoff.record_runtime_validation_execution`) and run `freeze-build-validation` or `freeze-runtime-validation`; require `sealed-validation/` to be the runner's private copy and write `output` with `validation.materialize_validated_export`. Returns `{"envelope", "validation"}`. Every account ends terminated and locked whatever happens; after a failure there is no `output`. No API read.
+
+## `mod_base.build_ci.commands_worker`
+
+Owner: MB11. `ci worker-prepare --repo DIR --config F --state DIR --roles validator|candidate+validator --python PATH [--java-home PATH]...`,
+`ci plan --repo DIR --config F --state DIR [--candidate DIR] [--expect-sha256 HEX] [--github-output F]`
+(outputs `plan_sha256`, `targets`, `lanes`),
+`ci worker-stage --repo DIR --config F --state DIR --candidate DIR [--gradle-seed DIR] [--bundle]`,
+`ci worker-run --repo DIR --config F --state DIR --hook policy|build_target|run_lane [--unit ID]`
+(`--unit` is required for a target or a lane and refused for `policy`; exit 2 with one error line
+when the hook failed, timed out or left a process behind),
+`ci worker-seal --repo DIR --config F --state DIR` (`if: always()` once the accounts exist; exit 0
+when it sealed and also when the state records that the hook failed, exit 2 without a record of the
+run), `ci worker-validate --repo DIR --config F --state DIR --hook
+verify_target|verify_build|verify_runtime [--unit ID] --output DIR` (the job's seal step: `DIR` must
+not exist and becomes what the next step uploads; `--unit` is the target or lane and `verify_build`
+takes none; no API read) and `ci worker-finish --repo DIR --config F --state DIR`
+(`if: always()`; it reads only `--state` and the host). A hook's output is printed neutralised.
+
+* `TOOL_PATH`: the argparse type of `--python` and `--java-home`, a canonical absolute POSIX path.
+* `PLAN_SHA256`: the argparse type of `--expect-sha256`, 64 lower-case hex digits.
+* `UNIT_ID`: the argparse type of `--unit`, a target or lane id (`grammar.CI_UNIT_ID`).
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`
+* `def run_worker_prepare(args: argparse.Namespace) -> int`
+* `def run_plan(args: argparse.Namespace) -> int`
+* `def run_worker_stage(args: argparse.Namespace) -> int`
+* `def run_worker_run(args: argparse.Namespace) -> int`
+* `def run_worker_seal(args: argparse.Namespace) -> int`
+* `def run_worker_finish(args: argparse.Namespace) -> int`
+* `def run_worker_validate(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.controller`
+
+Owner: MB11. The protected adapter copy of a job and the hooks the validator runs from it. The
+sources are admitted from the API (`authenticate_controller_sources`) or, inside a job, from the
+mod checkout the prologue verified (`checkout_controller_sources`). Native protected-path policy,
+owner authorization, import-root closure and installer provenance remain separate requirements.
+A candidate-supplied receipt confers no authority. Wherever a function takes an `identity`, it is
+the subject `ci subject` authenticated or the complete identity of a plan (`worker.execution_subject`).
+
+* `BUILD_CONFIG_PATH = 'scripts/ci/mod-base-build.json'`
+* `CONTROLLER_VALIDATION_ROOT`: Fixed protected source copy under WORKER_ROOT/controller, matching the validator dispatch root.
+* `VALIDATOR_HOOKS`: The hooks the validator runs from the protected copy: every protected hook of the adapter contract (`adapter.PROTECTED_HOOKS`), so `derive_plan` and `derive_runtime` as well as the three `verify_*` hooks. No candidate hook runs through this route.
+* `class ControllerFile`
+  * fields: `path: str, mode: str, git_blob: str, sha256: str, data: bytes`
+* `class ControllerSources`
+  * fields: `controller_sha: str, controller_tree: str, config: ControllerFile, files: tuple[ControllerFile, ...]`
+* `def authenticate_controller_sources(api: GitHubApi, *, identity: dict[str, Any], protected_paths: tuple[str, ...]) -> ControllerSources`: Bracket immutable protected-controller tree/blob reads with live PR authentication; require approved paths, regular Git modes and configured source hashes before returning evidence.
+* `def checkout_controller_sources(config: BuildConfig, *, controller_sha: str, controller_tree: str) -> ControllerSources`: The source receipt of the protected adapter as the prologue-verified mod checkout holds it: the bytes `config.load_build_config` read and compared with their configured hashes, with their Git blob ids computed from the same bytes and plain file modes (the validator's copy is run through the interpreter). No API read.
+* `class ControllerActivation`: Frozen constructible sources/manifest observation; never transition or execution authority.
+  * fields: `sources: ControllerSources, manifest: ControllerFile`
+* `def authenticate_controller_activation(api: GitHubApi, *, identity: dict[str, Any], protected_paths: tuple[str, ...]) -> ControllerActivation`: Read fixed activation data only from the API-authenticated original controller tree under independently admitted native policy. Bind normal bounded config/import sources; require regular non-executable activation/real site ancestor with no case aliases, 8 KiB bound, exact tree/blob length and rehashed blob identity, strict kind and matching config repository/profile. Reauthenticate sources, reread manifest and final live source identity before returning bytes. No candidate manifest, constructor/owner approval, protected transition, predecessor/caller-byte or physical import enrollment authority.
+* `def verify_controller_source_copy(root: Path, *, sources: ControllerSources, identity: dict[str, Any]) -> dict[str, Any]`: Recheck minimal source copy bytes/modes/blob hashes against retained protected evidence; refuse undeclared files and Git metadata without importing code.
+* `def materialize_controller_sources(output: Path, *, sources: ControllerSources, identity: dict[str, Any]) -> dict[str, Any]`: Prevalidate retained protected byte evidence, write exclusive descriptor-relative regular files into a private stage, independently verify the exact copy and publish atomically without replacing an existing output. Protected-parent ownership and authentic receipt retention remain caller obligations.
+* `def prepare_controller_validation(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, identity: dict[str, Any]) -> dict[str, Any]`: Protected-root-only fixed source handoff; authenticate host/accounts/layout, terminate the candidate when the job has one (`worker.authenticate_peer_account`), verify private bytes/modes, grant only validator-group reads and recheck normalized regular modes, hashes/inode/host. Accepted-copy failure restores private traversal. Import enrollment, provenance and native execution/sealing remain required.
+* `def execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, tools: ToolTreeProof, plan: dict[str, Any] | None, hook: str, unit_id: str | None, python: str, java_home: str | None, run_id: int, run_attempt: int, subject: dict[str, Any] | None = None) -> WorkerResult`: Run one protected hook of the adapter contract (`VALIDATOR_HOOKS`) as the validator. `derive_plan` takes the `subject` and no plan; every other hook takes the protected `plan`, never a subject, and its unit must be the target or lane the contract gives that hook (`adapter.plan_unit`). The argv, the unit environment and the timeout come from `adapter.hook_command`, `adapter.hook_values` and `adapter.hook_timeout_seconds` with the protected config. Metadata/byte/host checks before and after, existing tool fence and mandatory final UID termination. Caller must authenticate installer/import closure and native inputs; exit zero/logs do not confer receipt/upload/status authority.
+
+## `mod_base.build_ci.inputs`
+
+Owner: MB11. The validator's fixed inputs and what a derivation hands back. `validation-input/`
+holds the bytes of the candidate files a plan is derived from, each under its staged name
+(`inventory`, `scenario-contract` and the extra plan inputs the protected config names:
+`adapter.plan_sources`) and, once the plan exists, the canonical plan (`ci-plan.json`), which
+binds every one of them by SHA-256. The runner stages the directory privately, root hands it to the
+validator's group read-only, and every check requires exactly the files of its state. Also the
+aggregate/target verifier composition over these inputs. Retained protected provenance, native
+semantics and complete import/installer closure remain required. These helpers do not authorize
+uploads, workflow execution or status publication.
+
+* `VALIDATOR_INPUT_ROOT`: Fixed `validation-input/` directory under the worker boundary.
+* `DERIVED_PLAN_ROOT`: Fixed runner-private `derived-plan/` directory: the copy of what `derive_plan` wrote, as root handed it over.
+* `class BuildValidationExecution`
+  * fields: `execution: WorkerResult, input_sha256: str`
+* `def plan_source_digests(plan: dict[str, Any]) -> dict[str, str]`: Staged name -> SHA-256 of every candidate file a valid plan was derived from, in the order of `validation-input/`: the inventory and the scenario contract its identity binds, then the extra plan inputs it lists.
+* `def verify_validation_inputs(root: Path, *, digests: Mapping[str, str], plan: dict[str, Any] | None = None) -> None`: Require exactly the validator's input files with these bytes and no other entry: the candidate files `digests` names with their SHA-256 (always the inventory and the scenario contract, and extra plan inputs under their own names) and, when `plan` is given, its canonical bytes (it must bind exactly these digests). Names and bytes only; ownership and modes are separate admissions.
+* `def verify_validation_plan(root: Path, *, plan: dict[str, Any]) -> dict[str, Any]`: `verify_validation_inputs` for a hook that runs against the plan: the canonical plan and every candidate file it binds (`plan_source_digests`), nothing else.
+* `def materialize_validation_inputs(output: Path, *, sources: Mapping[str, bytes], plan: dict[str, Any] | None = None) -> None`: Write the candidate bytes (`sources`: staged name -> 1 byte to `MAX_CI_PLAN_SOURCE_BYTES`) and, when given, the plan through an exclusive descriptor stage and independently verify before atomic no-replace publication. Caller protects the parent and excludes other writers.
+* `def prepare_plan_inputs(*, boundary: HostBoundary, validator: WorkerAccount, digests: Mapping[str, str]) -> None`: Root-only read handoff of the staged candidate files (`digests`: staged name -> SHA-256) before `derive_plan` runs; the same admission as `prepare_validation_plan` for the state without a plan.
+* `def prepare_validation_plan(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any]) -> dict[str, Any]`: Root-only read handoff of the complete input root; authenticate host/layout/accounts, terminate the candidate when the job has one, require a private runner-owned directory, check bytes, grant only validator-group reads and recheck metadata/inode/bytes. Failures restore admitted copy traversal to private.
+* `def replace_plan_inputs(*, boundary: HostBoundary, validator: WorkerAccount, sources: Mapping[str, bytes], plan: dict[str, Any]) -> None`: Runner-only. Terminate the validator, require the directory it was granted to be exactly the staged candidate files `sources`, remove it and stage the complete private root (with the plan) for `prepare_validation_plan`.
+* `def take_derived_plan(*, boundary: HostBoundary, validator: WorkerAccount) -> None`: Root-only. Terminate the validator; require `validator-home/validation/` to be exactly the one file `adapter.hook_outputs("derive_plan")` names, private (0700 directory, 0600 single-link regular file of the validator) and within `MAX_CI_PLAN_SOURCE_BYTES`; copy it into the new runner-private `DERIVED_PLAN_ROOT` (independent inodes, 0700/0600, never a chown of the original) and remove the original directory, so the validator's next hook finds no output of this one. A missing or an extra file, a link or another mode fails and hands nothing over.
+* `def build_input_sha256(*, plan: dict[str, Any], envelope: dict[str, Any], hook: str, unit_id: str | None, run_id: int, run_attempt: int) -> str`: Require the sealed Build one verification is for and return the digest of that input, the SHA-256 of the canonical envelope (a validation record's `input_sha256`). The envelope must be a Build export of the plan sealed by this run attempt: the complete Build for `verify_build` (no unit), exactly the partition of target `unit_id` for `verify_target`. Any other hook is rejected.
+* `def read_sealed_build(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any]) -> tuple[dict[str, Any], bool]`: Runner-only. The envelope of `sealed-build/` and whether the validator reads it already. The directory must be the runner's private export (owner and group the runner's, 0700) or that export after root granted it to this job's validator (0750 and 0640 for the validator's group, no ACL); its files must be exactly its canonical envelope, a Build export of the plan, and the directory the same one before and after the read. A missing directory, another owner or mode and any other file set are rejections.
+* `def execute_frozen_build_validator(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any], envelope: dict[str, Any], hook: str, unit_id: str | None, run_id: int, run_attempt: int, execute: Callable[[], WorkerResult]) -> BuildValidationExecution`: Bind one Build verification to the read-only plan and Build it is given: `verify_build` over the complete Build of this run attempt, or `verify_target` over exactly the frozen partition of target `unit_id` (`build_input_sha256`; a complete or another target's bundle never stands in). `execute` runs that hook as the validator and returns its result (`lifecycle.run_protected_hook`); `validation-input/` and `sealed-build/` are authenticated in metadata and bytes before and after it and must be the same directories. Returns the execution with the envelope digest for the receipt freeze; always terminates the validator. Native semantics/provenance and final authority remain separate.
+* `def freeze_frozen_build_validation(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, bound: BuildValidationExecution, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int) -> dict[str, Any]`: Root-only receipt freeze tied to retained successful execution and the exact canonical input digest/producer attempt. Derive closed hook/unit from the independently retained complete/target envelope, snapshot plan/envelope and inspect read-only input bytes/metadata/inodes before and after independent validation export freeze. Reject disappearance/substitution/drift; always quiesce admitted validator. Genuine protected execution/source provenance remains required across privilege transition; constructible values, private copies or a matching receipt never establish native/API/upload/status authority alone. On late failure a private freeze copy may remain; do not consume it or upload after failure.
+
+## `mod_base.build_ci.policy`
+
+Owner: MB11. Native policy-runner count parity and bounded UTF-8 diagnostics. Discovery and
+suite execution belong only in credentialless disposable workers; these in-process counts do
+not authenticate candidate reports, protected source provenance, native policy or statuses.
+
+* `class PolicyError(MbError)`
+* `class PolicyCounts`
+  * fields: `tests_run: int, failures: int, errors: int, skipped: int, class_skips: int, expected_failures: int, unexpected_successes: int, successful: bool`
+* `def admit_policy_unit(*, profile: str, discovered: int, repeat: int, fixture: bool, counts: PolicyCounts) -> int`: Require retained protected scheduling/discovery metadata and native outcome success/count parity; return tests skipped with an admitted QS whole-class setUpClass skip. BP requires full exact count. Caller still requires complete discovery/worker results and nonzero total testsRun; constructed counts confer no authority.
+* `class BoundedPolicyStream`
+  * `__init__(self, max_bytes: int = limits.MAX_CI_LOG_BYTES) -> None`
+  * `truncated` (property) -> `bool`
+  * `writable(self) -> bool`
+  * `write(self, value: str) -> int`
+  * `flush(self) -> None`
+  * `getvalue(self) -> str`
+
+## `mod_base.build_ci.validation`
+
+Owner: MB11. What a verification leaves: its reports, the `mod-base.ci.validation` v1 record
+protected code builds, and the directory a job uploads. A `verify_*` hook writes one native report
+per unit (`<unit id>.json`) and never a kit document; root copies exactly those reports into the
+runner-private `sealed-validation/` and writes the record beside them. Native closed report
+schemas/semantics, actual protected execution and quiescent readable source provenance remain
+required. A matching record/copy does not authorize upload or successful status.
+
+* `VERIFICATION_HOOKS`: the hooks whose reports are sealed (`verify_target`, `verify_build`, `verify_runtime`).
+* `VALIDATOR_OUTPUT_ROOT`, `SEALED_VALIDATION_ROOT`: Fixed private verifier output and independent runner-private frozen copy.
+
+* `def validate_validation_receipt(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`
+* `def build_validation_record(root: Path, *, plan: dict[str, Any], hook: str, unit_id: str | None, run_id: int, run_attempt: int, source_config_sha256: str, input_sha256: str) -> dict[str, Any]`: The record of one verification, built from the reports in `root`. `root` must hold exactly what `adapter.hook_outputs` names (one `<unit id>.json` for the unit, or for every target of `verify_build`), each a canonical JSON object of at most `MAX_CI_REPORT_BYTES` in a single-linked regular file; a missing or an extra entry, a link, a directory or other bytes is a rejection. The hook contributes report bytes only: identity, plan hash, profile, hook, unit, run, attempt, config digest, input digest and every unit's native contract come from the caller's protected context. Proves no execution.
+* `def verify_validation_export(root: Path, *, plan: dict[str, Any], hook: str, unit_id: str | None, run_id: int, run_attempt: int, source_config_sha256: str, input_sha256: str) -> dict[str, Any]`: Check a sealed verification (the record and its reports): exact protected execution/input context, canonical outer/native JSON, exact report inventory and unchanged record bytes. Native closed-schema semantics and source lifecycle remain separate.
+* `def materialize_validation_export(root: Path, output: Path, *, plan: dict[str, Any], hook: str, unit_id: str | None, run_id: int, run_attempt: int, source_config_sha256: str, input_sha256: str) -> dict[str, Any]`: Seal one verification: require `root` to be exactly the hook's reports, copy them into a private stage, build the record from that copy (`build_validation_record`), write it beside them as `ci-validation.json`, verify the stage as a consumer would and publish it atomically; never replace an existing output. A record the hook wrote is an extra file. Caller must stop/reclaim/exclude source writers and protect ancestors.
+* `def materialize_validated_export(export: Path, validation: Path, output: Path, *, plan: dict[str, Any], envelope: dict[str, Any], hook: str, unit_id: str | None, run_id: int, run_attempt: int, source_config_sha256: str, input_sha256: str) -> dict[str, Any]`: Write the directory a job uploads and return its validation record; never replace an output. `output` becomes the export root: every file of the sealed export under its own path, its envelope (`ci-envelope.json`, or `ci-runtime-envelope.json` for a lane) and, beside the envelope, `ci-validation.json` and one `<unit id>.json` per report. `export` must be exactly `envelope` (one target's partition for `verify_target`, the complete Build for `verify_build`, the lane's results for `verify_runtime`), sealed by this run attempt; `validation` must be the sealed verification of exactly this context, and for a Build or a target its `input_sha256` must be the digest of that envelope. A report or the record that would take the path of an export file, differ from one only in case or be one of its directories is a rejection. Every byte is checked against the two inventories while it is copied.
+* `def freeze_validation_export(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, execution: WorkerResult, plan: dict[str, Any], hook: str, unit_id: str | None, run_id: int, run_attempt: int, input_sha256: str) -> dict[str, Any]`: Protected-root-only freeze of a verification into `sealed-validation/`. Require retained successful actual execution/source evidence, bind host/accounts/layout (a job with the validator alone has no candidate to isolate from), terminate the validator, admit its private `validation/` metadata, seal it (`materialize_validation_export`: the reports are copied, never chowned, and the record is built from the copy), transfer only the protected copy to runner-private ownership and recheck content/inode/metadata/host. Native semantics, input authenticity and final gate/API integration remain required.
+
+## `mod_base.build_ci.exports`
+
+Exact planned target-union and frozen export byte checks. Independent API, worker isolation and
+native domain validation remain required; these functions do not confer execution authority.
+
+* `def validate_target_partitions(partitions: Any, *, plan: dict[str, Any]) -> list[dict[str, Any]]`
+* `def verify_build_export(root: Path, *, plan: dict[str, Any]) -> dict[str, Any]`
+* `def materialize_build_export(root: Path, output: Path, *, plan: dict[str, Any]) -> dict[str, Any]`: Verify original admission, stream independent regular-file copies and independently verify the private stage before exclusive atomic publication. Source quiescence/reclamation, output-parent protection and second-UID native validation remain caller obligations.
+* `def assemble_build_export(inputs: Path, *, partitions: list[dict[str, Any]], plan: dict[str, Any], run_id: int, run_attempt: int, output: Path) -> dict[str, Any]`: Require the full exact ordered same-attempt target union and fixed target-ordinal input layout. Verify actual target bytes before and after independent selected-file copying, bound the complete logical export/envelope, generate a current-version canonical complete envelope and independently verify the private stage before one exclusive atomic publication. Exclude partition envelopes and root overlap. Caller retains API/source/policy authority and protects ancestors; native aggregate validation and upload/gate admission remain separate.
+* `BUILD_VALIDATION_ROOT`: Fixed independent Build copy under the disposable traversal root; callers cannot choose a handoff path.
+* `CANDIDATE_SOURCE_ROOT`, `CANDIDATE_OUTPUT_ROOT`: Fixed candidate repository and private Build export roots.
+* `def prepare_build_validation(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any]) -> dict[str, Any]`: Protected-root-only fixed Build read handoff. Recheck host/passwd/account/layout identities, terminate the candidate when the job has one (the assembling job allocates the validator alone), verify the copy, grant only fixed-validator-group reads and recheck inode/envelope/host. Accepted-copy failures restore private traversal; native second-UID verification and receipt sealing remain required.
+* `def target_envelope(records: list[dict[str, Any]], *, plan: dict[str, Any], target_id: str, producer: dict[str, Any]) -> dict[str, Any]`: The `mod-base.build.envelope` of scope `target` that protected code writes for one target: `records` (`[{path, sha256, size}]`, what the hook left) must hold exactly the planned outputs of the target, a missing or an extra file is a rejection that counts both; lane and role come from the plan, size and hash from the bytes, `producer` from the executing run. Validated against `plan`.
+* `def seal_target_export(root: Path, output: Path, *, plan: dict[str, Any], target_id: str, producer: dict[str, Any]) -> dict[str, Any]`: Inventory `root` (directories and non-empty single-link regular files under export paths; no kit document), build `target_envelope` and atomically create `output` with independent copies and the `ci-envelope.json` written here; `verify_build_export(output)` returns the envelope. Caller terminates the writer of `root` and owns the output parent.
+* `def verify_candidate_source(*, boundary: HostBoundary, candidate: WorkerAccount, inventory: tuple[GitSourceEntry, ...], generated_roots: tuple[str, ...]) -> list[dict[str, str | int]]`: Root-only. Terminate the candidate, authenticate the traversal roots, its home and its checkout, and require `repository/` to hold exactly `inventory` with nothing undeclared outside `generated_roots` (`source.verify_source_copy`). Nothing is copied or changed.
+* `def inspect_complete_build(*, boundary: HostBoundary, plan: dict[str, Any]) -> tuple[dict[str, Any], tuple[int, int]]`: The complete Build a lane job holds in `sealed-build/`: the root must be the runner's own 0700 directory (as `ci fetch-build` publishes it), every byte is checked against its envelope (`verify_build_export`) and the scope must be `complete`. Returns the envelope and the root's device and inode. For the runner and for root; an absent root raises `OSError`.
+* `def stage_build_bundle(*, boundary: HostBoundary, candidate: WorkerAccount, plan: dict[str, Any], envelope: dict[str, Any], path: str) -> None`: Root-only. Terminate the candidate; require `sealed-build/` to be exactly the complete Build `envelope`; create the parents of `repository/<path>` that the tested tree does not track, as the candidate's 0700 directories; publish `repository/<path>` exclusively with a copy of the files the envelope lists (no kit document) and hand it to the candidate as 0700 directories and 0600 files. An existing destination is never replaced.
+* `def freeze_build_export(*, boundary: HostBoundary, candidate: WorkerAccount, inventory: tuple[GitSourceEntry, ...], generated_roots: tuple[str, ...], plan: dict[str, Any], target_id: str, producer: dict[str, Any]) -> dict[str, Any]`: Protected-root-only freeze of one target. Terminate the candidate; prove its tracked sources unchanged before and after the copy (`verify_candidate_source`); require `export/` to be private (0700 directories, 0600 single-link files, no ACL); `seal_target_export` it into `sealed-build/` with the envelope root builds, so the file set must equal the plan; transfer only that copy to runner-private ownership and recheck inode, metadata and content. The originals keep the candidate's ownership. Native witnesses and second-account validation remain required.
+
+## `mod_base.build_ci.worker`
+
+The disposable accounts of one job: the fixed boundary, the two fixed accounts, their closed
+environment and one fenced execution that always ends with the account terminated and locked.
+`mod_base.build_ci.lifecycle` composes them into the `ci worker-*` commands. A locked account
+still runs what the runner starts for it through `sudo`, so locking is the resting state between
+two hooks. Bounded execution and environment construction are not a Linux isolation proof by
+themselves. Linux uses lazy passwd imports so the kit remains importable on other hosts, where
+account operations explicitly reject.
+
+* `WORKER_ROOT`, `WORKER_ACCOUNTS`: fixed private boundary root and candidate/validator account names.
+* `JAVA_HOMES_ENVIRONMENT = 'MB_JAVA_HOMES'`: the environment name that lists every JDK home of a candidate hook, in the job's order, joined with `:`.
+* `class WorkerError(MbError)`
+* `class WorkerAccount`
+  * fields: `role: str, uid: int, gid: int, home: str`
+* `class WorkerResult`
+  * fields: `returncode: int | None, log: bytes, truncated: bool`
+* `class WorkerExecutionError(WorkerError)`
+  * `__init__(self, message: str, result: WorkerResult) -> None`
+* `def execution_subject(identity: Any) -> dict[str, Any]`: The subject a hook runs for, from what its caller holds: a subject as `ci subject` authenticated it (`derive_plan`, before any plan exists) or the complete identity of a plan, which is validated in full and reduced to its subject part. Anything else is rejected.
+* `def worker_environment(*, role: str, python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str]) -> list[str]`: The closed `env -i` vector of one hook; `identity` is a subject or a complete plan identity (`execution_subject`). `values` may hold the unit id, the two runtime values, the display variables, `SOURCE_DATE_EPOCH` and `MB_JAVA_HOMES`: distinct canonical JDK homes joined with `:`, the first being `java_home`.
+* `def authenticate_worker_account(role: str) -> WorkerAccount`
+* `def worker_account_exists(role: str) -> bool`: Whether the fixed account of `role` has a passwd entry, authentic or not.
+* `def authenticate_peer_account(account: WorkerAccount, *, runner_uid: int, runner_gid: int) -> WorkerAccount | None`: The other fixed account, authenticated, or `None` in a job that allocated one account (only root adds or removes a passwd entry). Every account that exists must differ in user and group from the other one and from the runner.
+* `def lock_worker_account(role: str) -> None`: Lock and expire the fixed account by name without signalling any process: for an entry that cannot be authenticated, whose UID must never be the target of a kill.
+* `def worker_processes(account: WorkerAccount) -> bool`: Whether the account still owns a process that can run, by real or effective user. Observation only; a zombie does not count.
+* `def allocate_worker_account(role: str) -> WorkerAccount`: Allocate one fresh fixed identity in an already prepared runner-owned traversal boundary; reject account/home reuse and admitted sudo policy, verify private directory ownership, and forbid execution on failure.
+* `def prepare_worker_boundary(*, runner_environment: str) -> None`: Exclusively create the fixed runner-owned traversal root on a protected caller-admitted GitHub-hosted Linux runner; reject preexisting identities/paths. This does not restrict the rest of the host.
+* `def terminate_worker(account: WorkerAccount) -> None`: On a systemd host, disable the account's linger and stop its user manager, runtime directory and session slice; reset only units observed in the dead `failed` state, then require inactive state and absence of the linger/runtime paths. Double real/effective UID sweeps and mandatory lock/expiry are followed by a second revocation, removal of that account's cron/at jobs and post-lock quiescence checks. Every phase is attempted despite earlier failures; the first error is preserved and forbids success. The original grace applies normally; a mandatory sweep gets a fresh grace for emergency cleanup when an earlier failed phase exhausted it. Fixed administrative sudo commands target only the authenticated account; at job ids come from the bounded root queue listing.
+* `def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Run one dispatcher as the account and always terminate and lock its UID. The dispatcher starts with a umask of 077 (set inside the account, because `sudo`'s session applies the login umask). Only a zero exit of a dispatcher that left no running process behind returns; a failure, a timeout, a signal or a leftover process raises `WorkerExecutionError` with the bounded log.
+* `def neutral_log_line(line: str) -> str`: One line of output made inert for the Actions log: terminal controls become `?`, `##[` becomes `# #[` and every run of colons is spaced out, so neither workflow command grammar survives.
+* `def render_worker_log(result: WorkerResult, *, role: str) -> str`
+
+## `mod_base.build_ci.source`
+
+Owner: MB11. Inactive protected source inventory, post-quiescence inspection and atomic private
+tracked-source copy. The caller must authenticate listing provenance and generated roots. This
+does not allocate or freeze a worker, stage Git metadata/overlays/caches or assign candidate ownership.
+
+* `class SourceError(MbError)`: Source inventory or immutable copy failed closed.
+* `class GitSourceEntry`: A frozen tracked blob identity.
+  * fields: `path: str, mode: str, size: int, git_blob: str`
+* `def parse_source_inventory(data: bytes) -> tuple[GitSourceEntry, ...]`: Parse bounded full-tree NUL-delimited Git blob records; reject submodules, aliases, malformed paths and oversized trees.
+* `def validate_source_inventory(inventory: tuple[GitSourceEntry, ...]) -> None`: Validate complete typed source inventory ordering, paths/closure/aliases, modes/blob identities and file/tree/entry bounds. Shape validation does not authenticate original tree/source provenance.
+* `def read_source_tree_inventory(api: GitHubApi, *, tree_sha: str) -> tuple[GitSourceEntry, ...]`: Read complete metadata at exactly this tree SHA with bounded paths, modes, sizes and directory closure. Validate the complete prefix cap before expanding inferred directories. Caller must independently bind source/tree provenance, live identity, policy and blob bytes.
+* `def authenticate_source_inventory(api: GitHubApi, *, identity: dict[str, Any]) -> tuple[GitSourceEntry, ...]`: Read the immutable tested tree through bounded GitHub transport, require exact blob/directory closure and sizes, and authenticate the live PR before and after listing. Existing transport caps remain additional limits; no candidate code executes.
+* `def verify_source_copy(root: Path, *, inventory: tuple[GitSourceEntry, ...], generated_roots: tuple[str, ...] = ()) -> list[dict[str, str | int]]`: Compare all tracked bytes/modes with the protected inventory, retaining SHA-256 and refusing undeclared paths.
+* `def materialize_source_copy(root: Path, output: Path, *, inventory: tuple[GitSourceEntry, ...]) -> list[dict[str, str | int]]`: Atomically publish a new private copy of clean tracked source after original, copied and independently inspected staged bytes agree; existing output is never replaced.
+
+## `mod_base.build_ci.host`
+
+Owner: MB11. Host filesystem fences for the initial protected GitHub-hosted Linux
+profile, used by `ci worker-prepare` and undone by `ci worker-finish`. The runner hides its fixed home and authenticates workspace/temp containment without
+following directory links. Root then closes the image itself before any worker account exists
+(D5 of the Build/E2E architecture): a hosted `ubuntu-24.04` image ships `/opt` with the tool
+cache, `/usr/share`, `/usr/local` and the JDKs writable by everyone. Neither fence establishes
+kernel assumptions or stages authenticated copies.
+
+* `HOST_RUNNER_HOME = '/home/runner'`
+* `HOST_FENCE_TREES = ('/opt', '/usr/share', '/usr/local', '/usr/lib/jvm', '/var/lib/gems')`
+* `class HostBoundary`: A frozen private runner-home identity, not execution or status authority.
+  * fields: `home: str, uid: int, gid: int, device: int, inode: int, original_mode: int`
+* `def inspect_worker_host(*, runner_environment: str, runner_home: str, workspace: str, runner_temp: str) -> HostBoundary`: The receipt `protect_worker_host` will return, without changing the home: the same admission of the hosted layout, with the home's current mode as `original_mode`. `ci worker-prepare` records it before it changes anything.
+* `def protect_worker_host(*, runner_environment: str, runner_home: str, workspace: str, runner_temp: str) -> HostBoundary`: Authenticate the initial runner-owned hosted layout and close home traversal to 0700. The home's group, the runner's passwd group and the process group must be one (every later receipt check compares them). Failures after chmod keep it private.
+* `def restore_worker_host(boundary: HostBoundary) -> None`: Runner-only, the last act of a job, once no worker account can run: give the recorded home (same device, inode, owner and group; mode 0700 or already the original) its original mode back. A second call changes nothing.
+* `def authenticate_host_boundary(boundary: HostBoundary) -> None`: Recheck the exact private runner-home inode before admitting either disposable UID.
+* `def privileged_runner_identity() -> tuple[int, int]`: Root-only. The `(uid, gid)` of the passwd account that owns the fixed runner home, derived from the filesystem and passwd and never from a request. It names an account; it is not a host fence receipt.
+* `def authenticate_privileged_host_boundary(boundary: HostBoundary) -> None`: Recheck a bounded nonprivileged runner receipt against actual passwd/home identity from protected Linux root setup; never admits a worker or selects arbitrary owner identities.
+* `def fence_worker_host(*, boundary: HostBoundary) -> None`: Root-only, before either fixed worker account exists. Authenticate the fenced home and read the bounded kernel mount table. Close the existing Android (`/usr/local/lib/android`), CodeQL (`/opt/hostedtoolcache/CodeQL`), .NET (`/usr/share/dotnet`) and Swift (`/usr/share/swift`) SDK roots to mode 0700, retaining and verifying their existing owner. Map each SDK through its containing mount to the actual filesystem root; refuse writable descendant-root mounts exposed outside its closure, including single-link bind aliases. Whole-SDK and ancestor aliases retain the closed top inode. An unrelated writable same-device mount may name a hidden hard link: retain the SDK's full repair in that case, reporting it as walked_closed. Repair each existing `HOST_FENCE_TREES` root with `find -xdev` under one shared 600-second deadline: remove group/other write from directories and regular files and their directories' default ACLs, without following links; prune only the four SDK roots whose closure and mount aliases were admitted, retaining the previous complete repair of every other private directory. Then prove the root filesystem outside the worker boundary has no reachable world-writable regular file, world-writable non-sticky directory, or group-writable regular file with multiple hard links; the latter covers access-ACL masks on aliases of skipped SDK files. The proof uses the same private-directory pruning and fails on any listed entry, incomplete bounded listing, unsupported closure or failed/timed-out command. Other filesystems and special files retain their prior treatment; sticky directories outside repaired trees remain unchanged. The existing `CI_HOST_FENCE_TIMEOUT_SECONDS` is not raised. Bounded informational diagnostics report mount admission, each SDK closure, each repaired tree, verification and total time, including failure; they grant no authority. A second run does not change already closed metadata.
+* `def execute_isolated_worker(account: WorkerAccount, *, boundary: HostBoundary, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Recheck the host fence before dispatching the bounded worker; failed admission terminates/locks the UID without launching.
+
+## `mod_base.build_ci.toolchain`
+
+Owner: MB11. Inactive bounded permission/identity closure of protected-selected host tools.
+A root may live anywhere: what admits it is that every entry, ancestor and link target passes
+the ownership and mode rules after the host fence, not its location. This does not establish
+installer provenance, byte integrity, complete import-root enrollment or compiler semantics.
+Protected setup and actual hosted Linux evidence remain required.
+
+* `class ToolTreeProof`: Immutable metadata receipt; not a content digest or build authority.
+  * fields: `roots: tuple[str, ...], metadata_sha256: str, files: int, entries: int, total_bytes: int`
+* `def inspect_worker_toolchains(*, boundary: HostBoundary, roots: tuple[str, ...]) -> ToolTreeProof`: Inspect every selected root, link target and ancestor under global limits, rejecting foreign owners, group/other-writable directories/files, special entries and default ACLs that grant untrusted write access. Keep complete metadata stamps for race checks during the scan. The receipt binds complete stamps for inventoried directories, links and files; a directory traversed only as an ancestor binds device, inode, type, owner, group and mode, without inventorying unrelated siblings. No installation or link prefix is special.
+* `def authenticate_toolchains(proof: ToolTreeProof, *, boundary: HostBoundary) -> None`: Reinspect the full closure and reject tool metadata drift or ancestor identity/permission drift. An ancestor outside the inventoried trees may change its link count, size and directory timestamps when unrelated siblings change; all ownership, mode and ACL checks still run.
+* `def execute_tool_fenced_worker(account: WorkerAccount, *, boundary: HostBoundary, tools: ToolTreeProof, command: tuple[str, ...], python: str, java_home: str | None, identity: dict[str, Any], run_id: int, run_attempt: int, values: Mapping[str, str], timeout_seconds: int) -> WorkerResult`: Bind Python/JDK paths and their resolved destinations to explicitly admitted roots, require a nonempty worker-executable regular Python file and worker-traversable JAVA_HOME directory, recheck tool and host fences, and terminate/lock without dispatch on failed admission.
+
+## `mod_base.build_ci.root_request_schema`
+
+Owner: MB11. The closed `mod-base.ci.root-request` v1 document: one private request of one root
+operation. Its `operation` is a member of `grammar.CI_ROOT_OPERATIONS` and its `arguments` are a
+closed object per operation; no field holds a program, a hook or a destination path. Only
+`stage-candidate` names directories, and only ones root reads below the fenced runner home. The
+operations around a candidate hook carry neither the bundle directory nor a generated root: root
+reads both from the protected controller copy. Validation proves shape and internal consistency
+only.
+
+* `def validate_root_request(document: Any, *, path: str = "$") -> dict[str, Any]`: Require the kind, version, a closed operation, a 64-hex nonce, the runner's host boundary and exactly that operation's arguments. An account named in the arguments must differ from the runner in uid and gid. `host-fence` carries no arguments; `stage-candidate` carries the candidate, `repository`, `tested_sha`, `tested_tree`, the complete tested-tree `inventory` (`path`, `mode`, `size`, `git_blob` rows, a valid source inventory in ascending path order), the `source` checkout directory, the `overlay` (`path`, pin `sha`, `version`, `tree_digest`) and a `gradle_seed` directory or null, every directory a canonical absolute path strictly below `/home/runner`; `freeze-build-validation` carries the validator, controller source metadata, plan, Build envelope, producing run/attempt and the execution nonce (distinct from the request nonce); `freeze-runtime-validation` carries the same with the complete owning Build, the lane's runtime envelope and the lane id. The lifecycle operations name the accounts of the job, `validator` and `candidate` (`null` in a job that allocated the validator alone; otherwise different from the validator in uid and gid): `grant-controller` adds the subject and the controller source metadata (same controller commit), `grant-plan-inputs` the staged candidate files as `inputs` (name and SHA-256 each: the inventory, the scenario contract, then the extra plan inputs by name), `take-derived-plan` and `take-derived-runtime` nothing, `grant-validation-inputs` the plan, `grant-build-validation` the plan and the Build envelope of `sealed-build/` (a target's partition or the complete Build of that plan; no producing attempt, because a lane's owning Build may come from another run), `grant-runtime-validation` the plan, the complete owning Build envelope, the lane's runtime envelope, the lane id and the producing run and attempt (bound as in `freeze-runtime-validation`). The operations around a candidate hook require both accounts: `stage-bundle` carries the controller source metadata, the plan and the complete Build `envelope`; `verify-candidate-source` the source metadata, the plan, the complete tested-tree `inventory` and the `execution` the runner retained (`returncode` exactly 0, `truncated`, `log_bytes`, `log_sha256`: a request after a failed hook cannot be written); `freeze-build-export` the same with a `target_id` of the plan and the `producer` identity of the executing run, bound to the plan's subject; `freeze-runtime-export` the same with a `lane_id` of the plan, the `producer`, the complete `build` envelope and the `owning_build` descriptor it binds to. Source, plan and envelope caps of the existing kinds apply unchanged.
+
+## `mod_base.build_ci.root_request`
+
+Owner: MB11. The private runner-to-root channel (D3 of the Build/E2E architecture). The runner
+publishes one canonical request per operation in its own directory below the worker root (0700
+directory, 0600 single-link file, never replaced) and starts the kit's root bootstrap for it. Root
+derives the runner from the host, re-reads the request through the private record reader and
+admits the live host fence before any operation runs. A request is data: it selects no code and
+proves no provenance. Root never calls the GitHub API.
+
+* `ROOT_PROGRAM = 'tools/ci_privileged_bootstrap.py'`
+* `def root_request_path(operation: str) -> PurePosixPath`: The fixed `WORKER_ROOT / 'root-request-<operation>'` directory of one closed operation; any other name is rejected.
+* `def request_host_fence(*, boundary: HostBoundary) -> str`: Runner-only. Publish the `host-fence` request, which carries nothing but the receipt of the fenced home, after the runner closed its home and before any worker account exists. Returns the request nonce.
+* `def request_candidate_staging(*, boundary: HostBoundary, candidate: WorkerAccount, repository: str, tested_sha: str, tested_tree: str, inventory: tuple[GitSourceEntry, ...], source: Path, overlay: Path, pin: Pin, expected_digest: str, gradle_seed: Path | None = None) -> str`: Runner-only. Publish the `stage-candidate` request, once, after both worker accounts were allocated and before the candidate ever runs. The caller has authenticated the tested commit and tree, holds the tree's complete inventory and has established that `pin` is a released kit commit; root repeats none of that. `source` is the runner's checkout of the tested commit, detached at it; `overlay` a staged kit of `pin` with its stamp and digest `expected_digest`; `gradle_seed` an optional restored cache holding only `caches/` and `wrapper/`. All three lie below the fenced runner home. Returns the request nonce for `run_root_operation("stage-candidate", ...)`.
+* `def request_controller_grant(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, subject: dict[str, Any]) -> str`: Runner-only. Publish the `grant-controller` request while `controller/` is still the runner's private copy of `sources`: the live accounts, the subject and the metadata of every source; the copy is verified before and inside publication. Returns the request nonce.
+* `def request_plan_inputs_grant(*, boundary: HostBoundary, validator: WorkerAccount, digests: Mapping[str, str]) -> str`: Runner-only. Publish the `grant-plan-inputs` request for the privately staged candidate files of `validation-input/` (`digests`: staged name -> SHA-256; listed as the inventory, the scenario contract, then the extra plan inputs by name), verified before and inside publication. Returns the request nonce.
+* `def request_validation_inputs_grant(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any]) -> str`: Runner-only. Publish the `grant-validation-inputs` request for the privately staged complete `validation-input/` (the plan and the files its identity binds), verified before and inside publication. Returns the request nonce.
+* `def request_derived_plan(*, boundary: HostBoundary, validator: WorkerAccount) -> str`: Runner-only. Publish the `take-derived-plan` request, which names only the live accounts: the output's place, name and bound are fixed in root. Returns the request nonce.
+* `def request_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) -> str`: Runner-only. Publish the `take-derived-runtime` request, which names only the live accounts. Returns the request nonce.
+* `def request_bundle_staging(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any]) -> str`: Runner-only. Publish the `stage-bundle` request after `stage-candidate` and before the candidate runs: the live accounts, the controller source metadata, the plan and the complete Build envelope the runner read in `sealed-build/`. The controller copy and the accounts are inspected before and inside publication. Returns the request nonce.
+* `def request_candidate_source_check(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], inventory: tuple[GitSourceEntry, ...], execution: Mapping[str, Any]) -> str`: Runner-only. Publish the `verify-candidate-source` request after a successful hook that exports nothing: the accounts, the source metadata, the plan, the complete inventory of the tested tree and the retained execution (`returncode` 0, `truncated`, `log_bytes`, `log_sha256`). Returns the request nonce.
+* `def request_build_export_freeze(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], inventory: tuple[GitSourceEntry, ...], execution: Mapping[str, Any], target_id: str, producer: dict[str, Any]) -> str`: Runner-only. Publish the `freeze-build-export` request after `build_target` succeeded for `target_id`; `producer` is the identity of the executing run attempt, which root writes into the envelope. Returns the request nonce.
+* `def request_runtime_export_freeze(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], inventory: tuple[GitSourceEntry, ...], execution: Mapping[str, Any], lane_id: str, producer: dict[str, Any], build: dict[str, Any], owning_build: dict[str, Any]) -> str`: Runner-only. Publish the `freeze-runtime-export` request after `run_lane` succeeded for `lane_id`; `build` is the complete Build of `sealed-build/` and `owning_build` the descriptor of its selection. Returns the request nonce.
+* `def request_build_validation_grant(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any], envelope: dict[str, Any]) -> str`: Runner-only. Publish the `grant-build-validation` request once per job, while `sealed-build/` is still the runner's private export: the live accounts, the plan and the envelope the runner read there (`inputs.read_sealed_build`). The directory is read again inside publication, so nothing is published for another export. Returns the request nonce.
+* `def request_runtime_validation_grant(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int) -> str`: Runner-only. Publish the `grant-runtime-validation` request once per lane job, after its owning Build was granted and while `sealed-runtime/` is still the runner's private copy; both directories are read again inside publication (`runtime_inputs.read_sealed_runtime`), where the Build must be granted already. Returns the request nonce.
+* `def request_build_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int, execution_nonce: str) -> str`: Runner-only. Publish the `freeze-build-validation` request for the retained source receipt, plan, frozen Build and the nonce of the published execution record; the controller copy and both read-only inputs are inspected before and inside publication. Returns the request nonce.
+* `def request_runtime_validation_freeze(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int, execution_nonce: str) -> str`: Runner-only. Publish the `freeze-runtime-validation` request for one lane, keeping the complete owning Build's own cross-run identity; the caller's three documents are canonicalised once and compared again inside publication together with all three input roots. Returns the request nonce.
+* `def run_root_operation(operation: str, *, python: str, kit_root: Path, kit_digest: str, nonce: str) -> None`: Runner-only. Run `/usr/bin/sudo -n -- <python> -I -B -S <kit_root>/tools/ci_privileged_bootstrap.py --operation <operation> --kit <kit_root> --kit-digest <kit_digest> --nonce <nonce>` with a fixed environment, the worker root as working directory and no inherited descriptors, bounded by `CI_ROOT_OPERATION_TIMEOUT_SECONDS`. `kit_root` and `kit_digest` are the checkout and digest the job prologue verified. A non-zero exit, a timeout or a signal raises with the child's first bounded stderr line.
+* `def read_root_request(operation: str, *, nonce: str) -> tuple[HostBoundary, dict[str, Any], bytes]`: Root-only. Derive the runner from the fixed home, read the private canonical request of exactly this operation and nonce, require its boundary to name that runner and to be the live fenced home, and check the worker root layout. Returns the boundary, the closed arguments and the record bytes.
+
+## `mod_base.build_ci.root_request_operations`
+
+Owner: MB11. The closed set of root operations behind the request channel; the only kit entry of
+`tools/ci_privileged_bootstrap.py`. Operations rebuild their inputs from the request's closed data
+and from protected copies on disk; none calls the GitHub API.
+
+* `def candidate_generated_roots(config: Mapping[str, Any]) -> tuple[str, ...]`: The directories of a candidate checkout that may hold files the tested tree does not track, sorted: the kit overlay (`pin.OVERLAY_PATH`) and the `bundle.path` of the validated protected config `config`. Neither may lie inside the other. Protected policy, never a candidate claim.
+* `def execute_root_operation(operation: str, *, kit_root: str, kit_digest: str, nonce: str) -> None`: Require real Linux root; require the importing package to be `kit_root`'s, its kit-digest-v1 to equal `kit_digest` and its `template/`, `tools/` and `actions/` to match the staged-file locks; admit the request and the live host fence; run the one fixed operation; re-read the request unchanged. `host-fence` runs `host.fence_worker_host` for the request's boundary. `stage-candidate` requires the live candidate (and the validator beside it) to be the accounts the request names and runs `worker_preparation.prepare_privileged_worker_checkout` on the request's directories, identities, inventory and pin, leaving the candidate's `repository/` and Gradle home ready. `freeze-build-validation` and `freeze-runtime-validation` require the plan to name this kit's version and digest, rebuild the source receipt from the validator's protected controller copy, authenticate the read-only inputs before and after, seal the verifier receipt bound to the published execution record and always terminate the validator. The lifecycle operations require the live accounts to be exactly the ones the request names (a candidate the request does not name must not exist): `grant-controller` requires the subject to name this kit, rebuilds the source receipt from the still private `controller/` and runs `controller.prepare_controller_validation`; `grant-plan-inputs` runs `inputs.prepare_plan_inputs`; `take-derived-plan` runs `inputs.take_derived_plan`; `grant-validation-inputs` requires the plan to name this kit and runs `inputs.prepare_validation_plan`; `take-derived-runtime` runs `runtime_handoff.take_derived_runtime`. The operations around a candidate hook require both live accounts to be the ones named and the plan to name this kit, and read the protected Build config from the validator's controller copy (rebuilt from the request's source metadata, unchanged at the end): `stage-bundle` runs `exports.stage_build_bundle` for the config's `bundle.path`; the other three bind the request's inventory to the tested tree of the plan by recomputing the tree's object name and take the generated roots from `candidate_generated_roots`: `verify-candidate-source` runs `exports.verify_candidate_source`, `freeze-build-export` runs `exports.freeze_build_export` and `freeze-runtime-export` runs `runtime_freeze.freeze_runtime_export`; `grant-build-validation` requires the plan to name this kit and the envelope in `sealed-build/` to be byte for byte the one the request names before anything is granted, then runs `exports.prepare_build_validation` and requires the Build it verified and granted to be that envelope; `grant-runtime-validation` requires the plan to name this kit and runs `runtime_inputs.prepare_runtime_validation` on the request's plan, Build, lane and attempt.
+
+## `mod_base.build_ci.selection`
+
+Owner: MB11. Newest Build selection before success, and its use by a packaged run. A producer
+run is found by the managed Build caller's workflow file and, for a
+pull request, the `pull_request_target` event and the pull request's head commit, head branch and
+source repository; for a protected subject, a `push` or `workflow_dispatch` event on the default
+branch at the tested commit. There is no status filter and no run-title contract. The newest run by
+`(created_at, id)` and its latest attempt are chosen before any result is read. No run or an
+unfinished one means nothing yet for a pull request, whose wait continues; a protected subject
+without a run builds for itself, and an unfinished run is a rejection for it. A completed run with
+the exact deferral graph (pull request) or reuse graph (protected subject) is not a producer; a
+successful run with the exact full graph is described; anything else is a rejection, never a fall
+back to an older run. A standalone packaged run that built for itself reads that Build while the
+run is still in progress.
+
+* `SELECTION_NAME = 'ci-selection.json'`: the name of the selection record in the state directory of a job that selects or consumes a Build.
+* `SAME_RUN = 'same-run'`: the `--build-run-id` of a standalone packaged run whose `rebuild` job built in that run.
+* `def newest_run(api: GitHubApi, producer: str, *, head_sha: str, head_branch: str, head_repository: str, events: tuple[str, ...]) -> dict[str, Any] | None`: The newest run of the managed caller `producer` that GitHub lists under one head, whatever its result: `{id, run_attempt, created_at, status, conclusion, event}` or None. `events` are the events that start such a run; a single one is also the listing's filter. No status filter.
+* `def pending_run(run: dict[str, Any]) -> None`: Require the state of a run that has not completed to be a real pending one (a known status and no conclusion).
+* `def producer_record(plan: dict[str, Any], *, caller: str, run_id: int, run_attempt: int, event: str, graph_sha256: str) -> dict[str, Any]`: The producer identity a descriptor carries for one run attempt of a managed caller for the plan's subject, without an upload window.
+* `def describe_artifact(api: GitHubApi, *, plan: dict[str, Any], producer: dict[str, Any], jobs: list[dict[str, Any]], kind: str, unit_id: str | None = None) -> dict[str, Any]`: Describe the one `kind` artifact of a run attempt from API data alone: the upload window of the job that uploads it (sealed first) and the only artifact of its exact name in the run. Returns a structurally valid descriptor; its consumer authenticates the run and the artifact's metadata, owner and availability.
+* `def select_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], watch: Watch | None = None) -> dict[str, Any] | None`: Admit the live pull request, then describe the complete bundle of its newest Build run, or return None while it is absent, pending or deferred. One observation: a consumer repeats it before its effect. With `watch`, the mutable state of a command under way, the observation joins it: what the watch holds is not read again and the command's own recheck repeats the listing.
+* `def select_latest_merged_pr_build(api: GitHubApi, *, plan: dict[str, Any], controller_sha: str, merged_sha: str) -> dict[str, Any] | None`: The same after historical admission of the merged pull request; the original runs stay recorded under the pull request's head. None is absence, not reuse approval.
+* `def revalidate_latest_merged_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str) -> None`: Repeat the historical newest-run observation and require the same descriptor.
+* `def wait_for_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], wait_seconds: int = limits.CI_BUILD_WAIT_SECONDS, monotonic: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]`: Wait at most the monotonic 5400-second deadline and 91 observations; `wait_seconds` (1 to 5400) may shorten the deadline, never extend it. The pull request is admitted when the wait starts and again when a bundle is returned; in between a poll reads only the run listing. Late API results never admit; API, corruption and failed-producer errors propagate.
+* `def revalidate_latest_pr_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], watch: Watch | None = None) -> None`: Repeat the newest-run observation (in `watch` when the caller has one) and require the same descriptor. The packaged gate calls it for the Build its run consumed.
+* `def download_latest_pr_build(api: GitHubApi, *, plan: dict[str, Any], output: Path, wait_seconds: int=limits.CI_BUILD_WAIT_SECONDS, monotonic: Callable[[], float]=time.monotonic, sleep: Callable[[float], None]=time.sleep, source_config_sha256: str | None=None) -> dict[str, Any]`: Wait/select, download by immutable numeric ID, verify the canonical envelope and bytes, and observe the pull request, the newest run, its latest attempt and the bundle's availability again inside the private atomic copy before publication. Returns the descriptor and envelope. The complete Build must carry its validation record and reports; `source_config_sha256` binds the protected config the caller loaded when available.
+* `def select_protected_build(api: GitHubApi, *, plan: dict[str, Any], watch: Watch | None = None) -> dict[str, Any] | None`: Admit the live protected subject, then describe the complete bundle of the newest Build run of its commit. None when no run exists or the newest one is an admitted reuse (the caller builds for itself); a pending, failed or cancelled newest run is a rejection. One observation, which cannot wait and which joins `watch` like `select_latest_pr_build`: the selection that waits for a run in progress is `download_protected_build`.
+* `def revalidate_protected_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], watch: Watch | None = None) -> None`: Repeat that observation (in `watch` when the caller has one) and require the same descriptor.
+* `def download_protected_build(api: GitHubApi, *, plan: dict[str, Any], output: Path, run_id: int | None=None, wait_seconds: int=limits.CI_BUILD_WAIT_SECONDS, monotonic: Callable[[], float]=time.monotonic, sleep: Callable[[float], None]=time.sleep, source_config_sha256: str | None=None) -> dict[str, Any] | None`: Select the newest Build run of a protected subject (which must be `run_id` when one is named; None only when nothing is selected and no run was named), download its bundle by numeric ID and observe the subject, the newest run, its latest attempt and the bundle's availability again before publication. A newest run that is still in progress is waited for with the bounded wait of a pull request (`wait_seconds`, 1 to 5400, one listing request per poll; the subject is admitted when the wait starts and again when it ends): the packaged run of a push starts together with the Build run of that push. Only that waits: no run or an admitted reuse answers None at once, a failed or cancelled newest run is a rejection at once, and so is a run that does not finish within the wait. Returns the descriptor and envelope. The complete Build must carry its validation record and reports; `source_config_sha256` binds the protected config the caller loaded when available.
+* `def download_rebuilt_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attempt: int, event: str, output: Path, descriptor: dict[str, Any] | None=None, source_config_sha256: str | None=None) -> dict[str, Any]`: For a later job of the standalone packaged run that built for itself: authenticate the run's latest attempt (still in progress), its controller and kit pin and the finished guard, selection and Build jobs with their seals, describe the bundle the assembling job uploaded (which must be `descriptor` when one is given), download it and observe the mutable part again before publication. Returns the descriptor and envelope. The complete Build must carry its validation record and reports; `source_config_sha256` binds the protected config the caller loaded when available.
+* `def select_build(api: GitHubApi, *, plan: dict[str, Any], run_id: int, run_attempt: int, workflow_path: str, event: str, temporary_root: Path, build_run_id: int | str | None=None, wait_seconds: int=limits.CI_BUILD_WAIT_SECONDS, monotonic: Callable[[], float]=time.monotonic, sleep: Callable[[float], None]=time.sleep, source_config_sha256: str | None=None) -> dict[str, Any] | None`: The selection record (`records.build_source_selection`) of the exact Build that run attempt of the packaged caller consumes, or None when a protected subject has no Build to select. A pull request names no run and waits (`download_latest_pr_build`); a protected subject takes the newest Build run of its commit, waiting within the same `wait_seconds` while that run is in progress, which must be `build_run_id` when that is a run id (`download_protected_build`), or with `SAME_RUN` the Build this run built (`download_rebuilt_build`). The bundle is verified in a private directory below `temporary_root` and removed; the request names the run attempt, `workflow_path` on the default branch and a fresh 256-bit nonce. The complete Build must carry its validation record and reports; `source_config_sha256` binds the protected config the caller loaded when available.
+* `def fetch_build(api: GitHubApi, *, record: dict[str, Any], plan: dict[str, Any], run_id: int, run_attempt: int, workflow_path: str, event: str, output: Path, source_config_sha256: str | None=None) -> dict[str, Any]`: Bind the protected input job's selection record to this run attempt (`records.bind_source_selection`), then download its exact numeric artifact id, checking size and digest, and publish the complete bundle through `transport._materialize_build`. The input job and gate authenticate freshness; this lane repeats no run or source observation. The envelope must hash to the record's `envelope_sha256`. Returns the envelope. The complete Build must carry its validation record and reports; `source_config_sha256` binds the protected config the caller loaded when available.
+
+## `mod_base.build_ci.transport`
+
+Owner: MB11. Numeric-ID transport for Build/runtime exports and tested gates. A producer run is
+authenticated as GitHub records it (a pull request's run under its head commit and branch, a
+protected push or dispatch under the commit it runs from); its controller commit and kit pin come
+from `referenced_workflows`. The producers are the managed callers of `workflow.CI_CALLER_WORKFLOWS`,
+so no route takes a workflow path. Each route reads commits and completed job lists once and the
+source, each run's latest attempt and each artifact's availability at its start and again
+immediately before it publishes or returns. Plans and descriptors are copied on entry. The readers
+of a merged pull request's original gates tell evidence that is gone from evidence that is corrupt:
+an artifact that has expired, that its run no longer lists or whose numeric id answers 404 or 410
+raises `OriginalUnavailable`, after its immutable metadata and its owner were compared; every
+other failure is a rejection, and so is an artifact that goes between a reader's first observation
+and its last.
+
+* `class ArtifactUnavailable(DocumentError)`: A selected artifact is no longer listed for its producer run, or has expired. For a route that needs the artifact it is a rejection like every other document error (same message, reason `invalid-document`, exit 2).
+* `class OriginalUnavailable(Unavailable)`: An artifact of a merged pull request's original gates is gone or has expired: reason `ci-original-unavailable`, exit 3. Nothing is corrupt; whoever meant to reuse the evidence tests again.
+* `def download_completed_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], output: Path, source_config_sha256: str | None=None) -> dict[str, Any]`: Authenticate the live subject, the exact completed latest attempt of a full Build-caller run, its controller and kit pin, exact graph and the assembling job's upload window; bind artifact metadata, expiry, owner and head and the ZIP digest; verify the canonical envelope and inventory and atomically publish a private copy. Newest-run selection, native validity and final authorization remain required. The complete Build must carry its validation record and reports; `source_config_sha256` binds the protected config the caller loaded when available.
+* `def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], plan: dict[str, Any], run_id: int, run_attempt: int, output: Path, source_config_sha256: str | None = None) -> list[dict[str, Any]]`: With `source_config_sha256` (the digest of the protected Build config the reader loaded) every artifact is what a target job uploads, the partition with its `verify_target` validation record beside the envelope, which is verified against the partition and kept out of the published inputs; without it every artifact is the bare partition. For the assembling job of a still-running full Build run (or of a standalone packaged run that rebuilds): require the exact ordered complete same-attempt target descriptors and the extra compressed-set budget, finished plan, policy and target jobs with their sealed upload windows, download each checked ZIP into fixed target-ordinal children of one private atomic stage, verify the whole logical export and publish all or nothing. Returns descriptor/envelope pairs.
+* `def download_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, temporary_root: Path) -> dict[str, Any]`: Read one tested record of the live subject by numeric ID: the mode of its run is settled from the descriptor's graph digest, the run, exact graph, gate seal and upload and artifact metadata are authenticated, only the fixed canonical root JSON record is extracted, the execution timeline and every source artifact's metadata and availability are bound, and a Build consumed from a separate run is authenticated as its own completed full run.
+* `def download_merged_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], gate: str, controller_sha: str, merged_sha: str, temporary_root: Path) -> dict[str, Any]`: The same for one original PR seal after merge, under historical admission of the merged pull request; original producer identities are preserved. No reuse or settlement effect is approved.
+* `def download_merged_gate_pair(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any]]`: Read both original tested seals once and require the packaged gate's owning Build to be the Build gate's bundle. Never a partial result or reuse authority; a seal or source artifact that is gone raises `OriginalUnavailable`.
+* `def download_merged_build(api: GitHubApi, *, build_descriptor: dict[str, Any], packaged_descriptor: dict[str, Any], plan: dict[str, Any], controller_sha: str, merged_sha: str, output: Path, source_config_sha256: str | None=None) -> dict[str, Any]`: Privately materialize the exact original complete Build bundle of a coherent historical seal pair, observing the pair's mutable state again inside the atomic publication. The complete Build must carry its validation record and reports; `source_config_sha256` binds the protected config the caller loaded when available.
+
+## `mod_base.build_ci.describe`
+
+Owner: MB11. Descriptors of the artifacts a running attempt has uploaded so far, for a fan-in or
+gate job of that same attempt. The attempt's job listing and the run's artifact listing are each
+read once: every job that must have finished shows the conclusion its graph expects
+(`graph.require_partial_graph`), every expected artifact is listed exactly once, unexpired,
+within the size cap of its kind and under this run and the subject's head, and its window is the
+upload step of the job that sealed it. A job or an artifact of an earlier attempt is refused as a
+failed-jobs-only rerun. The run, the source and the bytes are authenticated by the caller.
+
+* `def attempt_producer(record: dict[str, Any], plan: dict[str, Any], *, mode: str, run_id: int, run_attempt: int) -> dict[str, Any]`: The producer identity (no upload window) that every record and descriptor of this attempt carries: the caller and the event of the job's identity record (`identity.read_subject`), the head GitHub records the run under and the graph digest of `mode` for `plan`. The plan must be of the record's subject.
+* `def settled_jobs(producer: str, mode: str, plan: dict[str, Any], kind: str, unit_id: str | None = None) -> list[str]`: The jobs of a run of `producer` in `mode` that have finished when the job that uploads the `kind` artifact seals (`build`: the assembling job; `results`: the aggregating job; `tested` with its gate as `unit_id`): every job that succeeds in its own call or an earlier one, except itself and the gate that follows it, and every job the mode skips.
+* `def settled_artifacts(producer: str, mode: str, plan: dict[str, Any], kind: str, unit_id: str | None = None) -> list[tuple[str, str | None]]`: `(kind, unit_id)` of the artifact every sealing job among `settled_jobs` has uploaded, in the order the run produces them.
+* `def attempt_jobs(api: GitHubApi | CommandReads, run_id: int, run_attempt: int) -> list[dict[str, Any]]`: Every job of one running attempt, read once (`github.jobs.attempt_jobs`); a job of an earlier attempt in the listing is refused as what a failed-jobs-only rerun leaves behind.
+* `def describe_attempt(api: GitHubApi | CommandReads, *, producer: dict[str, Any], plan: dict[str, Any], mode: str, expected: Sequence[tuple[str, str | None]], finished: Sequence[str] = ()) -> list[dict[str, Any]]`: Canonical descriptors (`records.validate_descriptor`) of the distinct `expected` `(kind, unit_id)` artifacts of this attempt, in the order given, from two requests. `producer` is `attempt_producer` for `mode`; `finished` names further jobs that must have finished beside the uploading ones; with nothing expected only the jobs are read and required. A missing, expired, repeated, oversized or foreign artifact, an artifact of an expected kind the plan does not expect, a job that has not finished as the graph expects or did not seal before its upload, and a job or artifact of an earlier attempt are distinct rejections. One observation: a caller that produces an effect describes again before it.
+
+## `mod_base.build_ci.gate`
+
+Owner: MB11. What the sealing jobs of a run prove about their own running attempt before they
+seal a record: the gate its tested record, the aggregating job of a packaged run the results
+index. The job's identity record fixes the modes that can reach the gate; a pull request has one,
+and a protected run shows which of its modes it is by the job names of its own attempt, never by
+an input of the gate job. In that mode the gate requires the live source, the run as its latest
+attempt in progress (bound to the controller commit and kit pin), every job the graph finishes
+before the gate with its expected conclusion (success or skipped) and seal-before-upload, and
+every artifact those jobs uploaded. The completed graph and the chronology are the reader's proof
+(`graph.authenticate_gate_timeline`).
+
+* `class Attempt`: A running attempt authenticated for the sealing step of its gate job. `reads` and
+  `watch` are the command's reads so far (whoever seals rechecks the watch before its effect),
+  `producer` is the attempt's identity without a window and `descriptors` are the artifacts of
+  `describe.settled_artifacts`, in that order.
+  * fields: `reads: CommandReads, watch: Watch, plan: dict[str, Any], producer: dict[str, Any], gate: str, mode: str, descriptors: list[dict[str, Any]]`
+  * `descriptor(self, kind: str, unit_id: str | None = None) -> dict[str, Any]`
+* `def admissible_modes(record: dict[str, Any], gate: str) -> tuple[str, ...]`: The modes in which a run of the record's caller reaches `gate` (which must be the record's producer) for the record's subject: one for a pull request; for a protected subject never the pull-request mode, and `reuse` too when the event is a push and the gate is the caller's own.
+* `def authenticate_attempt(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan: dict[str, Any], gate: str, run_id: int, run_attempt: int) -> Attempt`: Admit the source, settle the mode, authenticate the run and describe the settled jobs' artifacts under one watch. Nothing is sealed.
+* `def seal_gate(attempt: Attempt, *, config_sha256: str, temporary_root: Path, selection: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]`: `(grammar.CI_GATE_NAME, receipt)` of an attempt in a mode other than `reuse`. A Build gate takes no `selection`: it downloads the complete Build of the attempt, verifies the export against the plan and its `verify_build` validation record (frozen under `config_sha256` over the canonical envelope) and names the bundle and every target's report. A packaged gate needs `selection`, the record its `input` job handed to the gate job, and binds it to the attempt (`records.bind_source_selection`): it downloads the results index, requires exactly the lane artifacts this attempt uploaded, requires the index to own the Build and the envelope hash of that record, and authenticates that Build: the rebuilt one, or the complete bundle of the newest run of the Build caller for the live subject, observed again in the attempt's watch (`selection.revalidate_latest_pr_build`, `revalidate_protected_build`). The watch is rechecked before return.
+* `def seal_reuse(attempt: Attempt, *, temporary_root: Path) -> tuple[str, dict[str, Any]]`: `(grammar.CI_REUSE_NAME, reference)` of an attempt authenticated in `reuse` mode. The admission runs once more through the attempt's reads (`reuse.admit_post_merge_reuse`), so the gate depends on nothing its plan job said; the reference is `records.reuse_reference` of the attempt's plan and identity and the admitted source. A reuse that is no longer admitted raises `reuse.ReuseRefused` (the skipped workers cannot be made up for in the gate), and what stops an admission stops the gate. The attempt's watch and the admission's are rechecked before return.
+* `def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan: dict[str, Any], selection: dict[str, Any], run_id: int, run_attempt: int, config_sha256: str, temporary_root: Path) -> tuple[str, dict[str, Any]]`: `(grammar.CI_RESULTS_NAME, index)` of the running packaged attempt whose aggregating job calls it. `selection` is the selection record its `input` job handed to the job and must be this attempt's own request (`records.bind_source_selection`). The attempt is authenticated like a gate's (never in `reuse` mode) with exactly one artifact of this attempt for every planned lane and none for another; each lane is then downloaded by id, one at a time, and its export verified against the plan and bound to the selected Build, and its `verify_runtime` validation record verified against `config_sha256` and the digest of the plan, the selected Build's envelope hash and the lane's envelope. The Build bundle is not read. The watch is rechecked before return.
+
+## `mod_base.build_ci.commands_build`
+
+Owner: MB11. `ci assemble`, `ci aggregate` and `ci seal-gate`, listed in `commands.VERB_MODULES`:
+the fan-in and gate steps of a Build or packaged run. All take the job arguments
+(`commands.add_job_arguments`: `--repo`, `--config`, `--state DIR`), read `identity.json` and
+`ci-plan.json` of the state and the run and attempt from `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`,
+and build their API client through `commands.api_client` with an explicit budget. The state must
+belong to the executing repository and controller commit and the plan to the subject of the
+state. Downloads go into a temporary directory inside the state and are removed again; a record
+is written last, as the one file of a directory the command creates.
+
+* `PARTITIONS_NAME = 'ci-partitions.json'`: the state record `ci assemble` writes last: `{"descriptors", "envelope_sha256"}`, the partition descriptors in plan order and the SHA-256 of the assembled envelope.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register the three verbs on the `ci` verb group. `assemble` has no flag of its own; `aggregate --selection FILE --output DIR`; `seal-gate --gate build|packaged [--selection FILE] --output DIR` (`--selection` for a packaged gate outside a reuse run, and only there).
+* `def run_assemble(args: argparse.Namespace) -> int`: The `assemble` handler, a step of a Build job in a full run of the Build caller or in a packaged run that rebuilds: describes the partition of every planned target of this attempt, downloads them with the validation record each target job uploaded (`transport.download_target_set` with the digest of the protected Build config) and assembles their exact union into `exports.BUILD_VALIDATION_ROOT`, which must not exist. Budget `MAX_CI_ASSEMBLE_REQUESTS`.
+* `def run_aggregate(args: argparse.Namespace) -> int`: The `aggregate` handler, the sealing step of the aggregating job of a packaged run: reads the selection record the job received (`--selection`, `commands_packaged.received_selection`) and writes the index of `gate.seal_results` as `ci-results.json`, the one file of the new directory `--output`. Budget `MAX_CI_AGGREGATE_REQUESTS`.
+* `def run_seal_gate(args: argparse.Namespace) -> int`: The `seal-gate` handler: reads the selection record of `--selection` before any request (a Build gate is refused one), then `gate.authenticate_attempt` and `gate.seal_gate` with that record and the digest of the protected Build config of the mod checkout, or `gate.seal_reuse` in a reuse run, which is refused a record too; the result is written last as the one file of the new directory `--output`. Budget `MAX_CI_GATE_REQUESTS`.
+
+## `mod_base.build_ci.reuse`
+
+Owner: MB11. Post-merge reuse: whether the two gates of a merged pull request cover the push that
+landed it. The decision has three outcomes that are never blurred: `ReuseAdmitted`,
+`FullRunRequired` with one of `FULL_RUN_REASONS`, or an error that stops the job (an API failure,
+malformed or ambiguous metadata, a digest or graph that differs from an authenticated record, an
+original run that has not finished).
+
+Admission requires, in this order: the pushed commit is the final commit of exactly one merged
+pull request of this repository into the default branch, found from the commit; the newest Build
+run and the newest packaged run of that pull request's last head, chosen before any result is
+read, completed successfully as their latest attempts under the executing kit pin, neither a draft
+deferral nor a reuse run nor a run that lists a reuse reference; the Build record's claim of what
+it was sealed for holds field by field against the push (complete tree, policy digest, kit pin,
+inventory, scenario contract, runtime selection) and its plan hash is the hash of the push's own
+plan under the original identity (`records.original_plan`); both runs show exactly the full graph
+of their caller for that plan and both tested records read and pair coherently
+(`transport.download_merged_gate_pair`'s proof: merged history, ordered parents of the original
+test merge, equal trees, runs, seals, upload windows, timelines, and the packaged gate's Build
+being the Build gate's bundle); every artifact both records name is still available.
+
+* `FULL_RUN_REASONS`: reason token -> one line of words, for the seventeen ordinary reasons to test again: `not-a-push`, `no-merged-pull-request`, `several-merged-pull-requests`, `foreign-pull-request`, `no-original-run`, `original-run-failed`, `original-run-deferred`, `original-run-reused`, `original-run-of-another-pull-request`, `kit-pin-differs`, `merged-tree-differs`, `policy-differs`, `inventory-differs`, `scenario-contract-differs`, `runtime-selection-differs`, `plan-differs`, `original-evidence-unavailable`.
+* `ADMITTED_REASON = 'identical-tested-tree'`: the `reason` output of an admitted reuse.
+* `class OriginalPending(MbError)`: An original run of the merged pull request has not finished: reason `ci-original-pending`, exit 2. Neither a reuse nor a full run, which would race evidence whose result is unknown.
+* `class ReuseRefused(MbError)`: A run that skipped its workers for reuse is no longer covered by the original gates: reason `ci-reuse-refused`, exit 2. Its gate seals nothing; rerunning all jobs decides again.
+* `class FullRunRequired`: The push builds and runs in full. `reason` is a key of `FULL_RUN_REASONS`, `detail` one line of words.
+  * fields: `reason: str, detail: str`
+* `class ReuseAdmitted`: The push is covered by both original gates of pull request `pr_number`. `source` is the `source` of the reuse reference (original identity, plan hash, profile, both seal descriptors); `watch` holds everything mutable the admission read.
+  * fields: `pr_number: int, source: dict[str, Any], watch: Watch`
+  * `recheck(self) -> None`
+* `def admit_post_merge_reuse(api: GitHubApi | CommandReads, *, plan: dict[str, Any], event: str, temporary_root: Path) -> ReuseAdmitted | FullRunRequired`: Decide for the subject of `plan` (the job's protected plan) in a run of `event`. Any event but a push answers `FullRunRequired('not-a-push')` without a request. One observation that writes nothing: whoever acts on an admission calls its `recheck` immediately before. The Build record is downloaded twice (as the claim that names the test merge, then as evidence) and the packaged record once, into `temporary_root`, and removed; no bundle and no lane result is read.
+* `def download_reuse_reference(api: GitHubApi | CommandReads, *, descriptor: dict[str, Any], plan: dict[str, Any], temporary_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]`: For a consumer that trusts a reused generation: `(reference, Build receipt, packaged receipt)` of the `mb-ci-reuse` artifact `descriptor` selects, for the consumer's own plan of the live default-branch commit. The covering run must be the latest attempt of a completed successful push run in exactly the reuse graph whose attempt lists no other evidence of its own (a mixed generation is rejected), and its gate must have started sealing after its own prerequisites and every job of both original runs had finished. The original pair is authenticated again by id; an original artifact that has expired since raises `transport.OriginalUnavailable`. Everything mutable is observed again before return. Whether that run is the newest one of its caller for the commit stays the consumer's own selection.
+
+## `mod_base.build_ci.commands_reuse`
+
+Owner: MB11. `ci reuse-admit`, listed in `commands.VERB_MODULES`: the step after `ci plan` in the
+plan job of a Build run and in the one job of `select-build.yml`, on a push to the default branch.
+It takes the job arguments and `--github-output FILE`, reads `identity.json` and `ci-plan.json`
+of the state and decides (`reuse.admit_post_merge_reuse`). Both managed callers run the same
+decision over the same evidence; neither takes the other's answer, and each gate decides once
+more before it seals.
+
+* `ADMISSION_NAME = 'ci-reuse-admission.json'`: the state record the command writes: `{"mode": "reuse", "reason", "pr_number", "identity", "plan_sha256", "profile", "source"}` (the covered binding and the source the gate's reference will name) or `{"mode": "full", "reason", "detail"}`.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `reuse-admit --github-output FILE` on the `ci` verb group.
+* `def run_reuse_admit(args: argparse.Namespace) -> int`: The `reuse-admit` handler: outputs `mode` (`reuse` or `full`) and `reason` (`reuse.ADMITTED_REASON` or a key of `reuse.FULL_RUN_REASONS`), writes the state record and prints one line. A `reuse` is written only after the admission was rechecked; what must stop the job writes nothing and fails the step. The state must belong to the executing repository and controller commit. Budget `MAX_CI_REUSE_ADMIT_REQUESTS`.
+
+## `mod_base.build_ci.handoff`
+
+Owner: MB11. Fixed private runner-origin execution data channel; no native/status authority.
+
+* `EXECUTION_HANDOFF_ROOT`: fixed runner-private execution record directory beneath WORKER_ROOT.
+* `def validate_execution_handoff(document: Any, *, path: str = "$") -> dict[str, Any]`: Strict new local v1 kind with bounded canonical binary log, no program/path/hook fields. Structural validation proves no physical origin or actual execution.
+* `def record_build_validation_execution(*, boundary: HostBoundary, sources: ControllerSources, bound: BuildValidationExecution, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int) -> str`: Runner-only exclusive private publication of genuinely retained successful execution bound to protected context; return a fresh random nonce. Caller owns genuine execution provenance and mandatory UID quiescence.
+* `def freeze_handed_off_build_validation(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], envelope: dict[str, Any], run_id: int, run_attempt: int, nonce: str) -> dict[str, Any]`: Root-only admit fixed runner-owned single-link private canonical record and exact nonce/attempt/source/plan/input, reconstruct data and delegate existing independent input-bound receipt freeze. Fixed root program/import/installer/source provenance and native semantics remain separate requirements.
+
+## `mod_base.build_ci.archive`
+
+Owner: MB11. Local stored ZIP encoding of sealed exports, not upload/native/status authority.
+
+* `def encode_build_export(root: Path, output: Path, *, plan: dict[str, Any]) -> dict[str, Any]`: Verify canonical source export, stream sorted exact payload/envelope bytes through no-follow child reads into one exclusive private stored ZIP with fixed metadata and the existing 512 MiB compressed cap applied before every physical write including ZIP metadata. Independently extract/reverify the archive, recheck complete source and hash the bounded ZIP before atomic directory publication. Return local path/size/SHA-256; protect ancestry/quiescence separately. Never upload this file as an extra nested GitHub artifact or infer actual server ZIP size/digest.
+
+## `mod_base.build_ci.gradle_cache`
+
+* `def stage_privileged_gradle_cache(seed: Path, *, boundary: HostBoundary, account: WorkerAccount) -> list[dict[str, Any]]`: Before a fresh candidate UID starts, require actual Root/fenced home and exact `candidate` passwd admission with no processes; the destination is the fixed `candidate-home/gradle-home`. Admit a protected-policy, secret-free, writer-excluded restored seed under runner home, with only caches/wrapper root directories and original BP 250000-entry/200000-file/2 GiB-file/20 GiB-total caps. Require originally empty allocated Gradle home, fence its access to Root while making independent files, recheck source inventories/bytes and original directory bindings, normalize a newly populated independent private copy to worker-owned 0700/0600 and recheck. Any admitted failure locks/terminates the worker and returns no authority; partial private data can remain. Shape/hash checks certify neither arbitrary data's secret absence nor installer approval; restoration provenance, no earlier UID execution and production/Linux integration remain mandatory.
+
+## `mod_base.build_ci.worker_overlay`
+
+* `def stage_privileged_worker_overlay(overlay: Path, *, boundary: HostBoundary, account: WorkerAccount, pin: Pin, expected_digest: str) -> list[dict[str, Any]]`: Old protected Root implementation copies an independently checkout/bootstrap-bound stamped kit into the fixed candidate-only repository/out/mod-base-kit. Require Root/fence/fresh quiescent `candidate`, its private 0700 repository, private protected source, bounded closed kit roots, no bytecode/links/special/hard links/executable source and exact stamp/digest/locks. Root never calls the API: that the pin is a released kit commit is the runner-side caller's prerequisite. `out` is created when the tested tree tracks nothing in it and is the candidate's own 0700 directory either way, so a build can write beside the overlay. Exclusively publish independent files, retain empty files/required empty roots, remove ACLs and hand off to the candidate with plain 0644/0755 bootstrap modes, recheck original directory/pin/source/copy identity. Any admitted failure terminates/locks the candidate; late private output may remain. Candidate upgrade admission and original caller/runtime/source provenance are prerequisites; no copied code is imported or gains protected/native/App authority.
+
+
+## `mod_base.build_ci.worker_source`
+
+* `def stage_privileged_worker_source(root: Path, *, boundary: HostBoundary, account: WorkerAccount, inventory: tuple[GitSourceEntry, ...]) -> list[dict[str, Any]]`: Require actual Root/fenced home and fresh quiescent `candidate`; admit protected-home source bytes/Git modes against the tested-tree inventory, refusing an undeclared path, a hard link or an entry of another type or mode before anything is published. Bind original source and protected destination parent; exclusively publish independent tracked bytes at the fixed candidate repository, omitting Git metadata. Require new Root-private publication and transfer it to worker-private ownership/permissions while preserving executable Git modes and literal symlink bytes through no-follow operations. Recheck original source/copy/parent/name/inode/role; any admitted failure locks/terminates worker and returns no authority. Late inert output may remain. Original caller/runtime, tested-tree origin, candidate policy and no previous UID activity remain preconditions; no Git, copied-code or native execution and no validation/upload/App authority.
+
+
+## `mod_base.build_ci.worker_git`
+
+* `def stage_privileged_worker_git(root: Path, *, boundary: HostBoundary, account: WorkerAccount, repository: str, tested_commit: str) -> list[dict[str, Any]]`: Actual protected Root/fenced home and fresh quiescent candidate setup only. Curate independently authenticated original self-contained SHA-1 checkout metadata under private runner home; closed bounded no-follow ownership/shape checks select index, loose/packed object data, heads/tags/remotes/pull refs, packed refs and shallow boundary. Omit source config/HEAD/hooks/logs/other ancillary bytes; reject external object borrowing/grafts, replacement refs, unsupported stores and unsafe types/links/aliases. Validate bounded ref text and require the original HEAD to be detached at exactly `tested_commit` (a moved HEAD, or one on a branch, is refused); the independently supplied commit becomes detached HEAD and grammar-bound repository becomes fixed credential-free configuration with hooks/fsmonitor disabled. Exclusively publish independent files into the worker-private candidate repository .git; Root-private staging, ACL-free worker 0700/0600 handoff and repeated source/parent/copy/name/inode/role checks. Failure locks/terminates worker; late inert output can remain. Never invoke Git or execute copied data as Root. Original caller/runtime and source checkout/commit/tree/index, tracked candidate source, excluded writers and no earlier UID activity remain caller prerequisites; copying observed data hashes does not approve object graphs, native behavior, privileged Git or App/upload authority.
+
+
+## `mod_base.build_ci.worker_preparation`
+
+* `def prepare_privileged_worker_checkout(source: Path, gradle_seed: Path | None, overlay: Path, *, boundary: HostBoundary, account: WorkerAccount, repository: str, tested_commit: str, tested_tree: str, inventory: tuple[GitSourceEntry, ...], pin: Pin, expected_digest: str) -> dict[str, list[dict[str, Any]]]`: The `stage-candidate` root operation: actual protected Root/fenced-home/fresh-quiescent `candidate` setup only, with no API access. Require separate nonoverlapping original source/overlay/seed roots under private runner home, no existing candidate `repository` and an empty allocated Gradle home (a populated root is never reused); derive Git metadata from the original checkout's `.git`; retain all original no-follow roots plus the allocated private cache. Before the first effect: the inventory must hash to `tested_tree` (the Git tree name is recomputed from its rows), no tracked path may take `out`, the overlay slot or a case alias of either, the checkout must hold exactly the inventory (bytes, Git modes, literal links, no undeclared path or hard link), its HEAD must be detached at `tested_commit`, and the overlay must match its pin, stamp, digest and locks. Then compose exclusive source, Git, private Gradle cache (skipped without a seed, which is admitted when its phase starts) and candidate-only overlay copying in fixed order; retain each published inode/mode/candidate identity, including the candidate's own `out`. Finally recheck the complete tracked source with only the fixed overlay as generated data, Git/cache bytes and private metadata and the original seed/overlay/source bindings. Return only source/git/gradle/overlay copy observations, with no execution/validation/upload authority. Any failure terminates and locks the candidate; after a refusal in a later phase inert outputs may remain. The runner-side caller owns authentication of the tested commit and tree, the released pin, candidate upgrade, safe cache restoration, excluded writers and no earlier UID execution.
+
+## `mod_base.build_ci.activation`
+
+Owner: MB11. The Build/E2E activation manifest of a mod: its closed data, the caller workflows
+each mode makes managed files and the allowed transitions. Pure data and tables; it reads no file
+and grants nothing. `mod_base.template.tool` gates its rendered callers on these tables and
+`mod_base.build_ci.transition` admits a change of state.
+
+* `ACTIVATION_PATH = 'site/mod-base-build-activation.json'`
+* `ACTIVATION_KIND = 'mod-base.ci.activation'`
+* `ACTIVATION_MODES = ('disabled', 'shadow', 'shared-build', 'shared-build-and-e2e', 'reviewed-rollback')`
+* `DISABLED_MODE = 'disabled'`
+* `ROLLBACK_MODE = 'reviewed-rollback'`
+* `ROLLBACK_SOURCES = ('shadow', 'shared-build', 'shared-build-and-e2e')`: the modes a `reviewed-rollback` can leave (`rollback_from`).
+* `ABSENT_STATE = 'absent'`: the state of a mod without a manifest; never a `mode` value.
+* `GUARD_CALLER = '.github/workflows/mod-base-guard.yml'`
+* `BUILD_CALLER = '.github/workflows/mod-base-build.yml'`
+* `PACKAGED_CALLER = '.github/workflows/mod-base-packaged-e2e.yml'`
+* `STATUS_CALLER = '.github/workflows/mod-base-gate-status.yml'`
+* `CALLERS`: the four caller paths above, in that order.
+* `MANAGED_CALLERS`: mode -> the callers the kit manages in it: `disabled` none, `shadow` and `shared-build-and-e2e` all four, `shared-build` the guard, Build and status callers. `reviewed-rollback` has no row: it manages the row of the mode it leaves.
+* `TRANSITIONS`: state -> the states it may change to: `absent` to `disabled`; `disabled` to `absent`, `shadow` or `shared-build`; `shadow` to `disabled`, `shared-build`, `shared-build-and-e2e` or `reviewed-rollback`; `shared-build` to `shared-build-and-e2e` or `reviewed-rollback`; `shared-build-and-e2e` to `reviewed-rollback`; `reviewed-rollback` to `disabled`.
+* `def validate_activation(document: Any, *, path: str = '$') -> dict[str, Any]`: The closed mod-base.ci.activation v1 data: kind, schema_version, repository, profile, mode and rollback_from, which names the mode a reviewed-rollback leaves and is null in every other mode. No pin, template, job, permission, secret, approval, deferral or scenario key. Returns the same document; a valid one is data, not an admitted transition.
+* `def parse_activation(data: bytes, *, label: str = ACTIVATION_PATH) -> dict[str, Any]`: Strictly decode (at most `MAX_CI_ACTIVATION_BYTES`) and validate manifest bytes.
+* `def activation_state(document: dict[str, Any] | None) -> str`: The `TRANSITIONS` state of a validated manifest: its mode, or `ABSENT_STATE` for `None`.
+* `def managed_mode(document: dict[str, Any] | None) -> str`: The `MANAGED_CALLERS` row a validated manifest selects: the mode a reviewed-rollback leaves, `disabled` for `None`, else its mode.
+* `def managed_callers(document: dict[str, Any] | None) -> tuple[str, ...]`: The callers the kit manages for a mod with this validated manifest.
+* `def managing_modes(caller: str) -> frozenset[str]`: The `managed_mode` values for which `caller` is a managed file.
+* `def next_states(document: dict[str, Any] | None) -> tuple[str, ...]`: The states a mod with this validated manifest may change to in one transition.
+* `def transition_refusal(previous: dict[str, Any] | None, current: dict[str, Any] | None) -> str | None`: Why the change between two validated manifests (a mod without one is `None`) is not an allowed transition, or `None` when it is one or nothing changed. A transition changes the mode along `TRANSITIONS` and nothing else, and a reviewed-rollback names exactly the mode it leaves. Pins are not its concern (`transition.admit_transition`).
+
+## `mod_base.build_ci.transition`
+
+Owner: MB11. Admission of an activation change and of a candidate's Build/E2E caller bytes, from
+bytes the protected side read itself. `template transition` runs both over two checkouts. Neither
+is owner approval.
+
+* `class Transition`: An admitted change: the previous and current `activation_state`, whether the manifest changed at all, and the callers the candidate's state manages.
+  * fields: `previous: str, current: str, changed: bool, managed: tuple[str, ...]`
+* `def admit_transition(protected: bytes | None, candidate: bytes | None, *, protected_pin: Pin, candidate_pin: Pin) -> Transition`: Admit the change from the protected manifest bytes to the candidate's (a side without a manifest is `None`) or raise `MbError`. Both are decoded strictly. Equal documents are admitted whatever the pins (no transition); any difference must be an allowed transition (`activation.transition_refusal`) and both pins must carry the same SHA and version.
+* `def verify_candidate_callers(files: Mapping[str, bytes], *, candidate: bytes | None, pin: Pin, kit_root: Path, branch: str | None = None) -> tuple[str, ...]`: Require the candidate's caller files (`{path: bytes}` of those that exist) to be exactly `template.tool.expected_callers` for its manifest, pin and canonical branch: a managed caller equals its rendered template, every other caller path is absent, and no other path is given. `kit_root` must be the verified kit `pin` names; `branch` is `canonical_branch` of the candidate's `site/mod-base.json` as the protected side read it (`template.tool.canonical_branch` for a checkout), and without one a managed caller whose template names the branch is an error. Returns the managed paths; one `MbError` names every problem.
+
+## `mod_base.build_ci.batch`
+
+Owner: MB11. Batches of pull requests (K5): construction, verification by rebuilding and
+settlement, reached through `ci batch-prepare` and `ci batch-settle`. A batch squashes open
+same-repository pull requests, in a given order, onto the default branch head and lands them
+through one `batch/<name>` pull request. Its commit ids depend only on the base commit and on
+each member's number, title and head commit, so the stack can be built again and compared; the
+marker in the pull request body is a hint that must equal that rebuild. The token is the
+invocation's: a pull request opened with a workflow's default `GITHUB_TOKEN` starts no workflow
+runs, so the caller supplies an App or automation token.
+
+* `BATCH_BRANCH_PREFIX = 'batch/'`
+* `BATCH_KIND = 'mod-base.ci.batch'`
+* `class BatchMember`: One member pull request as the API reports it now.
+  * fields: `number: int, title: str, head_branch: str, head_sha: str`
+* `class BatchObservation`: The live state a batch is built on: the default branch head and the ordered members.
+  * fields: `repository: str, base_branch: str, base_sha: str, base_tree: str, members: tuple[BatchMember, ...]`
+* `def observe_batch(api: GitHubApi, *, pr_numbers: tuple[int, ...]) -> BatchObservation`: Check the 1 to 50 distinct positive numbers before any read, then read the default branch, its head and each pull request once (2 requests and 1 per member). A member is open, of this repository on both sides, based on the default branch, not itself a `batch/*` or the base branch, and has a printable title of at most 256 characters. The base commit of the pull request record and its draft flag are not bound.
+* `def batch_marker(manifest: dict[str, Any]) -> str`: The one line `<!-- mod-base-batch {manifest} -->` that carries a manifest in a pull request body: its canonical JSON with every character outside printable ASCII and every `<`, `>` and `&` as a JSON escape, so no title can close the comment and the line has one spelling.
+* `def read_batch_marker(body: object) -> dict[str, Any]`: The validated manifest of the single marker line of a body of at most 64 KiB. Exactly one marker, alone on its line, in its canonical spelling; anything else is refused. The result is a hint, never proof.
+* `def prepare_batch(api: GitHubApi, store: BatchStore, *, name: str, pr_numbers: tuple[int, ...], allowed_paths: tuple[str, ...], dry_run: bool = False) -> dict[str, Any]`: Observe, require the branch `batch/<name>` to be absent, fetch (a ref that is not the commit the API reported has moved), build the stack under the caller's allowed-path list and derive manifest and body. A dry run returns here and needs only a read-only client. Otherwise read the live state again immediately before the push (which can only create the branch), again before opening the pull request, require the pushed ref, and open one ready pull request whose body holds the marker. Returns `{"dry_run", "manifest", "pr_number"}`. 10 requests and 3 per member; a dry run 3 and 1 per member. A change after the push leaves the branch for the operator to delete.
+* `def rebuild_batch(store: BatchStore, manifest: dict[str, Any]) -> None`: The verifier. Fetch the manifest's base and member heads by id, build the stack again and require the manifest to equal the result field by field: a commit that holds anything but its member's patch, another title, number, head, base or order give other ids. The repository and branch names and the choice of the last commit are not covered by any id; the caller binds them. No path policy applies.
+* `def settle_batch(api: GitHubApi, store: BatchStore, *, pr_number: int, plan: dict[str, Any], build_seal: dict[str, Any], packaged_seal: dict[str, Any], temporary_root: Path, delete_branches: bool = False) -> dict[str, list[int]]`: Needs a writable client. `plan` is the plan the batch pull request's gates ran with; the seals are the descriptors of its Build and packaged tested records, each naming the run that sealed it. Before any write: the pull request is a merged `batch/*` pull request of this repository with one marker for its own branches; the plan's identity names that pull request, its head (the marker's last squash commit), the marker's base and the marker's final tree; `rebuild_batch` holds; and `transport.download_merged_gate_pair` authenticates both original gates, whose runs GitHub records under that head, and the merged commit and its tree against the live default branch head. Then each member still open at its batched head, of this repository and to the same base, gets a comment and is closed (a head that moved between the read and the close reopens it); others are reported as `changed` or `already_closed`. With `delete_branches` a closed member's branch is deleted while its ref still is the batched head. Returns `{"closed", "changed", "already_closed", "deleted"}`. 3 requests, the 28 of the gate pair and 3 per member (5 with deletion).
+
+## `mod_base.build_ci.batch_schema`
+
+Owner: MB11. The closed batch manifest as plain data.
+
+* `def validate_batch_manifest(document: Any, *, path: str = '$') -> dict[str, Any]`: Return the same `mod-base.ci.batch` v1 object after exact keys, types and bounds (1 to 50 members; printable titles of at most 256 characters) and what the shape alone can contradict: `branch` is a batch branch (`grammar.is_batch_branch`) and `base_branch` is not; member numbers and heads are distinct; a member's merge base is not its head; every squash commit is distinct from the base, from every head and merge base and from the other squash commits; each member's result tree differs from the tree before it and the final result is the last member's. Whether the ids are true is `batch.rebuild_batch`'s to decide.
+
+## `mod_base.build_ci.batch_git`
+
+Owner: MB11. The protected Git writer of batch stacks: plumbing in a private bare store that
+nothing of the ambient Git state reaches (fixed search path for `git`, an environment built
+from nothing, no system or global configuration, no hooks, credential helpers, templates,
+replacement objects or attributes, one allowed transport). Requires Git 2.40.
+
+* `BOT_NAME = 'github-actions[bot]'`
+* `BOT_EMAIL = '41898282+github-actions[bot]@users.noreply.github.com'`
+* `MINIMUM_GIT_VERSION = (2, 40)`
+* `GITHUB_ORIGIN = 'https://github.com/'`
+* `EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'`
+* `TRANSPORTS = ('https', 'file')`
+* `PATCH_MODES = ('100644', '100755', '120000')`
+* `class BatchGitError(MbError)`: The Git writer refused, or Git itself failed (reason `ci-batch-git`).
+* `def empty_batch_branch_lease(branch: str) -> str`: `--force-with-lease=refs/heads/<branch>:` for a valid batch branch: the push option that lets a branch only be created.
+* `def validate_batch_push_receipt(data: bytes, *, exit_code: int, remote: str, branch: str, commit_sha: str) -> None`: Require bounded ASCII `git push --porcelain` output of exactly one new branch: the `To <remote>` header, one `*\t<commit>:refs/heads/<branch>\t[new branch]` record and `Done`, with exit status 0. An `up to date` answer for a branch that already was that commit is not a creation and is refused.
+* `def supported_git_version(output: bytes) -> tuple[int, int]`: `(major, minor)` of a `git version` line; a version before 2.40 or an unreadable line raises `BatchGitError`.
+* `class BatchRemote`: The repository as Git reaches it: one URL through one transport. `https` is `https://github.com/<owner>/<name>.git`; `file` is an absolute path of a local repository and carries no token. Invalid combinations raise `BatchGitError` on construction.
+  * fields: `url: str, transport: str, token: str | None = None`
+  * `environment(self) -> dict[str, str]`: `GIT_ALLOW_PROTOCOL` for the one transport and, for a token, an `http.https://github.com/.extraheader` authorization header passed through `GIT_CONFIG_COUNT`: never an argument, a URL or a configuration file.
+* `def github_remote(repository: str, token: str | None) -> BatchRemote`: The https remote of `repository` on github.com.
+* `def allowed_path_roots(allowed_paths: tuple[str, ...]) -> frozenset[str]`: Validate the caller's allowed-path list: a non-empty tuple of at most 4096 canonical repository paths in strictly ascending order. An entry admits itself and, as a directory, everything below it.
+* `class PatchEntry`: One path of a member's patch; a side is `(mode, blob id)` or `None` when absent.
+  * fields: `path: str, before: tuple[str, str] | None, after: tuple[str, str] | None`
+* `def patch_sha256(patch: tuple[PatchEntry, ...]) -> str`: SHA-256 of the canonical JSON `[{path, before, after}]` in path order, sides as `{mode, git_blob}` or null: the manifest's `patch_sha256`.
+* `class StackMember`: What one squash commit is made from.
+  * fields: `number: int, title: str, head_sha: str`
+* `class StackCommit`: One squash commit of a built stack and the member patch it carries.
+  * fields: `member: StackMember, head_tree: str, merge_base_sha: str, patch: tuple[PatchEntry, ...], squash_sha: str, result_tree: str`
+* `class BatchStack`: A built stack: the base and one commit per member, in order.
+  * fields: `base_sha: str, base_tree: str, commits: tuple[StackCommit, ...]`
+* `class BatchStore`: One private bare repository; create it with `open_batch_store`.
+  * `fetch(self, *, base_sha: str, heads: Mapping[int, str], base_branch: str | None = None) -> None`: Fetch the base and 1 to 50 member heads and require them to be the expected commits. With `base_branch` the live refs `refs/heads/<base_branch>` and `refs/pull/<number>/head` are fetched and a different id is a base or head that moved; without it the commits are fetched by id.
+  * `build_stack(self, *, base_sha: str, base_branch: str, members: tuple[StackMember, ...], allowed_paths: tuple[str, ...] | None) -> BatchStack`: One `git commit-tree` commit per member on the fetched base, with the bot identity, the base's committer time and the message `<title> (#<number>)` plus `Batch-Member: <number> <head sha>`; equal inputs give equal ids. A member's patch is the difference between its single merge base with the base and its head, applied with `git merge-tree --write-tree`. Refused, naming the pull request and paths: no or several merge bases, a conflict, a path both sides changed that either deleted, a member that leaves the tree unchanged, a submodule entry, a path outside the repository path grammar or (unless `allowed_paths` is `None`) outside the allowed list, and a result that is not the member's patch applied path by path.
+  * `publish(self, *, branch: str, commit_sha: str) -> None`: Push the commit as the new batch branch with the empty lease and require the receipt of exactly one new branch; an existing branch is never moved or adopted.
+* `def open_batch_store(parent: Path, remote: BatchRemote) -> Iterator[BatchStore]`: Context manager: a new store in a fresh mode-0700 directory below `parent` (a real directory only its owner can write), removed afterwards. POSIX only; refuses a Git before 2.40.
+
+## `mod_base.build_ci.commands_batch`
+
+Owner: MB11. `ci batch-prepare` and `ci batch-settle`, listed in `commands.VERB_MODULES`. Both
+take the job arguments (`commands.add_job_arguments`: `--repo`, `--config` and `--state DIR`, the
+private directory below which the Git store lives for the command's lifetime), build their API
+client through `commands.api_client` with an explicit request budget, and print one canonical
+JSON document.
+
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register both verbs on the `ci` verb group. `batch-prepare --name NAME --allowed-paths FILE [--dry-run] [--github-output FILE] PR...` (the file is a JSON array of repository paths; outputs `branch`, `head_sha`, `pr_number`). `batch-settle --pr N --plan FILE --build-seal FILE --packaged-seal FILE [--delete-branches] [--github-output FILE]` (outputs the four counts of its report; each seal names its own run, so no workflow is an argument).
+* `def run_batch_prepare(args: argparse.Namespace) -> int`: The `batch-prepare` handler; a dry run asks for a read-only client.
+* `def run_batch_settle(args: argparse.Namespace) -> int`: The `batch-settle` handler.
+
+## `mod_base.build_ci.status`
+
+Owner: MB11. Read-only status intents for the protected gates of one pull request head. For each
+gate the newest run of its managed caller under the head is chosen before any result is read
+(`selection.newest_run`). `pending`: a draft, no run yet, a run in progress or a newest run that is
+a draft deferral. `success`: the newest run is complete, its exact graph for its mode
+authenticates, its tested record downloads and binds to the plan, the packaged gate's owning Build
+is the bundle the Build gate sealed, and the live pull request still has the plan's head, base and
+test merge and is no draft. `failure`: anything else. An API failure is never a state. The job asks
+twice: `settle_gates` first, without a plan, and `evaluate_gates` with the plan only when a newest
+run finished successfully.
+
+* `SHADOW_SUFFIX = ' (shadow)'`: what `shadow` mode appends to both contexts.
+* `class StatusError`: The evaluation does not apply or its own inputs disagree (exit 2); no intent is produced.
+* `def gate_contexts(config: BuildConfig, activation: dict[str, Any] | None) -> dict[str, str]`: Gate -> the fixed context string of the protected Build config, for the gates the activation mode puts under the kit's status caller: both, with `SHADOW_SUFFIX` in `shadow`; the Build gate alone in `shared-build`; a rollback as the mode it leaves. A mode that manages no status caller is a `StatusError`.
+* `def evaluate_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None, controller_sha: str, plan: dict[str, Any] | None, temporary_root: Path) -> dict[str, Any]`: `{repository, pr_number, target_sha, gates}` for the current head of the pull request; `gates` maps each evaluated gate to `{context, state, description, target_url}` (the description is one line of at most `MAX_CI_STATUS_DESCRIPTION_CHARS`, the URL the canonical one of the deciding run or null). `plan` is the plan the job derived, which must be the plan of this pull request, controller and protected policy and of the pull request as it is now (`StatusError` otherwise); without one no gate can succeed. The pull request and both run listings are read again before the document is returned, and a difference raises.
+* `def settle_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None, controller_sha: str) -> dict[str, Any] | None`: The same document when no gate needs the protected plan, else None. It is complete exactly when the pull request is a draft or each gate's newest run is absent, in progress, or failed or cancelled; as soon as one newest run finished successfully the answer is None and the job derives the plan and calls `evaluate_gates`. No state of a returned document is `success` (`StatusError` otherwise). A returned document was read twice like every other (6 requests without a run, 2 for a draft); None reads nothing again (5 requests with both runs finished).
+
+## `mod_base.build_ci.commands_packaged`
+
+Owner: MB11. `ci select-build` and `ci fetch-build`, listed in `commands.VERB_MODULES`. Both take
+the job arguments, read the subject and the plan of the job from `--state`, build their API client
+through `commands.api_client` with an explicit request budget and write nothing to GitHub. The
+module also holds how every later job of a packaged run reads the selection record its `input`
+job handed to it (`--selection FILE`), for `fetch-build` here and for `aggregate` and `seal-gate`
+in `commands_build`.
+
+* `BUILD_RUN`, `WAIT_SECONDS`: the argparse types of `--build-run-id` (a run id as `int`, `same-run`, or the empty string as `None`) and `--wait-seconds` (1 to 5400).
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register both verbs. `select-build [--wait-seconds N] [--build-run-id ID|same-run] --output FILE --github-output FILE` (outputs `found`, `run_id` and, when found, `selection`: the record on one line). `fetch-build --selection FILE`.
+* `def add_selection_argument(parser: argparse.ArgumentParser, *, required: bool) -> None`: Add `--selection FILE`, where the job wrote the record it received from its `input` job.
+* `def job_plan(state: Path) -> dict[str, Any]`: The plan `ci plan` left in the job's state directory (`ci-plan.json`), strictly decoded and validated.
+* `def received_selection(path: Path, *, plan: dict[str, Any], run_id: int, run_attempt: int, workflow_path: str) -> dict[str, Any]`: The selection record a job received from the `input` job of its run: the file must hold the canonical JSON of a `mod-base.ci.selection` record for `plan` that this very run attempt of the packaged caller requested (`records.bind_source_selection`). Whatever carried the line is not trusted; everything else is a rejection before a request is sent.
+* `def run_select_build(args: argparse.Namespace) -> int`: The `select-build` handler: `selection.select_build` for this run attempt; a selection is written to `--output` (a new file of this user) and to `ci-selection.json` in the state directory.
+* `def run_fetch_build(args: argparse.Namespace) -> int`: The `fetch-build` handler: the record of `--selection` (`received_selection`), then `selection.fetch_build` into `exports.BUILD_VALIDATION_ROOT`; the bound record is kept as `ci-selection.json` in the state directory, for the worker steps of the lane.
+
+## `mod_base.build_ci.commands_status`
+
+Owner: MB11. `ci gate-status --pr N [--settle] --github-output FILE`, listed in
+`commands.VERB_MODULES`: the read-only command of the one job of `gate-status.yml`, issued twice.
+It reads the protected Build config and the activation manifest of `--repo`. With `--settle`
+(first, before `ci subject`: `--state` must not exist) it asks `status.settle_gates`; a settled
+document is printed and written as `settled=true` and `intents`, otherwise the outputs are
+`settled=false` alone and the job goes on to `ci subject --producer status`, `ci worker-prepare`,
+`ci plan` and the second call. Without the flag it creates `--state` when no earlier step did,
+takes the plan from `ci-plan.json` there when the job derived one, prints the canonical document
+of `status.evaluate_gates` and writes it on one line as the output `intents`. Both calls spend at
+most `MAX_CI_GATE_STATUS_REQUESTS`.
+
+* `UNSETTLED`: the line the `--settle` call prints when a finished run needs the plan.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`
+* `def run_gate_status(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.runtime_schema`
+
+Owner: MB11. Initial closed runtime inventory data; no native execution or success authority.
+
+* `def validate_runtime_envelope(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: Validate exact producer/Build/plan bindings, ordered canonical inventory, lane coverage, native role bounds, per-lane and whole-scope budgets. Optional independently admitted plan binds complete ordered lanes/contracts. Native file/role derivation, actual complete frozen bytes and native report/image/log validation remain mandatory.
+
+* `def bind_runtime_envelope(envelope: dict[str, Any], *, descriptor: dict[str, Any], owning_build: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]`: Bind closed runtime data to independently authenticated exact original runtime and owning Build selections, producer and scope. Actual API admission, bytes and native validators remain required.
+
+## `mod_base.build_ci.runtime_exports`
+
+Owner: MB11. Runtime byte admission and private independent copying, never native E2E authority.
+
+* `def verify_runtime_export(root: Path, *, plan: dict[str, Any]) -> dict[str, Any]`: Bound complete no-follow tree closure before content reads, require canonical bounded envelope and exact full size/hash inventory including empty logs, then recheck the original envelope. Requires original private frozen root, independent native mapping/validity and authentic producer/Build provenance.
+* `def materialize_runtime_export(root: Path, output: Path, *, plan: dict[str, Any]) -> dict[str, Any]`: Atomically create a private independent regular data copy with exact inventory, staged and source revalidation before publication. Caller owns original private output parent and excludes source writers; no candidate execution, upload or native success is authorized.
+
+## `mod_base.build_ci.runtime_freeze`
+
+Owner: MB11. The freeze of one lane's native results with the runtime envelope protected code
+writes. The plan names a lane and its native contract but not its files, so the envelope lists
+what is found; a role only selects a size bound.
+
+* `CRASH_DIRECTORY = 'crash-reports'`
+* `def runtime_role(path: str) -> str`: The role of one runtime result, from its export path alone: `crash-report` below a `crash-reports` directory, `screenshot` for `.png`, `native-report` for `.json`, otherwise `runtime-log`.
+* `def lane_envelope(records: list[dict[str, Any]], *, plan: dict[str, Any], lane_id: str, producer: dict[str, Any], owning_build: dict[str, Any]) -> dict[str, Any]`: The `mod-base.ci.runtime-envelope` of scope `lane` that protected code writes: the lane and its contract from the plan, every record (`[{path, sha256, size}]`, at least one) as a file of that lane with its `runtime_role`, `producer` from the executing run and `owning_build` from the selection. Validated against `plan`.
+* `def seal_lane_export(root: Path, output: Path, *, plan: dict[str, Any], lane_id: str, producer: dict[str, Any], owning_build: dict[str, Any]) -> dict[str, Any]`: Inventory `root` (directories and single-link regular files under export paths within the caps of one lane; empty logs allowed; no kit document), build `lane_envelope` and atomically create `output` with independent copies and the `ci-runtime-envelope.json` written here; `runtime_exports.verify_runtime_export(output)` returns the envelope.
+* `def freeze_runtime_export(*, boundary: HostBoundary, candidate: WorkerAccount, inventory: tuple[GitSourceEntry, ...], generated_roots: tuple[str, ...], plan: dict[str, Any], build: dict[str, Any], owning_build: dict[str, Any], lane_id: str, producer: dict[str, Any]) -> dict[str, Any]`: Root-only freeze of one lane. Terminate the candidate; prove its tracked sources unchanged before and after the copy (`exports.verify_candidate_source`); require `sealed-build/` to be the runner's private complete Build `build`, bound to `owning_build`, before and after; require `export/` to be private (0700 directories, 0600 single-link files, no ACL); `seal_lane_export` it into `sealed-runtime/`; transfer only that copy to runner-private ownership and recheck inode, metadata and content. Failed closing may leave a private copy: never consume it. Native verification by the second account remains required.
+
+## `mod_base.build_ci.runtime_handoff`
+
+Owner: MB11. Runtime handoffs between the validator, the runner and root: the one output of
+`derive_runtime`, and the original runtime context binding through the existing private
+execution-v1 channel.
+
+* `DERIVED_RUNTIME_ROOT`: `WORKER_ROOT / 'derived-runtime'`, the runner's private copy of what `derive_runtime` wrote.
+* `def take_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) -> None`: Root-only. Terminate the validator; require `validator-home/validation/` to be exactly the private single-link file `runtime.json` within `MAX_CI_REPORT_BYTES`; copy it into the new runner-private `DERIVED_RUNTIME_ROOT` (0700 directory, 0600 file, own inode) and remove the original, so the lane's verifier finds no output of this hook. Anything else hands nothing over.
+* `def record_runtime_validation_execution(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, bound: RuntimeValidationExecution, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int) -> str`: Runner-only exclusive fixed-channel publication of genuinely retained successful lane execution and original plan/complete owning Build/runtime context, protected source-config identity and fresh random nonce. Preserve existing execution-v1 keys/bounds/canonical binary log with no path/hook/program fields. Quiesce admitted validator, inspect original three inputs before and inside publication, close caller/source snapshots and reread private staged bytes after closing admission. Existing channels never overwrite. Always terminate admitted validator; actual original execution/source/API/tool/runtime and writer-excluded private-root provenance remain caller prerequisites.
+* `def freeze_handed_off_runtime_validation(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int, nonce: str) -> dict[str, Any]`: Root-only physical private-runner channel/context admission and original runtime receipt freeze. Require exact canonical closed execution-v1 record, original nonce/current attempt/source-config/plan/three-input digest and fixed runner-private single-link layout. Reconstruct bounded RuntimeValidationExecution only after admission and delegate original frozen runtime validation. Reread original channel and all inputs/identities, close original caller/source snapshots and reauthenticate Root before returning; always quiesce admitted validator. Matching constructible records never establish protected execution/source/native provenance. Failed closing may leave a private receipt; never consume/upload it. Independently enrolled fixed Root process/request/installer/runtime and actual native/final API/graph/source authority remain required.
+
+
+## `mod_base.build_ci.runtime_inputs`
+
+Owner: MB11. Fixed frozen inputs around the enrolled native lane verifier.
+
+* `RUNTIME_VALIDATION_ROOT`: fixed sealed-runtime sibling of the protected plan and complete Build inputs.
+* `def prepare_runtime_validation(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int) -> dict[str, Any]`: Root-only validator-group read grant for the independently reclaimed runner-private exact runtime lane. Retain original canonical plan/complete owning Build/lane context, quiesce the candidate (when the job has one) and the validator, authenticate already-prepared plan/Build and private runtime metadata/bytes, then transfer runtime through bounded regular-data handoff with original lane caps and envelope overhead. Verify all three original directory identities/bytes and caller snapshots after transfer, reauthenticate Root and return an independent retained runtime envelope. Failed admission attempts to restore admitted runtime root traversal; cleanup errors remain visible. A late descriptor-close failure may leave a granted copy. Never consume a failed handoff; restage before retry. Always terminate the admitted validator, including descriptor-close failure. Original source/API/native/copy provenance and excluded writers remain independent prerequisites; no candidate original is reclaimed or native execution/upload/status authority granted.
+* `class RuntimeValidationExecution`
+  * fields: `execution: WorkerResult, input_sha256: str`
+* `def freeze_frozen_runtime_validation(*, boundary: HostBoundary, validator: WorkerAccount, sources: ControllerSources, bound: RuntimeValidationExecution, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int) -> dict[str, Any]`: Root-only receipt freeze bound to genuinely retained successful lane execution and the exact original canonical plan/complete owning Build/runtime context. Derive fixed verify_runtime/unit from the retained lane, quiesce the admitted validator, inspect all three fixed roots/metadata/byte inventories before and after the existing independent validation export freeze, reject directory or original caller drift and reauthenticate Root before returning. Always terminate the admitted validator; failed closing checks may leave a private copy which must not be consumed or uploaded. Bounded diagnostic truncation alone remains permitted. Constructible bound values confer no protected execution/source/native/API provenance or upload/status authority; complete independent original admission remains mandatory across privilege transition.
+* `def read_sealed_runtime(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any], lane_id: str, run_id: int, run_attempt: int) -> tuple[dict[str, Any], dict[str, Any], bool]`: Runner-only. The envelopes of the lane's complete owning Build and of its sealed results, and whether the validator reads that Build already (`inputs.read_sealed_build`). `sealed-runtime/` must be the runner's private copy (0700 directories, 0600 single-linked files, no ACL) holding exactly its canonical envelope: the results of lane `lane_id` of the plan, produced by this run attempt, whose owning Build is the complete one in `sealed-build/`.
+* `def execute_frozen_runtime_validator(*, boundary: HostBoundary, validator: WorkerAccount, plan: dict[str, Any], build: dict[str, Any], runtime: dict[str, Any], lane_id: str, run_id: int, run_attempt: int, execute: Callable[[], WorkerResult]) -> RuntimeValidationExecution`: Bind the protected `verify_runtime` hook to one frozen lane and its complete owning Build. `execute` runs the hook as the validator and returns its result (`lifecycle.run_protected_hook`). Requires the exact lane, its complete owning Build and the producing attempt; canonicalises the caller's plan/Build/runtime once and rejects any later change; authenticates the three read-only input roots before and after the hook and always terminates the validator. The result is execution data, not a receipt.
+
+## `mod_base.build_ci.candidate_kit`
+
+* `def verified_checkout(checkout: Path, sha: str, tree: str | None = None) -> Path`: Bind every working file to the exact Git commit and optional tested tree, using protected plumbing, bounded inventory and source checks. No checkout code executes.
+* `def planned_pin(checkout: Path, subject: dict[str, Any], *, api: GitHubApi | None) -> dict[str, str] | None`: Strictly parse every pin reference of the verified candidate. Return `None` for the executing SHA/version, without API traffic. Otherwise return `{sha, version}` after `verify_released` when `api` is supplied; callers passing `None` must enforce the independently handed-over plan hash or separately perform release admission before publishing the plan.
+* `def verify_future_checkout(checkout: Path, pin: Pin) -> str`: Verify the fetched commit, its own Build workflow kit-digest-v1 literal, and both staged-file locks; return its digest. Unsupported representations require a compatibility-first release. Future files are data only.

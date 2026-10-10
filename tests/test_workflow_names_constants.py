@@ -80,6 +80,159 @@ class JobNameTableTest(unittest.TestCase):
         self.assertEqual(set(workflow.CALLEE_WORKFLOWS), set(workflow.CALLEE))
 
 
+class BuildE2eNameTableTest(unittest.TestCase):
+    """Every Build/E2E name, spelled out: a rename must change this file, the literal job listings
+    under ``tests/fixtures/ci_graphs`` and every graph digest pinned in ``tests/test_ci_protocol.py``."""
+
+    def test_managed_workflow_paths(self) -> None:
+        self.assertEqual(workflow.CI_GUARD_WORKFLOW_PATH, ".github/workflows/mod-base-guard.yml")
+        self.assertEqual(workflow.CI_CALLER_WORKFLOWS, {
+            "build": ".github/workflows/mod-base-build.yml",
+            "packaged": ".github/workflows/mod-base-packaged-e2e.yml",
+            "status": ".github/workflows/mod-base-gate-status.yml",
+        })
+        self.assertEqual(workflow.CI_CALLEE_WORKFLOWS, {
+            "build": ".github/workflows/build.yml",
+            "select-build": ".github/workflows/select-build.yml",
+            "packaged-e2e": ".github/workflows/packaged-e2e.yml",
+            "gate-status": ".github/workflows/gate-status.yml",
+        })
+        # The Build/E2E callees are their own registry: the Pages table and its tests stay as they are.
+        self.assertEqual(set(workflow.CI_CALLEE_WORKFLOWS.values()) & set(workflow.CALLEE_WORKFLOWS.values()), set())
+
+    def test_caller_and_callee_job_tables(self) -> None:
+        self.assertEqual(workflow.CI_CALLER_JOBS, {
+            "build": {"guard": "Verify pinned mod-base", "deferred": "Build deferred for draft",
+                      "shared": "Shared Build"},
+            "packaged": {"guard": "Verify pinned mod-base", "deferred": "Packaged E2E deferred for draft",
+                         "select": "Select exact Build", "rebuild": "Shared Build",
+                         "shared": "Shared Packaged E2E"},
+            "status": {"guard": "Verify pinned mod-base", "locate": "Locate the pull request",
+                       "evaluate": "Evaluate protected gates", "publish": "Publish protected gate statuses"},
+        })
+        self.assertEqual(workflow.CI_CALLS, {
+            "build": {"guard": "guard", "shared": "build"},
+            "packaged": {"guard": "guard", "select": "select-build", "rebuild": "build", "shared": "packaged-e2e"},
+        })
+        # The status caller is no producer: its calls are tabled apart and `ci_producer` refuses it.
+        self.assertEqual(workflow.CI_STATUS_CALLS, {"guard": "guard", "evaluate": "gate-status"})
+        self.assertLessEqual(set(workflow.CI_STATUS_CALLS), set(workflow.CI_CALLER_JOBS["status"]))
+        self.assertNotIn("status", workflow.CI_CALLS)
+        with self.assertRaises(MbError):
+            workflow.ci_producer(workflow.CI_CALLER_WORKFLOWS["status"])
+        self.assertEqual(workflow.CI_CALLEE_CALLERS, {
+            "build": ("build", "packaged"), "select-build": ("build", "packaged"),
+            "packaged-e2e": ("build", "packaged"), "gate-status": ("status",)})
+        self.assertEqual(list(workflow.CI_CALLEE_CALLERS), list(workflow.CI_CALLEE_WORKFLOWS))
+        for callee, callers in workflow.CI_CALLEE_CALLERS.items():
+            self.assertLessEqual(set(callers), set(workflow.CI_CALLER_WORKFLOWS), callee)
+            called = {caller for caller, calls in {**workflow.CI_CALLS, "status": workflow.CI_STATUS_CALLS}.items()
+                      if callee in calls.values()}
+            self.assertLessEqual(called, set(callers), f"{callee}: a caller that calls it is admitted by it")
+        self.assertEqual(workflow.CI_CALLEE_JOBS, {
+            "guard": {"verify": "Authenticate the pinned kit"},
+            "build": {"plan": "Plan protected Build", "policy": "Verify protected policy",
+                      "target": "Compile target {id}", "assemble": "Seal complete Build bundle",
+                      "gate": "Verify complete Build"},
+            "select-build": {"select": "Select exact Build source"},
+            "packaged-e2e": {"input": "Authenticate exact Build", "lane": "Run packaged lane {id}",
+                             "aggregate": "Seal complete packaged results",
+                             "gate": "Verify complete packaged E2E"},
+            "gate-status": {"evaluate": "Evaluate gate states"},
+        })
+        self.assertIs(workflow.CI_CALLEE_JOBS["build"], workflow.CI_BUILD_JOBS)
+        self.assertIs(workflow.CI_CALLEE_JOBS["packaged-e2e"], workflow.CI_PACKAGED_JOBS)
+        self.assertIs(workflow.CI_CALLEE_JOBS["gate-status"], workflow.CI_STATUS_JOBS)
+        self.assertEqual((workflow.CI_GUARD_CALL, workflow.CI_BUILD_CALL, workflow.CI_SELECT_CALL,
+                          workflow.CI_PACKAGED_CALL, workflow.CI_STATUS_CALL),
+                         ("Verify pinned mod-base", "Shared Build", "Select exact Build", "Shared Packaged E2E",
+                          "Evaluate protected gates"))
+        self.assertEqual((workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP),
+                         ("Validate frozen native exports", "Upload sealed outputs"))
+        self.assertEqual(set(workflow.CI_CALLEE_JOBS), set(workflow.CI_CALLEE_WORKFLOWS) | {"guard"})
+        for producer, calls in workflow.CI_CALLS.items():
+            self.assertLessEqual(set(calls), set(workflow.CI_CALLER_JOBS[producer]))
+            self.assertLessEqual(set(calls.values()), set(workflow.CI_CALLEE_JOBS))
+
+    def test_api_job_names(self) -> None:
+        table = [
+            (("build", "guard", "verify"), {}, "Verify pinned mod-base / Authenticate the pinned kit"),
+            (("build", "shared", "plan"), {}, "Shared Build / Plan protected Build"),
+            (("build", "shared", "policy"), {}, "Shared Build / Verify protected policy"),
+            (("build", "shared", "target"), {"id": "mc1.20.1"}, "Shared Build / Compile target mc1.20.1"),
+            (("build", "shared", "assemble"), {}, "Shared Build / Seal complete Build bundle"),
+            (("build", "shared", "gate"), {}, "Shared Build / Verify complete Build"),
+            (("packaged", "guard", "verify"), {}, "Verify pinned mod-base / Authenticate the pinned kit"),
+            (("packaged", "select", "select"), {}, "Select exact Build / Select exact Build source"),
+            (("packaged", "rebuild", "target"), {"id": "target-a"}, "Shared Build / Compile target target-a"),
+            (("packaged", "rebuild", "gate"), {}, "Shared Build / Verify complete Build"),
+            (("packaged", "shared", "input"), {}, "Shared Packaged E2E / Authenticate exact Build"),
+            (("packaged", "shared", "lane"), {"id": "1.20.1-fabric.full"},
+             "Shared Packaged E2E / Run packaged lane 1.20.1-fabric.full"),
+            (("packaged", "shared", "aggregate"), {}, "Shared Packaged E2E / Seal complete packaged results"),
+            (("packaged", "shared", "gate"), {}, "Shared Packaged E2E / Verify complete packaged E2E"),
+        ]
+        for arguments, fields, expected in table:
+            with self.subTest(expected=expected):
+                self.assertEqual(workflow.ci_api_job_name(*arguments, **fields), expected)
+
+    def test_caller_owned_and_skipped_call_names_are_bare(self) -> None:
+        self.assertEqual(workflow.ci_caller_job_name("build", "deferred"), "Build deferred for draft")
+        self.assertEqual(workflow.ci_caller_job_name("packaged", "deferred"), "Packaged E2E deferred for draft")
+        self.assertEqual(workflow.ci_caller_job_name("status", "evaluate"), "Evaluate protected gates")
+        self.assertEqual(workflow.ci_caller_job_name("status", "publish"), "Publish protected gate statuses")
+        # A calling job that is skipped never expands its callee: the API lists the caller's job once.
+        self.assertEqual(workflow.ci_skipped_call_job_name("build", "shared"), "Shared Build")
+        self.assertEqual(workflow.ci_skipped_call_job_name("packaged", "select"), "Select exact Build")
+        self.assertEqual(workflow.ci_skipped_call_job_name("packaged", "rebuild"), "Shared Build")
+        self.assertEqual(workflow.ci_skipped_call_job_name("packaged", "shared"), "Shared Packaged E2E")
+        for call in (lambda: workflow.ci_skipped_call_job_name("build", "deferred"),
+                     lambda: workflow.ci_skipped_call_job_name("status", "publish"),
+                     lambda: workflow.ci_caller_job_name("build", "select"),
+                     lambda: workflow.ci_caller_job_name("pages", "guard")):
+            with self.assertRaises(MbError):
+                call()
+
+    def test_yaml_templates_and_skipped_unexpanded_matrices(self) -> None:
+        self.assertEqual(workflow.MATRIX_EXPRESSIONS["id"], "${{ matrix.id }}")
+        self.assertEqual(workflow.ci_workflow_template_name("build", "target"), "Compile target ${{ matrix.id }}")
+        self.assertEqual(workflow.ci_workflow_template_name("packaged-e2e", "lane"),
+                         "Run packaged lane ${{ matrix.id }}")
+        self.assertEqual(workflow.ci_workflow_template_name("build", "gate"), "Verify complete Build")
+        self.assertEqual(workflow.ci_workflow_template_name("guard", "verify"), "Authenticate the pinned kit")
+        self.assertEqual(workflow.ci_unexpanded_api_job_name("build", "shared", "target"),
+                         "Shared Build / Compile target ${{ matrix.id }}")
+        self.assertEqual(workflow.ci_unexpanded_api_job_name("packaged", "shared", "lane"),
+                         "Shared Packaged E2E / Run packaged lane ${{ matrix.id }}")
+        with self.assertRaises(MbError):
+            workflow.ci_unexpanded_api_job_name("build", "shared", "gate")
+
+    def test_fields_and_keys_are_exact_and_validated(self) -> None:
+        for call in (
+            lambda: workflow.ci_api_job_name("build", "shared", "target"),
+            lambda: workflow.ci_api_job_name("build", "shared", "target", id="a", key="mc1.20.1"),
+            lambda: workflow.ci_api_job_name("build", "shared", "gate", id="a"),
+            lambda: workflow.ci_api_job_name("build", "shared", "target", id="a--b"),
+            lambda: workflow.ci_api_job_name("build", "shared", "target", id="A"),
+            lambda: workflow.ci_api_job_name("build", "shared", "lane", id="a"),
+            lambda: workflow.ci_api_job_name("build", "deferred", "plan"),
+            lambda: workflow.ci_api_job_name("build", "rebuild", "plan"),
+            lambda: workflow.ci_api_job_name("status", "evaluate", "plan"),
+            lambda: workflow.ci_callee_job_name("publish", "admit"),
+            lambda: workflow.ci_workflow_template_name("build", "lane"),
+        ):
+            with self.assertRaises(MbError):
+                call()
+
+    def test_producer_of_a_workflow_path(self) -> None:
+        self.assertEqual(workflow.ci_producer(".github/workflows/mod-base-build.yml"), "build")
+        self.assertEqual(workflow.ci_producer(".github/workflows/mod-base-packaged-e2e.yml"), "packaged")
+        for path in (".github/workflows/mod-base-gate-status.yml", ".github/workflows/mod-base-guard.yml",
+                     ".github/workflows/build.yml", ".github/workflows/pages.yml", "", None):
+            with self.subTest(path=path), self.assertRaises(MbError):
+                workflow.ci_producer(path)
+
+
 class FindJobTest(unittest.TestCase):
     JOBS = [
         {"id": 1, "name": "Verify pinned mod-base", "run_attempt": 2, "conclusion": "success"},

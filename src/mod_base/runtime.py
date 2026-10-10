@@ -7,6 +7,8 @@ environment variables the kit consumes explicit:
 
 * ``GITHUB_REPOSITORY``, ``GITHUB_SHA``, ``GITHUB_JOB``, ``GITHUB_RUN_ID``, ``GITHUB_RUN_ATTEMPT``,
   ``GITHUB_REF_NAME``, ``GITHUB_WORKFLOW_REF``, ``GITHUB_OUTPUT``: GitHub's own run facts;
+* ``RUNNER_ENVIRONMENT``, ``GITHUB_WORKSPACE``, ``RUNNER_TEMP``: the runner's layout, which
+  ``ci worker-prepare`` admits before it fences the host;
 * ``MOD_BASE_KIT_SHA``: the pinned kit commit (exported by the ``setup`` composite and by every
   callee prologue); the kit version is always this checkout's ``mod_base.__version__``;
 * ``GH_TOKEN`` / ``GITHUB_TOKEN``: present only in steps that call the API (never in hooks
@@ -37,7 +39,10 @@ ENVIRONMENT_NAMES = (
     "GITHUB_WORKFLOW_REF",
     "GITHUB_EVENT_NAME",
     "GITHUB_OUTPUT",
+    "GITHUB_WORKSPACE",
     "GITHUB_API_URL",
+    "RUNNER_ENVIRONMENT",
+    "RUNNER_TEMP",
     "MOD_BASE_KIT_SHA",
     "GH_TOKEN",
     "GITHUB_TOKEN",

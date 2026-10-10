@@ -1,5 +1,23 @@
 # Schemas (v1)
 
+The thirteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
+`mod-base.build.envelope` and the `mod-base.ci.*` kinds, all new at version 1 and unreleased) are
+listed in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the
+validator that defines it. This page has the field tables of four of them, in its last four
+sections: the Build config, the batch manifest, the results index and the activation manifest.
+These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
+document shape changes. The compatibility decision of every kind against the previous release is
+`tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
+with the archived reader in `tests/fixtures/previous_release/`.
+
+The unreleased v1 Build plan optionally carries `candidate_kit: {sha, version}` when
+candidate tests use a different released kit. The plan hash binds it; `identity.kit`
+always names the executing protected kit. Same-pin plans omit it and retain their
+existing bytes. Older strict readers reject the new field: this capability must first
+be present in the protected executing release before a consumer can use the upgrade
+route. This optional extension does not promise that an older implementation can
+admit a newer digest algorithm or lock representation.
+
 Every document the kit reads or writes, its exact fields and the structural rules
 `mod_base.model.documents` (and `mod_base.config` for the config) enforce. The validators are
 the normative definition; this page explains them. A valid example of every kind lives in
@@ -63,6 +81,7 @@ and 32`.
 | `RUN_URL` | `https://github.com/<repository>/actions/runs/<id>` | Always built by the renderer. |
 | bundle path | `/`-separated components `[A-Za-z0-9_][A-Za-z0-9._-]*` (or a dotfile), no `.`, `..`, empty, absolute or backslash component, at most 16 components and 300 characters | |
 | repo path | a bundle path with no `.git` component (case-insensitive) | Config and template paths. |
+| export path | `/`-separated components of ASCII letters, digits, `.`, `_`, `-`, `+` and single inner spaces, none starting or ending with a space or a dot (so no dotfile), at most 128 characters each, 16 components and 300 characters | Files of a sealed Build or runtime export under the mod's own names (`files/Quick Skin - Fabric - 1.20.1-3.1.0.jar`): plan outputs, both envelopes, their trees and their archives. |
 
 ### Text rules
 
@@ -652,3 +671,142 @@ Validated by `mod_base.config.validate_config` (structure) and `load_config` (re
 Repository facts (skipped only by rotation's data-only load): the adapter, fixtures module, source
 and family producer workflows exist as regular files, every `python_path` entry is a real
 directory, no checked path crosses a symlink, and the icon rules hold.
+
+## `mod-base.build.config` (`scripts/ci/mod-base-build.json`, <= 1 MiB)
+
+The protected Build configuration (new kind, schema 1, unreleased). Validated by
+`mod_base.build_ci.config.validate_build_config`; `load_build_config` also requires every listed
+source in the protected checkout to have its configured hash.
+
+| Field | Rule |
+|---|---|
+| `repository` | `REPOSITORY`; must be the repository that runs |
+| `profile` | `quick-skin` or `block-pops` (`build_ci.protocol.PROFILES`) |
+| `build_adapter_api` | `1` |
+| `adapter` | `{path, dispatcher, policy, files}`: three distinct `scripts/ci/*.py` entry points and the sorted, alias-free import closure `files: [{path, sha256}]` (3..256) that lists all three |
+| `inventory.path`, `scenario_contract.path` | canonical repository paths of the two candidate files every plan is derived from |
+| `plan_inputs` | `[{name, path}]`, 0..8, sorted by `name` without duplicates: more candidate files the plan is derived from. `name` is a lower-case token of `a-z 0-9 . _ -` (at most 80 characters, no `--`), the file's name in `validation-input/`, and never `inventory`, `scenario-contract` or `ci-plan.json`; `path` is a canonical repository path |
+| `bundle.path` | canonical repository path of the directory where a lane's checkout expects the staged Build |
+| `contexts.build`, `contexts.packaged` | the two required status contexts: trimmed printable ASCII without `<`, `>`, `{{`, `}}`, 1..100 characters, distinct ignoring case |
+| `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
+| `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.protocol.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
+
+The config path, every adapter source, every candidate file (the inventory, the scenario contract
+and each `plan_inputs` path) and the bundle directory are
+checked as one tree: none may equal another (ignoring case), differ from one only by the case of a
+component, or lie inside another. No other key is accepted: no command, runner, permission, secret,
+matrix or scenario catalog, and no package list. [BUILD-ADAPTER.md](BUILD-ADAPTER.md) describes what each field is used for.
+
+## Batch manifest data v1
+
+`mod-base.ci.batch` writes/reads 1. This is a new kind (previous null); the archived v1.0.3
+reader rejects it. A manifest describes one batch: a stack of squash commits, one per member
+pull request, on a base commit of the default branch. It travels in the body of the batch pull
+request as one marker line, `<!-- mod-base-batch {manifest} -->`, so the strict decoder cap is
+64 KiB, GitHub's bound of a pull request body. The marker is the manifest's canonical JSON with
+every character outside printable ASCII and every `<`, `>` and `&` written as a JSON escape; a
+body holds exactly one marker, alone on its line, in that one spelling.
+
+The closed top level has kind, schema_version, repository, base_branch, base_sha, base_tree,
+branch, members and result_tree. `branch` is a batch branch (`batch/<name>`, no component that
+starts with a dot or ends in `.lock`, no final dot) and `base_branch` is not. There are 1..50
+ordered members, each with exactly:
+
+| Field | Meaning |
+| --- | --- |
+| `pr_number` | The member pull request, distinct within the batch. |
+| `title` | Its title when the batch was built: 1..256 characters of printable text. The squash commit's subject is `<title> (#<pr_number>)`. |
+| `head_sha`, `head_tree` | The member's head commit and its tree; heads are distinct. |
+| `merge_base_sha` | The single merge base of that head with `base_sha`; never the head itself. |
+| `patch_sha256` | SHA-256 of the canonical JSON of the member's patch, the difference between the merge base's tree and the head's: `[{"path", "before", "after"}]` in path order, a side being `{"mode", "git_blob"}` or null. |
+| `squash_sha`, `result_tree` | The member's squash commit and its tree. The commit's parent is the previous member's squash commit, or `base_sha` for the first member. |
+
+Every squash commit is distinct from the base, from every head and merge base and from the other
+squash commits; each member's `result_tree` differs from the tree before it (`base_tree` for the
+first member); the top-level `result_tree` is the last member's.
+
+A manifest is a hint, never authority: anyone who can edit the pull request body can edit it.
+The squash commits are written with `git commit-tree` under one fixed identity
+(`github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>`), with the base
+commit's committer time as author and committer time and the message `<title> (#<pr_number>)`,
+a blank line and `Batch-Member: <pr_number> <head_sha>`. Their ids therefore follow from the
+base, the member heads, titles, numbers and order alone. A verifier fetches the base and the
+heads, builds the stack again and requires every field of the manifest to equal the result
+(`batch.rebuild_batch`); the repository and branch names, which no commit id covers, are bound
+to the pull request that carries the marker. No execution selector, approval, secret,
+permission or status is accepted, and parsing a manifest grants no writer or consumer authority.
+
+## Packaged results index data v1
+
+`mod-base.ci.results` writes/reads 1. This is a new kind (previous null); the archived v1.0.3
+reader rejects it. It is the complete packaged results of one attempt of the packaged caller as
+an index of its lane artifacts, never a union of their bytes: Quick Skin's 34 lanes hold more
+than the 512 MiB one complete runtime export may. The aggregating job seals it as
+`ci-results.json`, the one file of the artifact `mb-ci-results--<run>--a<attempt>`, canonical
+JSON of at most 4 MiB.
+
+The closed top level has kind, schema_version, identity, plan_sha256, profile, producer,
+owning_build, build_envelope_sha256 and lanes.
+
+| Field | Meaning |
+| --- | --- |
+| `identity`, `plan_sha256`, `profile` | The binding of the plan every lane ran under. Every descriptor inside carries the same three. |
+| `producer` | The attempt that sealed the index: `run_id`, `run_attempt`, `workflow_path`, `workflow_ref`, `api_head_sha`, `event`, `graph_sha256`, without an upload window. Always a run of the managed packaged caller. |
+| `owning_build` | The descriptor of the complete Build every lane ran: the bundle this same attempt rebuilt (a standalone run only), or the bundle of a separate run of the Build caller. |
+| `build_envelope_sha256` | SHA-256 of that Build's canonical envelope, as the job's selection record carries it. |
+| `lanes` | 1..256 entries: exactly the planned lanes, in plan order. |
+
+A lane has exactly:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `native_contract_sha256` | The lane and its native contract, as the plan lists them. |
+| `descriptor` | The descriptor of the lane's `mb-ci-runtime` artifact of the same attempt. Artifact ids are distinct among the lanes and from the owning Build. |
+| `envelope_sha256` | SHA-256 of the canonical runtime envelope inside that artifact. |
+| `validation_sha256` | SHA-256 of the canonical validation record (`verify_runtime`) inside that artifact. |
+| `report_sha256` | SHA-256 of the lane's verification report, as that validation record inventories it: the lane's native receipt in the packaged gate. |
+
+There is no success flag, file inventory or status. An index is evidence only together with what
+its writer and readers authenticate. The aggregating job (`ci aggregate`) requires exactly one
+artifact of its own attempt for every planned lane and none for another, reads each by numeric
+id, verifies its export against the plan and its validation record against that export and the
+envelope hash of the Build the job selected, and never reads the Build bundle. The gate requires
+the index to list exactly the lane artifacts its attempt uploaded and authenticates the owning
+Build (`build_ci.gate`).
+
+## Profile activation data v1
+
+`mod-base.ci.activation` writes and reads 1. It is a new kind: the compatibility ledger records
+previous `null`, and the archived v1.0.3 reader rejects it. The file is
+`site/mod-base-build-activation.json`, at most `MAX_CI_ACTIVATION_BYTES` (8 KiB) of strict JSON
+(not necessarily canonical: it is written by hand).
+
+| Field | Rule |
+|---|---|
+| `kind`, `schema_version` | `mod-base.ci.activation`, 1 |
+| `repository` | repository grammar, at most 201 characters; equals the `repository` of `scripts/ci/mod-base-build.json` |
+| `profile` | `quick-skin` or `block-pops`; equals the `profile` of the Build configuration |
+| `mode` | `disabled`, `shadow`, `shared-build`, `shared-build-and-e2e` or `reviewed-rollback` |
+| `rollback_from` | `null`, except in `reviewed-rollback`, where it names the mode being left: `shadow`, `shared-build` or `shared-build-and-e2e` |
+
+Every key is required and no other key exists: no pin, template, job, permission, secret, approval,
+extension, deferral, matrix or scenario selector.
+
+The mode alone decides which caller workflows are managed files of the mod
+(`mod_base.build_ci.activation.MANAGED_CALLERS`):
+
+| State | Managed callers |
+|---|---|
+| no manifest, `disabled` | none |
+| `shadow`, `shared-build-and-e2e` | `mod-base-guard.yml`, `mod-base-build.yml`, `mod-base-packaged-e2e.yml`, `mod-base-gate-status.yml` (all in `.github/workflows/`) |
+| `shared-build` | `mod-base-guard.yml`, `mod-base-build.yml`, `mod-base-gate-status.yml` |
+| `reviewed-rollback` | those of `rollback_from` |
+
+A manifest changes only along these transitions, at an unchanged pin, and only its mode (and
+`rollback_from`) changes: none to `disabled`; `disabled` to none, `shadow` or `shared-build`;
+`shadow` to `disabled`, `shared-build`, `shared-build-and-e2e` or `reviewed-rollback`;
+`shared-build` to `shared-build-and-e2e` or `reviewed-rollback`; `shared-build-and-e2e` to
+`reviewed-rollback`; `reviewed-rollback` to `disabled`. A mod without a manifest is legacy only
+when it has no Build configuration either; a Build configuration without a manifest fails
+`template check`. The document is data: it is not owner approval, and the protected controller
+admits each transition (`mod_base.build_ci.transition`).

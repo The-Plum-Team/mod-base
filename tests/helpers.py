@@ -15,7 +15,9 @@ import copy
 import hashlib
 import io
 import json
+import stat
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from mod_base.model import grammar
@@ -731,10 +733,498 @@ def kit_stamp() -> dict[str, Any]:
             "tree_digest": f"sha256:{h('kit-tree')}"}
 
 
+def ci_plan() -> dict[str, Any]:
+    """Synthetic protocol fixture; native mod parity has its own immutable fixtures."""
+
+    from mod_base.build_ci.protocol import plan_sha256
+
+    repository = "example/mod"
+    document = {
+        "kind": "mod-base.build.plan", "schema_version": 1, "build_adapter_api": 1,
+        "profile": "block-pops",
+        "identity": {
+            "repository": repository, "source_repository": repository, "pr_number": 7,
+            "head_sha": "1" * 40, "head_branch": "feature/example",
+            "base_sha": "2" * 40, "base_branch": "master",
+            "controller_sha": "2" * 40, "controller_workflow": ".github/workflows/build-gate.yml",
+            "controller_ref": f"{repository}/.github/workflows/build-gate.yml@refs/heads/master",
+            "kit": {"repository": "The-Plum-Team/mod-base", "sha": "3" * 40,
+                    "version": "1.1.0", "tree_digest": "sha256:" + "4" * 64},
+            "tested_sha": "5" * 40, "tested_tree": "6" * 40, "tested_parents": ["2" * 40, "1" * 40],
+            "policy_sha256": h("policy"), "inventory_blob": "7" * 40, "inventory_sha256": h("inventory"),
+            "scenario_sha256": h("scenarios"), "runtime_selection_sha256": h("full"), "graph_version": 1,
+        },
+        "plan_inputs": [{"name": "gradle-properties", "sha256": h("gradle-properties")}],
+        "targets": [{"id": "target-a", "java": 21, "native_contract_sha256": h("target-contract"),
+                     "outputs": [{"path": f"staged/lane-a/{role}.{'jar' if role in ('production', 'harness') else 'json'}",
+                                  "lane_id": "lane-a", "role": role}
+                                 for role in ("production", "harness", "sbom", "native-report")]}],
+        "lanes": [{"id": "lane-a", "target_id": "target-a", "native_contract_sha256": h("lane-contract"),
+                   "obligations": ["scenario/example/server/probe"]}],
+    }
+    document["plan_sha256"] = plan_sha256(document)
+    return document
+
+
+def ci_plan_inputs() -> tuple[dict[str, Any], dict[str, bytes]]:
+    """:func:`ci_plan` with the bytes of every candidate file it binds by SHA-256, by staged name
+    (the inventory and the scenario contract in its identity, the extra input in ``plan_inputs``):
+    what ``validation-input/`` holds next to the plan."""
+
+    return ci_plan(), {"inventory": b"inventory", "scenario-contract": b"scenarios",
+                       "gradle-properties": b"gradle-properties"}
+
+
+def ci_staged_plan() -> dict[str, Any]:
+    """The fixture plan in the shape both mods stage. ``target-a`` builds two lanes and has a
+    manifest and an SBOM of its own (``lane_id`` null); ``target-c`` builds one lane and has no SBOM.
+    A file a mod writes once per target carries the target in its path, because a path is unique
+    in the whole plan."""
+
+    from mod_base.build_ci.protocol import plan_sha256
+
+    def jars(lane: str) -> list[dict[str, Any]]:
+        return [{"path": f"files/Example Mod - {lane}.jar", "lane_id": lane, "role": "production"},
+                {"path": f"harness/Example Mod E2E - {lane}.jar", "lane_id": lane, "role": "harness"}]
+
+    def whole(target: str, name: str, role: str) -> dict[str, Any]:
+        return {"path": f"targets/{target}/{name}", "lane_id": None, "role": role}
+
+    plan = ci_plan()
+    target, lane = plan["targets"][0], plan["lanes"][0]
+    plan["targets"] = [
+        {**target, "id": "target-a", "outputs": [*jars("lane-a"), *jars("lane-b"),
+                                                 whole("target-a", "artifacts.json", "native-report"),
+                                                 whole("target-a", "sbom/example.cdx.json", "sbom")]},
+        {**target, "id": "target-c", "outputs": [*jars("lane-c"), whole("target-c", "artifacts.json", "native-report")]},
+    ]
+    plan["lanes"] = [{**copy.deepcopy(lane), "id": name, "target_id": owner}
+                     for name, owner in (("lane-a", "target-a"), ("lane-b", "target-a"), ("lane-c", "target-c"))]
+    plan["plan_sha256"] = plan_sha256(plan)
+    return plan
+
+
+#: The managed producer callers, written out: a rename in ``mod_base.workflow`` must not follow.
+CI_WORKFLOWS = {"build": ".github/workflows/mod-base-build.yml",
+                "packaged": ".github/workflows/mod-base-packaged-e2e.yml"}
+#: The kit workflows each managed caller references, whether or not their calling jobs run.
+CI_KIT_CALLEES = {"build": ("build.yml",), "packaged": ("select-build.yml", "build.yml", "packaged-e2e.yml")}
+CI_GRAPH_FIXTURES = FIXTURES / "ci_graphs"
+
+
+def ci_push_plan() -> dict[str, Any]:
+    """The fixture plan for a protected push: one default-branch commit is the commit tested, the
+    commit executed and the head GitHub records the run under."""
+
+    from mod_base.build_ci.protocol import plan_sha256
+
+    plan = ci_plan()
+    plan["identity"].update(pr_number=0, head_branch="master", head_sha="2" * 40, tested_sha="2" * 40,
+                            tested_tree="8" * 40, tested_parents=["a" * 40])
+    plan["plan_sha256"] = plan_sha256(plan)
+    return plan
+
+
+def ci_run_producer(plan: dict[str, Any], producer: str = "build", mode: str | None = None) -> dict[str, Any]:
+    """The run of one managed caller for the plan's subject, as GitHub records it: a pull request's
+    under its head commit, a push under the commit it runs from. ``mode`` is the run's graph mode
+    (by default the full Build and the pull-request packaged run)."""
+
+    from mod_base.build_ci.graph import run_graph
+
+    identity, workflow = plan["identity"], CI_WORKFLOWS[producer]
+    mode = mode or ("full" if producer == "build" else "pull-request")
+    return {"run_id": 42 if producer == "build" else 43, "run_attempt": 2, "workflow_path": workflow,
+            "workflow_ref": f"{identity['repository']}/{workflow}@refs/heads/{identity['base_branch']}",
+            "api_head_sha": identity["head_sha"],
+            "event": "pull_request_target" if identity["pr_number"] else "push",
+            "graph_sha256": run_graph(producer, mode).sha256(plan),
+            "upload_window": {"started_at": "2026-10-07T10:01:00Z", "completed_at": "2026-10-07T10:02:00Z"}}
+
+
+def ci_producer(gate: str = "build") -> dict[str, Any]:
+    return ci_run_producer(ci_plan(), gate)
+
+
+def ci_graph_jobs(name: str) -> list[dict[str, Any]]:
+    """The jobs of the literal Jobs API listing ``tests/fixtures/ci_graphs/<name>.json``."""
+
+    listing = load_json_bytes((CI_GRAPH_FIXTURES / f"{name}.json").read_bytes())
+    if listing["total_count"] != len(listing["jobs"]):
+        raise ValueError(f"{name}: total_count disagrees with the listed jobs")
+    return listing["jobs"]
+
+
+def ci_api_run(plan: dict[str, Any], producer: str = "build", **changes: Any) -> dict[str, Any]:
+    """A completed successful run of a managed caller as ``GET /actions/runs/{id}`` reports it.
+
+    A ``pull_request_target`` run carries the pull request's head branch and commit; the commit it
+    executed from appears only in ``referenced_workflows``, as the commit of the mod's local guard
+    workflow (Block Pops run 37501309423). A protected push carries the commit it runs from."""
+
+    identity, kit = plan["identity"], plan["identity"]["kit"]
+    pull_request = bool(identity["pr_number"])
+    run = {
+        "id": 42 if producer == "build" else 43,
+        "name": "Build" if producer == "build" else "Packaged E2E",
+        "display_title": "Example change",
+        "path": CI_WORKFLOWS[producer],
+        "event": "pull_request_target" if pull_request else "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": identity["head_branch"],
+        "head_sha": identity["head_sha"],
+        "head_repository": {"full_name": identity["source_repository"]},
+        "repository": {"full_name": identity["repository"]},
+        "run_attempt": 2,
+        "run_number": 246,
+        "workflow_id": 331005979 if producer == "build" else 331006079,
+        "created_at": "2026-10-07T10:00:00Z",
+        "run_started_at": "2026-10-07T10:00:00Z",
+        "updated_at": "2026-10-07T10:15:00Z",
+        "previous_attempt_url": f"https://api.github.com/repos/{identity['repository']}/actions/runs/42/attempts/1",
+        "pull_requests": [],
+        "referenced_workflows": [
+            {"path": f"{identity['repository']}/.github/workflows/mod-base-guard.yml@{identity['controller_sha']}",
+             "sha": identity["controller_sha"], "ref": f"refs/heads/{identity['base_branch']}"},
+            *({"path": f"{kit['repository']}/.github/workflows/{name}@{kit['sha']}", "sha": kit["sha"]}
+              for name in CI_KIT_CALLEES[producer]),
+        ],
+    }
+    run.update(changes)
+    return run
+
+
+def ci_api_artifact(descriptor: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """The artifact a descriptor selects as the REST API reports it: its ``workflow_run`` carries
+    the head branch and commit of the producer run, like the run itself."""
+
+    selected, producer = descriptor["artifact"], descriptor["producer"]
+    record = {
+        "id": selected["id"],
+        "node_id": f"MDg6QXJ0aWZhY3Q{selected['id']}",
+        "name": selected["name"],
+        "size_in_bytes": selected["size"],
+        "url": f"https://api.github.com/repos/{descriptor['identity']['repository']}/actions/artifacts/{selected['id']}",
+        "expired": False,
+        "digest": selected["digest"],
+        "created_at": selected["created_at"],
+        "updated_at": selected["created_at"],
+        "expires_at": selected["expires_at"],
+        "workflow_run": {"id": producer["run_id"], "repository_id": 1082631496, "head_repository_id": 1082631496,
+                         "head_branch": descriptor["identity"]["head_branch"], "head_sha": producer["api_head_sha"]},
+    }
+    record.update(changes)
+    return record
+
+
+def ci_config() -> dict[str, Any]:
+    files = ["scripts/ci/mod_base_build_adapter.py", "scripts/ci/mod_base_build_dispatch.py", "scripts/ci/pr_gate.py"]
+    return {"kind": "mod-base.build.config", "schema_version": 1, "repository": "example/mod",
+            "profile": "block-pops", "build_adapter_api": 1,
+            "adapter": {"path": files[0], "dispatcher": files[1], "policy": files[2],
+                        "files": [{"path": name, "sha256": h(name)} for name in sorted(files)]},
+            "inventory": {"path": "release/release-matrix.json"},
+            "scenario_contract": {"path": "e2e/scenario-contract.json"},
+            "plan_inputs": [{"name": "gradle-properties", "path": "gradle.properties"}],
+            "bundle": {"path": "build/release"},
+            "contexts": {"build": "Trusted PR / Build and verify", "packaged": "Trusted PR / Packaged E2E gate"},
+            "timeouts": {"policy_seconds": 3600, "target_seconds": 7200,
+                         "runtime_seconds": 1800, "validator_seconds": 600}}
+
+
+def ci_validation(hook: str = "verify_build", unit_id: str | None = None) -> dict[str, Any]:
+    """Inert verifier-output fixture; actual native semantics are separate conformance evidence."""
+    plan = ci_plan()
+    from mod_base.model.canonical import canonical_json
+    units = plan["lanes"] if hook == "verify_runtime" else plan["targets"]
+    if hook != "verify_build":
+        units = [unit for unit in units if unit["id"] == unit_id]
+    return {"kind": "mod-base.ci.validation", "schema_version": 1,
+            "identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "hook": hook, "unit_id": unit_id, "run_id": 42, "run_attempt": 2,
+            "source_config_sha256": h("configbytes"), "input_sha256": h("inputs"),
+            "reports": [{"unit_id": unit["id"], "native_contract_sha256": unit["native_contract_sha256"],
+                         "path": f"reports/{unit['id']}.json",
+                         "size": len(canonical_json({"fixture_unit": unit["id"]})),
+                         "sha256": h(canonical_json({"fixture_unit": unit["id"]}).decode())} for unit in units]}
+
+
+def ci_run_descriptor(plan: dict[str, Any], producer: str, mode: str | None, kind: str, *,
+                      unit_id: str | None = None, artifact_id: int = 100) -> dict[str, Any]:
+    """One artifact of a run of ``producer`` in ``mode`` for the plan's subject."""
+
+    record = ci_run_producer(plan, producer, mode)
+    return {"identity": copy.deepcopy(plan["identity"]), "plan_sha256": plan["plan_sha256"],
+            "profile": plan["profile"], "producer": record,
+            "artifact": {"id": artifact_id, "name": grammar.ci_artifact_name(kind, record["run_id"], 2, unit_id),
+                         "digest": "sha256:" + h(kind + "-zip"), "size": 512,
+                         "created_at": "2026-10-07T10:01:30Z", "expires_at": "2026-10-14T10:01:30Z"}}
+
+
+def ci_descriptor(kind: str = "build", *, gate: str = "build", unit_id: str | None = None,
+                  artifact_id: int = 100) -> dict[str, Any]:
+    return ci_run_descriptor(ci_plan(), gate, None, kind, unit_id=unit_id, artifact_id=artifact_id)
+
+
+def ci_envelope(plan: dict[str, Any] | None = None, *, target_id: str | None = None) -> dict[str, Any]:
+    """The Build envelope of ``plan`` (by default the fixture plan): the complete export or, with
+    ``target_id``, the partition of that one target."""
+
+    plan = ci_plan() if plan is None else plan
+    files = sorted(({**output, "sha256": h(output["path"]), "size": 128}
+                    for target in plan["targets"] if target_id in (None, target["id"])
+                    for output in target["outputs"]), key=lambda item: item["path"])
+    return {"kind": "mod-base.build.envelope", "schema_version": 1, "identity": copy.deepcopy(plan["identity"]),
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "producer": {key: value for key, value in ci_run_producer(plan).items() if key != "upload_window"},
+            "scope": "complete" if target_id is None else "target", "target_id": target_id, "files": files,
+            "native_reports": [item["path"] for item in files if item["role"] == "native-report"]}
+
+
+def ci_selection() -> dict[str, Any]:
+    plan = ci_plan()
+    request = ci_producer("packaged")
+    return {"kind": "mod-base.ci.selection", "schema_version": 1, "identity": plan["identity"],
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "request": {key: request[key] for key in ("run_id", "run_attempt", "workflow_path", "workflow_ref")}
+                       | {"nonce": h("request-nonce")},
+            "build": ci_descriptor(), "envelope_sha256": canonical_sha256(ci_envelope())}
+
+
+def ci_run_gate(plan: dict[str, Any], gate: str, mode: str) -> dict[str, Any]:
+    """The receipt of ``gate`` for the plan's subject, sealed by a run in ``mode``: ``full`` is a
+    Build run; ``pull-request``, ``selected`` and ``rebuilt`` are packaged runs, and a rebuilt
+    packaged run also seals the Build gate of the Build it rebuilt."""
+
+    producer = "build" if mode == "full" else "packaged"
+    units = plan["targets"] if gate == "build" else plan["lanes"]
+    if gate == "build":
+        artifacts, owning = [ci_run_descriptor(plan, producer, mode, "build")], None
+    else:
+        artifacts = [ci_run_descriptor(plan, producer, mode, "runtime", unit_id=lane["id"], artifact_id=101 + index)
+                     for index, lane in enumerate(plan["lanes"])]
+        artifacts.append(ci_run_descriptor(plan, producer, mode, "results", artifact_id=101 + len(plan["lanes"])))
+        owning = (ci_run_descriptor(plan, "packaged", "rebuilt", "build") if mode == "rebuilt"
+                  else ci_run_descriptor(plan, "build", "full", "build"))
+    return {"kind": "mod-base.ci.gate", "schema_version": 1, "identity": copy.deepcopy(plan["identity"]),
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "producer": {key: value for key, value in ci_run_producer(plan, producer, mode).items()
+                         if key != "upload_window"},
+            "gate": gate, "mode": mode, "artifacts": artifacts, "owning_build": owning,
+            "native_receipts": [{"unit_id": unit["id"], "native_contract_sha256": unit["native_contract_sha256"],
+                                 "report_sha256": h(unit["id"] + "-native")} for unit in units]}
+
+
+def ci_gate(gate: str = "build") -> dict[str, Any]:
+    return ci_run_gate(ci_plan(), gate, "full" if gate == "build" else "pull-request")
+
+
+def ci_run_results(plan: dict[str, Any], mode: str) -> dict[str, Any]:
+    """The results index a packaged run in ``mode`` seals for the plan's subject: the lane
+    artifacts and the owning Build that :func:`ci_run_gate` names for the same run."""
+
+    receipt = ci_run_gate(plan, "packaged", mode)
+    return {"kind": "mod-base.ci.results", "schema_version": 1, "identity": copy.deepcopy(plan["identity"]),
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"], "producer": receipt["producer"],
+            "owning_build": receipt["owning_build"], "build_envelope_sha256": canonical_sha256(ci_envelope(plan)),
+            "lanes": [{"id": lane["id"], "native_contract_sha256": lane["native_contract_sha256"],
+                       "descriptor": descriptor, "envelope_sha256": h(lane["id"] + "-runtime-envelope"),
+                       "validation_sha256": h(lane["id"] + "-validation"), "report_sha256": h(lane["id"] + "-native")}
+                      for lane, descriptor in zip(plan["lanes"], receipt["artifacts"])]}
+
+
+def ci_results() -> dict[str, Any]:
+    return ci_run_results(ci_plan(), "pull-request")
+
+
+def ci_reuse() -> dict[str, Any]:
+    from mod_base.build_ci.graph import run_graph
+
+    plan = ci_plan()
+    identity = copy.deepcopy(plan["identity"])
+    identity.update(pr_number=0, head_sha="8" * 40, head_branch="master", tested_sha="8" * 40,
+                    controller_sha="8" * 40, base_sha="8" * 40, tested_parents=["2" * 40])
+    producer = ci_producer()
+    # The covering run is a push to the default branch: recorded under the commit it runs from.
+    producer.update(run_id=44, event="push", api_head_sha="8" * 40,
+                    graph_sha256=run_graph("build", "reuse").sha256(plan))
+    producer.pop("upload_window")
+    return {"kind": "mod-base.ci.reuse", "schema_version": 1, "identity": identity,
+            "plan_sha256": h("covered-plan"), "profile": plan["profile"], "producer": producer,
+            "source": {"identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+                       "build_seal": ci_descriptor("tested", unit_id="build"),
+                       "packaged_seal": ci_descriptor("tested", gate="packaged", unit_id="packaged", artifact_id=103)}}
+
+
+def ci_execution() -> dict[str, Any]:
+    """Inert local execution handoff fixture; metadata does not establish physical origin."""
+
+    import base64
+    from mod_base.model.canonical import canonical_json
+    import hashlib
+    return {"kind": "mod-base.ci.execution", "schema_version": 1, "run_id": 42, "run_attempt": 2,
+            "nonce": h("execution-nonce"), "plan_sha256": ci_plan()["plan_sha256"],
+            "source_config_sha256": h("configbytes"),
+            "input_sha256": hashlib.sha256(canonical_json(ci_envelope())).hexdigest(),
+            "returncode": 0, "truncated": False, "log_base64": base64.b64encode(b"fixture log").decode("ascii")}
+
+
+def ci_stat(*, inode: int = 99, size: int = 0, mode: int = stat.S_IFDIR | 0o755, uid: int = 0, gid: int = 0,
+            links: int = 1) -> SimpleNamespace:
+    """A synthetic ``os.stat_result`` for tests of metadata rules that need no real file."""
+    return SimpleNamespace(st_dev=1, st_ino=inode, st_size=size, st_mode=mode, st_uid=uid,
+                           st_gid=gid, st_nlink=links, st_mtime_ns=1, st_ctime_ns=1)
+
+
+def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any]:
+    """Inert root-operation request data; no physical source, UID or execution authority."""
+    plan = ci_plan()
+    sources = {"controller_sha": plan["identity"]["controller_sha"], "controller_tree": "b" * 40,
+               "config": {"path": "scripts/ci/mod-base-build.json", "mode": "100644",
+                          "git_blob": "c" * 40, "sha256": h("configbytes"), "size": 1000},
+               "files": [{"path": file["path"], "mode": "100644", "git_blob": "d" * 40,
+                          "sha256": file["sha256"], "size": 1} for file in ci_config()["adapter"]["files"]]}
+    validator = {"uid": 2001, "gid": 2001}
+    if operation == "host-fence":
+        arguments = {}
+    elif operation == "stage-candidate":
+        data = b"known tracked bytes\n"
+        blob = hashlib.sha1(b"blob %d\x00" % len(data) + data)
+        # The one-file inventory hashes to the tree named beside it, as root requires.
+        tree = hashlib.sha1(b"tree 32\x00" + b"100644 file\x00" + blob.digest())
+        arguments = {"candidate": {"uid": 2002, "gid": 2002}, "repository": plan["identity"]["repository"],
+                     "tested_sha": plan["identity"]["tested_sha"], "tested_tree": tree.hexdigest(),
+                     "inventory": [{"path": "file", "mode": "100644", "size": len(data),
+                                    "git_blob": blob.hexdigest()}],
+                     "source": "/home/runner/work/project/project/candidate",
+                     "gradle_seed": "/home/runner/work/_temp/gradle-seed",
+                     "overlay": {"path": "/home/runner/work/_temp/kit-overlay", "sha": "a" * 40,
+                                 "version": "1.0.3", "tree_digest": "sha256:" + "b" * 64}}
+    elif operation == "freeze-build-validation":
+        arguments = {"validator": validator, "sources": sources, "plan": plan, "envelope": ci_envelope(),
+                     "run_id": 42, "run_attempt": 2, "execution_nonce": h("execution-nonce")}
+    elif operation == "freeze-runtime-validation":
+        runtime = ci_runtime_envelope()
+        runtime.update(scope="lane", lane_id="lane-a")
+        arguments = {"validator": validator, "sources": sources, "plan": plan, "build": ci_envelope(),
+                     "runtime": runtime, "lane_id": "lane-a", "run_id": 43, "run_attempt": 2,
+                     "execution_nonce": h("execution-nonce")}
+    elif operation in ("grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs",
+                       "grant-build-validation", "grant-runtime-validation"):
+        from mod_base.build_ci.protocol import subject_of
+
+        identity = plan["identity"]
+        lane = ci_runtime_envelope()
+        lane.update(scope="lane", lane_id="lane-a")
+        arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}, **{
+            "grant-controller": {"subject": subject_of(identity), "sources": sources},
+            "grant-plan-inputs": {"inputs": [{"name": "inventory", "sha256": identity["inventory_sha256"]},
+                                             {"name": "scenario-contract", "sha256": identity["scenario_sha256"]},
+                                             *plan["plan_inputs"]]},
+            "take-derived-plan": {},
+            "grant-validation-inputs": {"plan": plan},
+            "grant-build-validation": {"plan": plan, "envelope": ci_envelope()},
+            "grant-runtime-validation": {"plan": plan, "build": ci_envelope(), "runtime": lane,
+                                         "lane_id": "lane-a", "run_id": 43, "run_attempt": 2}}[operation]}
+    elif operation == "take-derived-runtime":
+        arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}}
+    elif operation in ("stage-bundle", "verify-candidate-source", "freeze-build-export", "freeze-runtime-export"):
+        data = b"known tracked bytes\n"
+        # What every operation after a candidate hook names; the inventory is one tracked file.
+        source = {"inventory": [{"path": "file", "mode": "100644", "size": len(data),
+                                 "git_blob": hashlib.sha1(b"blob %d\x00" % len(data) + data).hexdigest()}],
+                  "execution": {"returncode": 0, "truncated": False, "log_bytes": 11, "log_sha256": h("hook log")}}
+
+        def producer(caller: str) -> dict[str, Any]:
+            return {key: value for key, value in ci_run_producer(plan, caller).items() if key != "upload_window"}
+
+        arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}, "sources": sources,
+                     "plan": plan, **{
+            "stage-bundle": {"envelope": ci_envelope()},
+            "verify-candidate-source": source,
+            "freeze-build-export": {**source, "target_id": "target-a", "producer": producer("build")},
+            "freeze-runtime-export": {**source, "lane_id": "lane-a", "producer": producer("packaged"),
+                                      "build": ci_envelope(), "owning_build": ci_descriptor()}}[operation]}
+    else:
+        raise ValueError(f"no sample root request for {operation!r}")
+    return {"kind": "mod-base.ci.root-request", "schema_version": 1, "operation": operation,
+            "nonce": h("root-request-nonce"),
+            "boundary": {"home": "/home/runner", "uid": 1001, "gid": 121,
+                         "device": 1, "inode": 10, "original_mode": 0o755},
+            "arguments": arguments}
+
+
+def ci_activation(mode: str = "disabled", rollback_from: str | None = None) -> dict[str, Any]:
+    """The activation manifest of the ``ci_config`` mod in ``mode``; ``rollback_from`` is the mode a
+    ``reviewed-rollback`` leaves (``shared-build`` unless given)."""
+
+    if mode == "reviewed-rollback" and rollback_from is None:
+        rollback_from = "shared-build"
+    return {"kind": "mod-base.ci.activation", "schema_version": 1,
+            "repository": ci_config()["repository"], "profile": ci_config()["profile"], "mode": mode,
+            "rollback_from": rollback_from}
+
+
+def ci_batch() -> dict[str, Any]:
+    """The batch of pull requests #1 and #2 of the repository that
+    ``tests/fixtures/ci_batch/support.py`` authors. Every id is the one Git produces for it:
+    ``tests/test_ci_batch_git.py`` builds the stack again and compares."""
+
+    return {'kind': 'mod-base.ci.batch', 'schema_version': 1, 'repository': ci_config()['repository'],
+            'base_branch': 'master', 'base_sha': '3a1ed9cc985c8b970df26e8578d426deebfcd702',
+            'base_tree': '099ff2cafe501a1acfdd2a45508f9b10c8316928', 'branch': 'batch/fixture',
+            'members': [{'pr_number': 1, 'title': 'fix: change fix/alpha',
+                         'head_sha': 'e2aabbc49cc7ed09c854403e8ba7cf909c103bc4',
+                         'head_tree': 'b872608236041c4d255da56d175c83a1c927ac16',
+                         'merge_base_sha': '3a1ed9cc985c8b970df26e8578d426deebfcd702',
+                         'patch_sha256': '05bfb323ecafab81cc6e946b3855ad8ccffac040b81758c4f115edb32875a696',
+                         'squash_sha': 'aa599fc6164e3a937fd540f1fbf7c9f971d2062d',
+                         'result_tree': 'b872608236041c4d255da56d175c83a1c927ac16'},
+                        {'pr_number': 2, 'title': 'fix: change feat/beta',
+                         'head_sha': '578135289ef824afedfa9f201319dacac5d597b8',
+                         'head_tree': 'd402a457761d5db463c12d305b72a0c6e7930037',
+                         'merge_base_sha': '3a1ed9cc985c8b970df26e8578d426deebfcd702',
+                         'patch_sha256': '3006c8f029910e55f6c37623708686d6f542d9c860951302a36f0236ffe8390a',
+                         'squash_sha': '05ac3d1c501d5712d42642d46d3f00c62e1e6e90',
+                         'result_tree': '929852cff2d0aecd767154b690ce0dd587cb4ce6'}],
+            'result_tree': '929852cff2d0aecd767154b690ce0dd587cb4ce6'}
+
+
+def ci_runtime_envelope() -> dict[str, Any]:
+    """Inert runtime inventory; native output mapping and bytes need independent proof."""
+    plan = ci_plan()
+    return {'kind': 'mod-base.ci.runtime-envelope', 'schema_version': 1,
+            'identity': plan['identity'], 'plan_sha256': plan['plan_sha256'], 'profile': plan['profile'],
+            'producer': {key: value for key, value in ci_producer('packaged').items() if key != 'upload_window'},
+            'scope': 'complete', 'lane_id': None, 'owning_build': ci_descriptor(),
+            'lanes': [{'id': lane['id'], 'native_contract_sha256': lane['native_contract_sha256']}
+                      for lane in plan['lanes']],
+            'files': [{'path': 'lanes/lane-a/result.json', 'lane_id': 'lane-a',
+                       'role': 'native-report', 'size': 128, 'sha256': h('runtime-report')}]}
+
+
 def sample_documents() -> dict[str, dict[str, Any]]:
     """Fixture name -> a coherent, valid document (see ``VALID_FIXTURE_KINDS``)."""
 
     return {
+        "ci-plan": ci_plan(),
+        "ci-config": ci_config(),
+        "ci-activation": ci_activation(),
+        "ci-batch": ci_batch(),
+        "ci-runtime-envelope": ci_runtime_envelope(),
+        "ci-envelope": ci_envelope(),
+        "ci-selection": ci_selection(),
+        "ci-gate-build": ci_gate(),
+        "ci-gate-packaged": ci_gate("packaged"),
+        "ci-results": ci_results(),
+        "ci-reuse": ci_reuse(),
+        "ci-validation": ci_validation(),
+        "ci-execution": ci_execution(),
+        "ci-root-request": ci_root_request(),
+        "ci-root-request-runtime": ci_root_request("freeze-runtime-validation"),
+        "ci-root-request-fence": ci_root_request("host-fence"),
+        "ci-root-request-staging": ci_root_request("stage-candidate"),
         "expectation": expectation(),
         "handoff": handoff(),
         "compact": compact(),
@@ -754,6 +1244,23 @@ def sample_documents() -> dict[str, dict[str, Any]]:
 
 #: Fixture name -> the document kind it holds.
 VALID_FIXTURE_KINDS = {
+    "ci-plan": "mod-base.build.plan",
+    "ci-config": "mod-base.build.config",
+    "ci-activation": "mod-base.ci.activation",
+    "ci-batch": "mod-base.ci.batch",
+    "ci-runtime-envelope": "mod-base.ci.runtime-envelope",
+    "ci-envelope": "mod-base.build.envelope",
+    "ci-selection": "mod-base.ci.selection",
+    "ci-gate-build": "mod-base.ci.gate",
+    "ci-gate-packaged": "mod-base.ci.gate",
+    "ci-results": "mod-base.ci.results",
+    "ci-reuse": "mod-base.ci.reuse",
+    "ci-validation": "mod-base.ci.validation",
+    "ci-execution": "mod-base.ci.execution",
+    "ci-root-request": "mod-base.ci.root-request",
+    "ci-root-request-runtime": "mod-base.ci.root-request",
+    "ci-root-request-fence": "mod-base.ci.root-request",
+    "ci-root-request-staging": "mod-base.ci.root-request",
     "expectation": "mod-base.evidence.expectation",
     "handoff": "mod-base.evidence.handoff",
     "compact": "mod-base.evidence.compact",

@@ -1,0 +1,174 @@
+{
+  "build": {
+    "bundle": {
+      "artifact": {
+        "bytes": 124386807,
+        "digest": "sha256:0818c320b0da6ef230c712b61775721f8a8a9159a855f6dbb6a280b4e350d305",
+        "id": 11535814679,
+        "name": "staged-release-bundle-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1"
+      },
+      "expanded_bytes": 124379269,
+      "files": 41,
+      "largest_jar_bytes": 6179191,
+      "other_files": {
+        "artifacts.json": 29390
+      }
+    },
+    "event": "pull_request_target",
+    "report": {
+      "bytes": 1341326,
+      "name": "build-matrix-report.json"
+    },
+    "run_attempt": 1,
+    "run_id": 37733023412
+  },
+  "controller_sha": "ad858858edcd6f5b5d373be21a24e52d8dce1add",
+  "measured_on": "2026-10-08",
+  "packaged": {
+    "aggregate": {
+      "artifact": {
+        "bytes": 208362834,
+        "digest": "sha256:d70bac3bbda7971e1f2379c164ba6992d2e3c49ddddc4196ac0b7c5c59c42c95",
+        "id": 11534718917,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-aggregate"
+      },
+      "expanded_bytes": 228787834,
+      "files": 764
+    },
+    "event": "pull_request_target",
+    "lanes": [
+      {
+        "bytes": 8382065,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-1_20_1--pr-behavior"
+      },
+      {
+        "bytes": 8536182,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-1_21_1--pr-behavior"
+      },
+      {
+        "bytes": 8407945,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-1_21_4--pr-behavior"
+      },
+      {
+        "bytes": 8368381,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-1_21_5--pr-behavior"
+      },
+      {
+        "bytes": 9508177,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-1_21_6--pr-behavior"
+      },
+      {
+        "bytes": 9521783,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-1_21_7--pr-behavior"
+      },
+      {
+        "bytes": 9506037,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-1_21_8--pr-behavior"
+      },
+      {
+        "bytes": 15986590,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-26_1_2--pr-behavior"
+      },
+      {
+        "bytes": 16036784,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-26_2--pr-behavior"
+      },
+      {
+        "bytes": 16025691,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-fabric-26_3--pr-behavior"
+      },
+      {
+        "bytes": 7119425,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-forge-1_20_1--pr-behavior"
+      },
+      {
+        "bytes": 7123317,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-1_21_1--pr-behavior"
+      },
+      {
+        "bytes": 7023140,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-1_21_4--pr-behavior"
+      },
+      {
+        "bytes": 6970891,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-1_21_5--pr-behavior"
+      },
+      {
+        "bytes": 7344395,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-1_21_6--pr-behavior"
+      },
+      {
+        "bytes": 7342742,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-1_21_7--pr-behavior"
+      },
+      {
+        "bytes": 7261607,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-1_21_8--pr-behavior"
+      },
+      {
+        "bytes": 16009116,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-26_1_2--pr-behavior"
+      },
+      {
+        "bytes": 15879729,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-26_2--pr-behavior"
+      },
+      {
+        "bytes": 16040308,
+        "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-26_3--pr-behavior"
+      }
+    ],
+    "run_attempt": 1,
+    "run_id": 37733023390,
+    "samples": [
+      {
+        "artifact": {
+          "bytes": 16040308,
+          "digest": "sha256:9254daa30b22401b464ec9d7ff775b9e786f463393760bf7497caf08fa69f2d2",
+          "id": 11535262324,
+          "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-26_3--pr-behavior"
+        },
+        "deepest_path": 5,
+        "evidence_profiles": {
+          "neoforge-26.3--26.3--in-world": {
+            "bytes": 15473232,
+            "files": 27
+          },
+          "neoforge-26.3--26.3--ui-regression": {
+            "bytes": 1359143,
+            "files": 11
+          }
+        },
+        "expanded_bytes": 16863477,
+        "files": 41,
+        "largest_log_bytes": 127008,
+        "largest_png_bytes": 1218817,
+        "longest_path_chars": 117
+      },
+      {
+        "artifact": {
+          "bytes": 6970891,
+          "digest": "sha256:7f89307e922a02d48da3b3397e20f034c1a664b2be5de3606dfa3324a8229069",
+          "id": 11533954757,
+          "name": "packaged-e2e-69a76825d6f6db3b825c0d0eaf9554f3af3cf323-1-neoforge-1_21_5--pr-behavior"
+        },
+        "deepest_path": 5,
+        "evidence_profiles": {
+          "neoforge-1.21.5--1.21.5--in-world": {
+            "bytes": 7005925,
+            "files": 27
+          },
+          "neoforge-1.21.5--1.21.5--ui-regression": {
+            "bytes": 1539116,
+            "files": 11
+          }
+        },
+        "expanded_bytes": 8576173,
+        "files": 41,
+        "largest_log_bytes": 546189,
+        "largest_png_bytes": 598637,
+        "longest_path_chars": 121
+      }
+    ]
+  }
+}

@@ -1,0 +1,310 @@
+# mod-base managed: gate status caller, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-gate-status.yml
+name: mod-base gate status
+
+# Publishes the two protected gate statuses of a pull request: the only writer of those contexts.
+# The workflow of the default branch runs whenever the answer may have changed: a gate run was
+# requested or has completed, the pull request got a new head or changed its draft state, once an
+# hour for one open pull request in turn (events can be lost), or on request for one pull request.
+# The guard binds the run to the pin; a native job finds the pull request; the kit's read-only
+# workflow evaluates both gates and returns the statuses they may show, each pending until its
+# newest run is verified; and a last job publishes exactly those. Only that job names the
+# protected environment and the App key, mints a token that can write commit statuses and
+# nothing else, and reads the live pull request again before it writes; a status that already
+# says the same is not written twice. The kit workflow receives no secret, and no evaluation
+# that failed, was skipped or returned nothing reaches a status.
+on:
+  workflow_run:
+    workflows: ["mod-base Build", "mod-base packaged E2E"]
+    types: [requested, completed]
+  pull_request_target:
+    branches: ["{{BRANCH}}"]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: The pull request whose gate statuses are evaluated and published again
+        required: true
+        type: string
+
+permissions: {}
+
+# One evaluation and publication at a time for a pull request, in the order the runs were started:
+# a run waits for the one before it and is never cancelled by a newer one, so an older answer is
+# never published after a newer one. The lock is held for this short run alone, never during a
+# Build or a test. The hourly run names its pull request only after it started and takes no lock.
+concurrency:
+  group: >-
+    mod-base-gate-status-${{ github.event.pull_request.number ||
+    github.event.workflow_run.pull_requests[0].number || inputs.pr-number ||
+    format('run-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Verify pinned mod-base
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/mod-base-guard.yml
+    with:
+      callees: gate-status
+
+  locate:
+    name: Locate the pull request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      pr-number: ${{ steps.locate.outputs.pr-number }}
+    steps:
+      - name: Find the pull request of this event
+        id: locate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr-number }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Locate pull request: %s\n' "$1" >&2; exit 1; }
+          # The hourly run takes one of at most this many open pull requests, in turn.
+          bound=10
+          number=""
+          case "$GITHUB_EVENT_NAME" in
+            pull_request_target) number="$EVENT_PR_NUMBER" ;;
+            workflow_dispatch) number="$DISPATCH_PR_NUMBER" ;;
+            workflow_run | schedule) ;;
+            *) fail "the gate status caller does not run on this event" ;;
+          esac
+          if [[ "$GITHUB_EVENT_NAME" == pull_request_target || "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$number" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed pull request number"
+          else
+            [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+            [[ "$GITHUB_REF" == refs/heads/* ]] || fail "this run is not on a branch"
+            base="${GITHUB_REF#refs/heads/}"
+            [[ "$base" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || fail "malformed default branch"
+            pulls="repos/$GITHUB_REPOSITORY/pulls?state=open&base=$base"
+            if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
+              # A push or a dispatch of a gate caller tests no pull request, and a fork's is never
+              # evaluated. Otherwise the pull request is the open one with exactly the branch and
+              # the head of the triggering run: one, or none when that head is already gone.
+              if [[ "$RUN_EVENT" == pull_request_target && "$RUN_HEAD_REPOSITORY" == "$GITHUB_REPOSITORY" ]]; then
+                [[ "$RUN_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed head of the triggering run"
+                [[ "$RUN_HEAD_BRANCH" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || fail "malformed head branch of the triggering run"
+                listed="$(protected_gh_api_retry "$pulls&head=${GITHUB_REPOSITORY%%/*}:$RUN_HEAD_BRANCH&per_page=100")" ||
+                  fail "cannot list the pull requests of the triggering run's branch"
+                number="$(jq -r --arg repository "$GITHUB_REPOSITORY" --arg base "$base" --arg branch "$RUN_HEAD_BRANCH" \
+                    --arg sha "$RUN_HEAD_SHA" '
+                      if type != "array" then error("no list") else . end |
+                      [.[] | select(.state == "open" and .head.ref == $branch and .head.sha == $sha and
+                        .head.repo.full_name == $repository and .base.ref == $base and
+                        .base.repo.full_name == $repository) | .number] |
+                      if all(.[]; type == "number") then . else error("no number") end |
+                      if length == 0 then "" elif length == 1 then .[0] else error("several") end' <<< "$listed")" ||
+                  fail "the triggering run does not name at most one open pull request"
+              fi
+            else
+              # The reconciliation: of the most recently updated open pull requests of this
+              # repository against the default branch that are no drafts, one in turn, by the hour.
+              now="$(date -u +%s)"
+              [[ "$now" =~ ^[1-9][0-9]{0,11}$ ]] || fail "cannot read the clock"
+              listed="$(protected_gh_api_retry "$pulls&sort=updated&direction=desc&per_page=100")" ||
+                fail "cannot list the open pull requests"
+              number="$(jq -r --arg repository "$GITHUB_REPOSITORY" --arg base "$base" --argjson bound "$bound" \
+                  --argjson hour "$(( now / 3600 ))" '
+                    if type != "array" then error("no list") else . end |
+                    [.[] | select(.state == "open" and .draft == false and .head.repo.full_name == $repository and
+                      .base.ref == $base and .base.repo.full_name == $repository) | .number] |
+                    if all(.[]; type == "number") then . else error("no number") end |
+                    .[:$bound] | sort | if length == 0 then "" else .[$hour % length] end' <<< "$listed")" ||
+                fail "cannot choose among the open pull requests"
+            fi
+            [[ -z "$number" || "$number" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed pull request number"
+          fi
+          if [[ -n "$number" ]]; then
+            printf 'This run evaluates pull request #%s\n' "$number"
+          else
+            printf 'This event names no open pull request: nothing is evaluated or published\n'
+          fi
+          printf 'pr-number=%s\n' "$number" >> "$GITHUB_OUTPUT"
+
+  evaluate:
+    name: Evaluate protected gates
+    needs: [guard, locate]
+    if: needs.locate.outputs.pr-number != ''
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: The-Plum-Team/mod-base/.github/workflows/gate-status.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.guard.outputs.kit-sha }}
+      pr-number: ${{ needs.locate.outputs.pr-number }}
+
+  publish:
+    name: Publish protected gate statuses
+    needs: [locate, evaluate]
+    if: needs.evaluate.outputs.intents != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: mod-base-gate
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Mint a statuses-only App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MOD_BASE_GATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MOD_BASE_GATE_APP_PRIVATE_KEY }}
+          permission-statuses: write
+      - name: Publish the evaluated statuses on the live pull request head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          EVALUATION: ${{ needs.evaluate.result }}
+          INTENTS: ${{ needs.evaluate.outputs.intents }}
+          PR_NUMBER: ${{ needs.locate.outputs.pr-number }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Publish gate statuses: %s\n' "$1" >&2; exit 1; }
+          # An answer that the pull request has outrun is dropped, not published and not an error:
+          # the event that outran it started an evaluation of its own.
+          superseded() { printf '::notice title=Gate statuses not published::%s\n' "$1"; exit 0; }
+          # Without an evaluation that succeeded, a document or the App token, nothing is published.
+          [[ "$EVALUATION" == success ]] || fail "the evaluation did not succeed"
+          [[ -n "$STATUS_TOKEN" && "$STATUS_TOKEN" != *[[:space:]]* ]] || fail "no App token was minted"
+          [[ -n "$GH_TOKEN" && "$GH_TOKEN" != "$STATUS_TOKEN" ]] || fail "the job token and the App token must be two tokens"
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "this run is not on a branch"
+          base="${GITHUB_REF#refs/heads/}"
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed pull request number"
+          (( ${#INTENTS} >= 2 && ${#INTENTS} <= 4096 )) || fail "the evaluation returned no bounded intents document"
+          # The document is admitted as a whole or not at all: this repository and pull request,
+          # a commit, the Build gate and at most the packaged one, each with a printable context,
+          # one of three states, one bounded line and no URL but a run of this repository.
+          admitted="$(jq -ce --arg repository "$GITHUB_REPOSITORY" --argjson number "$PR_NUMBER" \
+              --arg runs "https://github.com/$GITHUB_REPOSITORY/actions/runs/" '
+                def digits: length >= 1 and length <= 19 and (explode | .[0] != 48 and all(.[]; . >= 48 and . <= 57));
+                def gate:
+                  type == "object" and keys == ["context", "description", "state", "target_url"] and
+                  (.context | type == "string" and length >= 1 and length <= 109 and
+                    (explode | .[0] != 32 and .[-1] != 32 and all(.[]; . >= 32 and . <= 126))) and
+                  (.state == "pending" or .state == "success" or .state == "failure") and
+                  (.description | type == "string" and length >= 1 and length <= 140 and
+                    (explode | all(.[]; . >= 32 and (. < 127 or . >= 160) and . != 8232 and . != 8233))) and
+                  (.target_url == null or (.target_url | type == "string" and startswith($runs) and
+                    (.[($runs | length):] | digits)));
+                if type == "object" and keys == ["gates", "pr_number", "repository", "target_sha"] and
+                  .repository == $repository and .pr_number == $number and
+                  (.target_sha | type == "string" and length == 40 and
+                    (explode | all(.[]; (. >= 48 and . <= 57) or (. >= 97 and . <= 102)))) and
+                  (.gates | type == "object" and (keys == ["build"] or keys == ["build", "packaged"]) and
+                    all(.[]; gate) and ([.[].context | ascii_downcase] | unique | length) == length)
+                then {target_sha, pending: all(.gates[]; .state == "pending"),
+                      statuses: ([.gates.build, (.gates.packaged // empty)] |
+                        map(select(.state != "success")) + map(select(.state == "success")) |
+                        map({state, context, description} + if .target_url == null then {} else {target_url} end))}
+                else error("malformed") end' <<< "$INTENTS" 2> /dev/null)" ||
+            fail "the intents document is malformed"
+          target_sha="$(jq -r .target_sha <<< "$admitted")"
+          # The live pull request, read with the read-only job token immediately before the first
+          # status: still open, the same head, still against the default branch of this
+          # repository, and no draft unless every status is pending.
+          pull="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")" ||
+            fail "cannot read the live pull request"
+          verdict="$(jq -r --arg repository "$GITHUB_REPOSITORY" --argjson number "$PR_NUMBER" --arg base "$base" \
+              --argjson admitted "$admitted" '
+                if type != "object" or .number != $number or (.draft | type) != "boolean" or
+                  (.head | type) != "object" or (.base | type) != "object" then "malformed"
+                elif .state != "open" then "the pull request is not open any more"
+                elif .head.sha != $admitted.target_sha then "the pull request has a newer head than the evaluated one"
+                elif .base.ref != $base or .base.repo.full_name != $repository or
+                  .head.repo.full_name != $repository then "the pull request left the default branch of this repository"
+                elif .draft and ($admitted.pending | not) then "the pull request became a draft after its evaluation"
+                else "publish" end' <<< "$pull")" || fail "cannot read the live pull request"
+          case "$verdict" in
+            publish) ;;
+            malformed) fail "the live pull request is malformed" ;;
+            *) superseded "$verdict" ;;
+          esac
+          # From here on only the App token is used. GitHub keeps at most 1000 statuses of one
+          # context on one commit, and this job runs again for every event and every hour: a
+          # status that is still the newest of its context there, that this App wrote and that
+          # says exactly the same is not written again. Anything else is, so a doubt writes.
+          export GH_TOKEN="$STATUS_TOKEN"
+          writer=""
+          if [[ "$APP_SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,98}$ ]]; then
+            writer="${APP_SLUG}[bot]"
+          fi
+          newest="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/commits/$target_sha/statuses?per_page=100")" ||
+            fail "cannot read the statuses of the evaluated head"
+          due="$(jq -c --arg writer "$writer" --argjson admitted "$admitted" '
+                (if type != "array" then error("no list") else . end) as $published |
+                [$admitted.statuses[] | . as $status |
+                  ([$published[] | select(type == "object" and .context == $status.context)][0]) as $shown |
+                  select($writer == "" or ($shown | type) != "object" or $shown.creator.login != $writer or
+                    $shown.state != $status.state or $shown.description != $status.description or
+                    $shown.target_url != $status.target_url)]' <<< "$newest")" ||
+            fail "cannot read the statuses of the evaluated head"
+          # A state that is no success is written first: if a later request fails, the contexts
+          # are left more restrictive, never less.
+          request="$RUNNER_TEMP/mod-base-gate-status.json"
+          published=0
+          while IFS= read -r status; do
+            printf '%s\n' "$status" > "$request"
+            protected_gh_api_retry --method POST "repos/$GITHUB_REPOSITORY/statuses/$target_sha" --input "$request" \
+              < /dev/null > /dev/null || fail "GitHub refused a status; no further status is published"
+            published=$(( published + 1 ))
+          done < <(jq -c '.[]' <<< "$due")
+          printf 'Published %s gate status(es) on %s of pull request #%s; %s unchanged\n' "$published" "$target_sha" \
+            "$PR_NUMBER" "$(( $(jq -r '.statuses | length' <<< "$admitted") - published ))"

@@ -1,0 +1,19 @@
+{
+  "documents/config/bp.json": "764484cb1f8bb919880ef5fa34cd1112fcfaa8ca0418263f5997e5b8b7250fd4",
+  "documents/config/qs.json": "d6d068125d52c90cdca065948cab967a9f09c272a7e7875f2f41c636d955e135",
+  "documents/valid/anchor.json": "d0d31c2bd8ed2feb2492150e1ee2964282b070233625d9d117f078efbae672d5",
+  "documents/valid/build.json": "4e1d9cabb1f3b9bc2ebff811523141ccb90c51dc4b400b05737ad1dd2e5db581",
+  "documents/valid/compact-composed.json": "0e07283ebda61f0f12212e9bea07620c22123a3caf6b8e7ed2094b7646e20c96",
+  "documents/valid/compact.json": "cb73d1f5ff61c9c41d788833d0218605f4248d95dfe53424456e9c00d25411b5",
+  "documents/valid/expectation.json": "2cae885ba74b74c7a9e469ad7b9598f6d54a9b50a96f4ef4d0fe0c6070385acc",
+  "documents/valid/family-envelope.json": "18c52d432a2dfdb989e346e822b7ae55c7752f9969e471df4b4fb69e91ad77a3",
+  "documents/valid/family-paired.json": "23214d8b6075c9fcbad533e0d782caeafa37c7c8af2a5a65cd9fa46338c1e153",
+  "documents/valid/gallery.json": "2c2cf13c9f1761097a87a92d67f12c3cca00ed68084c49f5014ab6a9dc5cffb2",
+  "documents/valid/handoff.json": "8c7cecd90f46fc86cc50228a4dee638c8002dc6db08b677527325f7fdfbbec01",
+  "documents/valid/kit-stamp.json": "b704b170c79560392f320ae3dab1bb02419e003870a42ea686585d2c75be93f2",
+  "documents/valid/promotion.json": "97879f40bfd6d76a1d9e7214d706334416e9f6997668c30e58d3246b41369f88",
+  "documents/valid/selection.json": "0ab7edc5910e32ac28cddcffc7ae8681d3e3dd713dcc9ec52d818c7ee4063f57",
+  "documents/valid/site.json": "09817ff4610b901a4c28532893166bbf125ba7615167e7b43f49c3095cddeb26",
+  "documents/valid/template-manifest.json": "e18424126632c91569380c1a291c55c85805ec138cc6f6ff856f9242a169504a",
+  "source.zip": "5a1fa6b52a034de197d3ac1c15049fec010c0d2ae441b91c58b5df086462a133"
+}

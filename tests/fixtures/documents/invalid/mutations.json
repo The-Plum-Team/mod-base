@@ -475,7 +475,7 @@
       "set": [
         [
           "/frames/0/runtime_evidence",
-          "PASS "
+          "PASS \u007f"
         ]
       ]
     },
@@ -510,7 +510,7 @@
       "set": [
         [
           "/frames/0/runtime_evidence",
-          "PASS: cape frame 2 → réf ✓ ○"
+          "PASS: cape frame 2 \u2192 r\u00e9f \u2713 \u25cb"
         ]
       ]
     },
@@ -521,7 +521,7 @@
       "set": [
         [
           "/frames/0/runtime_evidence",
-          "PASS  next"
+          "PASS \u0085 next"
         ]
       ]
     },
@@ -533,7 +533,7 @@
       "set": [
         [
           "/lanes/0/pairs/0/runtime_evidence",
-          "x"
+          "x\u007f"
         ]
       ]
     },
@@ -2855,6 +2855,823 @@
           }
         ]
       ]
-    }
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-unknown-command",
+      "set": [
+        [
+          "/targets/0/command",
+          "arbitrary"
+        ]
+      ]
+    },
+    {
+      "error": "$.targets[0].outputs[0].lane_id: must be a string",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-output-lane-of-another-type",
+      "set": [
+        [
+          "/targets/0/outputs/0/lane_id",
+          7
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/targets/0/outputs/3/lane_id"
+      ],
+      "error": "$.targets[0].outputs[3]: is missing required keys ['lane_id']",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-output-without-a-scope"
+    },
+    {
+      "error": "$.targets[0].outputs[0].path: must be a canonical export path",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-output-path-is-no-export-path",
+      "set": [
+        [
+          "/targets/0/outputs/0/path",
+          "staged/lane-a/.production.jar"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/plan_inputs"
+      ],
+      "error": "is missing required keys ['plan_inputs']",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-without-plan-inputs"
+    },
+    {
+      "error": "$.plan_inputs[0]: has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-plan-input-with-a-repository-path",
+      "set": [
+        [
+          "/plan_inputs/0/path",
+          "gradle.properties"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].sha256: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-plan-input-short-hash",
+      "set": [
+        [
+          "/plan_inputs/0/sha256",
+          "abc"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].name: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-plan-input-name-is-a-path",
+      "set": [
+        [
+          "/plan_inputs/0/name",
+          "gradle/properties"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[1]: duplicates an earlier item",
+      "expect": "invalid",
+      "fixture": "ci-plan",
+      "name": "ci-plan-plan-input-repeated",
+      "set": [
+        [
+          "/plan_inputs/1",
+          {
+            "name": "gradle-properties",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-report-of-the-whole-target",
+      "set": [
+        [
+          "/files/1/lane_id",
+          null
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-sbom-of-the-whole-target",
+      "set": [
+        [
+          "/files/3/lane_id",
+          null
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/files/3"
+      ],
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-without-an-sbom"
+    },
+    {
+      "error": "$.files[2]: a production or harness JAR belongs to one lane",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-production-of-the-whole-target",
+      "set": [
+        [
+          "/files/2/lane_id",
+          null
+        ]
+      ]
+    },
+    {
+      "error": "$.files[0]: a production or harness JAR belongs to one lane",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-harness-of-the-whole-target",
+      "set": [
+        [
+          "/files/0/lane_id",
+          null
+        ]
+      ]
+    },
+    {
+      "error": "$.files[1].lane_id: must be a string",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-lane-of-another-type",
+      "set": [
+        [
+          "/files/1/lane_id",
+          false
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-real-jar-name",
+      "set": [
+        [
+          "/files/2/path",
+          "staged/lane-a/production - Fabric - 1.20.1-3.1.0+build.5.jar"
+        ]
+      ]
+    },
+    {
+      "error": "$.files[3].path: must be a canonical export path distinct from the outer envelope",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-hidden-file",
+      "set": [
+        [
+          "/files/3/path",
+          "staged/lane-a/.sbom.json"
+        ]
+      ]
+    },
+    {
+      "error": "$.files[2].path: must be a canonical export path distinct from the outer envelope",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-name-with-two-spaces",
+      "set": [
+        [
+          "/files/2/path",
+          "staged/lane-a/production  jar"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-sbom-16-mib",
+      "set": [
+        [
+          "/files/3/size",
+          16777216
+        ]
+      ]
+    },
+    {
+      "error": "$.files[3].size: native file exceeds its role budget",
+      "expect": "invalid",
+      "fixture": "ci-envelope",
+      "name": "ci-envelope-sbom-over-16-mib",
+      "set": [
+        [
+          "/files/3/size",
+          16777217
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-selection",
+      "name": "ci-selection-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-gate-build",
+      "name": "ci-gate-build-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-gate-packaged",
+      "name": "ci-gate-packaged-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-results",
+      "name": "ci-results-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-reuse",
+      "name": "ci-reuse-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-unknown-authority",
+      "set": [
+        [
+          "/authority",
+          "success"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-config",
+      "name": "ci-config-bare-context-names",
+      "set": [
+        [
+          "/contexts/build",
+          "Build and verify"
+        ],
+        [
+          "/contexts/packaged",
+          "Packaged E2E gate"
+        ]
+      ]
+    },
+    {
+      "error": "$.inventory.path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-inventory-traversal",
+      "set": [
+        [
+          "/inventory/path",
+          "../release/release-matrix.json"
+        ]
+      ]
+    },
+    {
+      "error": "$.inventory: has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-inventory-cannot-carry-a-catalog",
+      "set": [
+        [
+          "/inventory/targets",
+          []
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/scenario_contract"
+      ],
+      "error": "is missing required keys ['scenario_contract']",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-scenario-contract-missing"
+    },
+    {
+      "error": "$.scenario_contract.path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-scenario-contract-absolute",
+      "set": [
+        [
+          "/scenario_contract/path",
+          "/e2e/scenario-contract.json"
+        ]
+      ]
+    },
+    {
+      "error": "$: output inventory has a case-insensitive alias",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-inventory-is-a-protected-source",
+      "set": [
+        [
+          "/inventory/path",
+          "scripts/ci/PR_GATE.py"
+        ]
+      ]
+    },
+    {
+      "error": "$: output inventory has a case-insensitive alias",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-scenario-contract-is-the-inventory",
+      "set": [
+        [
+          "/scenario_contract/path",
+          "release/release-matrix.json"
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-config",
+      "name": "ci-config-no-extra-plan-inputs",
+      "set": [
+        [
+          "/plan_inputs",
+          []
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-config",
+      "name": "ci-config-two-extra-plan-inputs",
+      "set": [
+        [
+          "/plan_inputs/1",
+          {
+            "name": "versions.toml",
+            "path": "gradle/libs.versions.toml"
+          }
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/plan_inputs"
+      ],
+      "error": "is missing required keys ['plan_inputs']",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-inputs-missing"
+    },
+    {
+      "error": "$.plan_inputs[0].name: is a name the kit stages itself",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-takes-the-inventory-name",
+      "set": [
+        [
+          "/plan_inputs/0/name",
+          "inventory"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].name: is a name the kit stages itself",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-takes-the-plan-name",
+      "set": [
+        [
+          "/plan_inputs/0/name",
+          "ci-plan.json"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].name: does not match the required grammar",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-name-is-a-path",
+      "set": [
+        [
+          "/plan_inputs/0/name",
+          "gradle/properties"
+        ]
+      ]
+    },
+    {
+      "error": "$: output inventory has a case-insensitive alias",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-is-the-inventory-file",
+      "set": [
+        [
+          "/plan_inputs/0/path",
+          "release/release-matrix.json"
+        ]
+      ]
+    },
+    {
+      "error": "$: a file is also an inventory directory",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-inside-the-bundle",
+      "set": [
+        [
+          "/plan_inputs/0/path",
+          "build/release/gradle.properties"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0].path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-traversal",
+      "set": [
+        [
+          "/plan_inputs/0/path",
+          "../gradle.properties"
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs: extra plan inputs must be sorted by name",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-inputs-not-sorted",
+      "set": [
+        [
+          "/plan_inputs/1",
+          {
+            "name": "a-first",
+            "path": "a.txt"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[1]: duplicates an earlier item",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-repeated-name",
+      "set": [
+        [
+          "/plan_inputs/1",
+          {
+            "name": "gradle-properties",
+            "path": "other.properties"
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.plan_inputs[0]: has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-plan-input-with-a-hash",
+      "set": [
+        [
+          "/plan_inputs/0/sha256",
+          {
+            "$repeat": [
+              "0",
+              64
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.bundle.path: must be a canonical repository-relative path",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-bundle-in-git-metadata",
+      "set": [
+        [
+          "/bundle/path",
+          ".git/build"
+        ]
+      ]
+    },
+    {
+      "error": "$: a file is also an inventory directory",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-bundle-contains-the-inventory",
+      "set": [
+        [
+          "/bundle/path",
+          "release"
+        ]
+      ]
+    },
+    {
+      "error": "$: a file is also an inventory directory",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-bundle-inside-the-scenario-contract",
+      "set": [
+        [
+          "/bundle/path",
+          "e2e/scenario-contract.json/release"
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts: Build and packaged contexts must be distinct",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-contexts-differ-only-by-case",
+      "set": [
+        [
+          "/contexts/packaged",
+          "TRUSTED PR / BUILD AND VERIFY"
+        ]
+      ]
+    },
+    {
+      "delete": [
+        "/contexts/packaged"
+      ],
+      "error": "$.contexts: is missing required keys ['packaged']",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-missing"
+    },
+    {
+      "error": "$.contexts.build: must be printable ASCII",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-lookalike-letter",
+      "set": [
+        [
+          "/contexts/build",
+          "Trusted PR / Build and ver\u0456fy"
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts.build: must be trimmed printable text without markup or template syntax",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-control-character",
+      "set": [
+        [
+          "/contexts/build",
+          "Build\u0007and verify"
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts.packaged: must be trimmed printable text without markup or template syntax",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-untrimmed",
+      "set": [
+        [
+          "/contexts/packaged",
+          "Packaged E2E gate "
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-100",
+      "set": [
+        [
+          "/contexts/build",
+          {
+            "$repeat": [
+              "x",
+              100
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts.build: length must be between 1 and 100 characters",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-101",
+      "set": [
+        [
+          "/contexts/build",
+          {
+            "$repeat": [
+              "x",
+              101
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "error": "$.contexts.build: must be a string, not array",
+      "expect": "invalid",
+      "fixture": "ci-config",
+      "name": "ci-config-context-list",
+      "set": [
+        [
+          "/contexts/build",
+          [
+            "Build and verify"
+          ]
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-validation",
+      "name": "ci-validation-self-reported-success-is-not-a-field",
+      "set": [
+        [
+          "/passed",
+          true
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-execution",
+      "name": "ci-execution-programs-are-not-data-fields",
+      "set": [
+        [
+          "/command",
+          "candidate command"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-root-request",
+      "name": "ci-root-request-no-program",
+      "set": [
+        [
+          "/program",
+          "unsafe"
+        ]
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-cannot-select-jobs",
+      "set": [
+        [
+          "/jobs",
+          {}
+        ]
+      ]
+    },
+    {
+      "expect": "valid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-names-the-mode-it-leaves",
+      "set": [
+        [
+          "/mode",
+          "reviewed-rollback"
+        ],
+        [
+          "/rollback_from",
+          "shared-build-and-e2e"
+        ]
+      ]
+    },
+    {
+      "error": "$.rollback_from: must name the mode a reviewed-rollback leaves and be null in every other mode",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-without-the-mode-it-leaves",
+      "set": [
+        [
+          "/mode",
+          "reviewed-rollback"
+        ]
+      ]
+    },
+    {
+      "error": "$.rollback_from: must name the mode a reviewed-rollback leaves and be null in every other mode",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-target-outside-a-rollback",
+      "set": [
+        [
+          "/mode",
+          "shadow"
+        ],
+        [
+          "/rollback_from",
+          "shadow"
+        ]
+      ]
+    },
+    {
+      "error": "$.rollback_from: must be one of",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-cannot-leave-disabled",
+      "set": [
+        [
+          "/mode",
+          "reviewed-rollback"
+        ],
+        [
+          "/rollback_from",
+          "disabled"
+        ]
+      ]
+    },
+    {
+      "error": "is missing required keys ['rollback_from']",
+      "expect": "invalid",
+      "fixture": "ci-activation",
+      "name": "activation-rollback-key-is-required",
+      "delete": [
+        "/rollback_from"
+      ]
+    },
+    {
+      "error": "has unknown keys",
+      "expect": "invalid",
+      "fixture": "ci-batch",
+      "name": "batch-cannot-approve-publication",
+      "set": [["/approval", true]]
+    },
+    {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-runtime-envelope",
+     "name":"runtime-cannot-approve-native-result", "set":[["/approval",true]]},
+    {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-root-request-runtime",
+     "name":"runtime-root-request-cannot-select-program", "set":[["/arguments/program","unsafe"]]}
   ]
 }

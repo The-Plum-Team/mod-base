@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Write or check the ``MB_KIT_TREE_DIGEST`` literal of the three callee workflows (SPEC §1.2).
+"""Write or check the ``MB_KIT_TREE_DIGEST`` literal of the callee workflows (SPEC §1.2).
 
-Every job of ``publish.yml``, ``finalize.yml`` and ``rotate.yml`` recomputes kit-digest-v1 over its
-kit checkout (``src/``, ``site/`` and ``requirements/``) and requires it to equal the workflow-level
-literal. The callee YAML is not part of the digested tree, so rewriting the literal never changes
-the digest (no fixed point). Stage every change under those directories and under ``template/``,
-``tools/`` and ``actions/``, then run from the kit clone and commit the rewritten workflows with it::
+Every job of the Pages callees ``publish.yml``, ``finalize.yml`` and ``rotate.yml`` and of the
+Build/E2E callees ``build.yml``, ``select-build.yml``, ``packaged-e2e.yml`` and ``gate-status.yml``
+(:data:`CALLEES`) recomputes kit-digest-v1 over its kit checkout (``src/``, ``site/`` and
+``requirements/``) and requires it to equal the workflow-level literal. The callee YAML is not
+part of the digested tree, so rewriting the literal never changes the digest (no fixed point).
+Stage every change under those directories and under ``template/``, ``tools/`` and ``actions/``,
+then run from the kit clone and commit the rewritten workflows with it::
 
     python3 tools/update_tree_digest.py --write    # rewrite every stale literal in place
     python3 tools/update_tree_digest.py --check    # exit 1 and name the stale workflows
@@ -57,7 +59,10 @@ from pathlib import Path
 DIGESTED_DIRS = ("src", "site", "requirements")
 #: The ``src/`` of the kit this script belongs to; its ``mod_base`` owns the staged-file lock format.
 KIT_SOURCE = Path(__file__).resolve().parents[1] / "src"
-CALLEES = (".github/workflows/publish.yml", ".github/workflows/finalize.yml", ".github/workflows/rotate.yml")
+#: Every kit workflow that carries the literal: the three Pages callees, then the Build/E2E callees.
+CALLEES = (".github/workflows/publish.yml", ".github/workflows/finalize.yml", ".github/workflows/rotate.yml",
+           ".github/workflows/build.yml", ".github/workflows/select-build.yml",
+           ".github/workflows/packaged-e2e.yml", ".github/workflows/gate-status.yml")
 LITERAL = re.compile(r'^  MB_KIT_TREE_DIGEST: "(sha256:[0-9a-f]{64})"$', re.MULTILINE)
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 #: One ``git ls-files -z --stage`` record: mode, object id, stage and path.

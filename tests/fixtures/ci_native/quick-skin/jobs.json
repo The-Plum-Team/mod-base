@@ -1,0 +1,332 @@
+{
+  "build": {
+    "conclusion": "success",
+    "event": "pull_request",
+    "head_branch": "batch/20261006-082100",
+    "head_sha": "3031ee6906da03bbcdc0ba59f7935e654714aa09",
+    "jobs": [
+      {
+        "conclusion": "skipped",
+        "name": "Attest tested build on release branch"
+      },
+      {
+        "conclusion": "success",
+        "name": "Build and verify"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Notify version port controller"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Request packaged E2E for shared source"
+      },
+      {
+        "conclusion": "success",
+        "name": "Resolve tested build reuse"
+      },
+      {
+        "conclusion": "success",
+        "name": "Validate CI policy"
+      },
+      {
+        "conclusion": "success",
+        "name": "Validate release policy"
+      },
+      {
+        "conclusion": "success",
+        "name": "Validate repository policy"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.20.1"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.1"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.10"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.11"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.2"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.3"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.4"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.5"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.6"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.7"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.8"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 1.21.9"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 26.1"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 26.1.1"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 26.1.2"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 26.2"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Compile Minecraft 26.3"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Plan every supported build target"
+      },
+      {
+        "conclusion": "success",
+        "name": "compile / Reverify the complete compiled matrix"
+      }
+    ],
+    "run_attempt": 1,
+    "run_id": 37435530842,
+    "workflow": ".github/workflows/build-gate.yml",
+    "workflow_blob": "dd359c767ba58cb8b71bdd8f5a08fd8aaa65acf2",
+    "workflow_name": "Build gate"
+  },
+  "packaged": {
+    "conclusion": "success",
+    "event": "pull_request",
+    "head_branch": "batch/20261006-082100",
+    "head_sha": "3031ee6906da03bbcdc0ba59f7935e654714aa09",
+    "jobs": [
+      {
+        "conclusion": "skipped",
+        "name": "Attest tested E2E on release branch"
+      },
+      {
+        "conclusion": "success",
+        "name": "Build immutable E2E input bundle"
+      },
+      {
+        "conclusion": "success",
+        "name": "Classify packaged runtime impact"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Notify version port controller"
+      },
+      {
+        "conclusion": "success",
+        "name": "Packaged E2E gate"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Prepare public evidence for ${{ matrix.bundle_key }} (advisory)"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Refresh target status after required gate (advisory)"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Refresh target status after runtime policy (advisory)"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Resolve public evidence targets (advisory)"
+      },
+      {
+        "conclusion": "success",
+        "name": "Resolve the exact source Build bundle"
+      },
+      {
+        "conclusion": "success",
+        "name": "Select affected feature coverage"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Wake shared-source visual review (advisory)"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "Wake the protected project site (advisory)"
+      },
+      {
+        "conclusion": "skipped",
+        "name": "compile"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_20_1--1_20_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_1--1_21_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_10--1_21_10--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_11--1_21_11--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_2--1_21_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_3--1_21_3--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_4--1_21_4--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_5--1_21_5--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_6--1_21_6--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_7--1_21_7--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_8--1_21_8--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-1_21_9--1_21_9--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-26_1--26_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-26_1_1--26_1_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-26_1_2--26_1_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-26_2--26_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "fabric-26_3--26_3--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "forge-1_20_1--1_20_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_1--1_21_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_10--1_21_10--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_11--1_21_11--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_2--1_21_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_3--1_21_3--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_4--1_21_4--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_5--1_21_5--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_6--1_21_6--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_7--1_21_7--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_8--1_21_8--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-1_21_9--1_21_9--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-26_1--26_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-26_1_1--26_1_1--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-26_1_2--26_1_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-26_2--26_2--pr-behavior - contract scenarios"
+      },
+      {
+        "conclusion": "success",
+        "name": "neoforge-26_3--26_3--pr-behavior - contract scenarios"
+      }
+    ],
+    "run_attempt": 1,
+    "run_id": 37435530757,
+    "workflow": ".github/workflows/on-demand-e2e.yml",
+    "workflow_blob": "c8bf51ed0cbc8e14d66ec5031faf80d9a02675e1",
+    "workflow_name": "Packaged E2E"
+  },
+  "templates": {
+    "lane": "{runtime_id} - contract scenarios",
+    "target": "compile / Compile Minecraft {target}"
+  }
+}

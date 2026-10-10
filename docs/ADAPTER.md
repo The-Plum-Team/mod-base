@@ -1,5 +1,9 @@
 # Adapter interface (`ADAPTER_API = 1`)
 
+This is the Pages adapter. The protected Build adapter is a separate contract with its own version,
+`BUILD_ADAPTER_API = 1`: eight hooks behind one dispatcher, described for mod authors in
+[BUILD-ADAPTER.md](BUILD-ADAPTER.md). Its hooks never run in this host and add no authority to it.
+
 A mod connects to the kit with two protected files (both under Block Pops protected roots):
 
 * **data:** `site/mod-base.json` (`mod-base.config` v1, see [SCHEMAS.md](SCHEMAS.md#mod-baseconfig-sitemod-basejson-spec-41));

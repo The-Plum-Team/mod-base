@@ -1,0 +1,1 @@
+Synthetic source of the synthetic mod. Every staged JAR embeds these bytes.

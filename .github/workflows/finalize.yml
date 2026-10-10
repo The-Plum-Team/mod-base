@@ -26,7 +26,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:3140ed05c1305bc368634668bd290eed465ed779bc048759abd71ed149baef64"
+  MB_KIT_TREE_DIGEST: "sha256:d9bdb5d1d0192cb34c4f6c07b0e4962c061d7d6a41b5ee0ddc64afd7827b9c90"
 
 jobs:
   refresh:

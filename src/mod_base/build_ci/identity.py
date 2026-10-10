@@ -1,0 +1,481 @@
+"""The authenticated subject of one Build, packaged or status job and its private state record.
+
+``ci subject`` runs first in every Build and packaged job, and in a status job as soon as its
+evaluation needs the plan. It learns what is tested from the API, never from the run's own
+``head_sha`` or from a caller input alone:
+
+* a pull request: its live head, base and draft state (a draft is a rejection), and the synthetic
+  merge commit GitHub tests, whose parents must be exactly ``[base, head]``;
+* a protected push, dispatch or schedule: the live head of the default branch, which must be the
+  commit that is executing.
+
+The controller is the executing protected commit (``GITHUB_SHA``) and the managed caller that
+``GITHUB_WORKFLOW_REF`` names on the default branch; the kit is the checkout the prologue verified.
+The identity always names the Build caller as its controller workflow, so a Build run and the
+packaged run of one generation derive the same identity and therefore the same plan. The hashes
+that depend on the protected policy and on the candidate bytes are bound later
+(:func:`mod_base.build_ci.planning.build_plan`).
+
+The third producer, ``status``, is the status caller's evaluation (``gate-status.yml``). It tests
+nothing: it derives the plan of a generation in order to verify the runs that tested it. Its
+subject is always the pull request ``--pr`` names, whatever started the run: a finished or
+requested gate run (``workflow_run``), an event of the pull request itself
+(``pull_request_target``), the hourly reconciliation (``schedule``) or a manual request
+(``workflow_dispatch``). Every one of those runs executes the default branch, so the controller is
+again the executing commit, and the pull request is authenticated exactly like a Build job's: the
+live default branch must still be that commit and the pull request's base, or the generation the
+gates ran for is gone. The identity is therefore the one the Build and the packaged run derived,
+and so is the plan.
+
+A pull request is observed once, alongside the live default branch; a protected subject reads
+the default branch again before returning. The immutable commit object is read once.
+
+A job that holds the candidate checkout (``ci subject --candidate``: the policy, target and lane
+jobs) does not ask the API again what an earlier job of its run already authenticated. It derives
+the same record (:func:`derive_subject`) from its environment, from the commits its two checkouts
+are at, read as their own bytes, and from one live request, and then proves the result against
+that earlier job by reproducing its plan hash, which covers the whole identity.
+
+The record is ``<state>/identity.json``: canonical JSON in a directory only the runner can enter.
+``ci subject`` creates that directory; nothing in it is ever replaced.
+"""
+
+from __future__ import annotations
+
+import os
+import stat
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any
+
+from mod_base.build_ci.authenticate import PrGeneration, read_pr_generation, read_pr_on_base
+from mod_base.build_ci.checkout import Commit, head_commit
+from mod_base.build_ci.config import BuildConfig
+from mod_base.build_ci.protocol import (BUILD_ADAPTER_API, BUILD_GRAPH_VERSION, PACKAGED_GRAPH_VERSION, PRODUCERS,
+                                        SHA1, WORKFLOW, validate_subject)
+from mod_base.errors import MbError
+from mod_base.github.api import GitHubApi
+from mod_base.github.contents import branch_head, default_branch
+from mod_base.io.secure_json import loads
+from mod_base.model import grammar, limits
+from mod_base.model.canonical import canonical_json, canonical_sha256
+from mod_base.model.validators import Obj, Str, check
+from mod_base.pin import kit_tree_digest
+from mod_base.runtime import Invocation
+from mod_base.workflow import CI_CALLER_WORKFLOWS
+
+IDENTITY_NAME = "identity.json"
+PULL_REQUEST_EVENT = "pull_request_target"
+PROTECTED_EVENTS = ("push", "workflow_dispatch", "schedule")
+#: The producer of the status caller's evaluation job; never a ``protocol.PRODUCERS`` gate.
+STATUS_PRODUCER = "status"
+#: The events that start a run of the status caller. Its subject is a pull request on every one.
+STATUS_EVENTS = ("workflow_run", PULL_REQUEST_EVENT, "schedule", "workflow_dispatch")
+#: What ``ci subject --producer`` accepts: the two gates and the status evaluation.
+SUBJECT_PRODUCERS = (*PRODUCERS, STATUS_PRODUCER)
+#: The domain of :func:`policy_sha256`; a change of what the digest covers changes this label.
+POLICY_FORMAT = "mod-base.build.policy-v1"
+
+
+class SubjectError(MbError):
+    """The subject of this job cannot be authenticated (exit 2)."""
+
+    default_reason = "ci-subject"
+
+
+class StateError(MbError):
+    """The job's private state directory or one of its records cannot be trusted (exit 2)."""
+
+    default_reason = "ci-state"
+
+
+def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]:
+    """The managed callers a job of ``producer`` may run from. Build jobs also run inside the
+    packaged caller, whose ``rebuild`` job calls the Build workflow when a protected (never a
+    pull-request) subject has no Build to select. A status job runs from the status caller alone
+    and only for a pull request."""
+
+    if producer == STATUS_PRODUCER:
+        return (CI_CALLER_WORKFLOWS[STATUS_PRODUCER],) if pull_request else ()
+    if producer == "build" and not pull_request:
+        return (CI_CALLER_WORKFLOWS["build"], CI_CALLER_WORKFLOWS["packaged"])
+    return (CI_CALLER_WORKFLOWS[producer],)
+
+
+def run_events(producer: str, *, pull_request: bool) -> tuple[str, ...]:
+    """The events a job of ``producer`` may run on for a pull request subject or a protected one.
+
+    A gate tests a pull request on ``pull_request_target`` alone and a protected subject on a
+    push, a dispatch or a schedule. A status job evaluates a pull request on each event that
+    starts the status caller (:data:`STATUS_EVENTS`) and never anything else."""
+
+    if producer == STATUS_PRODUCER:
+        return STATUS_EVENTS if pull_request else ()
+    return (PULL_REQUEST_EVENT,) if pull_request else PROTECTED_EVENTS
+
+
+_RECORD = Obj({
+    "producer": Str(choices=SUBJECT_PRODUCERS),
+    "event": Str(choices=(PULL_REQUEST_EVENT, *PROTECTED_EVENTS, "workflow_run")),
+    "workflow_path": WORKFLOW,
+    "controller_tree": SHA1,
+    "subject": validate_subject,
+})
+
+
+def validate_subject_record(document: Any, path: str = "$") -> dict[str, Any]:
+    """The closed identity record: the producer, event and caller of this run, the tree of the
+    controller commit and the subject; every one of them as ``ci subject`` authenticated it."""
+
+    _RECORD(document, path)
+    subject = document["subject"]
+    pull_request = bool(subject["pr_number"])
+    check(document["event"] in run_events(document["producer"], pull_request=pull_request), f"{path}.event",
+          "a pull request subject needs the pull_request_target event and no other subject may use it; "
+          "only a status evaluation, always of a pull request, runs on the events of the status caller")
+    check(document["workflow_path"] in run_workflows(document["producer"], pull_request=pull_request),
+          f"{path}.workflow_path", "the producer does not run from this managed caller")
+    check(subject["controller_workflow"] == CI_CALLER_WORKFLOWS["build"], f"{path}.subject.controller_workflow",
+          "must name the managed Build caller")
+    check(pull_request or document["controller_tree"] == subject["tested_tree"], f"{path}.controller_tree",
+          "a protected subject is its own controller")
+    return document
+
+
+def _environment(invocation: Invocation, name: str) -> str:
+    value = invocation.environ.get(name)
+    if not value:
+        raise MbError(f"{name} is required for this command", reason="environment")
+    return value
+
+
+def _commit(api: GitHubApi, sha: str) -> Commit:
+    """One Git commit as the API states it: an immutable object, read once."""
+
+    value = api.get_json(f"/repos/{api.repository}/git/commits/{sha}")
+    check(type(value) is dict and value.get("sha") == sha, "$.commit", "response names another Git object")
+    tree, parents = value.get("tree"), value.get("parents")
+    check(type(tree) is dict and grammar.is_match(grammar.SHA1, tree.get("sha")), "$.commit.tree", "has no tree")
+    check(type(parents) is list and len(parents) <= 2
+          and all(type(parent) is dict and grammar.is_match(grammar.SHA1, parent.get("sha")) for parent in parents),
+          "$.commit.parents", "must be at most two commits")
+    return Commit(sha, tree["sha"], tuple(parent["sha"] for parent in parents))
+
+
+@dataclass(frozen=True)
+class _Run:
+    """What the environment of a run says of itself, admitted for one producer before any request:
+    the repository, the executing controller commit, the event, the managed caller and the kit."""
+
+    repository: str
+    controller: str
+    event: str
+    caller: grammar.WorkflowRef
+    kit: dict[str, str]
+
+
+def _run(invocation: Invocation, api: GitHubApi, *, producer: str, pull_request: bool) -> _Run:
+    repository = invocation.repository
+    controller = invocation.implementation_sha
+    check(api.repository == repository, "$.repository", "the API client serves another repository")
+    event = _environment(invocation, "GITHUB_EVENT_NAME")
+    check(event in run_events(producer, pull_request=pull_request), "$.event",
+          "a pull request subject needs the pull_request_target event and no other subject may use it; "
+          "only a status evaluation, always of a pull request, runs on the events of the status caller")
+    caller = grammar.parse_workflow_ref(_environment(invocation, "GITHUB_WORKFLOW_REF"))
+    check(caller.repository == repository and caller.path in run_workflows(producer, pull_request=pull_request),
+          "$.workflow_ref", "the run is not this repository's managed caller of the producer")
+    return _Run(repository, controller, event, caller,
+                {**invocation.kit, "tree_digest": kit_tree_digest(invocation.kit_root)})
+
+
+def _require_branch(invocation: Invocation, run: _Run, branch: str) -> None:
+    check(run.caller.branch == branch and _environment(invocation, "GITHUB_REF") == f"refs/heads/{branch}"
+          and invocation.config.canonical_branch == branch,
+          "$.ref", "the run, its caller and the mod's canonical branch must all be the default branch")
+
+
+def _test_merge(generation: PrGeneration) -> str:
+    """The commit GitHub tests for a pull request that is ready and has one."""
+
+    number = generation.pr_number
+    if generation.draft:
+        raise SubjectError(f"pull request {number} is a draft: the caller must defer, not call", reason="draft")
+    if generation.merge_sha is None or generation.mergeable is not True:
+        raise SubjectError(f"pull request {number} has no test merge: it conflicts or is not computed yet",
+                           reason="no-test-merge")
+    return generation.merge_sha
+
+
+def _ready_generation(observe: Callable[[], PrGeneration], *, wait_for_merge: bool) -> PrGeneration:
+    """Wait only for GitHub's pending merge computation, keeping the original source fixed."""
+
+    deadline = time.monotonic() + limits.CI_TEST_MERGE_WAIT_SECONDS
+    original = None
+    for poll in range(limits.MAX_CI_TEST_MERGE_POLLS):
+        generation = observe()
+        if original is None:
+            original = generation
+        check(replace(generation, merge_sha=original.merge_sha, mergeable=original.mergeable) == original,
+              "$.pr", "pull request source or readiness changed while waiting for its test merge; rerun the job")
+        if (not wait_for_merge or generation.draft or generation.mergeable is False
+                or (generation.mergeable is True and generation.merge_sha is not None)):
+            _test_merge(generation)
+            return generation
+        remaining = deadline - time.monotonic()
+        if poll + 1 == limits.MAX_CI_TEST_MERGE_POLLS or remaining <= 0:
+            break
+        time.sleep(min(limits.CI_TEST_MERGE_POLL_SECONDS, remaining))
+    raise SubjectError(f"pull request {original.pr_number} test merge is still pending after the bounded "
+                       "wait; rerun the job when GitHub finishes computing it", reason="ci-test-merge-pending")
+
+
+def _record(run: _Run, *, producer: str, pr_number: int | None, branch: str, controller_tree: str,
+            head_sha: str, head_branch: str, tested: Commit) -> dict[str, Any]:
+    """The identity record both ways of learning a subject end in, validated as one."""
+
+    if (pr_number is not None and len(tested.parents) == 2 and tested.parents[1] == head_sha
+            and tested.parents[0] != run.controller):
+        raise SubjectError("the test merge must equal the ordered base/head parents; its base is out of date; update the branch and push it "
+                           "again after the default branch moves", reason="ci-pr-base-outdated")
+    subject = {
+        "repository": run.repository, "source_repository": run.repository, "pr_number": pr_number or 0,
+        "head_sha": head_sha, "head_branch": head_branch, "base_sha": run.controller, "base_branch": branch,
+        "controller_sha": run.controller, "controller_workflow": CI_CALLER_WORKFLOWS["build"],
+        "controller_ref": grammar.workflow_ref(run.repository, CI_CALLER_WORKFLOWS["build"], branch),
+        "kit": run.kit, "tested_sha": tested.sha, "tested_tree": tested.tree,
+        "tested_parents": list(tested.parents), "graph_version": BUILD_GRAPH_VERSION,
+    }
+    return validate_subject_record({"producer": producer, "event": run.event, "workflow_path": run.caller.path,
+                                    "controller_tree": controller_tree, "subject": subject})
+
+
+def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str,
+                         pr_number: int | None, wait_for_merge: bool = False) -> dict[str, Any]:
+    """Authenticate what this job tests and return its identity record (:func:`validate_subject_record`).
+
+    ``pr_number`` is the pull request of a ``pull_request_target`` run and ``None`` for a protected
+    push, dispatch or schedule. For the ``status`` producer it is the pull request under
+    evaluation, on any event of the status caller (:func:`run_events`), and never ``None``.
+    Everything the environment claims is checked before the first request; nothing is written
+    here. ``wait_for_merge`` enables the command's bounded pending-merge wait; otherwise an
+    unavailable merge remains an immediate rejection."""
+
+    check(producer in SUBJECT_PRODUCERS, "$.producer", "must be build, packaged or status")
+    run = _run(invocation, api, producer=producer, pull_request=pr_number is not None)
+    if pr_number is not None:
+        generation = _ready_generation(
+            lambda: read_pr_generation(api, pr_number=pr_number, controller_sha=run.controller),
+            wait_for_merge=wait_for_merge)
+        branch, controller_tree = generation.base_branch, generation.controller_tree
+        head_sha, head_branch = generation.head_sha, generation.head_branch
+        # The subject rules require the parents of this commit to be exactly [base, head], in that order.
+        tested = _commit(api, _test_merge(generation))
+    else:
+        branch = default_branch(api)
+        live = branch_head(api, branch)
+        if live[0] != run.controller:
+            raise SubjectError("the protected default branch has moved past the executing commit",
+                               reason="controller-moved")
+        controller_tree, head_sha, head_branch = live[1], run.controller, branch
+        tested = _commit(api, run.controller)
+        check(tested.tree == controller_tree and tested.sha not in tested.parents, "$.commit",
+              "the default branch and its commit object disagree")
+        check(default_branch(api) == branch and branch_head(api, branch) == live, "$.controller_sha",
+              "the protected default branch moved during authentication")
+    _require_branch(invocation, run, branch)
+    return _record(run, producer=producer, pr_number=pr_number, branch=branch, controller_tree=controller_tree,
+                   head_sha=head_sha, head_branch=head_branch, tested=tested)
+
+
+def derive_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None,
+                   candidate: Path, wait_for_merge: bool = False) -> dict[str, Any]:
+    """The identity record of a job that holds the candidate checkout, from one live request.
+
+    The record is the one :func:`authenticate_subject` returns for the same subject. Each part
+    comes from a source that is authentic on its own:
+
+    * the environment of the run, admitted as there before anything is read;
+    * the mod checkout the prologue verified: its ``HEAD`` must be the executing controller
+      commit, and the bytes of that commit give the controller tree;
+    * the candidate checkout ``candidate``: the bytes of its ``HEAD`` commit give the tested
+      commit, its tree and its ordered parents
+      (:func:`mod_base.build_ci.checkout.head_commit`: a commit is named by the hash of its
+      bytes, and no replacement, graft or shallow boundary takes part in reading them);
+    * one request, made last. For a pull request it is the pull request: open, not a draft, of
+      this repository, based on the canonical branch at the controller, and its current test
+      merge is the commit the candidate is at. For a protected subject it is the head of the
+      canonical branch, which must still be the executing commit both checkouts are at.
+
+    Two observations of :func:`authenticate_subject` are not made here: that the canonical branch
+    is the repository's default branch, and for a pull request that the controller is still the
+    head of that branch. A job therefore derives its subject only when it goes on to require the
+    plan hash of a job of its run that authenticated in full (``ci plan --expect-sha256``): the
+    hash covers the whole identity, so an equal hash proves this record equal to the authenticated
+    one. Whether both still hold is for the gate, which seals and authenticates in full again. A
+    status job holds no candidate checkout and is refused. ``wait_for_merge`` waits only for
+    pending computation, within the command's original request cap."""
+
+    check(producer in PRODUCERS, "$.producer", "only a Build or packaged job holds a candidate checkout")
+    run = _run(invocation, api, producer=producer, pull_request=pr_number is not None)
+    branch = invocation.config.canonical_branch
+    _require_branch(invocation, run, branch)
+    controller = head_commit(invocation.repo_root)
+    check(controller.sha == run.controller, "$.controller_sha",
+          "the mod checkout is not at the executing controller commit")
+    tested = head_commit(candidate)
+    if pr_number is not None:
+        generation = _ready_generation(
+            lambda: read_pr_on_base(api, pr_number=pr_number, base_branch=branch, controller_sha=controller.sha,
+                                    controller_tree=controller.tree), wait_for_merge=wait_for_merge)
+        head_sha, head_branch = generation.head_sha, generation.head_branch
+        check(tested.sha == _test_merge(generation), "$.candidate",
+              "the candidate checkout is not at the current test merge of the pull request")
+    else:
+        check(tested == controller, "$.candidate",
+              "the candidate checkout of a protected subject is not at the executing commit")
+        live = branch_head(api, branch)
+        if live[0] != controller.sha:
+            raise SubjectError("the protected default branch has moved past the executing commit",
+                               reason="controller-moved")
+        check(live[1] == controller.tree, "$.commit", "the default branch and its commit object disagree")
+        head_sha, head_branch = controller.sha, branch
+    return _record(run, producer=producer, pr_number=pr_number, branch=branch, controller_tree=controller.tree,
+                   head_sha=head_sha, head_branch=head_branch, tested=tested)
+
+
+def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str:
+    """The closed protected-policy digest of the controller that executes ``subject``.
+
+    It covers the exact bytes of the protected Build config, every source of the adapter import
+    closure the config lists (as read from the protected checkout), the mod's own control files
+    (``config.CONTROL_PATHS``: the activation manifest and the caller workflows, each by its
+    bytes or as absent), the kit pin with its tree digest, the adapter API and both graph
+    versions. Any change of one of them, and nothing a candidate controls, changes the digest;
+    post-merge reuse compares it instead of the controller commit, which an ordinary merge always
+    moves. So a merge that changes how the gates execute is tested in full under what it merged."""
+
+    validate_subject(subject)
+    check(type(config) is BuildConfig and config.data["repository"] == subject["repository"],
+          "$.config", "must be the protected Build config of the subject's repository")
+    return canonical_sha256({
+        "format": POLICY_FORMAT,
+        "build_adapter_api": BUILD_ADAPTER_API,
+        "graph_versions": {"build": BUILD_GRAPH_VERSION, "packaged": PACKAGED_GRAPH_VERSION},
+        "kit": subject["kit"],
+        "config_sha256": config.sha256,
+        "adapter_files": [{"path": file.path, "sha256": file.sha256} for file in config.files],
+        "control_files": [{"path": file.path, "sha256": file.sha256} for file in config.control],
+    })
+
+
+# -- The private state directory ---------------------------------------------------------------------
+
+_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_state(state: Path) -> int:
+    """A descriptor of the state directory: a real directory only this user can enter."""
+
+    try:
+        descriptor = os.open(state, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NO_FOLLOW)
+    except OSError as exc:
+        raise StateError(f"cannot open the state directory: {exc.strerror or exc}") from exc
+    info = os.fstat(descriptor)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        os.close(descriptor)
+        raise StateError("the state directory must be a private directory of this user")
+    return descriptor
+
+
+def _record_name(name: str) -> str:
+    if not grammar.is_bundle_path(name) or "/" in name:
+        raise StateError("a state record is one plainly named file")
+    return name
+
+
+def create_state(state: Path) -> None:
+    """Create the job's private state directory. An existing path is never adopted, so every job
+    starts from a state that this run wrote."""
+
+    try:
+        os.mkdir(state, 0o700)
+    except FileExistsError:
+        raise StateError("the state directory already exists; `ci subject` runs once, first") from None
+    except OSError as exc:
+        raise StateError(f"cannot create the state directory: {exc.strerror or exc}") from exc
+    os.close(_open_state(state))
+
+
+def write_state_record(state: Path, name: str, raw: bytes) -> None:
+    """Create ``<state>/<name>`` with ``raw``, readable by this user alone; never replaces a record."""
+
+    directory = _open_state(state)
+    try:
+        descriptor = os.open(_record_name(name), os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NO_FOLLOW, 0o600,
+                             dir_fd=directory)
+        try:
+            view = memoryview(raw)
+            while view:
+                view = view[os.write(descriptor, view):]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise StateError(f"cannot write the state record {name}: {exc.strerror or exc}") from exc
+    finally:
+        os.close(directory)
+
+
+def read_state_record(state: Path, name: str, *, max_bytes: int) -> bytes:
+    """Bytes of ``<state>/<name>``: a single-link regular file of this user, mode 0600, of 1 to
+    ``max_bytes`` bytes, unchanged while it was read."""
+
+    directory = _open_state(state)
+    try:
+        descriptor = os.open(_record_name(name), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | _NO_FOLLOW,
+                             dir_fd=directory)
+        try:
+            before = os.fstat(descriptor)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1
+                    or stat.S_IMODE(before.st_mode) != 0o600 or not 1 <= before.st_size <= max_bytes):
+                raise StateError(f"the state record {name} is not a private bounded file of this user")
+            chunks = []
+            remaining = max_bytes + 1
+            while remaining:
+                chunk = os.read(descriptor, min(limits.CI_PROCESS_READ_BYTES, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            after = os.fstat(descriptor)
+            if len(raw) != before.st_size or (after.st_size, after.st_mtime_ns, after.st_nlink) != (
+                    before.st_size, before.st_mtime_ns, before.st_nlink):
+                raise StateError(f"the state record {name} changed while it was read")
+            return raw
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise StateError(f"cannot read the state record {name}: {exc.strerror or exc}") from exc
+    finally:
+        os.close(directory)
+
+
+def write_subject(state: Path, record: dict[str, Any]) -> None:
+    """Create the state directory and write the identity record into it."""
+
+    raw = canonical_json(validate_subject_record(record))
+    create_state(state)
+    write_state_record(state, IDENTITY_NAME, raw)
+
+
+def read_subject(state: Path) -> dict[str, Any]:
+    """The identity record ``ci subject`` wrote, strictly decoded and validated again."""
+
+    raw = read_state_record(state, IDENTITY_NAME, max_bytes=limits.MAX_CI_IDENTITY_BYTES)
+    document = validate_subject_record(loads(raw, label=IDENTITY_NAME, max_bytes=limits.MAX_CI_IDENTITY_BYTES))
+    check(raw == canonical_json(document), "$", "identity record is not canonical JSON")
+    return document

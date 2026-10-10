@@ -1,0 +1,220 @@
+# 0007. Share protected Build and packaged runtime mechanisms
+
+Date: 2026-10-08
+
+## Status
+
+Proposed. This record describes the implementation proposed in the pull request that carries it.
+[BUILD-E2E-DESIGN.md](../BUILD-E2E-DESIGN.md) is still a draft awaiting owner agreement, so
+merging this record ratifies nothing by itself: no consumer is activated, no release is cut and no
+GitHub setting, App or ruleset changes. The hosted canary of the design's step K7 is still
+required before any mod adopts the pipeline.
+
+## Context
+
+Quick Skin and Block Pops each run their own Build and Packaged E2E workflows. Quick Skin compiles
+one Minecraft target per runner and hands one bundle to its runtime lanes, but its workflows and
+helpers run from the candidate checkout. Block Pops runs from a protected controller and confines
+the candidate to a disposable account, but compiles everything twice on one runner behind a global
+lock. The design combines Quick Skin's topology with Block Pops' boundary in the kit. A review of
+the first implementation on this branch found library code that no command or workflow called and
+several wrong assumptions about GitHub; the decisions below settle the shared contracts.
+
+## Decision
+
+### Trust model
+
+Pull-request orchestration runs from the protected default branch on `pull_request_target`:
+`github.sha` names the controller, never the candidate. Protected code authenticates the pull
+request and its synthetic merge, then checks the candidate out as data. Candidate Python, tests,
+Gradle and Minecraft run only as the disposable account `modbase_candidate`, with a fixed
+environment and no token. Protected code then kills and locks that account, proves tracked sources
+unchanged and freezes the export. A second disposable account, `modbase_validator`, runs the mod's
+protected verifier over the frozen bytes. Only after that may an upload step use the runner's
+credentials. A separate caller-owned job with the mod's own App credentials publishes the required
+statuses. An account boundary is not a virtual machine; self-hosted persistent runners are not
+supported.
+
+### Identity
+
+Every plan, envelope, selection, gate receipt and reuse reference binds the same tuple, compared in
+full and never taken from an artifact name, a caller input or the run API alone:
+
+- repository, source repository and pull-request number (0 for a protected push or dispatch);
+- head SHA and branch, base SHA and branch;
+- controller SHA, controller workflow path and workflow ref;
+- kit repository, SHA, version and tree digest;
+- tested SHA, tested tree and ordered tested parents (base, then head, for a pull request);
+- policy digest, inventory blob and hash, scenario contract hash, runtime selection hash and graph
+  version;
+- with it, the plan hash and the profile (`quick-skin` or `block-pops`).
+
+A record that names an artifact adds the producer (run id, attempt, workflow path and ref, API head
+SHA, event, graph digest, upload window) and the artifact (numeric id, name, digest, size, creation
+and expiry time).
+
+### Document kinds
+
+All thirteen are new, strict, canonical JSON at schema version 1. The previous release rejects
+each as an unknown kind (`tests/test_schema_evolution.py`).
+
+| Kind | Holds |
+| --- | --- |
+| `mod-base.build.config` | The mod's protected Build configuration, `scripts/ci/mod-base-build.json`: adapter entry points with their hashed import closure, input and bundle paths, status contexts, timeouts. |
+| `mod-base.build.plan` | Targets and lanes derived from the release inventory and scenario contract, with every planned output, under the identity. |
+| `mod-base.build.envelope` | The inventory of one sealed Build export, a target partition or the complete bundle: path, size, hash, lane and role of every file. |
+| `mod-base.ci.runtime-envelope` | The inventory of one lane's sealed runtime export, with the Build it ran against. |
+| `mod-base.ci.validation` | The validator's receipt: the native verification reports of one hook and unit, bound to plan, run and input hash. |
+| `mod-base.ci.selection` | The exact Build a packaged run selected: its full descriptor and envelope hash. |
+| `mod-base.ci.gate` | The tested record of a Build or packaged gate: its artifacts, owning Build and native receipts. |
+| `mod-base.ci.results` | The complete packaged results of one attempt as an index: every lane's sealed artifact with the hashes of its envelope, validation record and report, and the owning Build. |
+| `mod-base.ci.reuse` | A direct reference from a merged commit to both original pull-request gate records. |
+| `mod-base.ci.execution` | A private runner-to-root record of one hook execution: bounded log, nonce and context. |
+| `mod-base.ci.root-request` | A private request for one operation of `grammar.CI_ROOT_OPERATIONS`: host fencing, staging, grants, source proof, export sealing or validation sealing. The nonce and closed arguments bind it to the runner and job. |
+| `mod-base.ci.activation` | The profile activation mode of a mod, `site/mod-base-build-activation.json`. |
+| `mod-base.ci.batch` | A batch manifest: base, ordered members with their heads, trees and patches, resulting tree. |
+
+### Bounds
+
+A bound of the shared pipeline is a mod's own bound, a platform fact or a kit decision, and is never
+raised because a pipeline fails. `tests/test_ci_limits.py` pins every one with its source; the
+table lists the native ones. Sources are `path:line` at Block Pops `47a890ae` (BP) and Quick Skin
+`c0cdc01a` (QS).
+
+| Bound | Value | Native source |
+| --- | --- | --- |
+| `MAX_CI_EXPORT_FILES`, `MAX_CI_EXPORT_ENTRIES` | 10,000 files, 20,000 entries per sealed tree | BP `scripts/ci/untrusted_runner.py:46-47` |
+| `MAX_CI_EXPORT_FILE_BYTES`, `MAX_CI_EXPORT_TREE_BYTES` | 1 GiB per file, 2 GiB per tree | BP `scripts/ci/untrusted_runner.py:48-49` |
+| `MAX_CI_LOG_BYTES`, `MAX_CI_ENV_BYTES` | 16 MiB log, 256 KiB environment | BP `scripts/ci/untrusted_runner.py:50`, `:44` |
+| `CI_TERMINATION_GRACE_SECONDS`, `CI_TERMINATION_POLL_SECONDS` | 15 s, polled every 0.25 s | BP `scripts/ci/untrusted_runner.py:42`, `:718` |
+| `MAX_CI_SOURCE_ENTRIES`, `MAX_CI_SOURCE_FILES`, `MAX_CI_SOURCE_FILE_BYTES`, `MAX_CI_SOURCE_TREE_BYTES` | 250,000 entries, 200,000 files, 2 GiB per file, 20 GiB (Gradle seed and source copies) | BP `scripts/ci/untrusted_runner.py:491-494` |
+| `MAX_CI_JAR_BYTES` | 256 MiB per JAR | BP `scripts/release/artifact_manifest.py:41` |
+| `MAX_CI_BUILD_REPORT_BYTES_BY_PROFILE` | Block Pops 8 MiB, Quick Skin 4 MiB per native report (a staged manifest is one) | BP `scripts/release/build_evidence.py:21`; Quick Skin's value is a kit choice below its native 16 MiB manifest reader |
+| `MAX_CI_SBOM_BYTES` | 16 MiB per SBOM | QS `scripts/release/generate_sbom.py:31`; Block Pops stages none |
+| `MAX_CI_RUNTIME_FILES`, `MAX_CI_RUNTIME_BYTES` | 512 files, 256 MiB per lane | BP `e2e/packaged_runtime.py:180-181`, QS `e2e/packaged_runtime.py:201-202` (there per evidence profile) |
+| `MAX_CI_REPORT_BYTES`, `MAX_CI_PNG_BYTES` | 4 MiB report, 32 MiB screenshot | BP `e2e/packaged_runtime.py:183-184`, QS `:204-205` |
+| `MAX_CI_RUNTIME_AGGREGATE_FILES`, `MAX_CI_RUNTIME_AGGREGATE_BYTES` | 4,096 files, 512 MiB per complete runtime export | BP `scripts/ci/e2e_fanin.py:80-81` |
+| `MAX_CI_BUNDLE_COMPRESSED_BYTES` | 512 MiB per artifact archive | QS `scripts/ci/staged_build_bundle.py:25`, `scripts/ci/ci_reuse.py:35` |
+| `CI_BUILD_WAIT_SECONDS` | 5,400 s wait for the exact Build | QS `scripts/ci/staged_build_bundle.py:96` |
+| `MAX_CI_BATCH_MEMBERS` | 50 pull requests per batch | QS `scripts/ci/pr_batch.py:29` |
+| `CI_RETENTION_DAYS` | target partitions 1 day; Build bundles, lane results and complete results 7; tested and reuse records 90 | QS `build-matrix.yml:126`, `build-gate.yml:378` and `:391` |
+
+Three native bounds have no kit constant. At most 16 export roots per seal holds by construction,
+because a kit job seals exactly one tree. The limits inside a JAR (8,192 entries, 1 GiB expanded,
+32 nested archives to depth 4) stay with Block Pops' protected verifier, the code that opens the
+JAR. The native 512 MiB fan-in budget is the aggregate bound above.
+
+Three scopes are stricter than the mods and await owner confirmation:
+
+- The 512 MiB archive cap applies to every profile and artifact kind. The design names it for Quick
+  Skin; Block Pops' evaluator admits 2 GiB. The kit downloads an archive into memory within the
+  Pages artifact cap (1 GiB + 32 MiB), which the design keeps, so 2 GiB could not be carried.
+  JARs do not compress, so this cap, not the 2 GiB tree bound, is what limits a Build bundle.
+  Measured bundles: Quick Skin 192.8 MiB, Block Pops 118.6 MiB.
+- 512 files and 256 MiB count a whole lane, where both mods count each evidence profile (one
+  scenario of a lane). Measured largest lane: 141 files and 52.7 MiB (Quick Skin, seven scenarios).
+- Quick Skin's native-report cap is 4 MiB, below its own 16 MiB manifest reader.
+
+Block Pops' aggregate of 20 lanes is 764 files and 218 MiB; Quick Skin's 34 lanes are about 4,760
+files and 1.2 GiB of archives. Both use `mod-base.ci.results`: the aggregate validates each lane
+one at a time and seals an index of its descriptor and receipt hashes. It never unions the lane
+bytes, and the fan-in bound is unchanged. Consumers download only the lanes they need; original
+runtime consumption after merge remains Q9/B6.
+
+### Graphs
+
+Managed caller workflows compose kit callees at one pinned SHA. The jobs API reports a callee job
+as `<caller job name> / <callee job name>`, and the exact job multiset of a run is the caller's jobs
+for its mode plus those callee jobs.
+
+| Managed caller | Caller jobs | Kit callee and its jobs |
+| --- | --- | --- |
+| Build, `mod-base-build.yml` | "Verify pinned mod-base", "Build deferred for draft", "Shared Build" | `build.yml`: "Plan protected Build", "Verify protected policy", "Compile target {id}", "Seal complete Build bundle", "Verify complete Build" |
+| Packaged E2E, `mod-base-packaged-e2e.yml` | "Verify pinned mod-base", "Packaged E2E deferred for draft", "Select exact Build", "Shared Build" (only when a non-PR selection found nothing), "Shared Packaged E2E" | `select-build.yml`: "Select exact Build source". `build.yml` as above. `packaged-e2e.yml`: "Authenticate exact Build", "Run packaged lane {id}", "Seal complete packaged results", "Verify complete packaged E2E" |
+| Status, `mod-base-gate-status.yml` | "Verify pinned mod-base", "Locate the pull request", "Evaluate protected gates", "Publish protected gate statuses" | `gate-status.yml`: "Evaluate gate states" (read-only, one pull request; no secret). The publishing job is the caller's own and runs no kit code |
+
+"Verify pinned mod-base" calls the mod's own managed `mod-base-guard.yml`. The callee job and step
+names are constants of `mod_base.workflow`; the mods' job listings of today are in
+`tests/fixtures/ci_native/*/jobs.json`.
+A sealed job has the step "Validate frozen native exports" followed by "Upload sealed outputs".
+Modes are a closed set: `full` (every worker succeeds), `deferred` (a draft: only the guard and the
+deferred job succeed) and `reuse` (a push to the default branch with admitted reuse: plan and gate
+succeed, workers are skipped). An attest-only dispatch stays on the mods' legacy route.
+Activation modes are `disabled`, `shadow`, `shared-build`, `shared-build-and-e2e` and
+`reviewed-rollback`.
+
+### Process model
+
+Each workflow step runs one `ci` command as the `runner` user. Work that needs root runs in a child
+started as `/usr/bin/sudo -n -- <python> -I -B -S <kit>/tools/ci_privileged_bootstrap.py --operation
+<name>`. That program is stdlib-only, recomputes the kit digest of the verified checkout before
+importing from it and dispatches a closed set of operations. Parent and child exchange data only
+through private records (a 0700 directory, a 0600 file, one link) below the worker root
+`/tmp/mod-base-sandbox-boundary/mod-base-worker`. Root never calls the GitHub API. The mod's
+adapter is reached only through eight hooks of `BUILD_ADAPTER_API = 1`, run by a fixed dispatcher
+inside an account: `derive_plan`, `derive_runtime`, `verify_target`, `verify_build` and
+`verify_runtime` as the validator, `policy`, `build_target` and `run_lane` as the candidate. Mods
+write native files only; the kit inventories, hashes and binds them.
+
+### Decisions and their reasons
+
+- **D1. A producer run is found by its pull-request head.** The API reports a
+  `pull_request_target` run under the head branch and head SHA of the pull request, not the base
+  (the real Block Pops runs in `tests/fixtures/ci_native/block-pops/jobs.json`). The controller is
+  authenticated from `referenced_workflows`. There is no run-title contract.
+- **D2. An exact graph includes the caller's jobs.** The guard the design requires can only be
+  another job of the same run, so a graph of callee jobs alone rejects every real run.
+- **D3. One process model.** Privilege is taken in one audited place, and root needs no token.
+- **D4. Use the verified checkout and admitted host tools.** The root bootstrap checks the kit
+  digest before importing the closed operations; the host fence and tool admission protect the
+  interpreter and JDKs. There is no separate kit installation or private interpreter protocol.
+- **D5. A host fence for hosted images.** On a hosted runner the tool caches, JDKs and
+  `/usr/local/bin` are world-writable, so any local account could replace the interpreter. Root
+  removes that write access and proves none is left before a worker account exists.
+- **D6. Export paths have their own grammar.** Both mods' JARs are named with spaces
+  (`files/Quick Skin - Fabric - 1.20.1-3.1.0.jar`); a repository-path grammar refuses all of them.
+- **D7. One `PROFILES` constant.** The profile tuple was written ten times.
+- **D8. Timestamps are normalised.** The API returns fractional seconds and offsets; readers accept
+  them and store whole-second UTC.
+- **D9. Build callees have their own registry, prologue and policy tests.** Pages stays unchanged.
+  Callee jobs use inline steps only and may check out the protected mod, the kit and the candidate.
+  Their ids avoid `build`, `admit`, `collect` and `family`, which the Pages adapter host reserves,
+  and a timeout may reach GitHub's 360 minutes.
+- **D10. Only the mod publishes required statuses.** The kit supplies a read-only evaluation; the
+  App credentials and the context strings stay in a caller-owned job.
+- **D11. Complete packaged results are an index.** Descriptors and receipt hashes preserve exact
+  lane coverage without forcing all runtime bytes into a single archive.
+
+## Consequences
+
+- This amends [ADR 0004](0004-unified-evidence-schema-v1.md): compatibility is decided per kind in
+  `tests/fixtures/documents/compatibility.json`. An unchanged kind still passes the previous
+  reader; a new kind starts at 1 and is rejected there as unknown. The baseline is always the
+  immediate predecessor release, derived from the changelog.
+- Pages document shapes, `ADAPTER_API`, the pixel metric version and existing workflow names do not
+  change. The planned release is v1.1.0.
+- `BUILD_ADAPTER_API = 1` is separate. The current worker overlay supplies the protected executing
+  kit pin; future candidate-pin staging needs implementation before Q/B adopts that upgrade route.
+  The documented expected failure and the separate hook/job timeout decision remain in
+  [BUILD-PROTOCOL.md](../BUILD-PROTOCOL.md).
+- Block Pops' source artifacts are kept seven days instead of one: about 0.5 GiB per pull-request
+  generation by today's sizes.
+- `tests/fixtures/ci_native` holds the inventories, lane lists, output names, job listings and
+  measured sizes of both mods at the reviewed commits, for parity tests.
+- A plan describes what the mods stage. Block Pops writes no SBOM, so an SBOM is optional; Quick
+  Skin writes one manifest and one SBOM per target, so an output may belong to its target as a
+  whole (`lane_id` null) instead of to one lane. Only the two JARs are required of every lane, and
+  a native report of every target. One thing is left to each adapter's own reviewed change: both
+  mods write `artifacts.json` (and Quick Skin its SBOM) under the same name in every partition,
+  and a path is unique in the whole plan, so the adapter stages those files under a per-target
+  path such as `targets/<target id>/artifacts.json`. `tests/test_ci_native_plan.py` builds the
+  complete plan of each mod that way from the fixtures.
+
+## Alternatives considered
+
+- Copying Quick Skin's workflows into the kit: fast, but candidate code would hold the tokens that
+  Block Pops' boundary withholds.
+- Per-profile archive caps with Block Pops at 2 GiB: needs a streaming download the kit does not
+  have, for a bundle that is a quarter of the common cap today.
+- Raising the fan-in budget until Quick Skin's lanes fit: the results index preserves the bound
+  while retaining the descriptors and receipts needed to authenticate every lane.

@@ -3,8 +3,8 @@
 ``FakeGitHub`` implements the public surface of :class:`mod_base.github.api.GitHubApi` over seeded
 state (repository metadata, branches, runs and attempts with ``referenced_workflows``, jobs with
 steps, artifacts with ZIP bytes, file contents at refs, commits, trees, blobs, refs and annotated
-tags, compare results, plus exact raw GET responses), counts requests exactly like the real
-client, and records every mutating call. Every seeder taking ``repository`` defaults to the fake's
+tags, compare results, pull requests, plus exact raw GET responses), counts requests exactly like
+the real client, and records every mutating call. Every seeder taking ``repository`` defaults to the fake's
 own repository; another value seeds a foreign repository (for example ``The-Plum-Team/mod-base``
 for pin reachability and tag peeling). It is derived from Quick
 Skin ``test_pages_artifact_rotation.FakeApi`` and Block Pops ``test_pages_publication`` fakes.
@@ -20,6 +20,11 @@ Served routes (GET unless noted; ``{R}`` is a seeded repository, ``{own}`` the f
 * ``/repos/{own}/actions/artifacts`` (``name``), ``/actions/runs/{id}/artifacts`` (``name``),
   ``/actions/artifacts/{id}``, the ``/zip`` download, and ``DELETE /actions/artifacts/{id}``;
 * ``POST /repos/{own}/actions/workflows/{file}/dispatches`` (recorded, answers 204);
+* ``/repos/{own}/pulls/{number}`` (a seeded or created pull request), ``POST /repos/{own}/pulls``
+  (the head must be a seeded ``heads/`` ref or branch, the base a seeded branch, and no open pull
+  request may already join them), ``PATCH /repos/{own}/pulls/{number}`` (``state``, ``title``,
+  ``body``; a merged one never reopens) and ``POST /repos/{own}/issues/{number}/comments``;
+* ``DELETE /repos/{own}/git/refs/{ref}`` (a seeded ref; a ``heads/`` ref takes its branch along);
 * ``/repos/{own}/contents/{path}?ref=`` (files over 1 MiB answer ``encoding: none`` and are
   served through ``/git/blobs``, as GitHub does);
 * ``/repos/{R}/compare/{base}...{head}``, ``/git/commits/{sha}``, ``/git/trees/{sha}``
@@ -128,6 +133,7 @@ class FakeGitHub:
         self._refs: dict[tuple[str, str], tuple[str, str | None]] = {}
         self._tags: dict[tuple[str, str], tuple[str, str]] = {}
         self._responses: dict[tuple[str, frozenset[tuple[str, str]]], Any] = {}
+        self._pulls: dict[int, dict[str, Any]] = {}
         self._job_ids = itertools.count(9_000_000_001)
 
     # -- seeding ---------------------------------------------------------------------------------
@@ -253,6 +259,15 @@ class FakeGitHub:
             self._tags[(owner, annotated_tag_sha)] = (ref.split("/", 1)[1], sha)
         self._refs[(owner, ref)] = (sha, annotated_tag_sha)
 
+    def add_pull(self, record: Mapping[str, Any]) -> None:
+        """Seed (or replace) ``/repos/{own}/pulls/{number}``: one pull request as the API reports it
+        (``number``, ``state``, ``title``, ``body``, ``head``, ``base``, ...), kept verbatim."""
+
+        stored = copy.deepcopy(dict(record))
+        _require(_positive(stored.get("number")), "a seeded pull request needs a positive number")
+        canonical_json(stored)  # must be JSON
+        self._pulls[stored["number"]] = stored
+
     def add_response(self, path: str, payload: Any, *, params: Mapping[str, str | int] | None = None) -> None:
         """Seed the exact JSON body of one GET ``path`` (with exactly ``params``) that no typed seeder
         covers; a request for an unseeded path answers 404 like the API."""
@@ -352,7 +367,33 @@ class FakeGitHub:
                 and rest[3] == "dispatches"):
             self._mutations.append(("POST", path, copy.deepcopy(dict(payload))))
             return None
+        created = self._post_route(path, repository, rest, dict(payload))
+        if created is not None:
+            self._mutations.append(("POST", path, copy.deepcopy(dict(payload))))
+            return self._serve(created)
         raise self._not_found("POST", path)
+
+    def patch_json(self, path: str, payload: Mapping[str, Any]) -> Any:
+        if not self._writable:
+            raise ReadOnlyViolation(f"refusing PATCH {path!r} on a read-only GitHub client"[:200])
+        _validate_path(path)
+        if not isinstance(payload, Mapping):
+            raise MbError("PATCH payload must be a JSON object", reason="usage")
+        canonical_json(dict(payload))
+        self._spend()
+        repository, rest = self._split(path, "PATCH")
+        number = self._integer(rest[1]) if len(rest) == 2 and rest[0] == "pulls" else None
+        if repository != self._repository or number not in self._pulls:
+            raise self._not_found("PATCH", path)
+        record, changes = self._pulls[number], dict(payload)
+        if (not changes or set(changes) - {"state", "title", "body"}
+                or any(not isinstance(value, str) for value in changes.values())
+                or changes.get("state", "open") not in {"open", "closed"}
+                or (changes.get("state") == "open" and record.get("merged") is True)):
+            raise self._unprocessable("PATCH", path, "the pull request cannot be changed like this")
+        record.update(changes)
+        self._mutations.append(("PATCH", path, copy.deepcopy(changes)))
+        return self._serve(record)
 
     def delete(self, path: str) -> None:
         if not self._writable:
@@ -367,6 +408,15 @@ class FakeGitHub:
                 self._deleted.append(artifact_id)
                 self._mutations.append(("DELETE", path, None))
                 return
+        if repository == self._repository and len(rest) >= 4 and rest[:2] == ["git", "refs"]:
+            ref = urllib.parse.unquote("/".join(rest[2:]))
+            if (repository, ref) not in self._refs:
+                raise self._unprocessable("DELETE", path, "Reference does not exist")
+            del self._refs[(repository, ref)]
+            if ref.startswith("heads/"):
+                self._branches.pop(ref[len("heads/"):], None)
+            self._mutations.append(("DELETE", path, None))
+            return
         raise self._not_found("DELETE", path)
 
     def download(self, path: str, *, max_bytes: int) -> bytes:
@@ -427,6 +477,11 @@ class FakeGitHub:
                            path=path)
 
     @staticmethod
+    def _unprocessable(method: str, path: str, detail: str) -> ApiError:
+        return ApiError(f"GitHub API {method} {path} failed: HTTP 422: {detail}", status=422, method=method,
+                        path=path)
+
+    @staticmethod
     def _integer(text: str) -> int | None:
         return int(text) if grammar.POSITIVE_DECIMAL.fullmatch(text) else None
 
@@ -473,6 +528,9 @@ class FakeGitHub:
                     "visibility": "public"}
         if rest[0] == "branches":
             return self._branch_route(path, rest[1:], params)
+        if rest[0] == "pulls" and len(rest) == 2:
+            self._accept(path, params, frozenset())
+            return self._pulls.get(self._integer(rest[1]))
         if rest[0] == "contents" and len(rest) > 1:
             self._accept(path, params, frozenset({"ref"}))
             return self._contents(urllib.parse.unquote("/".join(rest[1:])), params.get("ref", self._default_branch))
@@ -578,6 +636,36 @@ class FakeGitHub:
             self._blobs.setdefault((self._repository, oid), data)
             record.update(encoding="none", content="")
         return record
+
+    def _post_route(self, path: str, repository: str, rest: list[str], payload: dict[str, Any]) -> Any:
+        """The answer of an accepted ``POST /pulls`` or ``POST /issues/{number}/comments``, else ``None``."""
+
+        if repository != self._repository:
+            return None
+        if rest == ["pulls"]:
+            texts = {key: payload.get(key) for key in ("title", "head", "base", "body")}
+            valid = (set(payload) == {*texts, "draft"} and isinstance(payload["draft"], bool)
+                     and all(isinstance(value, str) and value for value in texts.values()))
+            head, base = texts["head"], texts["base"]
+            target = (self._refs.get((repository, f"heads/{head}")) or self._branches.get(head)) if valid else None
+            if target is None or base not in self._branches:
+                raise self._unprocessable("POST", path, "the pull request needs an existing head and base branch")
+            if any(pull.get("state") == "open" and isinstance(pull.get("head"), dict)
+                   and isinstance(pull.get("base"), dict) and pull["head"].get("ref") == head
+                   and pull["base"].get("ref") == base for pull in self._pulls.values()):
+                raise self._unprocessable("POST", path, f"a pull request already exists for {head}")
+            number = max(self._pulls, default=0) + 1
+            self._pulls[number] = {
+                "number": number, "state": "open", "draft": payload["draft"], "merged": False, "merged_at": None,
+                "merge_commit_sha": None, "title": texts["title"], "body": texts["body"],
+                "head": {"ref": head, "sha": target[0], "repo": {"full_name": repository}},
+                "base": {"ref": base, "sha": self._branches[base][0], "repo": {"full_name": repository}}}
+            return self._pulls[number]
+        if len(rest) == 3 and rest[0] == "issues" and rest[2] == "comments" and self._integer(rest[1]) in self._pulls:
+            if set(payload) != {"body"} or not isinstance(payload["body"], str) or not payload["body"]:
+                raise self._unprocessable("POST", path, "a comment needs a body")
+            return {"id": len(self._mutations) + 1, "body": payload["body"]}
+        return None
 
     def _git_route(self, path: str, repository: str, rest: list[str], params: dict[str, str]) -> Any:
         if len(rest) >= 2 and rest[0] == "compare":

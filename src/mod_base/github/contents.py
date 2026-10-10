@@ -154,13 +154,24 @@ def tree(api: GitHubApi, sha: str, *, recursive: bool = True) -> list[dict[str, 
     verify_action_tree.py`` reads a pin): a response naming another tree is accepted only when
     ``/git/commits/{sha}`` proves it is that commit's tree."""
 
+    return _read_tree(api, sha, recursive=recursive, commit_alias=True)
+
+
+def exact_tree(api: GitHubApi, sha: str, *, recursive: bool = True) -> list[dict[str, Any]]:
+    """Read exactly this tree SHA; never accept a commit-to-tree alias fallback."""
+
+    return _read_tree(api, sha, recursive=recursive, commit_alias=False)
+
+
+def _read_tree(api: GitHubApi, sha: str, *, recursive: bool, commit_alias: bool) -> list[dict[str, Any]]:
     grammar.require_sha1(sha, "tree")
     value = api.get_json(f"/repos/{api.repository}/git/trees/{sha}", params={"recursive": 1} if recursive else None)
     if (not isinstance(value, dict) or not grammar.is_match(grammar.SHA1, value.get("sha"))
             or not isinstance(value.get("tree"), list)):
         raise _fail(f"tree {sha} response is malformed")
-    if value["sha"] != sha and commit_tree(api, sha) != value["sha"]:
-        raise _fail(f"tree {sha} response names a tree that is neither {sha} nor its commit's tree")
+    if value["sha"] != sha and (not commit_alias or commit_tree(api, sha) != value["sha"]):
+        raise _fail(f"tree {sha} response names another tree" if not commit_alias else
+                    f"tree {sha} response names a tree that is neither {sha} nor its commit's tree")
     if value.get("truncated") is not False:
         raise _fail(f"tree {sha} listing is truncated or does not say it is complete")
     rows = value["tree"]

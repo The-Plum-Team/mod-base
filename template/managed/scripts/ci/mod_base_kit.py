@@ -55,6 +55,14 @@ of the verified source: :func:`kit_path` turns bytecode writing off for the impo
 (``PYTHONNOUSERSITE=1``) unless this interpreter imports the hash-locked Pillow from its own user
 site, which the kit then receives through ``PYTHONUSERBASE`` (:func:`imaging_user_site`).
 
+``bump`` moves the pin of every workflow and action file together or not at all. Before it edits
+anything, the tag is verified, the new kit is fetched, and its ``template sync`` plan must raise no
+error. While the kit manages Build/E2E callers in the mod (``site/mod-base-build-activation.json``
+in any mode but ``disabled``), the new kit must also read that manifest (:func:`activation_demand`):
+a kit from before activation would leave those callers unchecked, pinned to a commit without their
+workflows, so a rollback that far first returns the mod to ``disabled``. When the write phase fails
+after the pin lines changed, every workflow and action file is restored.
+
 Usage::
 
     python3 scripts/ci/mod_base_kit.py pin [--repo DIR]
@@ -126,6 +134,14 @@ ACTIONS_LOCK = "src/mod_base/template/staged_actions.sha256"
 STAGED_DIRS = DIGESTED_DIRS + LOCKED_DIRS + (ACTIONS_DIR,)
 STAMP_NAME = "MOD_BASE_KIT.json"
 STAMP_KIND = "mod-base.kit-stamp"
+#: The mod's shared Build/E2E adoption: its activation manifest (``mod-base.ci.activation``), the
+#: one mode in which the kit manages no caller, and its Build configuration. They mirror the kit's
+#: ``mod_base.build_ci`` names and bound; a kit test pins the parity.
+ACTIVATION_PATH = "site/mod-base-build-activation.json"
+ACTIVATION_KIND = "mod-base.ci.activation"
+ACTIVATION_DISABLED = "disabled"
+BUILD_CONFIG_PATH = "scripts/ci/mod-base-build.json"
+MAX_ACTIVATION_BYTES = 8 * 1024
 OVERLAY_PATH = ("out", "mod-base-kit")
 BYTECODE_DIRECTORY = "__pycache__"
 #: The top-level package of the hash-locked Pillow that :func:`imaging_user_site` locates.
@@ -143,6 +159,7 @@ MAX_KIT_BYTES = 512 * 1024 * 1024
 MAX_STAMP_BYTES = 4096
 MAX_LOCK_BYTES = 1024 * 1024
 MAX_API_BYTES = 32 * 1024 * 1024
+MAX_PROBE_BYTES = 64 * 1024
 MAX_TAG_PEELS = 4
 FETCH_ATTEMPTS = 3
 FETCH_BACKOFF_SECONDS = 2.0
@@ -157,6 +174,24 @@ DECIMAL = re.compile(r"[0-9]{1,10}", re.ASCII)
 GIT_SAFETY = ("-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false")
 UNAVAILABLE = ("mod-base kit unavailable for candidate pin {sha}; "
                "a controller upgrade must pin a released mod-base commit")
+PROBE_TIMEOUT_SECONDS = 120
+#: Run with the kit a bump targets: the schema version it writes of every document kind it reads.
+SCHEMA_PROBE = (
+    "import json\n"
+    "import mod_base\n"
+    "print(json.dumps(getattr(mod_base, 'SCHEMA_VERSIONS', None)))\n"
+)
+#: Run with the kit a bump targets: its ``template sync`` plan for the mod, without writing.
+SYNC_PLAN = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "from mod_base.errors import run_main\n"
+    "from mod_base.template.tool import sync\n"
+    "def main():\n"
+    "    sync(Path(sys.argv[1]), kit_root=Path(sys.argv[2]), write=False)\n"
+    "    return 0\n"
+    "raise SystemExit(run_main(main))\n"
+)
 
 _sleep: Callable[[float], None] = time.sleep
 _now: Callable[[], float] = time.time
@@ -1109,28 +1144,160 @@ def kit_environment(resolution: Resolution) -> dict[str, str]:
     return environment
 
 
+def _entry_state(repo: Path, relative: str) -> str:
+    """``absent``, ``file`` (a regular file reached without symlinks) or ``invalid``."""
+
+    current = repo
+    parts = relative.split("/")
+    for index, part in enumerate(parts):
+        current = current / part
+        try:
+            status = os.lstat(current)
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "invalid"
+        if not (stat.S_ISDIR if index < len(parts) - 1 else stat.S_ISREG)(status.st_mode):
+            return "invalid"
+    return "file"
+
+
+def activation_demand(repo: Path) -> tuple[int, str] | None:
+    """What the mod's shared Build/E2E adoption demands of a kit the mod is pinned to.
+
+    ``None`` when it demands nothing: the mod has neither an activation manifest nor a Build
+    configuration, or its manifest is in the ``disabled`` mode, in which the kit manages no caller.
+    Otherwise ``(schema_version, mode)`` of the manifest: the mod holds kit-managed Build/E2E
+    callers, and only a kit that reads this manifest keeps them managed and at the pin.
+
+    A manifest that is not a bounded regular file holding a strict ``mod-base.ci.activation``
+    object, and a Build configuration without a manifest, raise :class:`KitError`: the mod's state
+    is then undefined, and its pin must not move until the kit's ``template check`` passes again.
+    """
+
+    repo = Path(os.path.abspath(repo))
+    state = _entry_state(repo, ACTIVATION_PATH)
+    if state == "absent":
+        if _entry_state(repo, BUILD_CONFIG_PATH) == "absent":
+            return None
+        raise KitError(f"{BUILD_CONFIG_PATH} exists without {ACTIVATION_PATH}; restore the activation manifest")
+    if state != "file":
+        raise KitError(f"{ACTIVATION_PATH} must be a regular file reached without symlinks")
+    data = _read_bounded(repo.joinpath(*ACTIVATION_PATH.split("/")), MAX_ACTIVATION_BYTES, ACTIVATION_PATH)
+    document = strict_json(data, ACTIVATION_PATH)
+    if not isinstance(document, dict) or document.get("kind") != ACTIVATION_KIND:
+        raise KitError(f"{ACTIVATION_PATH} is not a {ACTIVATION_KIND} document")
+    version, mode = document.get("schema_version"), document.get("mode")
+    if type(version) is not int or version < 1 or not isinstance(mode, str) or not mode:
+        raise KitError(f"{ACTIVATION_PATH} must hold a positive schema_version and a mode")
+    return None if mode == ACTIVATION_DISABLED else (version, mode)
+
+
+def require_activation_reader(resolution: Resolution, environment: Mapping[str, str],
+                              demand: tuple[int, str]) -> None:
+    """Require the kit ``resolution`` to read the activation manifest behind ``demand`` (the result
+    of :func:`activation_demand`), by the kit's rule that a reader accepts the schema version it
+    writes and the one before.
+
+    The kit is asked for ``mod_base.SCHEMA_VERSIONS``, which every release carries. A kit from
+    before activation does not list the kind: pinned, it would leave the mod's Build/E2E callers
+    in place with no check and a pin pointing at workflows that kit does not have.
+    """
+
+    version, mode = demand
+    try:
+        result = subprocess.run([sys.executable, "-P", "-c", SCHEMA_PROBE], env=environment, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, timeout=PROBE_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise KitError(f"cannot ask mod-base {resolution.pin.version} for its schema versions "
+                       f"({_one_line(exc)}); pin unchanged") from None
+    written = None
+    if result.returncode == 0 and len(result.stdout) <= MAX_PROBE_BYTES:
+        try:
+            versions = strict_json(result.stdout, "schema versions")
+        except KitError:
+            versions = None
+        if isinstance(versions, dict) and type(versions.get(ACTIVATION_KIND)) is int:
+            written = versions[ACTIVATION_KIND]
+    if written is None or version not in (written, written - 1):
+        reads = "no activation manifest" if written is None else f"only schema_version {written} and the one before"
+        raise KitError(f"mod-base {resolution.pin.version} cannot keep this mod's Build/E2E callers managed: "
+                       f"{ACTIVATION_PATH} is schema_version {version} in the {_one_line(mode, 40)} mode, and that "
+                       f"kit reads {reads}; reach the {ACTIVATION_DISABLED} mode first (through reviewed-rollback) "
+                       "or pin a kit that reads it; pin unchanged")
+
+
+def restore_pin_files(repo: Path, before: Mapping[str, bytes]) -> None:
+    """Put every workflow and action file of ``repo`` back to its ``before`` bytes (the
+    :func:`read_pin_files` snapshot taken before a pin rewrite) and remove the ones created since,
+    so that the mod carries its previous single pin again."""
+
+    for relative, data in before.items():
+        path = repo.joinpath(*relative.split("/"))
+        if not os.path.lexists(path):
+            _write_new(path, data)
+            continue
+        try:
+            current = _read_bounded(path, MAX_PIN_FILE_BYTES, relative)
+        except KitError:
+            current = None
+        if current != data:
+            _replace_file(path, data)
+    for relative in _pin_file_paths(repo):
+        if relative not in before:
+            os.unlink(repo.joinpath(*relative.split("/")))
+
+
 def bump(repo: Path, version: str, environ: Mapping[str, str], get_json: Callable[[str], Any] | None = None) -> Pin:
     """Pin ``repo`` to the released kit ``version`` and resynchronize its managed files.
 
-    Before any file changes, the tag is resolved and verified like ``verify --network`` and the
-    new kit is fetched into the verified user cache; every pin line is then rewritten and the
-    managed files are resynchronized by ``template sync --write`` of the newly pinned kit.
+    Nothing changes before all of this holds: the tag resolves and is verified like ``verify
+    --network``; the new kit is fetched into the verified user cache; it reads the mod's activation
+    manifest whenever the kit manages Build/E2E callers there (:func:`activation_demand`), so a
+    rollback to a kit from before activation is refused until the mod is ``disabled``; and its
+    ``template sync`` plan raises no error. Every pin line is then rewritten and the managed files
+    are resynchronized by ``template sync --write`` of the newly pinned kit. When that write phase
+    fails, the workflow and action files are restored (:func:`restore_pin_files`): the mod keeps
+    one consistent pin, the previous one.
     """
 
     repo = Path(os.path.abspath(repo))
     get_json = get_json if get_json is not None else api_getter(environ)
     parse_pin(repo)
+    demand = activation_demand(repo)
     target = Pin(resolve_tag(version, get_json), version, ())
     require_reachable(target.sha, get_json)
     resolution = cached_kit(target, environ, repo)
-    rewrite_pin(repo, target)
-    pin = parse_pin(repo)
-    if (pin.sha, pin.version) != (target.sha, target.version):
-        raise KitError("the rewritten pin is inconsistent")
-    command = [sys.executable, "-P", "-m", "mod_base", "template", "sync", "--repo", str(repo), "--write"]
-    result = subprocess.run(command, env=kit_environment(resolution), stdin=subprocess.DEVNULL, check=False)
+    environment = kit_environment(resolution)
+    if demand is not None:
+        require_activation_reader(resolution, environment, demand)
+    # Drift is expected across releases; only a plan the new kit rejects must leave the old pin in
+    # place. The plan calls the kit's library, not its CLI, whose exit 2 means drift as well as
+    # rejection; every released kit has both names.
+    result = subprocess.run([sys.executable, "-P", "-c", SYNC_PLAN, str(repo), str(resolution.root)],
+                            env=environment, stdin=subprocess.DEVNULL, check=False)
     if result.returncode != 0:
-        raise KitError(f"template sync --write failed with exit {result.returncode}")
+        raise KitError(f"template sync planning failed with exit {result.returncode}; pin unchanged")
+    before = read_pin_files(repo)
+    try:
+        rewrite_pin(repo, target)
+        pin = parse_pin(repo)
+        if (pin.sha, pin.version) != (target.sha, target.version):
+            raise KitError("the rewritten pin is inconsistent")
+        command = [sys.executable, "-P", "-m", "mod_base", "template", "sync", "--repo", str(repo), "--write"]
+        result = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL, check=False)
+        if result.returncode != 0:
+            raise KitError(f"template sync --write failed with exit {result.returncode}")
+    except BaseException as exc:
+        try:
+            restore_pin_files(repo, before)
+        except (KitError, OSError) as failure:
+            raise KitError(f"{_one_line(exc)}; restoring the workflow and action files failed too "
+                           f"({_one_line(failure)}): restore .github from version control") from None
+        if isinstance(exc, (KitError, OSError)):
+            raise KitError(f"{_one_line(exc)}; every workflow and action file was restored, so the pin is "
+                           "unchanged (run 'template sync --write' to restore any other managed file)") from None
+        raise
     return pin
 
 
