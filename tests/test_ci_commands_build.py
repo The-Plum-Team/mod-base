@@ -126,6 +126,26 @@ class AssembleCommandTests(AttemptCase):
         attempt.api.add_response(f"/repos/{attempt.api.repository}/pulls/7", {**attempt.pull, "draft": True})
         self.assert_rejected(attempt, "invalid-document", "PR must be open and ready")
 
+    def test_a_run_or_a_partition_listing_that_changes_after_the_description_publishes_nothing(self) -> None:
+        # The one description of the attempt is what the partitions are downloaded by and checked
+        # against; it is read again, with the source and the run, before the sealed root appears.
+        cases = {
+            "newer attempt": (lambda attempt: attempt.api.add_run(
+                {**attempt.run, "run_attempt": 3, "run_started_at": "2026-10-07T10:30:00Z"}, attempts=[attempt.run]),
+                "producer run changed between the start of the command and its effect"),
+            "extra partition": (lambda attempt: attempt.publish("target", "target-zz", b"x", artifact_id=150,
+                                                                job=TARGET),
+                                "artifact 'mb-ci-target--42--a2--target-zz' is not one the plan expects"),
+        }
+        for label, (change, message) in cases.items():
+            with self.subTest(case=label):
+                attempt = self.world()
+                attempt.api.during_listing(f"/repos/{attempt.api.repository}/actions/runs/{attempt.run_id}/artifacts",
+                                           lambda attempt=attempt, change=change: change(attempt))
+                self.assert_rejected(attempt, "invalid-document", message)
+                # The change landed after the description: every partition was downloaded first.
+                self.assertGreater(attempt.api.request_count, 7 + 2 * 2)
+
     def test_a_partition_must_carry_the_validation_record_of_its_own_target_run(self) -> None:
         def second(edit):
             return lambda target, document, files: edit(document, files) if target == "target-02" else None
