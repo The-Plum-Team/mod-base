@@ -1161,6 +1161,9 @@ def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any
                                          "lane_id": "lane-a", "run_id": 43, "run_attempt": 2}}[operation]}
     elif operation == "take-derived-runtime":
         arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}}
+    elif operation == "export-seed":
+        arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000},
+                     "execution": {"returncode": 0, "truncated": False, "log_bytes": 11, "log_sha256": h("hook log")}}
     elif operation in ("stage-bundle", "verify-candidate-source", "freeze-build-export", "freeze-runtime-export"):
         data = b"known tracked bytes\n"
         # What every operation after a candidate hook names; the inventory is one tracked file.

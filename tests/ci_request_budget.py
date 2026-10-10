@@ -54,8 +54,11 @@ COSTS = {
 }
 #: These commands execute local protected work and cannot create an API client. PR reuse admission
 #: is tested to return full without a request. The hosted generation pins all their observed zeros.
-LOCAL_VERBS = frozenset({"system-profile", "worker-prepare", "worker-stage", "worker-run", "worker-seal",
-                         "worker-validate", "worker-finish", "reuse-admit"})
+#: A seed's key and export are local too; its restore and save are the cache actions' own traffic to
+#: the Actions cache service with the job's runtime token, outside this REST ledger like the
+#: artifact upload's.
+LOCAL_VERBS = frozenset({"system-profile", "worker-prepare", "seed-key", "worker-stage", "worker-run", "worker-seal",
+                         "worker-validate", "seed-export", "worker-finish", "reuse-admit"})
 
 
 def request_cost(route: str, *, targets: int = 1, lanes: int = 1, extra_inputs: int = 0,

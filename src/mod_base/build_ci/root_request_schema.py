@@ -6,7 +6,7 @@ a program, a hook or a destination path. ``stage-candidate`` alone names directo
 root reads: the runner's own checkout, kit overlay and Gradle seed below its fenced home. The
 operations that place or freeze candidate data take their paths from the protected controller copy
 root re-reads, and state the successful execution they follow: a request after a failed hook cannot
-be written.
+be written. ``export-seed`` names no path at all: its source and its destination are fixed roots.
 Validation proves shape and internal consistency only; physical admission of the host, the
 accounts, the sources and the frozen inputs happens in root.
 """
@@ -257,6 +257,7 @@ _OPERATIONS = {
     "grant-runtime-validation": (
         Obj({**_JOB, "plan": _plan, "build": _envelope, "runtime": _runtime, "lane_id": _UNIT,
              "run_id": _RUN, "run_attempt": _ATTEMPT}), _runtime_grant),
+    "export-seed": (Obj({**_CANDIDATE_JOB, "execution": _EXECUTION}), _job),
 }
 
 

@@ -84,6 +84,21 @@ CI_ENVIRONMENT = {"build": {},
 #: The third checkout, present exactly in the jobs that stage and run candidate code.
 CANDIDATE_CHECKOUT = "Check out the tested candidate"
 FUTURE_KIT_CHECKOUT = "Check out the admitted candidate kit"
+#: The protected seed (``build_ci.seeds``): the cache actions that restore it before staging and
+#: save it after the upload, one reviewed release. Dependabot proposes their bumps with the other
+#: pins of ``.github/workflows``; these two are used by the Build/E2E callees alone.
+CACHE_RESTORE = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+CACHE_SAVE = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+CI_PINNED_ACTIONS = {**PINNED_ACTIONS, CACHE_RESTORE: "v6.1.0", CACHE_SAVE: "v6.1.0"}
+RESTORE_STEP = "Restore the protected seed"
+SAVE_STEP = "Save the protected seed"
+#: The jobs that seed their candidate's Gradle home, with the seed kind of each and the variable
+#: that carries their unit.
+SEEDED_JOBS = {("build", "target"): ("gradle", "TARGET"), ("packaged-e2e", "lane"): ("runtime", "LANE")}
+SEED_PATH = "${{ runner.temp }}/mb-seed"
+#: Only a protected job whose exact restore missed exports a seed; a pull request never does.
+EXPORT_CONDITION = ("steps.seed.outputs.key != '' && steps.restore.outputs.cache-hit != 'true' && "
+                    "github.event_name != 'pull_request_target'")
 CANDIDATE_VERBS = frozenset({"worker-stage", "worker-run"})
 #: The verbs that call the API: exactly the steps that run one hold the step-scoped token.
 API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate", "select-build", "fetch-build",
@@ -130,12 +145,15 @@ CONDITIONAL_STEPS = {
     ("build", "policy", FUTURE_KIT_CHECKOUT): "steps.plan.outputs.candidate_kit_sha != ''",
     ("build", "target", FUTURE_KIT_CHECKOUT): "steps.plan.outputs.candidate_kit_sha != ''",
     ("packaged-e2e", "lane", FUTURE_KIT_CHECKOUT): "steps.plan.outputs.candidate_kit_sha != ''",
+    **{(name, job_id, step_name): condition for name, job_id in SEEDED_JOBS
+       for step_name, condition in ((RESTORE_STEP, "steps.seed.outputs.key != ''"), ("seed-export", EXPORT_CONDITION),
+                                    (SAVE_STEP, "steps.export.outputs.saved == 'true'"))},
 }
 #: The verbs of a job's one ``workflow.CI_SEAL_STEP``: a hook of the validator account, a gate, or
 #: the kit's own index of the lane results (``ci aggregate`` runs no hook).
 SEAL_VERBS = frozenset({"worker-validate", "seal-gate", "aggregate"})
 #: The third-party actions a Build/E2E callee may use, at the reviewed pins of the Pages callees.
-CI_ACTIONS = frozenset({CHECKOUT, SETUP_PYTHON, UPLOAD})
+CI_ACTIONS = frozenset({CHECKOUT, SETUP_PYTHON, UPLOAD, CACHE_RESTORE, CACHE_SAVE})
 UPLOAD_PATH = "${{ runner.temp }}/mb-upload"
 UPLOAD_FLAG = '--output "$RUNNER_TEMP/mb-upload"'
 RUN_EXPRESSION, ATTEMPT_EXPRESSION = "${{ github.run_id }}", "${{ github.run_attempt }}"
@@ -150,7 +168,7 @@ CI_COMMAND = re.compile(r"^  python3 -P -m mod_base ci ([a-z][a-z-]*) --repo mod
 #: What a step's ``env:`` may carry: a call input, an output of an earlier job, the matrix unit or
 #: the step-scoped token. Never an event payload field and never a secret.
 ENV_VALUE = re.compile(r"^\$\{\{ (?:inputs\.[a-z][a-z0-9-]*|needs\.[a-z][a-z-]*\.outputs\.[a-z][a-z0-9-]*|matrix\.id"
-                       r"|github\.token) \}\}$")
+                       r"|github\.token|steps\.restore\.outputs\.cache-hit) \}\}$")
 #: What a job may return: one output of one of its own steps, a choice between two literals by it,
 #: or the first written of two such outputs (the settling call's or the planned evaluation's).
 JOB_OUTPUT = re.compile(r"^\$\{\{ steps\.[a-z]+\.outputs\.[a-z0-9_]+(?: == '[a-z]+' && '[a-z]+' \|\| '[a-z]+'"
@@ -169,11 +187,16 @@ CI_VERB_OUTPUTS = {
     "reuse-admit": frozenset({"mode", "reason"}),
     "select-build": frozenset({"found", "run_id", "selection"}),
     "gate-status": frozenset({"settled", "intents"}),
+    "seed-key": frozenset({"key"}),
+    "seed-export": frozenset({"saved"}),
 }
+#: What a step that runs an action rather than a kit command writes, by the action: only the
+#: restore of a seed is read, for whether it restored the exact key.
+ACTION_OUTPUTS = {CACHE_RESTORE: frozenset({"cache-hit"})}
 DOCUMENT_KEYS = {"name", "on", "permissions", "env", "jobs"}
 JOB_KEYS = {"name", "needs", "if", "runs-on", "timeout-minutes", "permissions", "outputs", "strategy", "steps"}
 RUN_STEP_KEYS = {"name", "id", "if", "shell", "env", "run"}
-USES_STEP_KEYS = {"name", "uses", "with", "if"}
+USES_STEP_KEYS = {"name", "id", "uses", "with", "if"}
 
 #: The one difference between the Pages binding step and the Build/E2E one: which workflow of the
 #: canonical branch may call the job.
@@ -322,7 +345,7 @@ def strings(value: Any) -> Iterator[str]:
 #: of the Build the ``input`` job then selected reaches the later jobs as ``SELECTION``, the one
 #: line ``ci select-build`` writes as its ``selection`` output.
 SAMPLES = {"KIT_SHA": "b" * 40, "PR_NUMBER": "17", "GH_TOKEN": "step-token", "PLAN_SHA256": "c" * 64,
-           "TESTED_SHA": "d" * 40, "TARGET": "target-a", "LANE": "lane-a", "MODE": "", "BUILD_RUN_ID": "",
+           "TESTED_SHA": "d" * 40, "TARGET": "target-a", "LANE": "lane-a", "MODE": "", "BUILD_RUN_ID": "", "SEED_HIT": "",
            "SELECTION": canonical_json(ci_selection()).decode("utf-8").rstrip("\n")}
 #: What the runner could leak into a step: every script scrubs these before it runs anything.
 AMBIENT = ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
@@ -406,8 +429,8 @@ class CiRegistryTests(unittest.TestCase):
                 "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
                 "policy": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
                            "worker-finish"),
-                "target": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
-                           "worker-validate", "worker-finish"),
+                "target": ("subject", "worker-prepare", "plan", "seed-key", "worker-stage", "worker-run",
+                           "worker-seal", "worker-validate", "seed-export", "worker-finish"),
                 "assemble": ("subject", "worker-prepare", "plan", "assemble", "worker-validate", "worker-finish"),
                 "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
             },
@@ -416,8 +439,9 @@ class CiRegistryTests(unittest.TestCase):
             },
             "packaged-e2e": {
                 "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
-                "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "worker-stage",
-                         "worker-run", "worker-seal", "worker-validate", "worker-finish"),
+                "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "seed-key",
+                         "worker-stage", "worker-run", "worker-seal", "worker-validate", "seed-export",
+                         "worker-finish"),
                 "aggregate": ("subject", "worker-prepare", "plan", "aggregate", "worker-finish"),
                 "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
             },
@@ -534,7 +558,8 @@ class CiOutputTests(unittest.TestCase):
         read = set()
         for name, job_id, job in iter_ci_jobs():
             steps = job["steps"]
-            verbs = {item["id"]: step_verb(item) for item in steps if "id" in item}
+            verbs = {item["id"]: step_verb(item) or item.get("uses", "").partition(" # ")[0]
+                     for item in steps if "id" in item}
             position = {item["id"]: index for index, item in enumerate(steps) if "id" in item}
             self.assertEqual(len(verbs), sum("id" in item for item in steps), f"{name}/{job_id}: a step id repeats")
             # A job output may read every step; a step reads the steps before it.
@@ -546,14 +571,15 @@ class CiOutputTests(unittest.TestCase):
                     with self.subTest(callee=name, job=job_id, place=place, read=f"{step_id}.{output}"):
                         self.assertIn(step_id, verbs, "no step of this job has that id")
                         self.assertLess(position[step_id], limit, "only an earlier step has written")
-                        self.assertIn(output, CI_VERB_OUTPUTS.get(verbs[step_id], frozenset()),
-                                      f"`ci {verbs[step_id]}` writes no output of that name")
+                        self.assertIn(output, {**CI_VERB_OUTPUTS, **ACTION_OUTPUTS}.get(verbs[step_id], frozenset()),
+                                      f"`{verbs[step_id]}` writes no output of that name")
                         read.add((verbs[step_id], output))
         # Everything that leaves a job or decides a later step is among them.
         self.assertLessEqual({("subject", "tested_sha"), ("plan", "plan_sha256"), ("plan", "targets"),
                               ("plan", "lanes"), ("reuse-admit", "mode"), ("select-build", "found"),
                               ("select-build", "run_id"), ("select-build", "selection"),
-                              ("gate-status", "settled"), ("gate-status", "intents")}, read)
+                              ("gate-status", "settled"), ("gate-status", "intents"), ("seed-key", "key"),
+                              ("seed-export", "saved"), (CACHE_RESTORE, "cache-hit")}, read)
 
     def test_every_job_output_is_declared_where_it_is_read_and_read_where_it_is_declared(self) -> None:
         for name in CI_CALLEES:
@@ -832,7 +858,7 @@ class CiCalleePolicyTests(unittest.TestCase):
                 action, _, comment = value.partition(" # ")
                 with self.subTest(callee=name, uses=action):
                     self.assertIn(action, CI_ACTIONS, "inline steps only: no composite, no local and no new action")
-                    self.assertEqual(comment, PINNED_ACTIONS[action])
+                    self.assertEqual(comment, CI_PINNED_ACTIONS[action])
             for job_id, job in ci_callee(name)["jobs"].items():
                 python = step(job["steps"], PROLOGUE[4])
                 self.assertEqual((python["uses"], python["with"]), (SETUP_PYTHON, {"python-version": "3.13"}), job_id)
@@ -922,6 +948,52 @@ class CiCalleePolicyTests(unittest.TestCase):
                                   for verb in verbs})
         self.assertEqual({verb for verbs in PRE_ACCOUNT_VERBS.values() for verb in verbs}
                          & (API_VERBS | set(ALWAYS_VERBS) | set(GATING_IDS) | CANDIDATE_VERBS | SEAL_VERBS), set())
+
+    def test_a_seed_is_keyed_by_protected_code_restored_exactly_and_saved_only_by_a_protected_job(self) -> None:
+        # The key comes from `ci seed-key` alone, which reads the protected checkout; the restore
+        # takes that exact key and no prefix, and staging is given the seed only on an exact hit.
+        # The export runs after the upload, so the job's results never wait for or depend on it,
+        # and only in a protected job (a pull request never saves, whatever its candidate did);
+        # the save consumes nothing but what the export wrote. No seed step holds a token.
+        seeded = set()
+        for name, job_id, job in iter_ci_jobs():
+            steps = job["steps"]
+            names = [item["name"] for item in steps]
+            verbs = [step_verb(item) for item in steps]
+            caches = [item for item in steps if str(item.get("uses", "")).startswith("actions/cache/")]
+            with self.subTest(callee=name, job=job_id):
+                if (name, job_id) not in SEEDED_JOBS:
+                    self.assertEqual((caches, {"seed-key", "seed-export"} & set(verbs)), ([], set()))
+                    continue
+                seeded.add((name, job_id))
+                kind, unit = SEEDED_JOBS[name, job_id]
+                key, stage = verbs.index("seed-key"), verbs.index("worker-stage")
+                self.assertEqual(steps[key]["id"], "seed")
+                self.assertEqual(steps[key]["env"], {unit: "${{ matrix.id }}"})
+                self.assertTrue(steps[key]["run"].endswith(
+                    f'--kind {kind} --unit "${unit}" --github-output "$GITHUB_OUTPUT"\n'))
+                self.assertLess(verbs.index("plan"), key, "a key is derived for a planned unit")
+                self.assertEqual(steps[key + 1], {"name": RESTORE_STEP, "id": "restore",
+                                                  "if": "steps.seed.outputs.key != ''", "uses": CACHE_RESTORE,
+                                                  "with": {"key": "${{ steps.seed.outputs.key }}", "path": SEED_PATH}})
+                self.assertEqual(stage, key + 2, "nothing runs between the restore and the staging")
+                self.assertEqual(steps[stage]["env"], {"SEED_HIT": "${{ steps.restore.outputs.cache-hit }}"})
+                self.assertIn('[[ "$SEED_HIT" != true ]] || seed=(--gradle-seed "$RUNNER_TEMP/mb-seed")\n',
+                              steps[stage]["run"])
+                self.assertTrue(steps[stage]["run"].endswith(' "${seed[@]}"\n'))
+                upload, export = names.index(workflow.CI_UPLOAD_STEP), verbs.index("seed-export")
+                self.assertEqual(export, upload + 1, "the export follows the upload of the job's results")
+                self.assertEqual((steps[export]["id"], steps[export]["if"]), ("export", EXPORT_CONDITION))
+                self.assertNotIn("env", steps[export])
+                self.assertTrue(steps[export]["run"].endswith(
+                    f'--kind {kind} --output "$RUNNER_TEMP/mb-seed" --github-output "$GITHUB_OUTPUT"\n'))
+                self.assertEqual(steps[export + 1], {"name": SAVE_STEP, "if": "steps.export.outputs.saved == 'true'",
+                                                     "uses": CACHE_SAVE,
+                                                     "with": {"key": "${{ steps.seed.outputs.key }}", "path": SEED_PATH}})
+                self.assertEqual(verbs[export + 2], "worker-finish")
+                self.assertEqual(caches, [steps[key + 1], steps[export + 1]])
+        self.assertEqual(seeded, set(SEEDED_JOBS))
+        self.assertEqual({"seed-key", "seed-export"} & (API_VERBS | set(ALWAYS_VERBS) | SEAL_VERBS), set())
 
     def test_a_subject_is_derived_exactly_where_the_candidate_is_held_and_then_proven_by_the_plan(self) -> None:
         # `ci subject --candidate` spends one request instead of four or five and does not observe

@@ -65,6 +65,7 @@ ROUTES = {"pull-request": {"pr-number": "7"}, "selected": {"mode": "full", "buil
 #: The one form a step's ``env:`` value has, and the one form a job output has.
 _REFERENCE = re.compile(r"^\$\{\{ ([a-z]+(?:\.[A-Za-z0-9_-]+)+) \}\}$")
 _JOB_OUTPUT = re.compile(r"^\$\{\{ steps\.([a-z]+)\.outputs\.([a-z0-9_]+) \}\}$")
+_COMPARISON = re.compile(r"([a-z_]+(?:\.[a-z0-9_-]+)*) (==|!=) '([^']*)'")
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,8 @@ class PackagedRun:
         root = self.attempt.directory / (job_id if unit is None else f"{job_id}--{unit}")
         for name in ("workspace", "temp", "worker"):
             (root / name).mkdir(parents=True)
-        context = {"github.token": "job-token", **{f"inputs.{name}": value for name, value in self.inputs.items()},
+        context = {"github.token": "job-token", "github.event_name": self.attempt.record["event"],
+                   **{f"inputs.{name}": value for name, value in self.inputs.items()},
                    **{f"needs.{name}.outputs.{key}": value for name, needed in (needs or {}).items()
                       for key, value in needed.outputs.items()}}
         if unit is not None:
@@ -120,7 +122,7 @@ class PackagedRun:
         written: dict[str, dict[str, str]] = {}
         for position, item in enumerate(self.jobs[job_id]["steps"][len(PROLOGUE):]):
             if "run" not in item or not self._runs(item, context):
-                continue
+                continue  # An action this module does not run writes no output: GitHub answers "".
             label = f"{root.name} / {item['name']}"
             output = root / f"output-{position}"
             environment = {"GITHUB_WORKSPACE": str(root / "workspace"), "RUNNER_TEMP": str(root / "temp"),
@@ -134,6 +136,7 @@ class PackagedRun:
                     self._kit(label, root, record["argv"][3:])
             if "id" in item:
                 written[item["id"]] = outputs(output)
+                context.update({f"steps.{item['id']}.outputs.{key}": value for key, value in written[item["id"]].items()})
         declared = self.jobs[job_id].get("outputs", {})
         return Job(root, {name: self._output(value, written, f"{job_id}.{name}") for name, value in declared.items()})
 
@@ -144,11 +147,20 @@ class PackagedRun:
             return True
         if condition == NOT_REUSE:
             return context["inputs.mode"] != "reuse"
-        raise AssertionError(f"step {item['name']!r}: this module cannot decide `{condition}`")
+        # The seed steps compare step outputs and the event; an output no step wrote is "".
+        decided = True
+        for comparison in condition.split(" && "):
+            match = _COMPARISON.fullmatch(comparison)
+            if match is None or not match[1].startswith(("steps.", "github.event_name")):
+                raise AssertionError(f"step {item['name']!r}: this module cannot decide `{condition}`")
+            decided &= (context.get(match[1], "") == match[3]) == (match[2] == "==")
+        return decided
 
     @staticmethod
     def _answer(value: str, context: dict[str, str], label: str) -> str:
         reference = _REFERENCE.fullmatch(value)
+        if reference is not None and reference[1].startswith("steps."):
+            return context.get(reference[1], "")
         if reference is None or reference[1] not in context:
             raise AssertionError(f"{label}: nothing of this run answers {value!r}")
         return context[reference[1]]

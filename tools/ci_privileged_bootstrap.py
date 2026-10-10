@@ -37,7 +37,7 @@ ROOTS = ("src", "site", "requirements")
 OPERATIONS = ("host-fence", "stage-candidate", "freeze-build-validation", "freeze-runtime-validation",
               "grant-controller", "grant-plan-inputs", "take-derived-plan", "grant-validation-inputs",
               "stage-bundle", "take-derived-runtime", "verify-candidate-source", "freeze-build-export",
-              "freeze-runtime-export", "grant-build-validation", "grant-runtime-validation")
+              "freeze-runtime-export", "grant-build-validation", "grant-runtime-validation", "export-seed")
 ENTRY_FLAGS = ("--operation", "--kit", "--kit-digest", "--nonce")
 MAX_FILES = 20000
 MAX_ENTRIES = 40000

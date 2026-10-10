@@ -354,6 +354,28 @@ def request_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount)
         raise WorkerError("cannot publish private root request") from error
 
 
+def request_seed_export(*, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount,
+                        execution: Mapping[str, Any]) -> str:
+    """Runner-only request to copy the locked candidate's Gradle home out as a seed; return the nonce.
+
+    Made once, after the candidate hook succeeded and its export was sealed. ``execution`` is what
+    the runner retained of that hook run (``returncode`` 0, ``truncated``, ``log_bytes``,
+    ``log_sha256``), so no request follows a failed hook. Source and destination are fixed in root.
+    """
+    try:
+        authenticate_host_boundary(boundary)
+        accounts = _job_arguments(boundary, validator)
+        check(accounts["candidate"] == {"uid": candidate.uid, "gid": candidate.gid}, "$.candidate",
+              "must be the live candidate account of this job")
+
+        def closing() -> None:
+            check(_job_arguments(boundary, validator) == accounts, "$.request", "accounts changed during publication")
+
+        return _publish("export-seed", boundary, {**accounts, "execution": dict(execution)}, before_publish=closing)
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
+
+
 def _request_candidate(operation: str, boundary: HostBoundary, candidate: WorkerAccount, validator: WorkerAccount,
                        sources: ControllerSources, plan: dict[str, Any], arguments: dict[str, Any]) -> str:
     """Publish one request about the candidate of this job: its live accounts, the protected
