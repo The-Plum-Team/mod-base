@@ -769,7 +769,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_BATCH_REPORTED_PATHS`: 20 paths named by one batch refusal (a conflict, a rename that was followed).
 * `CI_BATCH_GIT_TIMEOUT_SECONDS`, `CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS`: 120 seconds for one Git plumbing call of the batch store, 600 for one fetch or push.
 * `MAX_CI_BATCH_GIT_OUTPUT_BYTES`: The output of one Git call of the batch store; the source-listing bound.
-* `MAX_CI_ASSEMBLE_REQUESTS`: 816, the request budget of `ci assemble`: it sends 15 requests and 2 per target, the two of a download (49 for 17 targets); the rest is for retries and further listing pages.
+* `MAX_CI_ASSEMBLE_REQUESTS`: 816, the request budget of `ci assemble`: it sends 16 requests, one of them the record of its own attempt (when it started), and 2 per target, the two of a download (50 for 17 targets); the rest is for retries and further listing pages.
 * `MAX_CI_AGGREGATE_REQUESTS`: 816, the request budget of `ci aggregate`: it sends 13 requests and 2 per lane, the two of a download (81 for 34 lanes); the rest is for retries and further listing pages.
 * `MAX_CI_BATCH_PREPARE_REQUESTS`: 216, the request budget of `ci batch-prepare`: it sends 10 requests and 3 per member (160 for 50 members); the rest is for retries.
 * `MAX_CI_BATCH_SETTLE_REQUESTS`: 348, the request budget of `ci batch-settle`: it sends 3 requests, the 28 of `transport.download_merged_gate_pair` for both original gates and at most 5 per member (281 for 50 members); the rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
@@ -1923,12 +1923,18 @@ each Git object once per command.
 ## `mod_base.build_ci.reads`
 
 Owner: MB11. How one Build/E2E command reads GitHub: immutable objects once, mutable state at the
-start of the command and again immediately before its effect.
+start of the command and again immediately before its effect. Every job list of one attempt holds
+only jobs that attempt ran.
 
+* `RERUN`: The recovery every reader of one attempt names when it meets the work of another attempt: "a failed-jobs-only rerun mixes attempts; rerun all jobs".
+* `def require_ran_in_attempt(jobs: list[dict[str, Any]], *, run_attempt: int, run_started_at: Any) -> None`: Refuse (`RERUN`) a job that started before its attempt did (`run_started_at` of the attempt record): GitHub lists a job it carried over into a rerun of failed jobs under the new attempt, with a new id, but with the times of the attempt that ran it (K7 canary, run 38032224931 attempt 2). Whole seconds; a job that started in the second its attempt did is its own; a skipped job and a job without a start time are not judged by time; a malformed time is refused.
 * `class CommandReads`: One command's reads through its one budgeted client. It offers the client's
   read surface, so it is passed wherever a client is read from. A commit, tree or blob named by SHA
   and a comparison of two SHAs are fetched once; so is the job list of an attempt that `run` saw
-  completed. Everything else reaches the client every time.
+  completed. Everything else reaches the client every time. `attempt_jobs` refuses a job that the
+  listing places in an earlier attempt or that started before the attempt did; the attempt's
+  start comes from the record `run` read when that was this attempt, otherwise from one read of
+  the attempt's own record (`attempt_started`).
   * `@classmethod of(cls, api: GitHubApi | CommandReads) -> CommandReads`
   * `repository` (property) -> `str`
   * `request_count` (property) -> `int`
@@ -1937,6 +1943,7 @@ start of the command and again immediately before its effect.
   * `read_listing(self, read: Callable[[], _T]) -> _T`
   * `download(self, path: str, *, max_bytes: int) -> bytes`
   * `run(self, run_id: int) -> dict[str, Any]`
+  * `attempt_started(self, run_id: int, run_attempt: int) -> Any`
   * `attempt_jobs(self, run_id: int, run_attempt: int) -> list[dict[str, Any]]`
 * `class Watch`: The mutable state one effect depends on. `read` performs a read the first time its
   key is asked for and answers from that observation afterwards; `recheck`, called immediately
@@ -2545,14 +2552,15 @@ gate job of that same attempt. The attempt's job listing and the run's artifact 
 read once: every job that must have finished shows the conclusion its graph expects
 (`graph.require_partial_graph`), every expected artifact is listed exactly once, unexpired,
 within the size cap of its kind and under this run and the subject's head, and its window is the
-upload step of the job that sealed it. A job or an artifact of an earlier attempt is refused as a
-failed-jobs-only rerun. The run, the source and the bytes are authenticated by the caller.
+upload step of the job that sealed it. A job or an artifact of an earlier attempt, a job GitHub
+carried over into this attempt included, is refused as a failed-jobs-only rerun. The run, the
+source and the bytes are authenticated by the caller.
 
 * `def attempt_producer(record: dict[str, Any], plan: dict[str, Any], *, mode: str, run_id: int, run_attempt: int) -> dict[str, Any]`: The producer identity (no upload window) that every record and descriptor of this attempt carries: the caller and the event of the job's identity record (`identity.read_subject`), the head GitHub records the run under and the graph digest of `mode` for `plan`. The plan must be of the record's subject.
 * `def settled_jobs(producer: str, mode: str, plan: dict[str, Any], kind: str, unit_id: str | None = None) -> list[str]`: The jobs of a run of `producer` in `mode` that have finished when the job that uploads the `kind` artifact seals (`build`: the assembling job; `results`: the aggregating job; `tested` with its gate as `unit_id`): every job that succeeds in its own call or an earlier one, except itself and the gate that follows it, and every job the mode skips.
 * `def settled_artifacts(producer: str, mode: str, plan: dict[str, Any], kind: str, unit_id: str | None = None) -> list[tuple[str, str | None]]`: `(kind, unit_id)` of the artifact every sealing job among `settled_jobs` has uploaded, in the order the run produces them.
-* `def attempt_jobs(api: GitHubApi | CommandReads, run_id: int, run_attempt: int) -> list[dict[str, Any]]`: Every job of one running attempt, read once (`github.jobs.attempt_jobs`); a job of an earlier attempt in the listing is refused as what a failed-jobs-only rerun leaves behind.
-* `def describe_attempt(api: GitHubApi | CommandReads, *, producer: dict[str, Any], plan: dict[str, Any], mode: str, expected: Sequence[tuple[str, str | None]], finished: Sequence[str] = ()) -> list[dict[str, Any]]`: Canonical descriptors (`records.validate_descriptor`) of the distinct `expected` `(kind, unit_id)` artifacts of this attempt, in the order given, from two requests. `producer` is `attempt_producer` for `mode`; `finished` names further jobs that must have finished beside the uploading ones; with nothing expected only the jobs are read and required. A missing, expired, repeated, oversized or foreign artifact, an artifact of an expected kind the plan does not expect, a job that has not finished as the graph expects or did not seal before its upload, and a job or artifact of an earlier attempt are distinct rejections. One observation: a caller that produces an effect describes again before it.
+* `def attempt_jobs(api: GitHubApi | CommandReads, run_id: int, run_attempt: int) -> list[dict[str, Any]]`: Every job of one running attempt, read once (`reads.CommandReads.attempt_jobs`); a job the listing places in an earlier attempt, or one that started before this attempt did, is refused as what a failed-jobs-only rerun leaves behind.
+* `def describe_attempt(api: GitHubApi | CommandReads, *, producer: dict[str, Any], plan: dict[str, Any], mode: str, expected: Sequence[tuple[str, str | None]], finished: Sequence[str] = ()) -> list[dict[str, Any]]`: Canonical descriptors (`records.validate_descriptor`) of the distinct `expected` `(kind, unit_id)` artifacts of this attempt, in the order given, from two requests, and one more for the attempt's record when `api` has not read the run as this attempt. `producer` is `attempt_producer` for `mode`; `finished` names further jobs that must have finished beside the uploading ones; with nothing expected only the jobs are read and required. A missing, expired, repeated, oversized or foreign artifact, an artifact of an expected kind the plan does not expect, a job that has not finished as the graph expects or did not seal before its upload, and a job or artifact of an earlier attempt are distinct rejections. One observation: a caller that produces an effect describes again before it.
 
 ## `mod_base.build_ci.gate`
 

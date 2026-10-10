@@ -16,7 +16,7 @@ from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from tests.ci_attempt import ATTEMPT, AttemptCase, expand, record_zip, sealed, validation, zip_tree
 from tests.helpers import ci_api_run, ci_graph_jobs, h
-from tests.test_ci_describe import ASSEMBLE, GATE, PLAN, POLICY, RERUN, TARGET
+from tests.test_ci_describe import ASSEMBLE, GATE, GUARD, PLAN, POLICY, RERUN, TARGET
 from tests.test_ci_transport import after_download, build_archive
 
 PACKAGED_GATE = "Shared Packaged E2E / Verify complete packaged E2E"
@@ -212,6 +212,8 @@ class BuildGateTests(GateCase):
             "unsealed upload": (unsealed, "upload started before sealing finished"),
             "earlier attempt": (lambda attempt: attempt.change_job(PLAN, run_attempt=1),
                                 f"job '{PLAN}' ran in attempt 1, not in attempt 2: {RERUN}"),
+            # K7 canary, run 38032224931 attempt 2: this gate sealed a Build fed by attempt 1's plan.
+            "failed-jobs-only rerun": (lambda attempt: attempt.rerun_failed_jobs(), f"job '{GUARD}' started before attempt 2 did, in an earlier attempt: {RERUN}"),
         }
         for label, (change, message) in cases.items():
             with self.subTest(case=label):

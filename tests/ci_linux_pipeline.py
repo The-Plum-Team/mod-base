@@ -51,7 +51,7 @@ class LinuxPipelineTests(unittest.TestCase):
         self.assertEqual({gate: (value["context"], value["state"]) for gate, value in intents["gates"].items()},
                          {gate: (context, "success") for gate, context in contexts.items()})
         pipeline.complete("status")
-        self.assertEqual(sum(count for _, _, count in pipeline.requests), 220 if upgrade else 211)
+        self.assertEqual(sum(count for _, _, count in pipeline.requests), 221 if upgrade else 212)
         if upgrade:
             self.assertTrue(pipeline.future_resolved)
             self.assertEqual(pipeline.plan["identity"]["kit"]["sha"], pipeline.pin)

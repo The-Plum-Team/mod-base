@@ -13,7 +13,7 @@ from tests.ci_request_budget import COSTS, WAITING_POLLS, generation_breakdown
 
 class GenerationBudgetTests(unittest.TestCase):
     def test_candidate_pin_upgrade_adds_one_release_admission_per_run(self) -> None:
-        for targets, lanes, extra, total in ((2, 3, 1, 220), (10, 20, 0, 322), (17, 34, 1, 420)):
+        for targets, lanes, extra, total in ((2, 3, 1, 221), (10, 20, 0, 323), (17, 34, 1, 421)):
             with self.subTest(targets=targets):
                 result = generation_breakdown(targets=targets, lanes=lanes, extra_inputs=extra, candidate_upgrade=True)
                 self.assertEqual(sum(result.values()), total)
@@ -29,7 +29,7 @@ class GenerationBudgetTests(unittest.TestCase):
             self.assertIn(method, {item.name for item in classes[owner].body if isinstance(item, ast.FunctionDef)}, route)
 
     def test_the_real_mod_generations_fit_the_pinned_budget(self) -> None:
-        totals = {"block-pops": 313, "quick-skin": 411}
+        totals = {"block-pops": 314, "quick-skin": 412}
         for profile in ci_native.profiles():
             native = ci_native.load(profile, "targets.json")
             breakdown = generation_breakdown(targets=len(native["targets"]), lanes=len(native["lanes"]),
@@ -45,7 +45,7 @@ class GenerationBudgetTests(unittest.TestCase):
         # token's 1000-request hourly budget. No runtime admission was added for this migration.
         breakdown = generation_breakdown(targets=limits.MAX_CI_TARGETS, lanes=limits.MAX_CI_LANES,
                                            extra_inputs=limits.MAX_CI_PLAN_INPUTS)
-        self.assertEqual(sum(breakdown.values()), 2287, breakdown)
+        self.assertEqual(sum(breakdown.values()), 2288, breakdown)
         self.assertGreater(sum(breakdown.values()), 1000, breakdown)
         self.assertEqual(WAITING_POLLS, 0)
 
@@ -55,7 +55,7 @@ class GenerationBudgetTests(unittest.TestCase):
         # covers exhausting the wait without a Build, including a cached draft deferral.
         breakdown = generation_breakdown(targets=17, lanes=34, extra_inputs=1,
                                            polls=limits.MAX_CI_BUILD_POLLS - 2)
-        self.assertEqual(sum(breakdown.values()), 500, breakdown)
+        self.assertEqual(sum(breakdown.values()), 501, breakdown)
         self.assertLess(sum(breakdown.values()), 600, breakdown)
 
 

@@ -315,10 +315,11 @@ MAX_CI_GENERATION_REQUESTS = 440
 MAX_CI_GATE_STATUS_REQUESTS = 96
 #: The description of a status intent: GitHub's own bound for a commit status description.
 MAX_CI_STATUS_DESCRIPTION_CHARS = 140
-#: ``ci assemble`` sends 15 requests and 2 per target (archive REST redirect and storage GET;
-#: metadata is already authenticated from the listing), 49 for 17 targets;
-#: the rest is for retries and for the further pages of a run that lists more than 100 jobs or
-#: artifacts.
+#: ``ci assemble`` sends 16 requests and 2 per target (archive REST redirect and storage GET;
+#: metadata is already authenticated from the listing), 50 for 17 targets. One of the 16 is the
+#: record of its own attempt, read before the run is: when the attempt started, so a job that
+#: GitHub carried over from an earlier attempt is refused. The rest is for retries and for the
+#: further pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_ASSEMBLE_REQUESTS = 48 + 3 * MAX_CI_TARGETS
 #: ``ci seal-gate`` sends 15 requests for a Build gate, 23 for the packaged gate of a pull request
 #: and 47 for the gate of a reuse run, which decides the reuse again (``gate.seal_reuse``), whatever

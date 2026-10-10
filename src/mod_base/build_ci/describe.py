@@ -14,8 +14,10 @@ of them uploaded. This module turns that into canonical descriptors
   must be there exactly once, unexpired, within the size cap of its kind and recorded under this
   run and the subject's head; no other artifact of this attempt may carry an expected kind.
 
-A failed-jobs-only rerun leaves jobs and artifacts of an earlier attempt behind. Both are
-rejections that say so: the recovery is to rerun all jobs, never to mix attempts.
+A failed-jobs-only rerun leaves jobs and artifacts of an earlier attempt behind. GitHub lists a
+job it did not run again under the new attempt, but with the start time of the attempt that ran
+it, before the new attempt started. Both are rejections that say so: the recovery is to rerun all
+jobs, never to mix attempts.
 
 Nothing here proves that the remaining jobs succeed, that this is the run's latest attempt or
 that the bytes are what the plan expects: the command that calls this authenticates the run and
@@ -32,10 +34,9 @@ from mod_base.build_ci.authenticate import run_head
 from mod_base.build_ci.graph import require_partial_graph, run_graph, sealed_upload, upload_job_name
 from mod_base.build_ci.identity import validate_subject_record
 from mod_base.build_ci.protocol import subject_of
-from mod_base.build_ci.reads import CommandReads
+from mod_base.build_ci.reads import RERUN, CommandReads
 from mod_base.build_ci.records import _PRODUCER_IDENTITY, validate_descriptor
 from mod_base.build_ci.transport import _artifact_state, _plan
-from mod_base.github import jobs as github_jobs
 from mod_base.github.api import GitHubApi
 from mod_base.model import grammar, limits
 from mod_base.model.validators import Int, check, fail
@@ -45,7 +46,6 @@ from mod_base.workflow import ci_producer, find_job
 _RECORD_KINDS = ("results", "tested", "reuse")
 #: The gate whose receipt covers the artifact a fan-in job uploads.
 _GATES = {"build": "build", "results": "packaged"}
-_RERUN = "a failed-jobs-only rerun mixes attempts; rerun all jobs"
 
 
 def attempt_producer(record: dict[str, Any], plan: dict[str, Any], *, mode: str, run_id: int,
@@ -100,28 +100,13 @@ def settled_artifacts(producer: str, mode: str, plan: dict[str, Any], kind: str,
     return [unit for unit in units if upload_job_name(producer, *unit) in sealed]
 
 
-class _OneAttempt:
-    """The reads of one attempt's job listing as ``github.jobs.attempt_jobs`` makes them, refusing
-    in its own words a job that an earlier attempt ran."""
-
-    def __init__(self, reads: CommandReads, run_attempt: int) -> None:
-        self.repository, self._reads, self._attempt = reads.repository, reads, run_attempt
-
-    def paginate(self, path: str, *, field: str | None, max_items: int) -> list[dict[str, Any]]:
-        jobs = self._reads.paginate(path, field=field, max_items=max_items)
-        for job in jobs:
-            attempt = job.get("run_attempt")
-            if type(attempt) is int and attempt < self._attempt:
-                raise fail("$.jobs", f"job {str(job.get('name'))[:120]!r} ran in attempt {attempt}, not in "
-                                     f"attempt {self._attempt}: {_RERUN}")
-        return jobs
-
-
 def attempt_jobs(api: GitHubApi | CommandReads, run_id: int, run_attempt: int) -> list[dict[str, Any]]:
-    """Every job of one running attempt, read once. A job of an earlier attempt in the listing is
-    what a failed-jobs-only rerun leaves behind and is refused as that."""
+    """Every job of one running attempt, read once (``reads.CommandReads.attempt_jobs``). A job
+    the listing places in an earlier attempt, or one that started before this attempt did (GitHub
+    lists a job it carried over into a rerun of failed jobs under the new attempt), is what a
+    failed-jobs-only rerun leaves behind and is refused as that."""
 
-    return github_jobs.attempt_jobs(_OneAttempt(CommandReads.of(api), run_attempt), run_id, run_attempt)
+    return CommandReads.of(api).attempt_jobs(run_id, run_attempt)
 
 
 def _size_cap(kind: str) -> int:
@@ -155,7 +140,7 @@ def _artifacts(reads: CommandReads, producer: dict[str, Any], plan: dict[str, An
             earlier = sorted(name.name for name in names
                              if (name.kind, name.unit_id) == unit and name.run_attempt != attempt)
             if earlier:
-                raise fail("$.artifacts", f"artifact {earlier[-1]!r} is not of attempt {attempt}: {_RERUN}")
+                raise fail("$.artifacts", f"artifact {earlier[-1]!r} is not of attempt {attempt}: {RERUN}")
             raise fail("$.artifacts", f"this attempt has no artifact {wanted_name!r}")
         check(len(found) == 1, "$.artifacts", f"artifact {wanted_name!r} is listed more than once")
         state = _artifact_state(found[0])
@@ -177,9 +162,10 @@ def describe_attempt(api: GitHubApi | CommandReads, *, producer: dict[str, Any],
     graph mode its digest stands for. ``expected`` holds distinct ``(kind, unit_id)`` pairs;
     ``finished`` names further jobs that must have finished as the graph expects, beside the
     jobs that uploaded the expected artifacts (:func:`settled_jobs`). Two requests for a run of
-    up to 100 jobs and 100 artifacts; with nothing expected only the jobs are read and required.
-    One observation: a caller that produces an effect describes again immediately before it and
-    requires the same answer."""
+    up to 100 jobs and 100 artifacts, and one more for the attempt's record when ``api`` has not
+    yet read the run as this attempt (:meth:`CommandReads.attempt_started`); with nothing
+    expected only the jobs are read and required. One observation: a caller that produces an
+    effect describes again immediately before it and requires the same answer."""
 
     reads = CommandReads.of(api)
     plan = _plan(plan)

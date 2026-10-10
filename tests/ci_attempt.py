@@ -32,7 +32,7 @@ from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json, canonical_sha256, sha256_hex, strict_loads
 from mod_base.workflow import CI_CALLER_WORKFLOWS
 from tests import ci_mod_harness as h
-from tests.helpers import ci_api_artifact, ci_api_run, ci_graph_jobs, ci_plan
+from tests.helpers import ci_api_artifact, ci_api_run, ci_failed_jobs_rerun, ci_graph_jobs, ci_plan
 
 RUN = {"build": 42, "packaged": 43}
 ATTEMPT = 2
@@ -223,6 +223,12 @@ class Attempt:
     def set_run(self, **changes: Any) -> None:
         self.run.update(changes)
         self.api.add_run(self.run)
+
+    def rerun_failed_jobs(self) -> None:
+        """This attempt is GitHub's rerun of the failed jobs of attempt 1: the jobs that started
+        before it did were carried over, not run again (``helpers.ci_failed_jobs_rerun``)."""
+
+        self.run = ci_failed_jobs_rerun(self.api, self.run, self.jobs)
 
     def job(self, name: str) -> dict[str, Any]:
         return next(job for job in self.jobs if job["name"] == name)

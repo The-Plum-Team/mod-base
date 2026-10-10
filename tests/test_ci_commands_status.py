@@ -23,7 +23,7 @@ from mod_base.github.api import ApiError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, strict_loads
 from tests import ci_mod_harness as h
-from tests.helpers import ci_api_run, ci_graph_jobs, ci_run_descriptor, ci_run_gate
+from tests.helpers import ci_api_run, ci_failed_jobs_rerun, ci_graph_jobs, ci_run_descriptor, ci_run_gate
 from tests.test_ci_build_selection import later_run
 from tests.test_ci_commands_packaged import JobWorld, run_ci, synthetic_plan
 from tests.test_ci_gate_timeline import PACKAGED_GATE, add_gate
@@ -374,10 +374,15 @@ class GateStatusTests(GateStatusTestCase):
             entry.update(path=entry["path"].rsplit("@", 1)[0] + "@" + "9" * 40, sha="9" * 40)
             world.api.add_run(world.runs[42])
 
+        def carried(world: StatusWorld) -> None:
+            # K7 canary: v1.1.1 published success for the attempt 2 of run 38032224931.
+            world.runs[42] = ci_failed_jobs_rerun(world.api, world.runs[42], world.jobs[42])
+
         cases = {"extra job": lambda w: w.set_jobs(42, ci_graph_jobs("build-full-extra-job")),
                  "missing job": lambda w: w.set_jobs(42, ci_graph_jobs("build-full-missing-job")),
                  "reuse graph": lambda w: w.set_jobs(42, ci_graph_jobs("build-reuse")),
-                 "mixed attempts": mixed, "unsealed gate": unsealed, "kit pin": repinned}
+                 "mixed attempts": mixed, "failed-jobs-only rerun": carried, "unsealed gate": unsealed,
+                 "kit pin": repinned}
         for name, change in cases.items():
             world = self.world().gated()
             change(world)

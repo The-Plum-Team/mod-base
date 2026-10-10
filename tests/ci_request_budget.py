@@ -40,8 +40,8 @@ COSTS = {
                              "test_a_pull_request_selects_the_newest_build_of_its_head_in_seventeen_requests", polls=1),
     "fetch-build": Cost(2, "test_ci_commands_packaged.FetchBuildCommandTests."
                            "test_each_route_materialises_the_selected_bundle_in_the_fixed_root"),
-    "assemble": Cost(15, "test_ci_commands_build.AssembleCommandTests."
-                         "test_seventeen_targets_cost_forty_nine_requests", targets=2),
+    "assemble": Cost(16, "test_ci_commands_build.AssembleCommandTests."
+                         "test_seventeen_targets_cost_fifty_requests", targets=2),
     "aggregate": Cost(13, "test_ci_aggregate.AggregateCommandTests."
                           "test_thirty_four_lanes_cost_two_requests_each_and_thirteen", lanes=2),
     "seal-gate:build": Cost(15, "test_ci_gate.BuildGateTests.test_seventeen_targets_cost_the_same_fifteen_requests"),

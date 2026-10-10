@@ -96,8 +96,9 @@ class GateTimelineTests(unittest.TestCase):
                 self.assertEqual(self.call(world, gate), GRAPHS[producer, mode])
                 self.assertEqual((world.documents[gate], world.seals[gate]), before)
                 self.assertEqual(world.api.mutations, [])
-                # One job listing per run involved: a consumed Build of another run is the second.
-                self.assertEqual(world.api.request_count, 2 if mode in ("pull-request", "selected") else 1)
+                # One job listing and one attempt record (when the attempt started) per run
+                # involved: a consumed Build of another run is the second.
+                self.assertEqual(world.api.request_count, 4 if mode in ("pull-request", "selected") else 2)
 
     def test_a_rebuilt_build_gate_does_not_wait_for_the_packaged_half_of_its_run(self):
         world = gate_world("build", "rebuilt")

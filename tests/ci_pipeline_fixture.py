@@ -228,7 +228,10 @@ CHECKS += (_future_kit_resolves,)
         callee = {"build": "build", "packaged": "packaged-e2e", "status": "gate-status"}[producer]
         run_id = {"build": 42, "packaged": 43, "status": 44}[producer]
         started = self.tick()
-        run = {"id": run_id, "run_attempt": 1, "path": workflow.CI_CALLER_WORKFLOWS[producer],
+        # GitHub's own record of the run, served for its attempt too: a reader of the attempt's
+        # jobs asks it when the attempt started.
+        run = {"id": run_id, "run_attempt": 1, "workflow_id": 331005979 + run_id,
+               "path": workflow.CI_CALLER_WORKFLOWS[producer],
                "name": producer, "event": "workflow_run" if producer == "status" else "pull_request_target",
                "status": "in_progress", "conclusion": None,
                "head_branch": self.pull["head"]["ref"], "head_sha": self.head,

@@ -24,7 +24,7 @@ ADR 0007 is Proposed. **K7, Q1–Q10, B1–B7 and GitHub settings remain untouch
   root launches, selection hand-over and generated upload ZIPs. Both status intents succeed;
   corrupt lane ZIP, missing target, newer Build attempt and draft controls reject. A second
   generation uses a released future kit with different bytes, proves candidate resolution and
-  refuses privileged imports of it: **211/220 requests and 26 real fence launches** per Python leg.
+  refuses privileged imports of it: **212/221 requests and 26 real fence launches** per Python leg.
   The release commit is merged only once its CI passes every ordinary and hosted module on
   Python 3.11–3.13.
   GitHub, caller orchestration and third-party Actions remain simulated. Latest-head acceptance
@@ -55,19 +55,19 @@ Paths below are relative to `src/mod_base/build_ci/` unless otherwise stated.
 ## Measured request budget
 
 The workflow-derived ledger includes Build, packaged E2E and one final status evaluation:
-synthetic 2 targets/3 lanes/1 extra input: **61 + 92 + 58 = 211**; Quick Skin 17/34/1:
-**106 + 247 + 58 = 411**; Block Pops 10/20/0: **82 + 174 + 57 = 313**. It counts kit
+synthetic 2 targets/3 lanes/1 extra input: **62 + 92 + 58 = 212**; Quick Skin 17/34/1:
+**107 + 247 + 58 = 412**; Block Pops 10/20/0: **83 + 174 + 57 = 314**. It counts kit
 traffic through FakeGitHub, including storage GETs, with single-page listings and no waiting,
 retries, other generations or earlier status events. Third-party Actions' internal traffic is
-outside this measurement. Every pending poll adds one; Quick Skin plus 89 polls is 500 (<600).
+outside this measurement. Every pending poll adds one; Quick Skin plus 89 polls is 501 (<600).
 
 Changing the candidate pin adds three release-admission requests in each run's first plan:
-**220 synthetic, 420 Quick Skin, 322 Block Pops** for the pinned annotated-tag case. Workers
+**221 synthetic, 421 Quick Skin, 323 Block Pops** for the pinned annotated-tag case. Workers
 verify the protected plan hash locally; they do not repeat admission. Equal pins add nothing.
 
 A job's `GITHUB_TOKEN` allowance is 1,000 REST requests/hour/repository, shared by runs.
 `MAX_CI_GENERATION_REQUESTS = 440` is a test-only no-wait regression budget. The coordinator
-retained structural bounds of 256 targets/256 lanes, whose cost is at least 2,287 plus pagination;
+retained structural bounds of 256 targets/256 lanes, whose cost is at least 2,288 plus pagination;
 those bounds do not promise an executable generation within the allowance.
 
 ## Cold host-fence cost

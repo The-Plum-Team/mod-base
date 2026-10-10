@@ -895,6 +895,38 @@ def ci_api_run(plan: dict[str, Any], producer: str = "build", **changes: Any) ->
     return run
 
 
+#: When GitHub started attempt 2 of a fixture run after ``gh run rerun --failed``: the guard and the
+#: plan job of attempt 1 had finished (by 10:00:50) and no later job had started (10:00:55).
+CI_FAILED_RERUN_STARTED_AT = "2026-10-07T10:00:52Z"
+
+
+def ci_failed_jobs_rerun(api: Any, run: dict[str, Any], jobs: list[dict[str, Any]], *,
+                         started_at: str = CI_FAILED_RERUN_STARTED_AT) -> dict[str, Any]:
+    """Seed ``run`` and the listing ``jobs`` of its attempt 2 as GitHub serves them after a rerun
+    of the failed jobs of attempt 1 (K7 canary, run 38032224931 attempt 2, evidence rows
+    "R1-C | C2"), and return the run as GitHub reports its latest attempt.
+
+    Attempt 2 started at ``started_at``. GitHub did not run again a job that had started before:
+    the listing of attempt 2 shows it with a new job id and ``run_attempt`` 2, but with the times
+    and the runner of attempt 1, whose own listing keeps it under its old id. Every other job ran
+    in attempt 2. A rerun of all jobs instead runs every job after the attempt started."""
+
+    latest = {**copy.deepcopy(run), "run_attempt": 2, "run_started_at": started_at,
+              "previous_attempt_url": f"https://api.github.com/repos/{api.repository}/actions/runs/{run['id']}"
+                                      "/attempts/1"}
+    first = {**copy.deepcopy(run), "run_attempt": 1, "run_started_at": run["created_at"], "status": "completed",
+             "conclusion": "cancelled", "previous_attempt_url": None}
+    carried = [job for job in jobs if job.get("started_at") is not None
+               and grammar.normalize_timestamp(job["started_at"]) < started_at]
+    if not carried or any(job["run_attempt"] != 2 for job in jobs):
+        raise ValueError("a failed-jobs-only rerun carries over at least one job of attempt 1 into attempt 2")
+    api.add_run(latest, attempts=[first])
+    api.add_jobs(run["id"], 1, [{**copy.deepcopy(job), "id": job["id"] - 1_000_000, "run_attempt": 1}
+                                for job in carried])
+    api.add_jobs(run["id"], 2, jobs)
+    return latest
+
+
 def ci_api_artifact(descriptor: dict[str, Any], **changes: Any) -> dict[str, Any]:
     """The artifact a descriptor selects as the REST API reports it: its ``workflow_run`` carries
     the head branch and commit of the producer run, like the run itself."""

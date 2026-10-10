@@ -11,15 +11,16 @@ from mod_base.build_ci.graph import (BUILD_MODES, PACKAGED_MODES, BuildGraphV1, 
                                      authenticate_referenced_workflows, gate_mode, job_name, require_graph,
                                      require_partial_graph, run_graph, sealed_upload, upload_job_name)
 from mod_base.build_ci.protocol import plan_sha256, validate_plan
-from mod_base.build_ci.reads import CommandReads, Watch
+from mod_base.build_ci.reads import RERUN, CommandReads, Watch, require_ran_in_attempt
 from mod_base.errors import MbError
+from mod_base.github import jobs as github_jobs
 from mod_base.github.fake import FakeGitHub
 from mod_base.github.runs import referenced_workflows
 from mod_base.model.documents import load_document
 from mod_base.model import grammar
 from mod_base.model.canonical import canonical_json
 from mod_base.workflow import CI_SEAL_STEP, CI_UPLOAD_STEP
-from tests.helpers import CI_GRAPH_FIXTURES, ci_api_run, ci_graph_jobs, ci_plan, ci_staged_plan
+from tests.helpers import CI_GRAPH_FIXTURES, ci_api_run, ci_failed_jobs_rerun, ci_graph_jobs, ci_plan, ci_staged_plan
 
 
 def seeded_pr():
@@ -655,10 +656,12 @@ class GraphContractTests(unittest.TestCase):
     def test_attempt_listing_is_read_once_and_must_belong_to_the_exact_attempt(self):
         plan = ci_plan()
         api = FakeGitHub(repository="example/mod")
+        api.add_run(ci_api_run(plan))
         api.add_jobs(42, 2, listing("build", "full"))
         self.assertEqual(authenticate_graph(api, plan=plan, producer="build", mode="full", run_id=42,
                                             run_attempt=2), GRAPHS["build", "full"])
-        self.assertEqual(api.request_count, 1)
+        # The listing, and the attempt's record: when the attempt started.
+        self.assertEqual(api.request_count, 2)
         for run_id, attempt, changes in ((43, 2, {}), (42, 3, {}), (42, 2, {"run_attempt": 1}),
                                          (42, 2, {"run_id": 43})):
             api = FakeGitHub(repository="example/mod")
@@ -671,6 +674,209 @@ class GraphContractTests(unittest.TestCase):
             with self.subTest(arguments=arguments), self.assertRaises(MbError):
                 authenticate_graph(api, **{"plan": plan, "producer": "build", "mode": "full", "run_id": 42,
                                            "run_attempt": 2, **arguments})
+
+
+class FailedJobsRerunTests(unittest.TestCase):
+    """What GitHub lists for an attempt after a rerun of failed jobs only (K7 canary, run
+    38032224931 attempt 2): the jobs it did not run again appear under the new attempt, with new
+    job ids and ``run_attempt`` of that attempt, but with the times and runner of attempt 1. Only
+    the attempt's own ``run_started_at`` tells them apart."""
+
+    PLAN = BUILD_FULL[0]
+
+    def world(self, jobs=None):
+        plan = ci_plan()
+        api = FakeGitHub(repository="example/mod")
+        jobs = listing("build", "full") if jobs is None else jobs
+        return plan, api, ci_failed_jobs_rerun(api, ci_api_run(plan), jobs)
+
+    def test_the_listing_of_the_canary_is_refused_by_the_times_of_its_carried_jobs(self):
+        plan, api, run = self.world()
+        listed = github_jobs.attempt_jobs(api, 42, 2)
+        # Nothing in the listing names attempt 1: the check of v1.1.1 let this attempt through.
+        self.assertEqual({job["run_attempt"] for job in listed}, {2})
+        earlier = {job["name"]: job for job in github_jobs.attempt_jobs(api, 42, 1)}
+        self.assertEqual(set(earlier), {GUARD, "Build deferred for draft", self.PLAN})
+        for job in listed:
+            if job["name"] in earlier:
+                self.assertNotEqual(job["id"], earlier[job["name"]]["id"])
+                self.assertEqual((job["started_at"], job["completed_at"], job["runner_id"]),
+                                 tuple(earlier[job["name"]][key] for key in ("started_at", "completed_at", "runner_id")))
+        self.assertEqual(require_graph(listed, plan=plan, producer="build", mode="full", run_attempt=2),
+                         GRAPHS["build", "full"])
+        refused = rf"job '{GUARD}' started before attempt 2 did, in an earlier attempt: {RERUN}"
+        reads = CommandReads.of(api)
+        self.assertEqual(reads.run(42)["run_started_at"], run["run_started_at"])
+        before = api.request_count
+        with self.assertRaisesRegex(MbError, refused):
+            reads.attempt_jobs(42, 2)
+        self.assertEqual(api.request_count - before, 1)  # the run's record said when attempt 2 started
+        before = api.request_count
+        with self.assertRaisesRegex(MbError, refused):
+            authenticate_graph(api, plan=plan, producer="build", mode="full", run_id=42, run_attempt=2)
+        self.assertEqual(api.request_count - before, 2)  # alone, it reads the attempt's own record
+
+    def test_a_carried_plan_job_alone_is_refused(self):
+        jobs = listing("build", "full")
+        guard = next(job for job in jobs if job["name"] == GUARD)
+        guard.update(started_at="2026-10-07T10:00:52Z", completed_at="2026-10-07T10:00:54Z")
+        for step in guard["steps"]:
+            step.update(started_at="2026-10-07T10:00:53.000Z", completed_at="2026-10-07T10:00:53.000Z")
+        _, api, _ = self.world(jobs)
+        with self.assertRaisesRegex(MbError, rf"job '{self.PLAN}' started before attempt 2 did, in an earlier "
+                                             rf"attempt: {RERUN}"):
+            CommandReads.of(api).attempt_jobs(42, 2)
+
+    def test_a_rerun_of_all_jobs_is_the_attempts_own_work(self):
+        plan, api = ci_plan(), FakeGitHub(repository="example/mod")
+        first = ci_api_run(plan, run_attempt=1, run_started_at="2026-10-07T09:00:00Z", conclusion="failure",
+                           previous_attempt_url=None)
+        second = ci_api_run(plan)  # every job of the fixture started after 10:00:00Z
+        third = ci_api_run(plan, run_attempt=3, run_started_at="2026-10-07T11:00:00Z")
+        api.add_run(third, attempts=[first, second])
+        api.add_jobs(42, 2, listing("build", "full"))
+        rerun = listing("build", "full")
+        for job in rerun:
+            job.update(id=job["id"] + 1_000_000, run_attempt=3, started_at="2026-10-07T11:00:00Z",
+                       completed_at="2026-10-07T11:00:30Z")
+        api.add_jobs(42, 3, rerun)
+        reads = CommandReads.of(api)
+        self.assertEqual(reads.run(42)["run_attempt"], 3)
+        before = api.request_count
+        self.assertEqual(len(reads.attempt_jobs(42, 3)), 7)  # started in the second attempt 3 did
+        self.assertEqual(api.request_count - before, 1)
+        self.assertEqual(len(reads.attempt_jobs(42, 2)), 7)  # an earlier attempt's own record says when it began
+        self.assertEqual(api.request_count - before, 3)
+        self.assertEqual(len(reads.attempt_jobs(42, 2)), 7)  # nothing is read twice but the listing
+        self.assertEqual(api.request_count - before, 4)
+
+    #: The canary's own listings (K7, The-Plum-Team/mod-base-canary, evidence rows "R1-C | C2",
+    #: "R1-C | C3" and "R1-C | C4"), read after every attempt had completed: ``run_started_at`` as
+    #: ``/runs/{id}/attempts/{n}`` served it for each attempt, earlier ones included, and every job's
+    #: name, conclusion and ``started_at`` in the order of ``/attempts/{n}/jobs``. Attempts 2 are the
+    #: reruns of failed jobs only, attempts 3 the reruns of all jobs; all of them ran v1.1.1.
+    CANARY_BUILD = {  # Build run 38032224931
+        1: ("2026-10-10T06:48:44Z", [
+            (GUARD, "success", "2026-10-10T06:48:47Z"),
+            ("Shared Build / Plan protected Build", "success", "2026-10-10T06:48:55Z"),
+            ("Build deferred for draft", "skipped", "2026-10-10T06:48:53Z"),
+            ("Shared Build / Compile target 1.21.1", "cancelled", "2026-10-10T06:51:02Z"),
+            ("Shared Build / Compile target 1.20.1", "cancelled", "2026-10-10T06:51:01Z"),
+            ("Shared Build / Verify protected policy", "cancelled", "2026-10-10T06:51:01Z"),
+            ("Shared Build / Seal complete Build bundle", "cancelled", "2026-10-10T06:51:31Z"),
+            ("Shared Build / Verify complete Build", "cancelled", "2026-10-10T06:51:32Z")]),
+        2: ("2026-10-10T06:55:06Z", [
+            ("Shared Build / Compile target 1.21.1", "success", "2026-10-10T06:55:10Z"),
+            ("Shared Build / Compile target 1.20.1", "success", "2026-10-10T06:55:10Z"),
+            ("Shared Build / Verify protected policy", "success", "2026-10-10T06:55:10Z"),
+            (GUARD, "success", "2026-10-10T06:48:47Z"),
+            ("Shared Build / Plan protected Build", "success", "2026-10-10T06:48:55Z"),
+            ("Build deferred for draft", "skipped", "2026-10-10T06:55:17Z"),
+            ("Shared Build / Seal complete Build bundle", "success", "2026-10-10T06:58:31Z"),
+            ("Shared Build / Verify complete Build", "success", "2026-10-10T07:00:59Z")]),
+        3: ("2026-10-10T07:07:36Z", [
+            (GUARD, "success", "2026-10-10T07:07:40Z"),
+            ("Shared Build / Plan protected Build", "success", "2026-10-10T07:07:50Z"),
+            ("Build deferred for draft", "skipped", "2026-10-10T07:07:48Z"),
+            ("Shared Build / Compile target 1.21.1", "success", "2026-10-10T07:10:37Z"),
+            ("Shared Build / Verify protected policy", "success", "2026-10-10T07:10:37Z"),
+            ("Shared Build / Compile target 1.20.1", "success", "2026-10-10T07:10:37Z"),
+            ("Shared Build / Seal complete Build bundle", "success", "2026-10-10T07:12:38Z"),
+            ("Shared Build / Verify complete Build", "success", "2026-10-10T07:14:45Z")]),
+    }
+    CANARY_PACKAGED = {  # packaged run 38032224927
+        2: ("2026-10-10T07:18:00Z", [
+            ("Shared Packaged E2E / Authenticate exact Build", "success", "2026-10-10T07:18:05Z"),
+            ("Packaged E2E deferred for draft", "skipped", "2026-10-10T07:18:03Z"),
+            ("Select exact Build", "skipped", "2026-10-10T07:18:03Z"),
+            (GUARD, "success", "2026-10-10T06:48:47Z"),
+            ("Shared Build", "skipped", "2026-10-10T07:18:11Z"),
+            ("Shared Packaged E2E / Run packaged lane forge-1.20.1", "success", "2026-10-10T07:19:54Z"),
+            ("Shared Packaged E2E / Run packaged lane fabric-1.21.1", "success", "2026-10-10T07:19:54Z"),
+            ("Shared Packaged E2E / Run packaged lane fabric-1.20.1", "success", "2026-10-10T07:19:55Z"),
+            ("Shared Packaged E2E / Seal complete packaged results", "success", "2026-10-10T07:23:08Z"),
+            ("Shared Packaged E2E / Verify complete packaged E2E", "success", "2026-10-10T07:25:51Z")]),
+        3: ("2026-10-10T07:29:41Z", [
+            (GUARD, "success", "2026-10-10T07:29:44Z"),
+            ("Packaged E2E deferred for draft", "skipped", "2026-10-10T07:29:49Z"),
+            ("Shared Packaged E2E / Authenticate exact Build", "success", "2026-10-10T07:29:51Z"),
+            ("Shared Build", "skipped", "2026-10-10T07:29:49Z"),
+            ("Select exact Build", "skipped", "2026-10-10T07:29:50Z"),
+            ("Shared Packaged E2E / Run packaged lane fabric-1.20.1", "success", "2026-10-10T07:32:19Z"),
+            ("Shared Packaged E2E / Run packaged lane fabric-1.21.1", "success", "2026-10-10T07:32:19Z"),
+            ("Shared Packaged E2E / Run packaged lane forge-1.20.1", "success", "2026-10-10T07:32:19Z"),
+            ("Shared Packaged E2E / Seal complete packaged results", "success", "2026-10-10T07:35:47Z"),
+            ("Shared Packaged E2E / Verify complete packaged E2E", "success", "2026-10-10T07:37:49Z")]),
+    }
+
+    @staticmethod
+    def canary_jobs(run_attempt, rows):
+        return [{"id": 114_150_000_000 + 100 * run_attempt + index, "run_id": 42, "run_attempt": run_attempt,
+                 "name": name, "status": "completed", "conclusion": conclusion, "started_at": started}
+                for index, (name, conclusion, started) in enumerate(rows)]
+
+    def test_the_canary_reruns_of_all_jobs_pass_and_its_failed_jobs_reruns_do_not(self):
+        refused = rf"job '{GUARD}' started before attempt 2 did, in an earlier attempt: {RERUN}"
+        for name, attempts in (("packaged", self.CANARY_PACKAGED), ("build", self.CANARY_BUILD)):
+            for attempt, (started, rows) in attempts.items():
+                with self.subTest(run=name, attempt=attempt):
+                    jobs = self.canary_jobs(attempt, rows)
+                    if attempt == 2:
+                        with self.assertRaisesRegex(MbError, refused):
+                            require_ran_in_attempt(jobs, run_attempt=attempt, run_started_at=started)
+                    else:
+                        require_ran_in_attempt(jobs, run_attempt=attempt, run_started_at=started)
+        # The Build run as a command reads it once attempt 3 is its latest: attempt 3 from the run's
+        # record, earlier attempts from their own records, each with its own start.
+        plan, api = ci_plan(), FakeGitHub(repository="example/mod")
+        records = {attempt: ci_api_run(plan, run_attempt=attempt, run_started_at=started,
+                                       created_at="2026-10-10T06:48:44Z", updated_at="2026-10-10T07:17:13Z",
+                                       conclusion="cancelled" if attempt == 1 else "success")
+                   for attempt, (started, _) in self.CANARY_BUILD.items()}
+        records[1]["previous_attempt_url"] = None
+        api.add_run(records[3], attempts=[records[1], records[2]])
+        for attempt, (_, rows) in self.CANARY_BUILD.items():
+            api.add_jobs(42, attempt, self.canary_jobs(attempt, rows))
+        reads = CommandReads.of(api)
+        self.assertEqual(reads.run(42)["run_attempt"], 3)
+        self.assertEqual(len(reads.attempt_jobs(42, 3)), 8)
+        with self.assertRaisesRegex(MbError, refused):
+            reads.attempt_jobs(42, 2)
+        self.assertEqual(reads.attempt_started(42, 2), "2026-10-10T06:55:06Z")
+        self.assertEqual(len(reads.attempt_jobs(42, 1)), 8)
+
+    def test_times_are_whole_seconds_and_skipped_or_unstarted_jobs_are_not_judged_by_time(self):
+        def job(started, conclusion="success"):
+            return {"name": "a job", "status": "completed", "conclusion": conclusion, "started_at": started}
+
+        attempt = "2026-10-07T10:00:05Z"
+        for started in ("2026-10-07T10:00:05Z", "2026-10-07T10:00:05.000Z", "2026-10-07T10:00:05.999Z",
+                        "2026-10-07T12:00:05+02:00", "2026-10-07T10:00:06Z", None):
+            with self.subTest(started=started):
+                require_ran_in_attempt([job(started)], run_attempt=1, run_started_at=attempt)
+        for started in ("2026-10-07T10:00:04Z", "2026-10-07T10:00:04.999Z", "2026-10-07T12:00:04+02:00",
+                        "2026-10-07T09:59:59.999999999Z"):
+            with self.subTest(started=started), self.assertRaisesRegex(MbError, "started before attempt 1 did"):
+                require_ran_in_attempt([job(started)], run_attempt=1, run_started_at=attempt)
+        # GitHub's placeholder times of a skipped job and a queued job without a start say nothing.
+        require_ran_in_attempt([job("2026-10-07T09:00:00Z", "skipped"),
+                                {"name": "queued", "status": "queued", "conclusion": None, "started_at": None}],
+                               run_attempt=2, run_started_at=attempt)
+        for started in ("2026-10-07 10:00:06", 0, ""):
+            with self.subTest(started=started), self.assertRaisesRegex(MbError, "job started_at"):
+                require_ran_in_attempt([job(started)], run_attempt=2, run_started_at=attempt)
+        for value in (None, "", "2026-10-07", 1_700_000_000):
+            with self.subTest(run_started_at=value), self.assertRaisesRegex(MbError, "run_started_at of attempt 2"):
+                require_ran_in_attempt([], run_attempt=2, run_started_at=value)
+
+    def test_an_attempt_without_a_start_is_refused(self):
+        plan, api = ci_plan(), FakeGitHub(repository="example/mod")
+        run = ci_api_run(plan)
+        del run["run_started_at"]
+        api.add_run(run)
+        api.add_jobs(42, 2, listing("build", "full"))
+        with self.assertRaisesRegex(MbError, "run_started_at of attempt 2"):
+            CommandReads.of(api).attempt_jobs(42, 2)
 
 
 class RunningGraphTests(unittest.TestCase):
