@@ -569,8 +569,24 @@ Findings that are not defects:
 - Exception, still open: the App is installed on all repositories of the organization; the owner
   must restrict it to the canaries and the mods that adopt the gate.
 
-**Verification of v1.1.2/v1.1.3 fixes: pending.** Cases C (C2, C4) and F (F1) run again at
-v1.1.3 in The-Plum-Team/mod-base-canary-2, after its bump pull request from v1.1.1 to v1.1.3.
+**Verification of the v1.1.2/v1.1.3 fixes: passed** in The-Plum-Team/mod-base-canary-2, a copy of
+the canary's `main` with its own repository identity, bumped from v1.1.1 to v1.1.3 by PR #1 (the
+push generation 38070470454 / 38070470469 is green with exact graphs and records naming kit 1.1.3).
+Cases C (PR #2) and F (PR #3) ran concurrently at v1.1.3 / `4199d85`:
+
+- C2 and C4: the reruns of failed jobs only (38072195557 and 38072195600, attempts 2) failed in
+  Seal and Verify with "a failed-jobs-only rerun mixes attempts; rerun all jobs", and no `success`
+  was ever published from them; the reruns of all jobs (attempts 3) went green with exact graphs
+  and both statuses `success`.
+- F1: with the bundle deleted after selection, the lanes failed their fetch and both statuses
+  became `failure`, naming the gone artifact. F3: the rerun of all jobs sealed a new bundle that
+  the packaged rerun owns; both statuses `success`.
+- F4, now decided: deleting that bundle and evaluating again turned both published `success`
+  statuses into `failure` ("artifact N it needs is gone (HTTP 404)"). v1.1.3 fails closed on any
+  re-evaluation, scheduled or manual, of an open pull request whose bundle has expired or been
+  deleted; the recovery is to rerun the Build, then the packaged run.
+
+The v1.1.3 Release was published after these cases; v1.1.2 has no Release.
 
 ## Rollout
 
