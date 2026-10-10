@@ -5,6 +5,25 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.1.3
+
+- Decide a gate whose evidence is gone instead of failing the status evaluation. The K7 canary
+  (The-Plum-Team/mod-base-canary, evidence rows "R1-F | F1" and "R1-F | F2") deleted the Build
+  bundle of PR #13 three seconds after its packaged run selected it: the lanes failed their fetch
+  and the packaged run failed, as designed, but every status run (38043290126, 38043626870,
+  38044221317) stopped in "Evaluate gate states" on `github-not-found ... actions/artifacts/
+  11666144281 ... HTTP 404`. A single artifact is read by its numeric id, and v1.1.2 let that 404
+  propagate as an API failure, so no intent was published: both statuses stayed `pending` with a
+  stale "in progress" description and the failed packaged run was never reported as `failure`.
+  `ci gate-status` now answers `failure` for such a gate ("the newest Build run was rejected:
+  artifact N it needs is gone (HTTP 404)"), as it already did for an artifact that has expired or
+  that its run's listing no longer shows. Only a `GET` of an artifact's metadata or archive that
+  answers 404 or 410 counts (`transport.artifact_gone`, which the readers of a merged pull
+  request's original evidence already used); any other API failure still produces no intent.
+  Recovery is unchanged: rerun the Build, then the packaged run (canary case F3).
+- Nothing else changes: request counts, schemas, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1 and the managed files are those of v1.1.2.
+
 ## v1.1.2
 
 - Refuse the jobs GitHub carries over into a rerun of failed jobs only. The K7 canary

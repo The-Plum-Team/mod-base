@@ -175,7 +175,7 @@ Quick Skin's Pages/feature coverage, curation, review, compatibility, target-sta
 | GitHub API failure | Bounded classified retry, then visible failure. Never treat it as absence or permission to use old proof. |
 | Source attempt still pending during reuse admission | No reuse and no success. Wait boundedly or stop; do not race a new full run against unproven original authority. |
 | Failed-jobs-only rerun mixes attempts | Reject incomplete attempt graph/receipts; recovery is rerun all jobs. No cross-attempt mosaic. GitHub lists a carried-over job under the new attempt with a new id: a job that started before the attempt's `run_started_at` is refused as one (K7 canary, v1.1.2). |
-| Source artifacts disappear after selection | Recheck/reject before consumption or App success. A new full recovery may start independently; the failed consumer cannot pass. |
+| Source artifacts disappear after selection | Recheck/reject before consumption or App success. A new full recovery may start independently; the failed consumer cannot pass. The gate status App decides such a gate as failure: GitHub's 404 or 410 for an artifact's numeric id is absence, not an API failure (K7 canary case F1, v1.1.3). |
 | Missing batch members or required lanes/obligations | Reject. Authenticated selected action/capture scope may pass the ordinary gate only with every required lane and every selected obligation; it cannot serve as full-baseline/release/full-scope proof. Unknown optional selection chooses full scope before execution. |
 | Advisory Pages/AI/wake failure | Preserve deterministic gate semantics and previous public site. No advisory status replaces required evidence. |
 

@@ -15,7 +15,8 @@ read, by the listing rules of :mod:`mod_base.build_ci.selection`. The state is
   gate's owning Build is exactly the bundle the Build gate sealed, and the live pull request still
   has the head, base and test merge of that plan and is not a draft;
 * ``failure`` otherwise, with one bounded line that says why. A newer failed run is a failure
-  whatever an older run proved.
+  whatever an older run proved, and so is a run whose evidence is gone: an artifact it needs that
+  has expired, that its run no longer lists or whose numeric id GitHub answers with 404 or 410.
 
 Nothing a candidate supplies reaches a context, a target or a state. The context strings are those
 of the protected Build config, the target is the head the API reports for the pull request number,
@@ -33,7 +34,9 @@ that evaluation. It answers with the same document when no gate depends on the p
 ``None`` as soon as one newest run finished successfully, which only :func:`evaluate_gates` with
 the plan can verify. It never answers ``success``.
 
-An API failure is never a state: it propagates, the job fails and no intent is produced.
+An API failure is never a state: it propagates, the job fails and no intent is produced. The one
+exception is GitHub's own answer that an artifact is gone (:func:`~mod_base.build_ci.transport.artifact_gone`):
+that is a fact about the evidence, and the gate it decides is a failure.
 """
 
 from __future__ import annotations
@@ -50,7 +53,7 @@ from mod_base.build_ci.identity import policy_sha256
 from mod_base.build_ci.protocol import subject_of
 from mod_base.build_ci.reads import CommandReads, Watch
 from mod_base.build_ci.selection import describe_artifact, newest_run, pending_run, producer_record
-from mod_base.build_ci.transport import _plan, _run_state, download_gate_receipt
+from mod_base.build_ci.transport import _plan, _run_state, artifact_gone, download_gate_receipt
 from mod_base.errors import MbError, single_line
 from mod_base.github.api import ApiError, GitHubApi, RequestBudgetExhausted
 from mod_base.github.jobs import job_graph
@@ -180,7 +183,8 @@ def _run_verdict(reads: CommandReads, gate: str, newest: dict[str, Any], plan: d
 def _gate(reads: CommandReads, watch: Watch, gate: str, pull: dict[str, Any], plan: dict[str, Any] | None,
           temporary_root: Path | None) -> _Verdict:
     """The verdict of one gate from the newest run of its caller under the pull request's head.
-    A rejection of that run's evidence is a failure; an API failure propagates."""
+    A rejection of that run's evidence is a failure, and so is an artifact GitHub says is gone;
+    every other API failure propagates."""
 
     producer, _, label = _GATES[gate]
     newest = watch.read((f"newest {label} run",), functools.partial(
@@ -190,7 +194,13 @@ def _gate(reads: CommandReads, watch: Watch, gate: str, pull: dict[str, Any], pl
         return _Verdict("pending", f"waiting: no {label} run exists for this head yet")
     try:
         return _run_verdict(reads, gate, newest, plan, temporary_root)
-    except (ApiError, RequestBudgetExhausted):
+    except ApiError as error:
+        if not artifact_gone(error):
+            raise
+        artifact_id = error.path.split("/")[6]
+        return _Verdict("failure", f"the newest {label} run was rejected: artifact {artifact_id} it needs is gone "
+                                   f"(HTTP {error.status})", newest["id"])
+    except RequestBudgetExhausted:
         raise
     except MbError as error:
         return _Verdict("failure", f"the newest {label} run was rejected: {error}", newest["id"])

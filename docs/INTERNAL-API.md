@@ -2537,6 +2537,7 @@ other failure is a rejection, and so is an artifact that goes between a reader's
 and its last.
 
 * `class ArtifactUnavailable(DocumentError)`: A selected artifact is no longer listed for its producer run, or has expired. For a route that needs the artifact it is a rejection like every other document error (same message, reason `invalid-document`, exit 2).
+* `def artifact_gone(error: ApiError) -> bool`: Whether an API failure is GitHub saying that an artifact is gone: a `GET` of its numeric id (metadata or archive) that answers 404 or 410. Every other API failure is no statement about evidence.
 * `class OriginalUnavailable(Unavailable)`: An artifact of a merged pull request's original gates is gone or has expired: reason `ci-original-unavailable`, exit 3. Nothing is corrupt; whoever meant to reuse the evidence tests again.
 * `def download_completed_build(api: GitHubApi, *, descriptor: dict[str, Any], plan: dict[str, Any], output: Path, source_config_sha256: str | None=None) -> dict[str, Any]`: Authenticate the live subject, the exact completed latest attempt of a full Build-caller run, its controller and kit pin, exact graph and the assembling job's upload window; bind artifact metadata, expiry, owner and head and the ZIP digest; verify the canonical envelope and inventory and atomically publish a private copy. Newest-run selection, native validity and final authorization remain required. The complete Build must carry its validation record and reports; `source_config_sha256` binds the protected config the caller loaded when available.
 * `def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], plan: dict[str, Any], run_id: int, run_attempt: int, output: Path, source_config_sha256: str | None = None) -> list[dict[str, Any]]`: With `source_config_sha256` (the digest of the protected Build config the reader loaded) every artifact is what a target job uploads, the partition with its `verify_target` validation record beside the envelope, which is verified against the partition and kept out of the published inputs; without it every artifact is the bare partition. For the assembling job of a still-running full Build run (or of a standalone packaged run that rebuilds): require the exact ordered complete same-attempt target descriptors and the extra compressed-set budget, finished plan, policy and target jobs with their sealed upload windows, download each checked ZIP into fixed target-ordinal children of one private atomic stage, verify the whole logical export and publish all or nothing. Returns descriptor/envelope pairs.
@@ -2816,7 +2817,8 @@ gate the newest run of its managed caller under the head is chosen before any re
 a draft deferral. `success`: the newest run is complete, its exact graph for its mode
 authenticates, its tested record downloads and binds to the plan, the packaged gate's owning Build
 is the bundle the Build gate sealed, and the live pull request still has the plan's head, base and
-test merge and is no draft. `failure`: anything else. An API failure is never a state. The job asks
+test merge and is no draft. `failure`: anything else, including a gate whose evidence is gone
+(`transport.artifact_gone`). Any other API failure is never a state. The job asks
 twice: `settle_gates` first, without a plan, and `evaluate_gates` with the plan only when a newest
 run finished successfully.
 
