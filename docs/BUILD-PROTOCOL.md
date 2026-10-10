@@ -198,33 +198,54 @@ All lifecycle verbs below are registered and exercised by the hosted command-cha
 
 | Step | What it does |
 | --- | --- |
-| 1. Prologue: shell and pinned actions, no kit code | Validates the call inputs, checks out the protected mod at `github.sha` into `mod/` and the kit at `inputs.kit-sha` into `kit/`, and requires both to be clean and at those commits, the kit's tree digest to equal the workflow's `MB_KIT_TREE_DIGEST` literal and the calling workflow to be a managed caller of the mod's canonical branch. Installs Python 3.13 and the hash-locked Pillow. A job that runs candidate code also checks out the tested commit into `candidate/`, without credentials; no step of the runner executes anything from it. |
+| 1. Prologue: shell and pinned actions, no kit code | Validates the call inputs, checks out the protected mod at `github.sha` into `mod/` and the kit at `inputs.kit-sha` into `kit/`, and requires both to be clean and at those commits, the kit's tree digest to equal the workflow's `MB_KIT_TREE_DIGEST` literal and the calling workflow to be a managed caller of the mod's canonical branch. Installs Python 3.13 and the hash-locked Pillow. Every planning job obtains the tested checkout as data in `candidate/`, without persistent credentials, for strict pin parsing; no runner step executes candidate code. |
 | 2. `ci subject --producer build\|packaged\|status --pr N [--candidate DIR] --github-output F` | Authenticates the subject, creates the state directory and writes `identity.json`. Outputs: `tested_sha`, `pr_number`. |
 | 3. `ci worker-prepare --roles validator\|candidate+validator --python PATH [--java-home PATH]...` | Closes the runner home, has root fence the image, admits the tool trees (the interpreter's prefix and every JDK home: no foreign owner, no group or other write access, no special file), allocates the accounts and hands the protected adapter copy to the validator. It sends no API request. |
-| 4. `ci plan [--candidate DIR] [--expect-sha256 HEX] [--github-output F]` | Stages the candidate files the config names (from the Git objects of `candidate/`, or from the API when the job has no such checkout), runs `derive_plan` as the validator, builds the plan around the result and writes `ci-plan.json`. With `--expect-sha256`, the hash the planning job derived, another plan fails the job. Outputs: `plan_sha256` and the job matrices `targets` and `lanes`. |
-| 5. `ci worker-stage --candidate DIR [--bundle] [--gradle-seed DIR]` | Has root publish the tested tree for the candidate as `repository/`, with a `.git` reduced to objects and refs (no hooks, no configuration), the kit overlay (the copy of the pinned kit that a mod's bootstrap stages inside a checkout) and, when given, a Gradle seed. For a lane, `--bundle` also stages the Build from `sealed-build/` at the `bundle.path` of the config. |
+| 4. `ci plan [--candidate DIR] [--pin-candidate DIR] [--expect-sha256 HEX] [--github-output F]` | Stages the configured candidate files from local Git when `--candidate` is supplied, otherwise from the API; runs `derive_plan` as the validator and writes `ci-plan.json`. Every workflow supplies `--pin-candidate` to parse the complete pin. The first plan admits a changed release; later jobs match `--expect-sha256` before publishing outputs. Outputs: `plan_sha256`, `candidate_kit_sha` (empty for the executing pin), `targets` and `lanes`. |
+| 5. `ci worker-stage --candidate DIR [--future-kit DIR] [--bundle] [--gradle-seed DIR]` | Has root publish the tested tree for the candidate as `repository/`, with a `.git` reduced to objects and refs (no hooks, no configuration), the admitted kit overlay and, when given, a Gradle seed. A changed pin requires the separately checked out `--future-kit`; protected code verifies it as bytes before copying. For a lane, `--bundle` also stages the Build from `sealed-build/` at the `bundle.path` of the config. |
 | 6. `ci worker-run --hook policy\|build_target\|run_lane [--unit ID]` | Runs one candidate hook as `modbase_candidate` under the timeout the config names for it and always terminates the account. A non-zero exit, a timeout or a process left behind fails the step. A lane first gets the two values `derive_runtime` returns for it. |
 | 7. `ci worker-seal`, also after a failure once step 3 succeeded | Terminates and locks the candidate, proves the tracked sources unchanged, freezes the export and writes its envelope. |
 | 8. `ci worker-validate --hook verify_target\|verify_build\|verify_runtime [--unit ID] --output DIR`, the seal step "Validate frozen native exports" | Root hands the sealed export to the validator read-only, the hook runs from the protected adapter copy, and root copies exactly the expected reports out of the validator's home and writes the validation record. The command then writes the upload directory: the export under its own paths with its envelope, `ci-validation.json` and one `<unit id>.json` for each report. |
 | 9. "Upload sealed outputs", `actions/upload-artifact` | The only step that uploads. Its start and end are the upload window of the artifact's descriptor. |
 | 10. `ci worker-finish`, also after a failure once step 2 succeeded | Terminates and locks both accounts, requires that neither owns a process and only then reopens the runner home. |
 
-**Candidate kit pin limitation.** `lifecycle.stage_kit_overlay` currently stages the protected
-executing pin from the job's subject. An ordinary generation whose candidate retains that pin
-resolves the overlay successfully. A candidate that bumps its pin cannot use this path: the
-managed bootstrap rejects the staged old pin, even if the future pin's release tag and ancestry
-pass protected admission. The real staging/bootstrap regression is
-`tests/test_ci_lifecycle_candidate.py::KitOverlayTests::test_a_candidate_kit_bump_resolves_the_lifecycle_overlay`
-(expected failure); the adjacent unchanged-pin test passes.
+**Candidate kit admission.** `pin.parse_pin` reads the attacker-controlled candidate pin from
+the verified tested checkout. Equal pins retain the existing overlay and plan bytes at no extra
+API cost. For a changed pin, the run's first plan calls `pin.verify_released`: its immutable
+release tag must peel to that commit, which must be reachable from the kit's `main`. An optional
+v1 plan field, `candidate_kit: {sha, version}`, binds that admission to the plan hash. Later jobs
+parse locally and match the protected expected hash; they do not repeat release API requests.
 
-The scope decision is to keep ordinary K1–K6 generations on the protected pin and leave future-pin
-staging unsupported until it is implemented before Q/B adopts that upgrade route. The design's
-distinction between the protected executing pin and an approved candidate's future pin still
-applies. Completion needs protected admission and staging of the candidate overlay separately
-from the executing kit, with the stage record naming the kit actually supplied. The existing
-bootstrap `stage` operation supports that distinction, but the worker lifecycle does not compose
-it. K4's activation and bootstrap tests are not complete proof of future kit upgrades; a hosted
-canary cannot supply this missing behavior. Do not bypass pin verification to make a bump pass.
+After that match, policy, target and lane jobs conditionally use pinned `actions/checkout` for
+the public kit repository at `candidate_kit_sha`, in a separate `candidate-kit/` checkout without
+persistent credentials. `worker-stage --future-kit` verifies its exact commit and tracked bytes,
+its own `kit-digest-v1` literal and both staged-file locks. Only bounded regular files are copied.
+Unknown digest/lock formats or a missing supported actions layout fail closed with a request for
+a compatibility-first release; protected code never imports or executes the future implementation.
+Planning, validation, sealing and every root operation remain in the executing checkout;
+`identity.kit` still names it. Only the candidate account executes the supplied future kit.
+Stage and root-admission records retain their format and name the kit actually supplied.
+
+Older released pins are admitted under the same ancestry and format checks: a candidate rollback
+does not downgrade protected authority or override a consumer's rollback policy. Strict older
+plan readers reject the optional field, so this capability must first be present in the protected
+release. The job graph is unchanged; candidate and conditional future-kit checkout steps are new.
+The former expected-failure regression now passes; the hosted pipeline exercises both complete
+generations and proves that the future kit refuses execution by privileged or validator accounts.
+
+**Host fence.** Before accounts exist, root closes the unused Android, CodeQL, .NET and Swift
+SDK roots to mode `0700`, retaining and verifying their existing owners. A bounded 64 KiB
+mount-table proof rejects writable descendant aliases; an unrelated writable alias on the same
+filesystem forces a full SDK repair instead of pruning. Global verification also rejects reachable
+group-writable regular files with multiple hard links. Real-account tests cover named ACLs, hard
+links and bind mounts. Every other repair path keeps its original coverage, including private
+directories. Python/JDK, Node, Git and the runner's own runtime remain accessible.
+
+Repair shares one 600-second deadline across its five trees; verification has another 600 seconds,
+inside the existing 1,800-second root-operation bound. Failure prevents account creation. Each
+hosted module reports its first fence's mount, closure, per-tree repair, verification and total
+times, plus any closed SDK it had to walk. These are diagnostics, not authority records. The
+measured cold cost and image sensitivity are recorded in BUILD-E2E-PROGRESS.md.
 
 The verbs of every job after the prologue, in step order (`workflow.CI_JOB_VERBS`, without the
 step the note below the table describes):
@@ -431,7 +452,7 @@ objects named by SHA and the job list of a completed attempt are fetched once pe
 | Command | Requests in the pinned case | Cap in `model/limits.py` | Pinned in |
 | --- | --- | --- | --- |
 | `ci subject` | 4 for a ready pull request, 5 for a protected subject; 1 with `--candidate` | `MAX_CI_SUBJECT_REQUESTS`, 16; `MAX_CI_DERIVED_SUBJECT_REQUESTS`, 4 | `tests/test_ci_commands_subject.py` |
-| `ci plan` | 0 with a candidate checkout; otherwise the tree and one blob for each candidate file, 3 to 11 | `MAX_CI_PLAN_REQUESTS`, 24 | `tests/test_ci_lifecycle.py` |
+| `ci plan` | 0 with local candidate sources; otherwise the tree and one blob per configured file, 3 to 11; a changed pin adds 3 in the first plan for the pinned annotated-tag case | `MAX_CI_PLAN_REQUESTS`, 24 | `tests/test_ci_lifecycle.py`, `tests/test_ci_candidate_kit.py` |
 | `ci reuse-admit` | 38 for an admitted reuse, 11 when the merged tree differs, 1 for a push that merges no pull request | `MAX_CI_REUSE_ADMIT_REQUESTS`, 96 | `tests/test_ci_reuse.py` |
 | `ci select-build` | 17 for a pull request whose Build is complete and one more for every poll before that; 15 for a protected subject | `MAX_CI_SELECT_BUILD_REQUESTS`, 155 | `tests/test_ci_commands_packaged.py` |
 | `ci fetch-build` | 2 for every route, including the storage GET | `MAX_CI_FETCH_BUILD_REQUESTS`, 8 | `tests/test_ci_commands_packaged.py` |
@@ -452,13 +473,18 @@ including subject and plan). Jobs and artifact listings fit one page; waiting po
 | Synthetic hosted command chain | 2 / 3 / 1 | 61 | 92 | 58 | 211 |
 | Quick Skin fixture | 17 / 34 / 1 | 106 | 247 | 58 | 411 |
 | Block Pops fixture | 10 / 20 / 0 | 82 | 174 | 57 | 313 |
+| Synthetic, changed candidate pin | 2 / 3 / 1 | 64 | 95 | 61 | 220 |
+| Quick Skin, changed candidate pin | 17 / 34 / 1 | 109 | 250 | 61 | 420 |
+| Block Pops, changed candidate pin | 10 / 20 / 0 | 85 | 177 | 60 | 322 |
 
 The hosted pipeline observes every command's traffic through `FakeGitHub` and compares it with
 this ledger while running the real workflow-derived command lines, files, Git, accounts, hooks
 and root operations. Each archive costs two counted requests: the REST redirect and a storage
 GET, although the storage GET is not charged to the REST allowance. This scope excludes
 third-party Actions' internal traffic, retries, other generations and earlier status events.
-It is not a measurement of a live GitHub generation.
+It is not a measurement of a live GitHub generation. Changed-pin totals add one annotated-tag
+release admission in each run's first plan, nine requests per generation. Extra checkout Actions'
+traffic is also outside this kit ledger; unchanged pins retain their ordinary totals.
 
 Each pending selection poll adds one request: Quick Skin plus 89 pending polls is 500, below
 the target of 600. `MAX_CI_GENERATION_REQUESTS = 440` is a test-only regression budget for the
@@ -491,7 +517,8 @@ on GitHub. K7 must still establish:
 - that marking a draft ready starts a new run for the same head, which the wait for a Build relies
   on to leave a deferral behind;
 - that GitHub executes the complete callers and reusable jobs as written on `ubuntu-24.04`,
-  including real job-output selection hand-over, upload behavior and the image's
+  including real job-output selection hand-over, the conditional future-kit checkout after the
+  fence and plan verification, upload behavior and the image's
   `JAVA_HOME_17_X64`, `JAVA_HOME_21_X64` and `JAVA_HOME_25_X64` homes;
 - how much real generation traffic, including third-party Actions, spends the repository's
   hourly `GITHUB_TOKEN` allowance;

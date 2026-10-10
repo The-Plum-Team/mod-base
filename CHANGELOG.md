@@ -5,11 +5,12 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased (planned v1.1.0)
+## v1.1.0
 
-The protected Build and packaged E2E kit is implemented through K1–K6. This version is
-unreleased, no consumer is activated, and the design and ADR 0007 await owner agreement.
-K7's release candidate and managed-caller canary are required before adoption.
+Adds the protected Build and packaged E2E pipeline (design steps K1–K6). Nothing changes for a
+mod until it adds a Build adapter and an activation manifest; Pages, its schemas, `ADAPTER_API`
+and `pixel_metrics_version` 1 are unchanged. The tag is the K7 release candidate: mods pin it only
+after its canary is green and its GitHub Release is published.
 
 - Add `BUILD_ADAPTER_API = 1`, separate from the Pages adapter: eight hooks derive the plan
   and runtime values, run policy/target/lane work, and verify target/Build/runtime exports.
@@ -31,6 +32,16 @@ K7's release candidate and managed-caller canary are required before adoption.
   linger, cron and at jobs as well as processes; an error prevents successful sealing.
   Admit linked JDK certificates through stable ancestor identity/type/permissions while keeping
   full tool stamps and race checks; unrelated `/etc` timestamp changes no longer reject admission.
+- Admit a changed candidate kit pin once per run, bind it into the optional v1 plan field
+  `candidate_kit`, and use a separate pinned checkout for candidate-only execution. Protected
+  code verifies release tag, main ancestry, commit, own digest and both locks; the executing kit
+  retains all privileged work. Stage/root record formats and the job graph stay unchanged;
+  checkout steps are added. Released rollbacks use the same checks. Older strict plan readers
+  and unsupported digest/lock formats require a compatibility-first protected release.
+- Reduce host-fence traversal by closing only unused Android, CodeQL, .NET and Swift SDK roots.
+  Prove closure against real accounts, ACL/hard-link and bind-mount aliases; retain full repair
+  when a mount is ambiguous. All other repair coverage and existing deadlines remain intact.
+  Bound mountinfo to 64 KiB and report first-fence phase/tree timings in every hosted CI job.
 - Add `ci assemble` for the exact union of target partitions and `ci aggregate` for the
   packaged results index. The index authenticates every lane's descriptor and receipt hashes
   without combining all lane bytes into one archive. Complete Builds require their validation
@@ -72,24 +83,27 @@ K7's release candidate and managed-caller canary are required before adoption.
   while keeping other chronology exact. Failed-jobs-only mixed attempts are refused.
 - Pin API command caps and workflow-derived generation costs: synthetic 211, Quick Skin 411,
   Block Pops 313, including one final status evaluation and storage GETs, with no waiting.
+  Changed candidate pins cost 220/420/322 respectively in the pinned annotated-tag case;
+  matrix workers verify the plan locally without repeating release admission.
   Pending selection polls add one each. `MAX_CI_GENERATION_REQUESTS = 440` is a test-only
   regression budget; structural 256/256 plans exceed the repository's 1,000 REST/hour allowance.
   These are FakeGitHub kit-traffic measurements, excluding third-party Actions and retries.
 - Add native parity/graph fixtures and required Python 3.11–3.13 ordinary, hosted worker,
   deferred-execution and full command-chain CI jobs. The pipeline exercises real Git, accounts,
   hooks, root operations and artifacts with fake GitHub, plus corruption/missing/stale/draft controls.
+  Both the ordinary and future-kit generations traverse the complete command chain; the future
+  kit differs and refuses execution by protected or validator accounts.
 - Keep retention at one day for targets, seven for Build/lane/results, 90 for gates/reuse.
   Owner review remains for common 512 MiB archives, whole-lane 512-file/256 MiB bounds and
   Quick Skin's 4 MiB native-report cap. Protocol and artifact bounds are not raised for failures.
 - Operator prerequisites: ratify the design/ADR, complete K7 and release; then provide native
-  adapters, lane packages before fencing and cache restore/save (current Gradle seeds are empty).
+  adapters and, where wanted, cache restore/save (current Gradle seeds are empty).
   Provision `mod-base-gate` with `MOD_BASE_GATE_APP_CLIENT_ID` and
   `MOD_BASE_GATE_APP_PRIVATE_KEY` before managing the status caller. Transition admission
   remains an operator route; batch commands need reviewed paths/procedure and App credentials.
-- Adoption constraints: candidate staging currently supplies the protected kit pin; a future
-  candidate pin fails bootstrap matching and needs implementation before Q/B uses that route.
-  Per-hook timeout admission does not guarantee whole-job fit. Both remain documented expected
-  failures. Runtime reuse consumers remain Q9/B6; no K7, consumer or GitHub setting is changed.
+- Adoption constraints: per-hook timeout admission does not guarantee whole-job fit and remains
+  the one documented expected failure. The candidate-pin regression now passes. Runtime reuse
+  consumers remain Q9/B6.
 
 ## v1.0.3
 
