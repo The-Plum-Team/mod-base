@@ -196,9 +196,10 @@ locked between hooks; cleanup also revokes their deferred execution and fails cl
    job, copies the complete Build of `sealed-build/` to `repository/<bundle.path>`. Nothing of the
    candidate has run at this point.
    Current workflows supply no seed and start with empty Gradle homes; cache restore/save and
-   native lane system packages before fencing remain adoption work. The overlay contains the
-   protected executing pin. A candidate future-pin bump currently fails bootstrap stamp matching
-   and needs separate admission/staging before Q/B adopts that upgrade route.
+   native lane system packages before fencing remain adoption work. For an unchanged pin the
+   overlay is the protected executing kit. A candidate that changes the pin gets the kit of its
+   admitted release instead, checked out separately and passed as `--future-kit`; only the
+   candidate account runs it ([BUILD-PROTOCOL.md](BUILD-PROTOCOL.md), "Candidate kit admission").
 3. **Run** (`ci worker-run`). A job runs one candidate hook:
    * `policy` receives its checkout and no extra variable.
    * `build_target` receives its checkout and `MB_TARGET_ID`.

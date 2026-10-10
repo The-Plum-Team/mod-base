@@ -1,8 +1,8 @@
 {
   "baseline": {
-    "commit": "f99ef433b66c729a869a2c1fbf038332c8b2f3e8",
-    "source_sha256": "5a1fa6b52a034de197d3ac1c15049fec010c0d2ae441b91c58b5df086462a133",
-    "tag": "v1.0.3"
+    "commit": "da4fa6a38685a6ab643badfa3dc70cc685458cb5",
+    "source_sha256": "a90af53104da11ed3063830893ffe28af091a47771951ecf74d0031aa038498b",
+    "tag": "v1.1.0"
   },
   "kinds": {
     "mod-base.build": {
@@ -12,68 +12,68 @@
     },
     "mod-base.build.config": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.build.envelope": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.build.plan": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.activation": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.batch": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.execution": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.gate": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.results": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.reuse": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.root-request": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.runtime-envelope": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.selection": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.validation": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.config": {
       "current_version": 1,

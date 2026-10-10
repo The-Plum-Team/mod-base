@@ -1,16 +1,17 @@
 # Schemas (v1)
 
 The thirteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
-`mod-base.build.envelope` and the `mod-base.ci.*` kinds, all new at version 1 and unreleased) are
+`mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1 since v1.1.0) are
 listed in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the
 validator that defines it. This page has the field tables of four of them, in its last four
 sections: the Build config, the batch manifest, the results index and the activation manifest.
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`.
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.1.0, which
+already reads every kind of this release, so every kind is `unchanged`.
 
-The unreleased v1 Build plan optionally carries `candidate_kit: {sha, version}` when
+The v1 Build plan (since v1.1.0) optionally carries `candidate_kit: {sha, version}` when
 candidate tests use a different released kit. The plan hash binds it; `identity.kit`
 always names the executing protected kit. Same-pin plans omit it and retain their
 existing bytes. Older strict readers reject the new field: this capability must first
@@ -674,7 +675,7 @@ directory, no checked path crosses a symlink, and the icon rules hold.
 
 ## `mod-base.build.config` (`scripts/ci/mod-base-build.json`, <= 1 MiB)
 
-The protected Build configuration (new kind, schema 1, unreleased). Validated by
+The protected Build configuration (schema 1, since v1.1.0). Validated by
 `mod_base.build_ci.config.validate_build_config`; `load_build_config` also requires every listed
 source in the protected checkout to have its configured hash.
 
@@ -699,12 +700,12 @@ matrix or scenario catalog, and no package list. [BUILD-ADAPTER.md](BUILD-ADAPTE
 
 ## Batch manifest data v1
 
-`mod-base.ci.batch` writes/reads 1. This is a new kind (previous null); the archived v1.0.3
-reader rejects it. A manifest describes one batch: a stack of squash commits, one per member
-pull request, on a base commit of the default branch. It travels in the body of the batch pull
-request as one marker line, `<!-- mod-base-batch {manifest} -->`, so the strict decoder cap is
-64 KiB, GitHub's bound of a pull request body. The marker is the manifest's canonical JSON with
-every character outside printable ASCII and every `<`, `>` and `&` written as a JSON escape; a
+`mod-base.ci.batch` writes/reads 1. The kind is new in v1.1.0, whose archived reader accepts the
+manifests of this release (`unchanged`). A manifest describes one batch: a stack of squash commits,
+one per member pull request, on a base commit of the default branch. It travels in the body of the
+batch pull request as one marker line, `<!-- mod-base-batch {manifest} -->`, so the strict decoder
+cap is 64 KiB, GitHub's bound of a pull request body. The marker is the manifest's canonical JSON
+with every character outside printable ASCII and every `<`, `>` and `&` written as a JSON escape; a
 body holds exactly one marker, alone on its line, in that one spelling.
 
 The closed top level has kind, schema_version, repository, base_branch, base_sha, base_tree,
@@ -738,12 +739,12 @@ permission or status is accepted, and parsing a manifest grants no writer or con
 
 ## Packaged results index data v1
 
-`mod-base.ci.results` writes/reads 1. This is a new kind (previous null); the archived v1.0.3
-reader rejects it. It is the complete packaged results of one attempt of the packaged caller as
-an index of its lane artifacts, never a union of their bytes: Quick Skin's 34 lanes hold more
-than the 512 MiB one complete runtime export may. The aggregating job seals it as
-`ci-results.json`, the one file of the artifact `mb-ci-results--<run>--a<attempt>`, canonical
-JSON of at most 4 MiB.
+`mod-base.ci.results` writes/reads 1. The kind is new in v1.1.0, whose archived reader accepts the
+indexes of this release (`unchanged`). It is the complete packaged results of one attempt of the
+packaged caller as an index of its lane artifacts, never a union of their bytes: Quick Skin's 34
+lanes hold more than the 512 MiB one complete runtime export may. The aggregating job seals it as
+`ci-results.json`, the one file of the artifact `mb-ci-results--<run>--a<attempt>`, canonical JSON
+of at most 4 MiB.
 
 The closed top level has kind, schema_version, identity, plan_sha256, profile, producer,
 owning_build, build_envelope_sha256 and lanes.
@@ -776,8 +777,8 @@ Build (`build_ci.gate`).
 
 ## Profile activation data v1
 
-`mod-base.ci.activation` writes and reads 1. It is a new kind: the compatibility ledger records
-previous `null`, and the archived v1.0.3 reader rejects it. The file is
+`mod-base.ci.activation` writes and reads 1. The kind is new in v1.1.0: the compatibility ledger
+records it `unchanged` against that release, whose archived reader accepts it. The file is
 `site/mod-base-build-activation.json`, at most `MAX_CI_ACTIVATION_BYTES` (8 KiB) of strict JSON
 (not necessarily canonical: it is written by hand).
 

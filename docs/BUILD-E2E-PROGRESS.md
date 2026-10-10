@@ -4,15 +4,17 @@ Where the implementation of [BUILD-E2E-DESIGN.md](BUILD-E2E-DESIGN.md) stands, b
 independently mergeable migration steps. [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md) describes the
 commands and evidence; [ADR 0007](adr/0007-protected-build-and-packaged-runtime.md) records the decisions.
 
-K1–K6 now compose through registered commands and their workflow or operator entries. Nothing
-is released or active: planned v1.1.0 remains unreleased, no mod pins it or has an activation
-manifest, and no managed Build/E2E caller has run on GitHub. The design awaits owner agreement;
+K1–K6 now compose through registered commands and their workflow or operator entries. They are
+tagged as v1.1.0, the K7 release candidate, and v1.1.1, which restores the managed `.gitattributes`
+of v1.0.3 so that Block Pops can adopt it. Nothing is active: no mod has an activation manifest,
+and no managed Build/E2E caller has run on GitHub. The design awaits owner agreement;
 ADR 0007 is Proposed. **K7, Q1–Q10, B1–B7 and GitHub settings remain untouched.**
 
 ## Evidence and its scope
 
-- **Ordinary suite:** 3,050 tests on each Python 3.11–3.13 at the v1.1.0 release commit, with
-  one skip and one documented expected failure. GitHub is `FakeGitHub`; integration cases use
+- **Ordinary suite:** 3,050 tests on each Python 3.11–3.13 at the v1.1.0 release commit and on
+  Python 3.11 and 3.13 at the v1.1.1 release commit, with one skip and one documented expected
+  failure. GitHub is `FakeGitHub`; integration cases use
   real files, Git and processes, while older isolated tests also replace system/account operations.
 - **Hosted account proof:** `ci_linux_worker.py` (132 tests), `ci_linux_deferred.py` (2 tests) and
   `ci_linux_system_profile.py` (1 test, a real `xvfb-mesa` install before the fence) run separately in the kit's own CI on each Python version. They exercise the real accounts,
@@ -45,7 +47,7 @@ Paths below are relative to `src/mod_base/build_ci/` unless otherwise stated.
 | K1: protocol, schemas, graphs | Thirteen strict v1 kinds, compatibility ledger, literal caller/callee graph fixtures, native plan/output parity and the complete limits ledger. `mod-base.ci.results` is the lane-descriptor/receipt index. | Owner ratification of the design/ADR and narrower kit bounds: 512 MiB archives for every profile; 512 files/256 MiB for a whole lane; Quick Skin native reports capped at 4 MiB versus its native 16 MiB reader. |
 | K2: worker, sealing, second validator | `subject`, `worker-prepare`, `plan`, `worker-stage`, `worker-run`, `worker-seal`, `worker-validate`, `worker-finish` compose real staging, admitted candidate-kit overlays, hook execution, source proof, envelopes and receipts. Hosted tests cover account/root and deferred cleanup, including failure paths. | Native adapters remain Q1/B1. Workflows supply no Gradle seed (empty candidate Gradle homes); cache restore/save remain adoption work; lane system packages come from the closed `runtime.system_profile` (`xvfb-mesa`) installed before the fence. Reserved record/report path collisions fail later at upload preparation, not planning. |
 | K3: Build and packaged workflows | `build.yml`, `select-build.yml`, `packaged-e2e.yml`, `gate-status.yml`; `select-build`, `fetch-build`, `assemble`, `aggregate`, `seal-gate`, `gate-status`. P1 runs the full synthetic command chain and negative controls. Complete Build validation records/reports are mandatory; loaded protected config digests are bound. | Managed caller execution, job names/references, real uploads, selection job-output transport and real request allowance still require K7. Hook/job timing needs native adoption measurements. |
-| K4: callers, activation, bootstrap | Four registered managed callers, activation checks in `template check/sync/init`, `template activation/transition`, bootstrap bump/rollback checks, candidate release admission bound by the plan hash, canonical-base PR filters and LF checkout rules. | Owner creates the `mod-base-gate` environment and App variable/secret before the status caller is active. Transition admission is an operator command; no workflow runs it. The executing release must understand the candidate kit's digest and both lock formats. |
+| K4: callers, activation, bootstrap | Four registered managed callers, activation checks in `template check/sync/init`, `template activation/transition`, bootstrap bump/rollback checks, candidate release admission bound by the plan hash, canonical-base PR filters (the managed `.gitattributes` keeps its v1.0.3 bytes, see v1.1.1). | Owner creates the `mod-base-gate` environment and App variable/secret before the status caller is active. Transition admission is an operator command; no workflow runs it. The executing release must understand the candidate kit's digest and both lock formats. |
 | K5: batches | `ci batch-prepare`, `ci batch-settle`, strict batch manifests and real-Git rebuild/settlement tests. CLI flags and effects are in the protocol. | No workflow or managed caller starts them. The owner/adopter must supply a reviewed batch procedure, protected allowed-path list and App/automation credentials allowed to push `batch/*` and open/close PRs. |
 | K6: post-merge reuse | `ci reuse-admit` is wired into Build planning and protected selection; reuse gates re-admit and seal `ci-reuse.json`. Original gate-pair and Build readers verify retained evidence; policy digests cover the activation manifest and four callers. | No command consumes reuse references yet. Q9/B6 must consume original runtime via the results index and required lane artifacts; unused byte-union runtime readers were removed. Live reuse remains a K7 case. |
 | K7: release candidate and hosted canary | Not started. Existing `canary/` and OPERATIONS.md's canary procedure cover Pages; `tests/fixtures/ci_mod/` supplies the synthetic Build adapter. | Owner-controlled immutable release-candidate tag, isolated repository, activation manifest and gate App; all K7 design cases. A failed tag gets no Release and no mod pin. |

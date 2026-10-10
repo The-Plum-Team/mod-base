@@ -1,0 +1,157 @@
+{
+  "adapter": {
+    "api": 1,
+    "extensions": [
+      "block-pops.aggregate_scope"
+    ],
+    "fixtures_path": "scripts/pages/mod_base_fixtures.py",
+    "network_hooks": [
+      "authenticate_extensions"
+    ],
+    "path": "scripts/pages/mod_base_adapter.py",
+    "python_path": [
+      "."
+    ],
+    "timeout_seconds": 600
+  },
+  "admission": {
+    "defer_on_active_source_runs": false,
+    "mode": "always"
+  },
+  "anchor": {
+    "enabled": true,
+    "retention_days": 90,
+    "successor_grace_days": 8
+  },
+  "baseline_archive": {
+    "enabled": false
+  },
+  "canonical_branch": "master",
+  "copy": {
+    "evidence_lead": "Every image comes from a real remapped mod JAR and an exact current branch head. Publication and AI review are advisory; Build and Packaged E2E remain authoritative.",
+    "family_notes": {},
+    "gallery_lead": "Browse every capture from the authenticated current-head packaged E2E run, by branch, loader and checkpoint.",
+    "methodology": [
+      "Each capture is bound to its exact branch head, tested run, loader and production JAR digest.",
+      "Publication and AI review are advisory; Build and Packaged E2E remain the authoritative gates."
+    ],
+    "principles": [
+      "Every image comes from a real remapped mod JAR.",
+      "Every release is bound to an exact current branch head."
+    ]
+  },
+  "families": [],
+  "images": {
+    "cross_check_runtime_metrics": true,
+    "derivative_box": [
+      1280,
+      720
+    ],
+    "pixel_metrics_version": 1,
+    "source_size": [
+      1600,
+      900
+    ],
+    "webp_method": 6,
+    "webp_quality": 82
+  },
+  "kind": "mod-base.config",
+  "labels": {
+    "loaders": {
+      "fabric": "Fabric",
+      "forge": "Forge",
+      "neoforge": "NeoForge"
+    },
+    "release_prefix": "Branch",
+    "roles": {
+      "client_a": "Client A"
+    },
+    "scenarios": {
+      "in-world": "In world",
+      "ui-regression": "UI regression"
+    },
+    "search_placeholder": "Box, claw machine, figure…",
+    "tiers": {
+      "all": "Full review",
+      "key": "Key checkpoint"
+    }
+  },
+  "project": {
+    "description": {
+      "from_matrix": "project.description"
+    },
+    "eyebrow": "Minecraft collectibles mod",
+    "icon": null,
+    "license_label": "All Rights Reserved",
+    "links": [],
+    "name": "BlockPops",
+    "tagline": "Collect, display and play with pop figures."
+  },
+  "schema_version": 1,
+  "source": {
+    "attestation_job": "Attest exact tested packaged tree / Verify exact tested tree",
+    "delegated_reuse_extension": null,
+    "display_title": "Packaged E2E / {subject_commit}",
+    "events": {
+      "canonical": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "other": [
+        "workflow_dispatch"
+      ]
+    },
+    "handoff_job": "Curate current-head public evidence (advisory)",
+    "handoff_step": "Prepare and hand off current-head public evidence",
+    "require_job_graph": true,
+    "require_newest_run": true,
+    "workflow": ".github/workflows/on-demand-e2e.yml"
+  },
+  "targets": {
+    "max": 64,
+    "max_branches": 100,
+    "mode": "enrolled-branches"
+  },
+  "template": {
+    "agents_local": [
+      "docs/ai/PROJECT.md"
+    ],
+    "deferred": [
+      ".gitattributes",
+      ".gitignore",
+      ".github/dependabot.yml",
+      ".github/pull_request_template.md",
+      "AGENTS.md"
+    ]
+  },
+  "theme": {
+    "dark": {
+      "accent": "#8dd7ff",
+      "accent_strong": "#9adeff",
+      "bg": "#090d17",
+      "danger": "#ff8f8f",
+      "highlight": "#f5c451",
+      "image_well": "#000000",
+      "line": "#273651",
+      "muted": "#b9c5dc",
+      "surface": "#101827",
+      "surface_raised": "#17213b",
+      "surface_soft": "#1b2640",
+      "text": "#ecf2ff"
+    },
+    "light": {
+      "accent": "#0369a1",
+      "accent_strong": "#075985",
+      "bg": "#f4f7fd",
+      "danger": "#b42318",
+      "highlight": "#b45309",
+      "image_well": "#000000",
+      "line": "#cbd5e1",
+      "muted": "#475569",
+      "surface": "#ffffff",
+      "surface_raised": "#dbeaff",
+      "surface_soft": "#eef3fb",
+      "text": "#101828"
+    }
+  }
+}

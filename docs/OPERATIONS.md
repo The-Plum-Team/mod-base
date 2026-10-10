@@ -311,11 +311,11 @@ A kit bump in an active mode is an ordinary bump: `bump` rewrites the pin lines 
 the activation manifest (v1.0.3 and older) while a mode other than `disabled` is active, so a pin
 rollback that far follows the two rollback pull requests. When `bump` fails after it started
 writing, it restores every workflow and action file; run `template sync --repo . --write` to
-restore any other managed file. The managed `.gitattributes` lists all four callers with explicit
-`eol=lf` rules, including on a `core.autocrlf=true` clone. This bump command is not proof that the
-shared candidate worker can run a changed pin: its overlay still supplies the protected kit.
-Implement that future-pin staging route before Q/B uses it for controller upgrades
-([BUILD-PROTOCOL.md](BUILD-PROTOCOL.md), "Candidate kit pin limitation").
+restore any other managed file. The managed `.gitattributes` has no rule for the four callers
+(it keeps the bytes of v1.0.3, which every mod can carry): on a `core.autocrlf=true` clone,
+`template check` reports a CRLF caller as line-ending drift with its fix. A pull request that
+changes the pin runs the candidate's own kit in the candidate account only, after protected
+admission of its release ([BUILD-PROTOCOL.md](BUILD-PROTOCOL.md)).
 
 ### The gate status App
 

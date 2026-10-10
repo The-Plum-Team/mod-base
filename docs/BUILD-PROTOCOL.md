@@ -115,12 +115,13 @@ the shapes the API returns and compared as whole-second UTC (`grammar.normalize_
 
 ## Document kinds
 
-Thirteen kinds, all new at schema version 1 and strict (an unknown or duplicate key is a
-rejection); the records the kit writes are canonical JSON. The previous release rejects each as an
-unknown kind (`tests/test_schema_evolution.py`). [SCHEMAS.md](SCHEMAS.md) has the field tables of
-the Build config, the batch manifest, the results index and the activation manifest. For the others
-the validator named here, a function of `mod_base.build_ci`, is the definition, and
-`tests/fixtures/documents/valid/ci-*.json` holds a valid example of each.
+Thirteen kinds, all new in v1.1.0 at schema version 1 and strict (an unknown or duplicate key is a
+rejection); the records the kit writes are canonical JSON. v1.0.3 rejects each as an unknown kind;
+v1.1.0, the predecessor of this release, reads each unchanged (`tests/test_schema_evolution.py`).
+[SCHEMAS.md](SCHEMAS.md) has the field tables of the Build config, the batch manifest, the results
+index and the activation manifest. For the others the validator named here, a function of
+`mod_base.build_ci`, is the definition, and `tests/fixtures/documents/valid/ci-*.json` holds a
+valid example of each.
 
 | Kind, file, validator | What it holds |
 | --- | --- |
