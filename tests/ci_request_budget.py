@@ -36,20 +36,20 @@ COSTS = {
                  extra_inputs=1),
     "plan:candidate": Cost(0, "ci_linux_worker.LinuxLifecycleCommandTests."
                               "test_candidate_and_validator_job_plans_from_the_candidate_checkout_without_the_api"),
-    "select-build": Cost(17, "test_ci_commands_packaged.SelectBuildCommandTests."
-                             "test_a_pull_request_selects_the_newest_build_of_its_head_in_seventeen_requests", polls=1),
+    "select-build": Cost(16, "test_ci_commands_packaged.SelectBuildCommandTests."
+                             "test_a_pull_request_selects_the_newest_build_of_its_head_in_sixteen_requests", polls=1),
     "fetch-build": Cost(2, "test_ci_commands_packaged.FetchBuildCommandTests."
                            "test_each_route_materialises_the_selected_bundle_in_the_fixed_root"),
-    "assemble": Cost(16, "test_ci_commands_build.AssembleCommandTests."
-                         "test_seventeen_targets_cost_fifty_requests", targets=2),
+    "assemble": Cost(13, "test_ci_commands_build.AssembleCommandTests."
+                         "test_seventeen_targets_cost_forty_seven_requests", targets=2),
     "aggregate": Cost(13, "test_ci_aggregate.AggregateCommandTests."
                           "test_thirty_four_lanes_cost_two_requests_each_and_thirteen", lanes=2),
     "seal-gate:build": Cost(15, "test_ci_gate.BuildGateTests.test_seventeen_targets_cost_the_same_fifteen_requests"),
-    "seal-gate:packaged": Cost(23, "test_ci_gate.PackagedGateTests."
-                                 "test_thirty_four_lanes_cost_the_same_twenty_three_requests"),
+    "seal-gate:packaged": Cost(22, "test_ci_gate.PackagedGateTests."
+                                 "test_thirty_four_lanes_cost_the_same_twenty_two_requests"),
     "gate-status:settle": Cost(5, "test_ci_commands_status.GateSettleTests."
                                  "test_the_two_calls_of_one_job_end_in_the_verified_document"),
-    "gate-status": Cost(45, "test_ci_commands_status.GateStatusTests."
+    "gate-status": Cost(36, "test_ci_commands_status.GateStatusTests."
                             "test_both_green_gates_are_success_on_the_pull_request_head_within_budget"),
 }
 #: These commands execute local protected work and cannot create an API client. PR reuse admission

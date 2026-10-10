@@ -153,9 +153,10 @@ class ProtectedSelectionTests(unittest.TestCase):
             expected["producer"]["event"] = event
             with self.subTest(event=event):
                 self.assertEqual(self.call(world), expected)
-                # The subject (default branch, its head, the commit), the listing, the run, its jobs,
-                # the bundle listing and the bundle record.
-                self.assertEqual(world.api.request_count, 8)
+                # The subject (default branch, its head, the commit), the listing, the run, its jobs
+                # and the bundle's row in the listing by name, which is its first observation: the
+                # bundle record is read by id only by the recheck before an effect.
+                self.assertEqual(world.api.request_count, 7)
                 self.assertEqual(world.api.mutations, [])
         self.assertEqual(expected["producer"]["workflow_path"], ".github/workflows/mod-base-build.yml")
         self.assertEqual(expected["producer"]["api_head_sha"], world.plan["identity"]["tested_sha"])
@@ -291,7 +292,7 @@ class ProtectedSelectionTests(unittest.TestCase):
                 if change is None:
                     self.assertIsNone(selection.revalidate_protected_build(world.api, descriptor=world.bundle,
                                                                           plan=world.plan))
-                    self.assertEqual(world.api.request_count, 8)
+                    self.assertEqual(world.api.request_count, 7)
                 else:
                     with self.assertRaises(MbError):
                         selection.revalidate_protected_build(world.api, descriptor=world.bundle, plan=world.plan)
@@ -309,9 +310,9 @@ class ProtectedDownloadTests(unittest.TestCase):
             self.assertEqual(self.call(world, output), {"descriptor": world.bundle, "envelope": world.envelope})
             published(self, world, output)
             self.assertEqual(list(Path(directory).iterdir()), [output])
-        # Select 8, download 2, and before publication the subject 2, the listing, the run and the
-        # bundle record once more.
-        self.assertEqual(world.api.request_count, 15)
+        # Select 7, download 2, and before publication the subject 2, the listing, the run and the
+        # bundle record by id.
+        self.assertEqual(world.api.request_count, 14)
         self.assertEqual(world.api.mutations, [])
 
     def test_a_named_run_must_be_the_newest_build_run(self):
@@ -549,12 +550,12 @@ class SelectBuildTests(unittest.TestCase):
         self.assertLess(world.api.request_count, 60)
         self.assertEqual(world.api.mutations, [])
 
-    def test_a_pull_request_takes_the_newest_build_of_its_head_in_seventeen_requests(self):
+    def test_a_pull_request_takes_the_newest_build_of_its_head_in_sixteen_requests(self):
         world = build_world()
         with tempfile.TemporaryDirectory() as directory:
             record = self.select(world, Path(directory))
             self.assertEqual(list(Path(directory).iterdir()), [])  # the verified copy is not kept
-        self.assert_record(world, record, requests=17)
+        self.assert_record(world, record, requests=16)
         self.assertNotEqual(record["build"]["producer"]["run_id"], record["request"]["run_id"])
 
     def test_every_selection_has_a_nonce_of_its_own(self):
@@ -726,7 +727,7 @@ class SelectBuildTests(unittest.TestCase):
             with self.subTest(event=world.runs[42]["event"]), tempfile.TemporaryDirectory() as directory:
                 record = self.select(world, Path(directory), sleep=Mock(side_effect=AssertionError))
                 self.assertEqual(list(Path(directory).iterdir()), [])
-            self.assert_record(world, record, requests=15)
+            self.assert_record(world, record, requests=14)
             self.assertEqual(record["build"]["producer"]["event"], world.runs[42]["event"])
 
     def test_a_protected_subject_without_a_build_gets_no_record_and_never_waits(self):
@@ -762,10 +763,10 @@ class SelectBuildTests(unittest.TestCase):
                 # The first poll admits the subject (3) and lists; every later one lists.
                 self.assertEqual(counts, [4, 5, 6, 7])
                 self.assertEqual(elapsed[0], 4 * limits.CI_BUILD_POLL_SECONDS)
-                # The poll that finds the run complete lists and describes it (5), the subject is
+                # The poll that finds the run complete lists and describes it (4), the subject is
                 # admitted again (its branch, 2: the commit object never changes), and the
                 # download with its last observation costs the 7 of an immediate selection.
-                self.assert_record(world, record, requests=7 + 5 + 2 + 7)
+                self.assert_record(world, record, requests=7 + 4 + 2 + 7)
         self.assertLessEqual(3 + limits.MAX_CI_BUILD_POLLS + 15, limits.MAX_CI_SELECT_BUILD_REQUESTS)
 
     def test_a_protected_wait_ends_at_the_deadline_and_fails_closed(self):
@@ -850,7 +851,7 @@ class SelectBuildTests(unittest.TestCase):
         world = build_world(push=True)
         with tempfile.TemporaryDirectory() as directory:
             record = self.select(world, Path(directory), build_run_id=42)
-        self.assert_record(world, record, requests=15)
+        self.assert_record(world, record, requests=14)
         for build_run_id in (41, "42", "latest"):
             world = build_world(push=True)
             with self.subTest(build_run_id=build_run_id), tempfile.TemporaryDirectory() as directory, \

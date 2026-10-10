@@ -438,6 +438,59 @@ class ReadRuleTests(unittest.TestCase):
         with self.assertRaisesRegex(MbError, "artifact availability changed between the start of the command"):
             watch.recheck()
 
+    def test_an_observation_made_through_another_request_is_read_again_only_before_the_effect(self):
+        answers = iter([{"expired": False}, {"expired": True}])
+        calls = []
+
+        def reader():
+            calls.append(1)
+            return next(answers)
+
+        watch = Watch()
+        seen = {"expired": False}
+        watch.observe(("artifact availability", 42), reader, seen)
+        seen["expired"] = True  # the caller's row is copied, not held
+        self.assertEqual(watch.read(("artifact availability", 42), reader), {"expired": False})
+        watch.observe(("artifact availability", 42), reader, {"expired": True})  # the first observation stays
+        self.assertEqual(calls, [])
+        watch.recheck()
+        self.assertEqual(calls, [1])
+        with self.assertRaisesRegex(MbError, "artifact availability changed between the start of the command"):
+            watch.recheck()
+
+    def test_a_listing_row_that_the_read_by_id_contradicts_fails_the_recheck(self):
+        watch = Watch()
+        watch.observe(("artifact availability", 42), lambda: {"expired": True}, {"expired": False})
+        with self.assertRaisesRegex(MbError, "artifact availability changed"):
+            watch.recheck()
+
+    def test_a_watch_after_another_starts_only_from_what_that_one_rechecked(self):
+        reads = {"source": 0, "run": 0, "late": 0}
+
+        def reader(name):
+            def read():
+                reads[name] += 1
+                return name
+            return read
+
+        self.assertEqual(Watch.after(None).read(("source",), reader("source")), "source")
+        earlier = Watch()
+        earlier.read(("source",), reader("source"))
+        earlier.read(("producer run", 42), reader("run"))
+        self.assertEqual(reads, {"source": 2, "run": 1, "late": 0})
+        unchecked = Watch.after(earlier)  # nothing is lent before the earlier watch rechecked
+        unchecked.read(("source",), reader("source"))
+        self.assertEqual(reads["source"], 3)
+        earlier.recheck()
+        earlier.read(("late",), reader("late"))  # read after the recheck: never confirmed, never lent
+        self.assertEqual(reads, {"source": 4, "run": 2, "late": 1})
+        later = Watch.after(earlier)
+        self.assertEqual(later.read(("source",), reader("source")), "source")
+        self.assertEqual(later.read(("late",), reader("late")), "late")
+        self.assertEqual(reads, {"source": 4, "run": 2, "late": 2})
+        later.recheck()  # only what this watch read is read again, the lent source included
+        self.assertEqual(reads, {"source": 5, "run": 2, "late": 3})
+
     def test_a_run_is_recorded_under_the_head_github_gives_it(self):
         plan, api, _ = seeded_pr()
         self.assertEqual(run_head(plan["identity"]), ("1" * 40, "feature/example", "example/mod"))

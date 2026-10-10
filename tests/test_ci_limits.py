@@ -132,7 +132,7 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
     "MAX_CI_DERIVED_SUBJECT_REQUESTS": (4, "API requests one subject derivation in a job that holds the candidate "
                                            "checkout may spend: its one request and the retries of that request"),
-    "MAX_CI_GATE_REQUESTS": (96, "API requests one `ci seal-gate` may spend: 15 for a Build gate, 23 for the "
+    "MAX_CI_GATE_REQUESTS": (96, "API requests one `ci seal-gate` may spend: 15 for a Build gate, 22 for the "
                                  "packaged gate of a pull request and 47 for the gate of a reuse run, whatever the "
                                  "plan's size, and room for retries and further listing pages"),
     "MAX_CI_COMMIT_PULLS": (100, "pull requests GitHub associates with one pushed commit: the one page "
@@ -151,7 +151,7 @@ KIT: dict[str, tuple[Any, str]] = {
                                        "credential-free storage GET, plus retries"),
     "MAX_CI_GENERATION_REQUESTS": (440, "D14 regression cap for one complete generation of either native profile; "
                                        "test_ci_generation_budget enforces it, without adding runtime admission"),
-    "MAX_CI_GATE_STATUS_REQUESTS": (96, "API requests one `ci gate-status` may spend: 45 with both runs complete, "
+    "MAX_CI_GATE_STATUS_REQUESTS": (96, "API requests one `ci gate-status` may spend: 36 with both runs complete, "
                                         "the rest for retries and further listing pages"),
     "MAX_CI_PRIVATE_RECORD_ENTRIES": (2, "a private record directory and its one file"),
     "MAX_CI_POLICY_TESTS": (100_000, "tests one policy suite may discover"),
@@ -225,15 +225,15 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
     "MAX_CI_BUILD_POLLS": (91, "one poll per interval of the wait, and the first",
                            lambda: limits.CI_BUILD_WAIT_SECONDS // limits.CI_BUILD_POLL_SECONDS + 1),
     "MAX_CI_SELECT_BUILD_REQUESTS": (
-        155, "the 4 requests that admit a pull request, one run listing for each poll of a whole wait and the 15 "
-             "that describe, download and recheck the Build, with 45 more for retries and further listing pages",
-        lambda: (4 + 15 + 45) + limits.MAX_CI_BUILD_POLLS),
+        155, "the 4 requests that admit a pull request, one run listing for each poll of a whole wait and the 14 "
+             "that describe, download and recheck the Build, with 46 more for retries and further listing pages",
+        lambda: (4 + 14 + 46) + limits.MAX_CI_BUILD_POLLS),
     "MAX_CI_BATCH_GIT_OUTPUT_BYTES": (64 * MIB, "the output of one Git call of the batch store: one Git tree listing",
                                       lambda: limits.MAX_CI_SOURCE_LIST_BYTES),
     "MAX_CI_ASSEMBLE_REQUESTS": (
-        816, "the 15 requests and 2 per target of `ci assemble`, with 33 and 1 per target more for retries and "
+        816, "the 13 requests and 2 per target of `ci assemble`, with 35 and 1 per target more for retries and "
              "further listing pages",
-        lambda: (15 + 33) + (2 + 1) * limits.MAX_CI_TARGETS),
+        lambda: (13 + 35) + (2 + 1) * limits.MAX_CI_TARGETS),
     "MAX_CI_AGGREGATE_REQUESTS": (
         816, "the 13 requests and 2 per lane of `ci aggregate`, with 35 and 1 per lane more for retries and "
              "further listing pages",

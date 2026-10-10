@@ -26,9 +26,10 @@ LISTINGS = {"full": "build-full", "pull-request": "packaged-pull-request", "sele
             "rebuilt": "packaged-rebuilt"}
 #: `ci seal-gate` of a packaged run that consumed the Build of another run: the source (4), this
 #: run with its jobs and artifacts (3), the results index (2), the newest Build run of the
-#: subject with its jobs and its bundle by name and by id (5), and once more before the receipt
-#: the source (3), this run with its jobs and artifacts (3) and that listing, run and bundle (3).
-PACKAGED_GATE_REQUESTS = 23
+#: subject with its jobs and its bundle's row in the listing by name (4), and once more before the
+#: receipt the source (3), this run with its jobs and artifacts (3) and that listing, run and the
+#: bundle by id (3).
+PACKAGED_GATE_REQUESTS = 22
 STALE = "selected Build is no longer the newest exact available producer"
 
 
@@ -372,7 +373,7 @@ class PackagedGateTests(GateCase):
              "report_sha256": h(lane["id"] + "-report")} for lane in attempt.plan["lanes"]])
         self.assertEqual(len(document["native_receipts"]), 4)
 
-    def test_thirty_four_lanes_cost_the_same_twenty_three_requests(self) -> None:
+    def test_thirty_four_lanes_cost_the_same_twenty_two_requests(self) -> None:
         attempt = self.packaged_world(targets=17, lanes=2)
         self.assertEqual(self.seal(attempt, "packaged")[0], 0)
         self.assertEqual(attempt.api.request_count, PACKAGED_GATE_REQUESTS)
@@ -500,12 +501,13 @@ class PackagedGateTests(GateCase):
                                              "has not completed)")
             with self.subTest(mode=mode, newer="after the gate looked"):
                 attempt = self.packaged_world(mode=mode)
-                bundle = f"/repos/{attempt.api.repository}/actions/artifacts/100"
                 read, seen = attempt.api.get_json, []
 
                 def get_json(path, **arguments):
                     answer = read(path, **arguments)
-                    if path == bundle and not seen:  # the last read of the gate's own observation
+                    # The bundle's row in its run's listing is the last read of the gate's own
+                    # observation: its availability is read by id only by the recheck.
+                    if path.endswith("/artifacts") and "name" in (arguments.get("params") or {}) and not seen:
                         seen.append(path)
                         newer_build(attempt, status="queued", conclusion=None)
                     return answer

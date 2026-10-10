@@ -44,6 +44,11 @@ as the artifacts, then reads every lane by numeric id, one at a time: the export
 plan, the lane's validation record against that export, and both against the Build of the
 selection record its ``input`` job handed to it, bound to this run attempt. The Build bundle
 itself is not read here; the gate authenticates it.
+
+The target partitions. The assembling job of a Build authenticates its attempt the same way, with
+the targets as the artifacts, and then reads every partition by numeric id with the validation
+record its target job uploaded (:func:`collect_targets`). The one description of the attempt's
+jobs and artifacts is what it observes again before the partitions are published.
 """
 
 from __future__ import annotations
@@ -62,7 +67,8 @@ from mod_base.build_ci.records import (GATE_MODES, bind_source_selection, gate_r
 from mod_base.build_ci.reuse import FullRunRequired, ReuseRefused, admit_post_merge_reuse
 from mod_base.build_ci.selection import revalidate_latest_pr_build, revalidate_protected_build
 from mod_base.build_ci.transport import (_admit_source, _authenticate_build, _authenticate_run, _bound, _plan,
-                                         _read_results, _read_sealed_build, _read_sealed_lane, _run)
+                                         _publish_target_set, _read_results, _read_sealed_build, _read_sealed_lane,
+                                         _run, _target_inputs)
 from mod_base.github.api import GitHubApi
 from mod_base.model import grammar
 from mod_base.model.validators import check
@@ -276,3 +282,37 @@ def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan:
                              build_envelope_sha256=selection["envelope_sha256"], lanes=lanes)
     watch.recheck()
     return grammar.CI_RESULTS_NAME, document
+
+
+def collect_targets(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan: dict[str, Any], run_id: int,
+                    run_attempt: int, config_sha256: str, output: Path) -> list[dict[str, Any]]:
+    """Authenticate the target partitions of the running attempt whose assembling job calls this
+    and publish them privately at ``output``, as ``transport.download_target_set`` does, or publish
+    nothing. Returns the ordered ``{descriptor, envelope}`` partitions.
+
+    ``record`` is the job's identity record and ``plan`` the plan of that subject; the run is a
+    full run of the Build caller or a packaged run that rebuilds. Every planned target must have
+    uploaded exactly one artifact in this attempt and every job before the assembling one must have
+    finished as the graph expects (``describe.describe_attempt``). Each partition carries the
+    validation record of its ``verify_target`` run under the protected Build config whose digest
+    is ``config_sha256``. Everything mutable is observed once more before ``output`` appears."""
+
+    plan = _plan(plan)
+    reads, watch = CommandReads.of(api), Watch()
+    validate_subject_record(record)
+    caller = ci_producer(record["workflow_path"])
+    check(record["producer"] == "build" and caller in ("build", "packaged"), "$.record",
+          "only the assembling job of a Build reads the target partitions")
+    mode = "full" if caller == "build" else "rebuilt"
+    _admit_source(reads, watch, plan["identity"])
+    # The run is observed before its jobs are read: its record says when this attempt started.
+    _run(reads, watch, run_id)
+    producer = describe.attempt_producer(record, plan, mode=mode, run_id=run_id, run_attempt=run_attempt)
+    _authenticate_run(reads, watch, producer, plan, mode=mode, complete=False)
+    descriptors = watch.read(("jobs and target artifacts of this attempt", run_id, run_attempt), functools.partial(
+        describe.describe_attempt, reads, producer=producer, plan=plan, mode=mode,
+        expected=[("target", target["id"]) for target in plan["targets"]],
+        finished=describe.settled_jobs(caller, mode, plan, "build")))
+    descriptors, _ = _target_inputs(descriptors, plan, run_id=run_id, run_attempt=run_attempt, output=output)
+    return _publish_target_set(reads, descriptors, plan, output=output, source_config_sha256=config_sha256,
+                               recheck=watch.recheck)
