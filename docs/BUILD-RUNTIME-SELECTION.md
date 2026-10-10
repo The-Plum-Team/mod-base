@@ -22,8 +22,10 @@ selected obligation, and it never serves as full-baseline, release or full-scope
 "Ownership and shared interfaces" and the failure table). Block Pops gets no selective exception.
 
 The design does not say where the selection is bound, which code reads the API, or which schema
-and adapter versions carry it. Each of those is a frozen interface ([KIT.md](ai/KIT.md#frozen-interfaces)),
-so each needs a version decision.
+and adapter versions carry it. The first and third change document kinds, the adapter protocol
+or the job graph, which are frozen interfaces ([KIT.md](ai/KIT.md#frozen-interfaces)) and need a
+version decision. The second moves the trust boundary of the design's ownership table, which only
+the owner can do.
 
 ## Why the mapping's minimal change cannot ship as written
 
@@ -32,9 +34,12 @@ digest into `identity.runtime_selection_sha256` (`planning.py:42`). Three produc
 plan, however, and each derives it independently:
 
 - The Build run plans for itself and seals its bundle and tested record under its `identity` and
-  `plan_sha256`. A packaged consumer requires both to equal its own plan
-  (`transport._bound`, `transport.py:95-97`). If only the packaged plan carried the selection, the
-  consumer would refuse its Build as "selected artifact differs from the admitted plan".
+  `plan_sha256`. A packaged consumer validates the sealed Build envelope against its own plan and
+  requires both to be equal (`records.validate_build_envelope` through `records._plan_binding`,
+  `records.py:137-145`). If only the packaged plan carried the selection, every lane would refuse
+  its Build when it fetches the bundle, as "does not equal the complete admitted binding". The
+  selection record itself would pass, because `ci select-build` writes its descriptor from the
+  packaged plan (`selection.describe_artifact`).
 - `gate-status.yml` derives one plan ("Derive the protected plan") and verifies both runs' tested
   records against it (`status._generation_plan`). It runs later, on its own triggers.
 - Every job of a generation plans again with `--expect-sha256`, and the same inputs must give the
@@ -69,9 +74,11 @@ a safe optimization.
 the disposable accounts, none holds a token, and the hook set is closed (`adapter.HOOKS`; design,
 "Ownership and shared interfaces"). There are two options:
 
-- *Token-bearing mod producer.* This keeps Quick Skin's own certificate and ancestry proof
-  unchanged, but it widens the boundary: protected mod code would run with a token on the fenced
-  runner.
+- *Token-bearing mod producer.* This keeps Quick Skin's own certificate check and ancestry proof,
+  but it widens the boundary: protected mod code would run with a token on the fenced runner. It
+  does not keep the certificate's source. Quick Skin's protected issuer certifies a complete
+  native run and its job graph. Once Q7 replaces the native packaged E2E, no run of that kind
+  exists, so the mod must first issue its certificate from the kit's sealed full evidence.
 - *Kit-authenticated inputs and a token-free hook.* The kit authenticates generic inputs and gives
   a new validator hook only data. One input is the paths changed between the tested merge's first
   parent (`identity.tested_parents[0]`, the base) and the tested tree. The other is the base
@@ -81,6 +88,15 @@ the disposable accounts, none holds a token, and the hook set is closed (`adapte
 
 Either option adds a hook, which needs a `BUILD_ADAPTER_API` decision: an optional hook within
 version 1, or version 2.
+
+Either option also spends requests that nobody has counted. They come from the 1,000 REST
+requests per hour that every run of the repository shares, so the producer needs its own
+`max_requests` cap and a test that pins its typical count, like every other command
+([BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#request-budget)). Under (b) the gate, status and reuse
+should add no requests, because they read the scope from documents they already download. One
+Quick Skin generation already counts 412 requests in the ledger, or 501 with 89 pending selection
+polls, and the test-only regression budget `MAX_CI_GENERATION_REQUESTS` is 440. Any requests the
+producer adds count against both, so they have to be measured and approved before it ships.
 
 **D3. Schema evolution.** The changes are an optional `runtime_selection` entry in
 `mod-base.build.config`, the scope record, and its digest in the results index and tested record.
@@ -117,17 +133,27 @@ run. Releases keep their full rehearsals either way.
 - The fence, `worker-run` and the second validator do not change.
 - Unknown or unavailable proof means full scope before any lane starts. A malformed record or an
   API failure stops the `input` job.
+- The selection policy is protected code at the executing controller, never the candidate's. A
+  candidate's files reach it only as data. A pull request that changes the selection policy, or
+  any input the selection reads (the scenario contract, the inventory, a plan input), runs full,
+  as Quick Skin's native consumer already does for changed policy. Otherwise a candidate could
+  narrow its own scope by editing what the selection reads.
 - Forks, dispatches, pushes, release rehearsals and explicit full recovery always run full.
 - Every planned lane stays required, and the job graph and the public contexts do not change
   under (b).
 
 ## What it unblocks
 
-Q1–Q6 do not need this, because full profiles fit the lane budget (180 minutes, the same as
-native). Q7 can activate the shared callers with full profiles, which is a cost the design accepts
-and nobody has measured. Without selection Quick Skin does lose native parity: native PR lane
-artifacts were 26–48 MB each, and its paired Build+E2E time was 26m55s–36m51s
-([BUILD-E2E-DESIGN.md](BUILD-E2E-DESIGN.md#measured-ci-baseline)). Once D1–D5 are decided, the
-change splits into kit pull requests: schema and ledger, then the producer and hand-over, then the
-gate, status and reuse readers. A kit release and a Quick Skin adapter change follow, before or
-after Q7.
+Q1–Q6 do not need this. The native workflows, with their selection, stay required through Q6,
+and the shadow runs of Q4 can run full profiles, which fit the lane budget (180 minutes, the same
+as native). Q7 can activate the shared callers with full profiles, which is a cost the design
+accepts and nobody has measured. The native baseline does not measure it either. Native PR pairs
+took 26m55s–36m51s for Build and E2E together
+([BUILD-E2E-DESIGN.md](BUILD-E2E-DESIGN.md#measured-ci-baseline)). The 34 lane artifacts of one
+of those runs (37435530757) were 25.2–48.3 MiB each
+(`tests/fixtures/ci_native/quick-skin/measured.json`). Both lanes sampled in detail there carry
+a `full` evidence profile, so these numbers do not show what a selected run saves.
+
+Once D1–D5 are decided, the change splits into kit pull requests: schema and ledger, then the
+producer and hand-over, then the gate, status and reuse readers. A kit release and a Quick Skin
+adapter change follow, before or after Q7.
