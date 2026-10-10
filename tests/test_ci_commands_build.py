@@ -69,13 +69,16 @@ class AssembleCommandTests(AttemptCase):
         self.assertEqual(recorded["envelope_sha256"], canonical_sha256(envelope))
         self.assertEqual([descriptor["artifact"]["id"] for descriptor in recorded["descriptors"]], [110, 111])
         self.assertEqual(attempt.budgets, [limits.MAX_CI_ASSEMBLE_REQUESTS])
-        self.assertEqual(attempt.api.request_count, 16 + 2 * 2)
+        self.assertEqual(attempt.api.request_count, 13 + 2 * 2)
         self.assertEqual(attempt.api.mutations, [])
 
-    def test_seventeen_targets_cost_fifty_requests(self) -> None:
+    def test_seventeen_targets_cost_forty_seven_requests(self) -> None:
         attempt = self.world(targets=17)
         self.assertEqual(attempt.command("assemble")[0], 0)
-        self.assertEqual(attempt.api.request_count, 16 + 2 * 17)
+        # The source (4), the run, its jobs and its artifacts (3), then two per target, then the
+        # same once more before the sealed root appears (6): the one description of the attempt
+        # is also what the downloads are checked against.
+        self.assertEqual(attempt.api.request_count, 13 + 2 * 17)
         self.assertLess(attempt.api.request_count, 60)
         self.assertEqual(len(verify_build_export(attempt.sealed_build, plan=attempt.plan)["native_reports"]), 17)
 
@@ -103,7 +106,8 @@ class AssembleCommandTests(AttemptCase):
                 attempt = self.world()
                 change(attempt)
                 self.assert_rejected(attempt, "invalid-document", message)
-                self.assertLessEqual(attempt.api.request_count, 3)
+                # At most the source, the run, its jobs and its artifacts; nothing is downloaded.
+                self.assertLessEqual(attempt.api.request_count, 7)
 
     def test_a_run_that_moved_and_bytes_that_differ_publish_nothing(self) -> None:
         attempt = self.world()

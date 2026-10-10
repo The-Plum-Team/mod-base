@@ -218,7 +218,7 @@ class PrBuildWaitTests(unittest.TestCase):
             world = build_world()
             with self.subTest(origin_bits=origin.bit_length()):
                 self.assertEqual(self.wait(world, monotonic=lambda: origin, sleep=sleep), world.bundle)
-                self.assertEqual(world.api.request_count, 9)
+                self.assertEqual(world.api.request_count, 8)
         sleep.assert_not_called()
 
     def test_one_pending_poll_costs_one_request_after_the_first(self):
@@ -235,8 +235,9 @@ class PrBuildWaitTests(unittest.TestCase):
         self.assertEqual(self.wait(world, monotonic=lambda: elapsed[0], sleep=sleep), world.bundle)
         # First poll: the pull request (3), its tested commit and the run listing. Then the listing only.
         self.assertEqual(counts, [5, 6, 7, 8])
-        # The poll that finds the Build: listing, run, jobs, bundle listing and record, and the pull request again.
-        self.assertEqual(world.api.request_count - counts[-1], 8)
+        # The poll that finds the Build: listing, run, jobs and the bundle's row in its listing, and the pull
+        # request again.
+        self.assertEqual(world.api.request_count - counts[-1], 7)
         self.assertEqual(elapsed[0], 4 * limits.CI_BUILD_POLL_SECONDS)
         self.assertEqual(world.api.mutations, [])
 
@@ -381,7 +382,7 @@ class PrBuildWaitTests(unittest.TestCase):
             with self.subTest(change=change):
                 if change is None:
                     self.assertIsNone(revalidate())
-                    self.assertEqual(world.api.request_count, 9)
+                    self.assertEqual(world.api.request_count, 8)
                 else:
                     with self.assertRaises(MbError):
                         revalidate()

@@ -182,10 +182,11 @@ class GateStatusTests(GateStatusTestCase):
             "gates": {gate: {"context": CONTEXTS[gate], "state": "success", "description": VERIFIED[gate],
                              "target_url": run_url(run_id)} for gate, run_id in (("build", 42), ("packaged", 43))}})
         self.assertEqual(list(document["gates"]), ["build", "packaged"])
-        # The pull request and both listings (3), the Build run with its jobs, record listing and
-        # receipt read (18), the packaged run likewise with the Build it consumed (21), and the
-        # pull request and both listings once more (3).
-        self.assertEqual(world.api.request_count, 45)
+        # The pull request and both listings (3); the Build run, its jobs and its record's row,
+        # then the receipt read, which starts from those (16); the packaged run likewise, starting
+        # from the source and the Build bundle the Build gate's read has just rechecked (14); and
+        # the pull request and both listings once more (3).
+        self.assertEqual(world.api.request_count, 36)
         self.assertLess(world.api.request_count, 60)
         self.assertLessEqual(limits.MAX_CI_GATE_STATUS_REQUESTS, 100)
 
@@ -475,7 +476,7 @@ class GateStatusTests(GateStatusTestCase):
 
             with self.subTest(path=path), patch.object(world.api, "get_json", side_effect=get):
                 self.refused(world, world.planned(f"state-{index}"), "github-api")
-        for budget in (1, 5, 20, 44):
+        for budget in (1, 5, 20, 35):
             world = self.world(max_requests=budget).gated()
             with self.subTest(budget=budget):
                 self.refused(world, world.planned(), "request-budget")
@@ -676,7 +677,7 @@ class GateSettleTests(GateStatusTestCase):
         self.assertEqual(self.states(document), {gate: ("success", VERIFIED[gate], run_url(run_id))
                                                  for gate, run_id in (("build", 42), ("packaged", 43))})
         self.assertEqual(self.output.read_text(encoding="utf-8"), "settled=false\nintents=" + stdout.decode("utf-8"))
-        self.assertEqual(world.api.request_count, 5 + 4 + 45)
+        self.assertEqual(world.api.request_count, 5 + 4 + 36)
         self.assertEqual(world.budgets, [limits.MAX_CI_GATE_STATUS_REQUESTS, limits.MAX_CI_SUBJECT_REQUESTS,
                                          limits.MAX_CI_GATE_STATUS_REQUESTS])
 
