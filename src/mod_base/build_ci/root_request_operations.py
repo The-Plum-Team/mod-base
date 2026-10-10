@@ -9,7 +9,8 @@ copies on disk; nothing in a request selects code, and no operation calls the Gi
 checkout, kit overlay and Gradle seed, each below the fenced runner home. The operations around a
 candidate hook (``stage-bundle``, ``verify-candidate-source``, ``freeze-build-export``,
 ``freeze-runtime-export``) take the bundle directory and the generated roots from the protected
-Build config in the validator's controller copy, never from the request.
+Build config in the validator's controller copy, never from the request. ``export-seed`` reads
+the locked candidate's Gradle home and writes ``seed-export/``, both fixed roots of the boundary.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from mod_base.build_ci.controller import (CONTROLLER_VALIDATION_ROOT, Controller
                                           prepare_controller_validation)
 from mod_base.build_ci.exports import (BUILD_VALIDATION_ROOT, freeze_build_export, prepare_build_validation,
                                        stage_build_bundle, verify_candidate_source)
+from mod_base.build_ci.gradle_cache import export_privileged_gradle_seed
 from mod_base.build_ci.handoff import _context, freeze_handed_off_build_validation
 from mod_base.build_ci.host import (HostBoundary, _canonical_path, authenticate_privileged_host_boundary,
                                     fence_worker_host)
@@ -306,6 +308,11 @@ def _freeze_runtime_export(boundary: HostBoundary, arguments: dict[str, Any], ki
     closing()
 
 
+def _export_seed(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    candidate, _ = _candidate_job(boundary, arguments)
+    export_privileged_gradle_seed(boundary=boundary, account=candidate)
+
+
 _OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
     "host-fence": _host_fence,
     "stage-candidate": _stage_candidate,
@@ -322,6 +329,7 @@ _OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
     "freeze-runtime-export": _freeze_runtime_export,
     "grant-build-validation": _grant_build_validation,
     "grant-runtime-validation": _grant_runtime_validation,
+    "export-seed": _export_seed,
 }
 
 

@@ -204,11 +204,13 @@ All lifecycle verbs below are registered and exercised by the hosted command-cha
 | 2. `ci subject --producer build\|packaged\|status --pr N [--candidate DIR] --github-output F` | Authenticates the subject, creates the state directory and writes `identity.json`. Outputs: `tested_sha`, `pr_number`. |
 | 3. `ci worker-prepare --roles validator\|candidate+validator --python PATH [--java-home PATH]...` | Closes the runner home, has root fence the image, admits the tool trees (the interpreter's prefix and every JDK home: no foreign owner, no group or other write access, no special file), allocates the accounts and hands the protected adapter copy to the validator. It sends no API request. |
 | 4. `ci plan [--candidate DIR] [--pin-candidate DIR] [--expect-sha256 HEX] [--github-output F]` | Stages the configured candidate files from local Git when `--candidate` is supplied, otherwise from the API; runs `derive_plan` as the validator and writes `ci-plan.json`. Every workflow supplies `--pin-candidate` to parse the complete pin. The first plan admits a changed release; later jobs match `--expect-sha256` before publishing outputs. Outputs: `plan_sha256`, `candidate_kit_sha` (empty for the executing pin), `targets` and `lanes`. |
+| 4a. `ci seed-key --kind gradle\|runtime --unit ID --github-output F`, then "Restore the protected seed", `actions/cache/restore` | Target and lane jobs only. Derives the cache key of the job's seed from the protected checkout of the default branch (the kind, the unit, a format literal and the bytes of the config's `seeds.<kind>.key_files`; empty when the config enables none) and restores exactly that key, no prefix, into `$RUNNER_TEMP/mb-seed`. The candidate cannot choose the key and nothing it wrote is ever restored: only step 9a saves. Output: `key`. ([BUILD-ADAPTER.md](BUILD-ADAPTER.md#seeds)) |
 | 5. `ci worker-stage --candidate DIR [--future-kit DIR] [--bundle] [--gradle-seed DIR]` | Has root publish the tested tree for the candidate as `repository/`, with a `.git` reduced to objects and refs (no hooks, no configuration), the admitted kit overlay and, when given, a Gradle seed. A changed pin requires the separately checked out `--future-kit`; protected code verifies it as bytes before copying. For a lane, `--bundle` also stages the Build from `sealed-build/` at the `bundle.path` of the config. |
 | 6. `ci worker-run --hook policy\|build_target\|run_lane [--unit ID]` | Runs one candidate hook as `modbase_candidate` under the timeout the config names for it and always terminates the account. A non-zero exit, a timeout or a process left behind fails the step. A lane first gets the two values `derive_runtime` returns for it. |
 | 7. `ci worker-seal`, also after a failure once step 3 succeeded | Terminates and locks the candidate, proves the tracked sources unchanged, freezes the export and writes its envelope. |
 | 8. `ci worker-validate --hook verify_target\|verify_build\|verify_runtime [--unit ID] --output DIR`, the seal step "Validate frozen native exports" | Root hands the sealed export to the validator read-only, the hook runs from the protected adapter copy, and root copies exactly the expected reports out of the validator's home and writes the validation record. The command then writes the upload directory: the export under its own paths with its envelope, `ci-validation.json` and one `<unit id>.json` for each report. |
 | 9. "Upload sealed outputs", `actions/upload-artifact` | The only step that uploads. Its start and end are the upload window of the artifact's descriptor. |
+| 9a. `ci seed-export --kind gradle\|runtime --output DIR --github-output F`, then "Save the protected seed", `actions/cache/save` | Target and lane jobs of a push or dispatch on the default branch whose exact restore missed, after the upload. Root copies `caches/` and `wrapper/` of the locked candidate's Gradle home into `seed-export/` (`export-seed`), the runner copies that into `$RUNNER_TEMP/mb-seed` and the cache action saves it under the key of step 4a. A pull request never exports. A home that cannot be exported declines the seed (`saved=false`) and fails nothing. Output: `saved`. |
 | 10. `ci worker-finish`, also after a failure once step 2 succeeded | Terminates and locks both accounts, requires that neither owns a process and only then reopens the runner home. |
 
 **Candidate kit admission.** `pin.parse_pin` reads the attacker-controlled candidate pin from
@@ -250,18 +252,18 @@ times, plus any closed SDK it had to walk. These are diagnostics, not authority 
 measured cold cost and image sensitivity are recorded in BUILD-E2E-PROGRESS.md.
 
 The verbs of every job after the prologue, in step order (`workflow.CI_JOB_VERBS`, without the
-step the note below the table describes):
+step the note below the table describes; `seed-export` runs only where step 9a says):
 
 | Job | Verbs |
 | --- | --- |
 | Build `plan` | `subject`, `worker-prepare`, `plan`, `reuse-admit` (a push only), `worker-finish` |
 | Build `policy` | `subject`, `worker-prepare`, `plan`, `worker-stage`, `worker-run`, `worker-seal`, `worker-finish` |
-| Build `target` | `subject`, `worker-prepare`, `plan`, `worker-stage`, `worker-run`, `worker-seal`, `worker-validate`, `worker-finish` |
+| Build `target` | `subject`, `worker-prepare`, `plan`, `seed-key`, `worker-stage`, `worker-run`, `worker-seal`, `worker-validate`, `seed-export` (a protected miss only), `worker-finish` |
 | Build `assemble` | `subject`, `worker-prepare`, `plan`, `assemble`, `worker-validate`, `worker-finish` |
 | Build `gate` | `subject`, `worker-prepare`, `plan`, `seal-gate`, `worker-finish` |
 | `select-build` `select` | `subject`, `worker-prepare`, `plan`, `reuse-admit` (a push only), `select-build` (unless reuse was admitted), `worker-finish` |
 | Packaged `input` | `subject`, `worker-prepare`, `plan`, `select-build`, `worker-finish` |
-| Packaged `lane` | `subject`, `system-profile`, `worker-prepare`, `plan`, `fetch-build`, `worker-stage`, `worker-run`, `worker-seal`, `worker-validate`, `worker-finish` |
+| Packaged `lane` | `subject`, `system-profile`, `worker-prepare`, `plan`, `fetch-build`, `seed-key`, `worker-stage`, `worker-run`, `worker-seal`, `worker-validate`, `seed-export` (a protected miss only), `worker-finish` |
 | Packaged `aggregate` | `subject`, `worker-prepare`, `plan`, `aggregate`, `worker-finish` |
 | Packaged `gate` | `subject`, `worker-prepare`, `plan`, `seal-gate`, `worker-finish` |
 | `gate-status` `evaluate` | `gate-status --settle`; only when that could not settle: `subject`, `worker-prepare`, `plan`, `gate-status`, `worker-finish` |
@@ -330,6 +332,7 @@ Every path is fixed (`build_ci.worker.WORKER_ROOT`, the directory constants of `
   sealed-build/       a frozen Build export with ci-envelope.json
   sealed-runtime/     a frozen lane export with ci-runtime-envelope.json
   sealed-validation/  the reports of one verification with ci-validation.json
+  seed-export/        the seed roots of a locked candidate's Gradle home, the runner's once root hands them over
   execution-handoff/  the private record of one protected hook execution
   root-request-<operation>/   the private request of one root operation
 ```
@@ -384,6 +387,7 @@ without importing the kit (`tests/test_ci_privileged_bootstrap.py` keeps both eq
 | `freeze-build-export`, `freeze-runtime-export` | Terminates the candidate, copies the export into its sealed root and writes the Build or lane envelope |
 | `grant-build-validation`, `grant-runtime-validation` | Verifies the frozen copy in `sealed-build/`, or in `sealed-runtime/` for one lane, and hands it to the validator, read-only |
 | `freeze-build-validation`, `freeze-runtime-validation` | Terminates the validator, copies exactly the expected reports into `sealed-validation/` and writes the validation record, for a Build export or for one lane |
+| `export-seed` | After a successful, sealed candidate hook of a protected job: terminates and locks the candidate again, copies `caches/` and `wrapper/` of its Gradle home as independent regular files within the seed caps into the new `seed-export/` and hands that to the runner. A link, a special file or a file with several links is a refusal. The request names no path |
 
 ## Artifacts
 
@@ -465,6 +469,10 @@ objects named by SHA and the job list of a completed attempt are fetched once pe
 | `ci batch-prepare` | 10 and 3 for each member: 160 for 50 | `MAX_CI_BATCH_PREPARE_REQUESTS`, 216 | `tests/test_ci_batch_commands.py` |
 | `ci batch-settle` | 3, 28 for both gates and at most 5 for each member: 281 for 50 | `MAX_CI_BATCH_SETTLE_REQUESTS`, 348 | `tests/test_ci_batch_commands.py` |
 
+`ci seed-key` and `ci seed-export` send no request, so seeds leave every total below unchanged.
+The two cache actions talk to the Actions cache service with the job's runtime token, which the
+REST allowance does not count (like the artifact upload): one lookup, and on a hit one download,
+per seeded target or lane job, and one save per missing entry in a protected run.
 `tests/ci_request_budget.py` derives the whole-generation ledger from the actual workflow
 commands; `test_ci_generation_budget.py` pins the native fixture totals. Each total includes
 Build, packaged E2E and one final status evaluation (both `--settle` and verified evaluation,
@@ -524,6 +532,11 @@ on GitHub. K7 must still establish:
   `JAVA_HOME_17_X64`, `JAVA_HOME_21_X64` and `JAVA_HOME_25_X64` homes;
 - how much real generation traffic, including third-party Actions, spends the repository's
   hourly `GITHUB_TOKEN` allowance;
+- that `actions/cache/restore` and `actions/cache/save` behave on these callers as the seed steps
+  assume: a `pull_request_target` run reads the default branch's entries (and, once GitHub issues
+  read-only cache tokens to it, cannot write any), a protected push saves under the exact key, and
+  a seed restored into `$RUNNER_TEMP/mb-seed` passes `--gradle-seed` admission; and how large the
+  seeds of each mod are;
 - that a `workflow_run` event of a producer run carries the head branch, head commit and head
   repository by which the status caller finds the pull request, and that the pull requests GitHub
   lists for a pushed commit include the one post-merge reuse looks for;

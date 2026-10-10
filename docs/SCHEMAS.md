@@ -691,6 +691,7 @@ source in the protected checkout to have its configured hash.
 | `contexts.build`, `contexts.packaged` | the two required status contexts: trimmed printable ASCII without `<`, `>`, `{{`, `}}`, 1..100 characters, distinct ignoring case |
 | `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
 | `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.protocol.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
+| `seeds` | optional (added within schema 1): at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..16 `{path}` objects (canonical repository paths, unique, sorted by path) of the protected checkout whose bytes key the seed; absent means no seed |
 
 The config path, every adapter source, every candidate file (the inventory, the scenario contract
 and each `plan_inputs` path) and the bundle directory are

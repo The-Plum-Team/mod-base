@@ -17,7 +17,10 @@ name: mod-base packaged-e2e
 # $RUNNER_TEMP/mb-state. Candidate code runs only inside `ci worker-run`, as a separate account
 # and without any token: the candidate tree is a third checkout that no step of the runner user
 # executes. When the caller's selection admitted post-merge reuse (mode `reuse`), input, lane and
-# aggregate are skipped and the gate seals the reuse reference instead of a tested record. The two
+# aggregate are skipped and the gate seals the reuse reference instead of a tested record. A lane
+# restores the exact runtime seed key `ci seed-key` derives from the protected config, if any, into
+# the candidate's Gradle home; only a push or a dispatch whose restore missed exports and saves the
+# next one after its upload (`ci seed-export`, actions/cache/save). A pull request never saves. The two
 # steps that must also run after a failure or a cancellation (`ci worker-seal`, `ci
 # worker-finish`) depend on a step that follows the prologue, so no kit Python ever runs in a job
 # whose prologue did not pass.
@@ -47,7 +50,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:b5eaf799425db2f01a5b88855538792a39bdf7bf507d4b88a4f2d159cbcc8716"
+  MB_KIT_TREE_DIGEST: "sha256:5ecdc59b615739a0c38e99f27dbe005cd188cb5bbeaabc486e5519ed2a76a1b5"
 
 jobs:
   input:
@@ -443,14 +446,38 @@ jobs:
           ref: ${{ steps.plan.outputs.candidate_kit_sha }}
           path: candidate-kit
           persist-credentials: false
-      - name: Stage the candidate and the sealed Build bundle
+      - name: Derive the protected seed key
+        id: seed
         shell: bash
+        env:
+          LANE: ${{ matrix.id }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Seed key: %s\n' "$1" >&2; exit 1; }
+          [[ "$LANE" =~ ^[a-z0-9][a-z0-9._-]{0,79}$ && "$LANE" != *--* ]] || fail "malformed lane"
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci seed-key --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --kind runtime --unit "$LANE" --github-output "$GITHUB_OUTPUT"
+      - name: Restore the protected seed
+        id: restore
+        if: steps.seed.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.seed.outputs.key }}
+          path: ${{ runner.temp }}/mb-seed
+      - name: Stage the candidate and the sealed Build bundle
+        shell: bash
+        env:
+          SEED_HIT: ${{ steps.restore.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          seed=()
+          [[ "$SEED_HIT" != true ]] || seed=(--gradle-seed "$RUNNER_TEMP/mb-seed")
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci worker-stage --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --candidate candidate --future-kit candidate-kit --bundle
+            --candidate candidate --future-kit candidate-kit --bundle "${seed[@]}"
       - name: Run the lane as the candidate
         shell: bash
         env:
@@ -492,6 +519,22 @@ jobs:
           include-hidden-files: true
           compression-level: 6
           retention-days: 7
+      - name: Export the protected seed
+        id: export
+        if: steps.seed.outputs.key != '' && steps.restore.outputs.cache-hit != 'true' && github.event_name != 'pull_request_target'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci seed-export --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --kind runtime --output "$RUNNER_TEMP/mb-seed" --github-output "$GITHUB_OUTPUT"
+      - name: Save the protected seed
+        if: steps.export.outputs.saved == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.seed.outputs.key }}
+          path: ${{ runner.temp }}/mb-seed
       - name: Terminate and lock the worker accounts
         if: ${{ always() && steps.subject.outcome == 'success' }}
         shell: bash

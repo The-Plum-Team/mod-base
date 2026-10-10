@@ -20,7 +20,8 @@ from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.model import grammar
 from mod_base.model import limits as lim
 from tests.helpers import ci_graph_jobs, ci_plan, ci_push_plan
-from tests.test_workflow_ci_policy import CANDIDATE_CHECKOUT, FUTURE_KIT_CHECKOUT, JDKS, SAMPLES, CiStepRunner, ci_callee
+from tests.test_workflow_ci_policy import (CANDIDATE_CHECKOUT, EXPORT_CONDITION, FUTURE_KIT_CHECKOUT, JDKS, RESTORE_STEP,
+                                          SAMPLES, SAVE_STEP, CiStepRunner, ci_callee)
 from tests.test_workflow_policy import PROLOGUE, UPLOAD, parse_kit_argv, require_tools, step
 
 SUBJECT = "Authenticate the tested subject"
@@ -34,12 +35,15 @@ COMPILE = "Build the target as the candidate"
 LOCK = "Lock the candidate and freeze its export"
 ASSEMBLE = "Assemble the exact target union"
 FINISH = "Terminate and lock the worker accounts"
+SEED = "Derive the protected seed key"
+EXPORT = "Export the protected seed"
 SEAL, SEND = workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP
 #: The steps of each job, in order: section 5 of the architecture, per job type.
 STEPS = {
     "plan": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, REUSE, FINISH],
     "policy": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, FUTURE_KIT_CHECKOUT, STAGE, POLICY, LOCK, FINISH],
-    "target": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, FUTURE_KIT_CHECKOUT, STAGE, COMPILE, LOCK, SEAL, SEND, FINISH],
+    "target": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PREPARE, REPLAN, FUTURE_KIT_CHECKOUT, SEED, RESTORE_STEP, STAGE,
+               COMPILE, LOCK, SEAL, SEND, EXPORT, SAVE_STEP, FINISH],
     "assemble": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, ASSEMBLE, SEAL, SEND, FINISH],
     "gate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, SEAL, SEND, FINISH],
 }
@@ -66,6 +70,10 @@ class BuildStructureTests(unittest.TestCase):
         plan = self.jobs["plan"]["steps"]
         self.assertEqual({item["id"]: item["name"] for item in plan if "id" in item},
                          {"subject": SUBJECT, "prepare": PREPARE, "plan": PLAN, "reuse": REUSE})
+        target = self.jobs["target"]["steps"]
+        self.assertEqual({item["id"]: item["name"] for item in target if "id" in item},
+                         {"subject": SUBJECT, "prepare": PREPARE, "plan": REPLAN, "seed": SEED, "restore": RESTORE_STEP,
+                          "export": EXPORT})
         # The plan outputs are the ones the kit writes for a plan.
         self.assertEqual(set(planning.plan_outputs(ci_plan())), {"plan_sha256", "targets", "lanes", "candidate_kit_sha"})
 
@@ -96,6 +104,9 @@ class BuildStructureTests(unittest.TestCase):
             expected = {name: condition for name, condition in always.items() if name in STEPS[job_id]}
             if job_id in ("policy", "target"):
                 expected[FUTURE_KIT_CHECKOUT] = "steps.plan.outputs.candidate_kit_sha != ''"
+            if job_id == "target":
+                expected.update({RESTORE_STEP: "steps.seed.outputs.key != ''", EXPORT: EXPORT_CONDITION,
+                                 SAVE_STEP: "steps.export.outputs.saved == 'true'"})
             with self.subTest(job=job_id):
                 self.assertEqual(conditions, {**expected, **({REUSE: "github.event_name == 'push'"}
                                                              if job_id == "plan" else {})})
@@ -269,10 +280,12 @@ class BuildShellTests(unittest.TestCase):
                      finish],
             "policy": [derived, prepare("candidate+validator"), replan_candidate, stage,
                        ["ci", "worker-run", *job, "--hook", "policy"], ["ci", "worker-seal", *job], finish],
-            "target": [derived, prepare("candidate+validator"), replan_candidate, stage,
+            "target": [derived, prepare("candidate+validator"), replan_candidate,
+                       ["ci", "seed-key", *job, "--kind", "gradle", "--unit", "target-a", *out], stage,
                        ["ci", "worker-run", *job, "--hook", "build_target", "--unit", "target-a"],
                        ["ci", "worker-seal", *job],
                        ["ci", "worker-validate", *job, "--hook", "verify_target", "--unit", "target-a", *upload],
+                       ["ci", "seed-export", *job, "--kind", "gradle", "--output", f"{temp}/mb-seed", *out],
                        finish],
             "assemble": [subject, prepare("validator"), replan, ["ci", "assemble", *job],
                          ["ci", "worker-validate", *job, "--hook", "verify_build", *upload], finish],
@@ -280,6 +293,10 @@ class BuildShellTests(unittest.TestCase):
                      finish],
         })
         self.assertEqual(list(JDKS), ["JAVA_HOME_17_X64", "JAVA_HOME_21_X64", "JAVA_HOME_25_X64"])
+        # Staging is given the seed only when the restore hit the exact key; anything else is no hit.
+        for hit, seed in (("true", ["--gradle-seed", f"{temp}/mb-seed"]), ("false", []), ("", []), ("True", [])):
+            with self.subTest(hit=hit):
+                self.assertEqual(self.run_step("target", STAGE, SEED_HIT=hit).commands, [[*stage, *seed]])
 
     def test_hooks_roles_and_producer_are_those_of_the_adapter_contract(self) -> None:
         for job_id in self.jobs:
@@ -320,7 +337,7 @@ class BuildShellTests(unittest.TestCase):
                               {"TESTED_SHA": "e" * 40})
         ] + [
             ("target", name, {"TARGET": value})
-            for name in (COMPILE, SEAL)
+            for name in (SEED, COMPILE, SEAL)
             for value in ("", "a--b", "../x", "A", "a b", "-a", "a" * 81, "a;id", "$(id)")
         ]
         for job_id, name, overrides in cases:
@@ -331,9 +348,9 @@ class BuildShellTests(unittest.TestCase):
 
     def test_the_unit_check_is_the_unit_grammar(self) -> None:
         # The matrix unit becomes part of an artifact name, so the shell admits exactly the kit's ids.
-        scripts = [step(self.jobs["target"]["steps"], name)["run"] for name in (COMPILE, SEAL)]
+        scripts = [step(self.jobs["target"]["steps"], name)["run"] for name in (SEED, COMPILE, SEAL)]
         checks = {line for script in scripts for line in script.splitlines() if '"$TARGET" =~' in line}
-        self.assertEqual(len(checks), 1, "the two steps that name the unit apply one check")
+        self.assertEqual(len(checks), 1, "the three steps that name the unit apply one check")
         characters = [chr(code) for code in range(1, 128)] + ["é"]
         samples = ["", "target-a", "1.20.1-fabric", "a" * 79, "a" * 80, "a" * 81, "0" * 80, "a" * 79 + "-", "a--b",
                    "--a", "a--", "a---b", "a-b-c", "a-.-b", "a.-_b", "-", "--", *characters,
@@ -350,7 +367,7 @@ class BuildShellTests(unittest.TestCase):
             for sample, verdict in zip(samples, result.stdout):
                 with self.subTest(locale=locale, unit=sample):
                     self.assertEqual(verdict == "1", grammar.is_match(grammar.CI_UNIT_ID, sample))
-        for name in (COMPILE, SEAL):
+        for name in (SEED, COMPILE, SEAL):
             self.assertEqual(self.run_step("target", name, TARGET="1.20.1-fabric").result.returncode, 0)
 
     def test_a_missing_tool_or_a_failing_command_fails_the_step(self) -> None:

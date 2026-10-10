@@ -381,6 +381,33 @@ executes. Once the default branch has moved past the base the pull request was t
 generation is gone: `evaluate` fails in `ci subject`, nothing is published and the statuses stay
 as they were. Update the pull request to start a new generation.
 
+### Protected seeds
+
+`seeds` of `scripts/ci/mod-base-build.json` ([BUILD-ADAPTER.md](BUILD-ADAPTER.md#seeds)) lets every
+target and lane job start from a Gradle home a protected job of the default branch saved in the
+repository's Actions cache. A pull request only restores; a push to the default branch or a
+dispatch there saves the entries that are missing. Enabling it is a change of the protected
+config, reviewed like any other, and it is safe only when all of these hold. **Checking them is
+the owner's decision**, before the pull request that adds `seeds` is merged:
+
+1. No workflow of the repository runs code under review on the default branch's ref while the
+   Actions runtime token is reachable: no `pull_request_target`, `workflow_run`, `issue_comment` or
+   other default-ref job that checks out and executes a pull request without dropping the token
+   and the cache variables as the kit's jobs do. Such a job can write a cache entry under any key
+   that every later protected job restores, and the cache action extracts it as the runner. GitHub
+   is moving `pull_request_target` runs to read-only cache tokens (actions/cache v6.1.0, "Read-only
+   access"); until that applies to the repository, this check is the only defence.
+2. The mod's dependency verification is strict (for Quick Skin: step Q2), so a module a stale or
+   damaged seed holds is checked before Gradle uses it. A seed restores time, not trust.
+3. The cache has room: one entry per target and one per lane of an enabled kind, each up to the
+   size of a full Gradle home of that unit. GitHub evicts the least recently used entries beyond the
+   repository's cache limit, which costs time only. Measure the sizes on the first protected run.
+
+To start over, delete the repository's `mb-seed-v1-*` cache entries (`gh cache delete --all` or by
+key, an owner operation) or change one of the key files; to stop, remove `seeds` from the config.
+A kit release older than the one that added `seeds` refuses a config that has it: remove `seeds`
+before a pin rollback below that release.
+
 ## Canary procedure
 
 The canary is a separate public caller repository, so it exercises exactly the cross-repository
