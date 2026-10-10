@@ -12,7 +12,7 @@ from mod_base.build_ci.protocol import plan_sha256
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from tests.ci_attempt import AttemptCase, sealed, validation
-from tests.test_ci_describe import ASSEMBLE, PLAN, RERUN, TARGET
+from tests.test_ci_describe import ASSEMBLE, GUARD, PLAN, RERUN, TARGET
 from tests.test_ci_transport import build_archive
 
 
@@ -69,13 +69,13 @@ class AssembleCommandTests(AttemptCase):
         self.assertEqual(recorded["envelope_sha256"], canonical_sha256(envelope))
         self.assertEqual([descriptor["artifact"]["id"] for descriptor in recorded["descriptors"]], [110, 111])
         self.assertEqual(attempt.budgets, [limits.MAX_CI_ASSEMBLE_REQUESTS])
-        self.assertEqual(attempt.api.request_count, 15 + 2 * 2)
+        self.assertEqual(attempt.api.request_count, 16 + 2 * 2)
         self.assertEqual(attempt.api.mutations, [])
 
-    def test_seventeen_targets_cost_forty_nine_requests(self) -> None:
+    def test_seventeen_targets_cost_fifty_requests(self) -> None:
         attempt = self.world(targets=17)
         self.assertEqual(attempt.command("assemble")[0], 0)
-        self.assertEqual(attempt.api.request_count, 15 + 2 * 17)
+        self.assertEqual(attempt.api.request_count, 16 + 2 * 17)
         self.assertLess(attempt.api.request_count, 60)
         self.assertEqual(len(verify_build_export(attempt.sealed_build, plan=attempt.plan)["native_reports"]), 17)
 
@@ -92,6 +92,7 @@ class AssembleCommandTests(AttemptCase):
                               f"required job '{TARGET}' has not finished as the graph expects"),
             "earlier plan job": (lambda attempt: attempt.change_job(PLAN, run_attempt=1),
                                  f"job '{PLAN}' ran in attempt 1, not in attempt 2: {RERUN}"),
+            "carried-over plan job": (lambda attempt: attempt.rerun_failed_jobs(), f"job '{GUARD}' started before attempt 2 did, in an earlier attempt: {RERUN}"),
             "expired partition": (lambda attempt: attempt.set_artifact(111, expired=True),
                                   "artifact 'mb-ci-target--42--a2--target-02' has expired"),
             "extra partition": (lambda attempt: attempt.publish("target", "target-zz", b"x", artifact_id=150, job=TARGET),
@@ -102,11 +103,13 @@ class AssembleCommandTests(AttemptCase):
                 attempt = self.world()
                 change(attempt)
                 self.assert_rejected(attempt, "invalid-document", message)
-                self.assertLessEqual(attempt.api.request_count, 2)
+                self.assertLessEqual(attempt.api.request_count, 3)
 
     def test_a_run_that_moved_and_bytes_that_differ_publish_nothing(self) -> None:
         attempt = self.world()
-        attempt.set_run(run_attempt=3)
+        # GitHub still serves the record of attempt 2 once attempt 3 exists.
+        attempt.api.add_run({**attempt.run, "run_attempt": 3, "run_started_at": "2026-10-07T10:30:00Z"},
+                            attempts=[attempt.run])
         self.assert_rejected(attempt, "invalid-document", "a newer producer attempt exists")
         attempt = self.world()
         attempt.set_run(status="completed", conclusion="failure")

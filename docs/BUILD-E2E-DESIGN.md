@@ -174,7 +174,7 @@ Quick Skin's Pages/feature coverage, curation, review, compatibility, target-sta
 | Malformed/ambiguous metadata, digest/hash/graph mismatch, unsafe archive, unknown scope | Fatal visible failure. Never downgrade authenticated corruption to an optimization miss. |
 | GitHub API failure | Bounded classified retry, then visible failure. Never treat it as absence or permission to use old proof. |
 | Source attempt still pending during reuse admission | No reuse and no success. Wait boundedly or stop; do not race a new full run against unproven original authority. |
-| Failed-jobs-only rerun mixes attempts | Reject incomplete attempt graph/receipts; recovery is rerun all jobs. No cross-attempt mosaic. |
+| Failed-jobs-only rerun mixes attempts | Reject incomplete attempt graph/receipts; recovery is rerun all jobs. No cross-attempt mosaic. GitHub lists a carried-over job under the new attempt with a new id: a job that started before the attempt's `run_started_at` is refused as one (K7 canary, v1.1.2). |
 | Source artifacts disappear after selection | Recheck/reject before consumption or App success. A new full recovery may start independently; the failed consumer cannot pass. |
 | Missing batch members or required lanes/obligations | Reject. Authenticated selected action/capture scope may pass the ordinary gate only with every required lane and every selected obligation; it cannot serve as full-baseline/release/full-scope proof. Unknown optional selection chooses full scope before execution. |
 | Advisory Pages/AI/wake failure | Preserve deterministic gate semantics and previous public site. No advisory status replaces required evidence. |

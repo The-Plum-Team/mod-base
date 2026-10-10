@@ -166,7 +166,7 @@ class KitsCase(unittest.TestCase):
     def checkout(self, tag: str) -> Path:
         return self.cache / "mod-base" / self.sha(tag)
 
-    def mod(self, state: str, tag: str = "v1.1.1", name: str = "mod") -> Path:
+    def mod(self, state: str, tag: str = "v1.1.2", name: str = "mod") -> Path:
         """A clean mod pinned to ``tag`` in ``state``, its callers written by this kit."""
 
         repo = real_mod(self.root / name, self.sha(tag), tag)
@@ -313,17 +313,17 @@ class ActivationReaderTest(unittest.TestCase):
 
 
 class BumpTest(KitsCase):
-    RELEASES = {"v1.0.3": released_kit("v1.0.3"), "v1.1.1": current_kit, "v1.1.2": next_kit}
+    RELEASES = {"v1.0.3": released_kit("v1.0.3"), "v1.1.2": current_kit, "v1.1.3": next_kit}
 
     def test_a_bump_moves_every_pin_and_resynchronizes_the_callers_of_every_state(self) -> None:
         for index, state in enumerate(STATES):
             with self.subTest(state=state):
                 repo = self.mod(state, name=f"mod-{index}")
-                result = self.bump(repo, "v1.1.2")
+                result = self.bump(repo, "v1.1.3")
                 pin = parse_pin(repo)
                 self.assertEqual((result.sha, result.version, pin.sha, pin.version),
-                                 (self.sha("v1.1.2"), "v1.1.2", self.sha("v1.1.2"), "v1.1.2"))
-                kit = self.checkout("v1.1.2")
+                                 (self.sha("v1.1.3"), "v1.1.3", self.sha("v1.1.3"), "v1.1.3"))
+                kit = self.checkout("v1.1.3")
                 expected = tool.expected_callers(kit, Pin(pin.sha, pin.version, ()), manifest(state),
                                                  tool.canonical_branch(repo))
                 for path in CALLERS:
@@ -335,7 +335,7 @@ class BumpTest(KitsCase):
                     self.assertTrue((repo / BUILD).read_bytes().endswith(b"# a later template\n"))
                     self.assertIn(f'MB_KIT_SHA: "{pin.sha}"'.encode(), (repo / GUARD).read_bytes())
                 self.assertTrue((repo / "docs/ai/shared/REPOSITORY.md").read_text(encoding="utf-8").endswith(NOTE))
-                self.assertNotIn(self.sha("v1.1.1").encode(), b"".join(tree(repo / ".github").values()))
+                self.assertNotIn(self.sha("v1.1.2").encode(), b"".join(tree(repo / ".github").values()))
                 self.assertEqual(tool.check(repo, kit_root=kit), [])
 
     def test_a_rollback_below_activation_is_refused_while_callers_are_managed(self) -> None:
@@ -377,16 +377,16 @@ class BumpTest(KitsCase):
         pages.write_bytes(pages.read_bytes().replace(b"# <<< mod-local extensions\n", b""))
         before = tree(repo)
         with self.assertRaisesRegex(BOOT.KitError, "template sync planning failed with exit 2; pin unchanged"):
-            self.bump(repo, "v1.1.2")
+            self.bump(repo, "v1.1.3")
         self.assertEqual(tree(repo), before)
 
     def test_a_malformed_manifest_stops_the_bump_before_any_request(self) -> None:
         repo = self.mod("shadow")
         (repo / ACTIVATION_PATH).write_bytes(b"{")
         before = tree(repo)
-        api = FakeApi(released(self.sha("v1.1.2"), "v1.1.2"))
+        api = FakeApi(released(self.sha("v1.1.3"), "v1.1.3"))
         with self.assertRaises(BOOT.KitError):
-            BOOT.bump(repo, "v1.1.2", self.environ, get_json=api.getter())
+            BOOT.bump(repo, "v1.1.3", self.environ, get_json=api.getter())
         self.assertEqual((api.calls, tree(repo), self.cache.exists()), ([], before, False))
 
     def test_a_refused_bump_is_one_line_and_exit_two_on_the_command_line(self) -> None:
@@ -412,11 +412,11 @@ class BumpTest(KitsCase):
         os.chmod(shared, 0o555)
         self.addCleanup(os.chmod, shared, 0o755)
         with self.assertRaises(BOOT.KitError) as caught:
-            self.bump(repo, "v1.1.2")
+            self.bump(repo, "v1.1.3")
         self.assertIn("template sync --write failed", str(caught.exception))
         self.assertIn("every workflow and action file was restored", str(caught.exception))
         self.assertEqual(tree(repo), before)
-        self.assertEqual(parse_pin(repo).sha, self.sha("v1.1.1"))
+        self.assertEqual(parse_pin(repo).sha, self.sha("v1.1.2"))
 
 
 #: A write phase that edits, creates and then fails: what a restore must undo.
@@ -439,12 +439,12 @@ BOOT_BYTES = (KIT_ROOT / "template/managed/scripts/ci/mod_base_kit.py").read_byt
 
 
 class RestoreTest(KitsCase):
-    RELEASES = {"v1.1.1": current_kit, "v2.0.0": authored_kit(MEDDLING_MAIN), "v2.0.1": authored_kit(LOCKING_MAIN)}
+    RELEASES = {"v1.1.2": current_kit, "v2.0.0": authored_kit(MEDDLING_MAIN), "v2.0.1": authored_kit(LOCKING_MAIN)}
 
     def test_whatever_a_failed_write_phase_did_to_the_pin_files_is_undone(self) -> None:
         repo = self.mod("absent")
         write(repo, ".github/actions/local/action.yml",
-              f"runs:\r\n  steps:\r\n      - uses: The-Plum-Team/mod-base/actions/setup@{self.sha('v1.1.1')} # v1.1.1\r\n")
+              f"runs:\r\n  steps:\r\n      - uses: The-Plum-Team/mod-base/actions/setup@{self.sha('v1.1.2')} # v1.1.2\r\n")
         before = tree(repo)
         with self.assertRaisesRegex(BOOT.KitError, "sync --write failed with exit 2; every workflow and action file "
                                                    "was restored"):

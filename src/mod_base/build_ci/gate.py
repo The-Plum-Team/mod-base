@@ -62,7 +62,7 @@ from mod_base.build_ci.records import (GATE_MODES, bind_source_selection, gate_r
 from mod_base.build_ci.reuse import FullRunRequired, ReuseRefused, admit_post_merge_reuse
 from mod_base.build_ci.selection import revalidate_latest_pr_build, revalidate_protected_build
 from mod_base.build_ci.transport import (_admit_source, _authenticate_build, _authenticate_run, _bound, _plan,
-                                         _read_results, _read_sealed_build, _read_sealed_lane)
+                                         _read_results, _read_sealed_build, _read_sealed_lane, _run)
 from mod_base.github.api import GitHubApi
 from mod_base.model import grammar
 from mod_base.model.validators import check
@@ -139,6 +139,8 @@ def authenticate_attempt(api: GitHubApi | CommandReads, *, record: dict[str, Any
     modes = admissible_modes(record, gate)
     caller = ci_producer(record["workflow_path"])
     _admit_source(reads, watch, plan["identity"])
+    # The run is observed before its jobs are read: its record says when this attempt started.
+    _run(reads, watch, run_id)
     mode = _shown_mode(reads, record, plan, modes, run_id, run_attempt)
     producer = describe.attempt_producer(record, plan, mode=mode, run_id=run_id, run_attempt=run_attempt)
     _authenticate_run(reads, watch, producer, plan, mode=mode, complete=False)
@@ -258,6 +260,8 @@ def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan:
                                       workflow_path=record["workflow_path"])
     owning = selection["build"]
     _admit_source(reads, watch, plan["identity"])
+    # The run is observed before its jobs are read: its record says when this attempt started.
+    _run(reads, watch, run_id)
     mode = _shown_mode(reads, record, plan, modes, run_id, run_attempt)
     producer = describe.attempt_producer(record, plan, mode=mode, run_id=run_id, run_attempt=run_attempt)
     _authenticate_run(reads, watch, producer, plan, mode=mode, complete=False)

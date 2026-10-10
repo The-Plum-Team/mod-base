@@ -12,7 +12,7 @@ from mod_base.build_ci.protocol import plan_sha256
 from mod_base.build_ci.selection import revalidate_latest_pr_build, select_latest_pr_build, wait_for_latest_pr_build
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
-from tests.helpers import ci_api_run, ci_graph_jobs
+from tests.helpers import ci_api_run, ci_failed_jobs_rerun, ci_graph_jobs
 from tests.test_ci_transport import ASSEMBLE, World, build_world
 
 LISTING = "/repos/example/mod/actions/workflows/mod-base-build.yml/runs"
@@ -166,6 +166,18 @@ class PrBuildSelectionTests(unittest.TestCase):
         world.api.during_listing(LISTING, lambda: world.set_run(42, run_attempt=3))
         with self.assertRaises(MbError):  # attempt 3 has no jobs: nothing of attempt 2 is reused
             self.call(world)
+
+    def test_a_failed_jobs_only_rerun_is_refused_and_a_rerun_of_all_jobs_selected(self):
+        world = build_world()
+        world.runs[42] = ci_failed_jobs_rerun(world.api, world.runs[42], world.jobs[42])
+        with self.assertRaisesRegex(MbError, "Authenticate the pinned kit' started before attempt 2 did, in an "
+                                             "earlier attempt: a failed-jobs-only rerun mixes attempts; rerun all jobs"):
+            self.call(world)
+        # Attempt 2 of a rerun of all jobs: its first job starts in the second the attempt does.
+        world = build_world(run_started_at="2026-10-07T10:00:05Z")
+        world.api.add_run(world.runs[42], attempts=[{**world.runs[42], "run_attempt": 1, "conclusion": "cancelled",
+                                                     "run_started_at": "2026-10-07T09:00:00Z"}])
+        self.assertEqual(self.call(world), world.bundle)
 
     def test_live_source_and_non_pr_request_are_independent_requirements(self):
         world = build_world()

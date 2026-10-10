@@ -1,0 +1,19 @@
+{
+  "implementation": {
+    "run_attempt": 1,
+    "run_id": 500,
+    "run_url": "https://github.com/The-Plum-Team/Quick-Skin-Mod/actions/runs/500",
+    "sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "workflow_ref": "The-Plum-Team/Quick-Skin-Mod/.github/workflows/pages.yml@refs/heads/master"
+  },
+  "kind": "mod-base.build",
+  "kit": {
+    "repository": "The-Plum-Team/mod-base",
+    "sha": "734f6e6bc8ba05938734384ab7835c45111af4d3",
+    "version": "0.9.0"
+  },
+  "pixel_metrics_version": 1,
+  "repository": "The-Plum-Team/Quick-Skin-Mod",
+  "schema_version": 1,
+  "site_inventory_sha256": "7cc0ee8fe5ecc9c13bfcc902ee43a8ec5c00ba1991529e5d0ed88777bb492a5f"
+}

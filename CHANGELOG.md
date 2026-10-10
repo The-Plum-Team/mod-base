@@ -5,6 +5,30 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.1.2
+
+- Refuse the jobs GitHub carries over into a rerun of failed jobs only. The K7 canary
+  (The-Plum-Team/mod-base-canary, evidence rows "R1-C | C2" and "R1-C | C4") reran the failed
+  jobs of Build run 38032224931: the job listing of attempt 2 showed the plan and guard jobs of
+  attempt 1 under new job ids with `run_attempt` 2, but with the times and runner of attempt 1
+  (the plan job started at 06:48:55Z, attempt 2 at 06:55:06Z). v1.1.1 refused only a job whose
+  `run_attempt` was lower, so it sealed a green attempt 2 fed by the plan of attempt 1 and the gate
+  status App published success; packaged run 38032224927 carried its guard job over the same way.
+  Every reader of one attempt's jobs now also refuses a job that started before the attempt's
+  `run_started_at`, with "a failed-jobs-only rerun mixes attempts; rerun all jobs". Times compare
+  as whole seconds, so a job that starts in the second its attempt does is the attempt's own;
+  skipped jobs and jobs without a start time are not judged by time. A rerun of all jobs runs
+  every job again and is accepted: in the attempts 3 of both canary runs, reruns of all jobs that
+  ran v1.1.1, every job started after its attempt (first jobs at 07:07:40Z and 07:29:44Z, attempts
+  at 07:07:36Z and 07:29:41Z), and the tests replay these listings. No hosted run of v1.1.2 has
+  shown it yet: K7 has to repeat C2 and C4 on a v1.1.2 pin.
+- The start of an attempt comes from the run record each command already reads. Only
+  `ci assemble`, which reads its jobs before its run, reads the record of its own attempt: 16
+  requests and 2 per target (50 for 17 targets), within its unchanged budget. The
+  workflow-derived generation ledger moves by one: synthetic 212, Quick Skin 412, Block Pops 314
+  (221/421/323 with a changed candidate pin). Nothing else changes: schemas, `ADAPTER_API`,
+  `BUILD_ADAPTER_API` 1, `pixel_metrics_version` 1 and the managed files are those of v1.1.1.
+
 ## v1.1.1
 
 - Admit the `.git/config.worktree` that actions/checkout leaves in every checkout (it runs

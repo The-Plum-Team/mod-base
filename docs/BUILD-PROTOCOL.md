@@ -117,7 +117,8 @@ the shapes the API returns and compared as whole-second UTC (`grammar.normalize_
 
 Thirteen kinds, all new in v1.1.0 at schema version 1 and strict (an unknown or duplicate key is a
 rejection); the records the kit writes are canonical JSON. v1.0.3 rejects each as an unknown kind;
-v1.1.0, the predecessor of this release, reads each unchanged (`tests/test_schema_evolution.py`).
+v1.1.0 and v1.1.1, the predecessor of this release, read each unchanged
+(`tests/test_schema_evolution.py`).
 [SCHEMAS.md](SCHEMAS.md) has the field tables of the Build config, the batch manifest, the results
 index and the activation manifest. For the others the validator named here, a function of
 `mod_base.build_ci`, is the definition, and `tests/fixtures/documents/valid/ci-*.json` holds a
@@ -424,7 +425,7 @@ or superseded evidence uses exit 3, including expired original evidence during `
 | The gate of a reuse run finds the reuse no longer admitted | `ci seal-gate` seals nothing and fails. Rerunning all jobs of the run decides again and tests in full |
 | Malformed or ambiguous metadata, a digest, hash or graph mismatch, an unsafe archive | A rejection. Nothing turns it into "not found" |
 | A GitHub API failure | The client sends a request at most four times (transport errors, HTTP 408, 429, 500, 502, 503, 504 and rate-limit answers, with delays of at most 30 seconds); then the command fails, as it does when its request budget is spent. `ci gate-status` then produces no intent at all |
-| A rerun of failed jobs only | A job or an artifact of an earlier attempt is refused with "a failed-jobs-only rerun mixes attempts; rerun all jobs", and a selection record serves only the attempt that requested it |
+| A rerun of failed jobs only | A job or an artifact of an earlier attempt is refused with "a failed-jobs-only rerun mixes attempts; rerun all jobs", and a selection record serves only the attempt that requested it. GitHub lists a job it did not run again under the new attempt, with a new job id and that attempt's number, but with the times of the attempt that ran it: every reader of an attempt's jobs refuses a job that started before the attempt's `run_started_at` (whole seconds; skipped jobs are not judged by time). A rerun of all jobs runs every job again and is accepted |
 | An artifact disappears after it was selected | `ci fetch-build` fails its numeric-id download; it never selects a replacement. `ci seal-gate` observes the live source, newest run and artifacts again before returning |
 | A target, a lane or a batch member is missing | `ci assemble` and `ci aggregate` require exactly one artifact of their own attempt for every planned unit, and a gate one native receipt for every planned unit. `ci batch-settle` refuses a batch whose rebuilt commits differ from its manifest |
 | A Pages, AI review or notification failure | Outside this pipeline: no `ci` command reads or writes Pages state, and the Pages workflows are unchanged |
@@ -457,7 +458,7 @@ objects named by SHA and the job list of a completed attempt are fetched once pe
 | `ci reuse-admit` | 38 for an admitted reuse, 11 when the merged tree differs, 1 for a push that merges no pull request | `MAX_CI_REUSE_ADMIT_REQUESTS`, 96 | `tests/test_ci_reuse.py` |
 | `ci select-build` | 17 for a pull request whose Build is complete and one more for every poll before that; 15 for a protected subject | `MAX_CI_SELECT_BUILD_REQUESTS`, 155 | `tests/test_ci_commands_packaged.py` |
 | `ci fetch-build` | 2 for every route, including the storage GET | `MAX_CI_FETCH_BUILD_REQUESTS`, 8 | `tests/test_ci_commands_packaged.py` |
-| `ci assemble` | 15 and 2 for each target: 49 for 17 targets | `MAX_CI_ASSEMBLE_REQUESTS`, 816 | `tests/test_ci_commands_build.py` |
+| `ci assemble` | 16 and 2 for each target: 50 for 17 targets | `MAX_CI_ASSEMBLE_REQUESTS`, 816 | `tests/test_ci_commands_build.py` |
 | `ci aggregate` | 13 and 2 for each lane: 81 for 34 lanes | `MAX_CI_AGGREGATE_REQUESTS`, 816 | `tests/test_ci_aggregate.py` |
 | `ci seal-gate` | 15 for a Build gate, 23 for the packaged gate of a pull request, 47 for the gate of a reuse run | `MAX_CI_GATE_REQUESTS`, 96 | `tests/test_ci_gate.py`, `tests/test_ci_reuse_seal.py` |
 | `ci gate-status` | 2 to 8 with `--settle`; 45 with both runs complete | `MAX_CI_GATE_STATUS_REQUESTS`, 96 | `tests/test_ci_commands_status.py` |
@@ -471,12 +472,12 @@ including subject and plan). Jobs and artifact listings fit one page; waiting po
 
 | Case | Targets / lanes / extra plan inputs | Build | Packaged | Status | Total |
 | --- | --- | --- | --- | --- | --- |
-| Synthetic hosted command chain | 2 / 3 / 1 | 61 | 92 | 58 | 211 |
-| Quick Skin fixture | 17 / 34 / 1 | 106 | 247 | 58 | 411 |
-| Block Pops fixture | 10 / 20 / 0 | 82 | 174 | 57 | 313 |
-| Synthetic, changed candidate pin | 2 / 3 / 1 | 64 | 95 | 61 | 220 |
-| Quick Skin, changed candidate pin | 17 / 34 / 1 | 109 | 250 | 61 | 420 |
-| Block Pops, changed candidate pin | 10 / 20 / 0 | 85 | 177 | 60 | 322 |
+| Synthetic hosted command chain | 2 / 3 / 1 | 62 | 92 | 58 | 212 |
+| Quick Skin fixture | 17 / 34 / 1 | 107 | 247 | 58 | 412 |
+| Block Pops fixture | 10 / 20 / 0 | 83 | 174 | 57 | 314 |
+| Synthetic, changed candidate pin | 2 / 3 / 1 | 65 | 95 | 61 | 221 |
+| Quick Skin, changed candidate pin | 17 / 34 / 1 | 110 | 250 | 61 | 421 |
+| Block Pops, changed candidate pin | 10 / 20 / 0 | 86 | 177 | 60 | 323 |
 
 The hosted pipeline observes every command's traffic through `FakeGitHub` and compares it with
 this ledger while running the real workflow-derived command lines, files, Git, accounts, hooks
@@ -487,10 +488,10 @@ It is not a measurement of a live GitHub generation. Changed-pin totals add one 
 release admission in each run's first plan, nine requests per generation. Extra checkout Actions'
 traffic is also outside this kit ledger; unchanged pins retain their ordinary totals.
 
-Each pending selection poll adds one request: Quick Skin plus 89 pending polls is 500, below
+Each pending selection poll adds one request: Quick Skin plus 89 pending polls is 501, below
 the target of 600. `MAX_CI_GENERATION_REQUESTS = 440` is a test-only regression budget for the
 no-wait native fixtures, not runtime admission. The structural maxima of 256 targets and 256
-lanes cost at least 2,287 requests before extra listing pages, exceeding the 1,000 allowance.
+lanes cost at least 2,288 requests before extra listing pages, exceeding the 1,000 allowance.
 The coordinator explicitly retained those structural bounds without promising that such a
 generation fits; concurrent runs, polling and real hosted traffic must be considered at adoption.
 

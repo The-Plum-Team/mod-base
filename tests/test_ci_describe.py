@@ -6,6 +6,7 @@ import copy
 import unittest
 
 from mod_base.build_ci import describe, selection, transport
+from mod_base.build_ci.reads import CommandReads
 from mod_base.build_ci.records import validate_descriptor
 from mod_base.errors import MbError
 from mod_base.model import limits
@@ -46,7 +47,7 @@ class DescribeAttemptTests(AttemptCase):
                          expected=[("target", target["id"]) for target in attempt.plan["targets"]],
                          finished=describe.settled_jobs("build", "full", attempt.plan, "build"))
         arguments.update(changes)
-        return describe.describe_attempt(attempt.api, **arguments)
+        return describe.describe_attempt(arguments.pop("api", attempt.api), **arguments)
 
     def rejected(self, attempt, pattern: str, **changes) -> str:
         with self.assertRaisesRegex(MbError, pattern) as caught:
@@ -55,8 +56,14 @@ class DescribeAttemptTests(AttemptCase):
 
     def test_every_target_is_described_in_plan_order_from_two_requests(self) -> None:
         attempt = self.world()
-        descriptors = self.describe(attempt)
-        self.assertEqual(attempt.api.request_count, 2)
+        reads = CommandReads(attempt.api)
+        reads.run(attempt.run_id)
+        descriptors = self.describe(attempt, api=reads)
+        # Once the run has been read, its record says when this attempt started.
+        self.assertEqual(attempt.api.request_count, 1 + 2)
+        # Alone, the reader asks the attempt's own record.
+        self.assertEqual(self.describe(attempt), descriptors)
+        self.assertEqual(attempt.api.request_count, 3 + 3)
         self.assertEqual([descriptor["artifact"]["name"] for descriptor in descriptors],
                          ["mb-ci-target--42--a2--target-a", "mb-ci-target--42--a2--target-02"])
         for index, descriptor in enumerate(descriptors):
@@ -154,6 +161,20 @@ class DescribeAttemptTests(AttemptCase):
         missing = self.rejected(self.world(second=None), r"this attempt has no artifact")
         self.assertEqual(len({job, artifact, missing}), 3)
 
+    def test_a_job_github_carried_over_into_a_failed_jobs_only_rerun_is_a_mixed_attempt(self) -> None:
+        # K7 canary, run 38032224931 attempt 2: the guard and the plan job of attempt 1 are listed
+        # under attempt 2, with new ids, but they started before attempt 2 did.
+        attempt = self.world()
+        attempt.rerun_failed_jobs()
+        self.rejected(attempt, rf"job '{GUARD}' started before attempt 2 did, in an earlier attempt: {RERUN}")
+        reads = CommandReads(attempt.api)
+        reads.run(attempt.run_id)
+        self.rejected(attempt, rf"job '{GUARD}' started before attempt 2 did", api=reads)
+        # A rerun of all jobs runs every job again: the first starts in the second its attempt does.
+        attempt = self.world()
+        attempt.set_run(run_started_at=attempt.job(GUARD)["started_at"])
+        self.assertEqual(len(self.describe(attempt)), 2)
+
     def test_the_producer_must_carry_the_graph_of_the_mode_and_the_expectation_be_exact(self) -> None:
         attempt = self.world()
         self.rejected(attempt, r"is not the graph of this run in that mode",
@@ -164,9 +185,9 @@ class DescribeAttemptTests(AttemptCase):
             self.describe(attempt, expected=[("runtime", "lane-a")])  # the Build caller runs no lane
         self.assertEqual(attempt.api.request_count, 0)
         self.rejected(attempt, r"required job is outside this graph", finished=["Shared Build / No such job"])
-        # With nothing expected only the jobs are read and required.
+        # With nothing expected only the jobs are read and required, beside the attempt's record.
         self.assertEqual(self.describe(attempt, expected=[]), [])
-        self.assertEqual(attempt.api.request_count, 2)
+        self.assertEqual(attempt.api.request_count, 4)
 
 
 class AttemptShapeTests(AttemptCase):
