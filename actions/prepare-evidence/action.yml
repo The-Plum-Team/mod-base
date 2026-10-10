@@ -159,7 +159,7 @@ runs:
           --kind handoff --input "$HANDOFF_DIR" --expected-subject-commit "$SUBJECT_COMMIT"
     - name: Upload the single-use evidence handoff
       id: handoff-upload
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: mb-handoff--${{ inputs.key }}--a${{ github.run_attempt }}
         path: ${{ steps.prepare.outputs.handoff }}
@@ -224,7 +224,7 @@ runs:
     - name: Upload the durable lossless anchor
       id: anchor-upload
       if: steps.prepare.outputs.anchor_eligible == 'true'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ steps.anchor.outputs.name }}
         path: ${{ steps.anchor.outputs.path }}

@@ -606,7 +606,7 @@ jobs:
             python3 -P -m mod_base ci worker-validate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --hook verify_target --unit "$TARGET" --output "$RUNNER_TEMP/mb-upload"
       - name: Upload sealed outputs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mb-ci-target--${{ github.run_id }}--a${{ github.run_attempt }}--${{ matrix.id }}
           path: ${{ runner.temp }}/mb-upload
@@ -792,7 +792,7 @@ jobs:
             python3 -P -m mod_base ci worker-validate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --hook verify_build --output "$RUNNER_TEMP/mb-upload"
       - name: Upload sealed outputs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mb-ci-build--${{ github.run_id }}--a${{ github.run_attempt }}
           path: ${{ runner.temp }}/mb-upload
@@ -971,7 +971,7 @@ jobs:
             python3 -P -m mod_base ci seal-gate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --gate build --output "$RUNNER_TEMP/mb-upload"
       - name: Upload sealed outputs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ format(needs.plan.outputs.mode == 'reuse' && 'mb-ci-reuse--{0}--a{1}' || 'mb-ci-tested--{0}--a{1}--build', github.run_id, github.run_attempt) }}
           path: ${{ runner.temp }}/mb-upload
