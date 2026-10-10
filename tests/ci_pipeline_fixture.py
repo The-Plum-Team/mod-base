@@ -210,10 +210,17 @@ CHECKS += (_future_kit_resolves,)
         return equal if match[2] == "==" else not equal
 
     def checkout(self, source: Path, destination: Path, sha: str) -> None:
+        # The commands actions/checkout v7 runs on a hosted runner, in order: its metadata (shallow,
+        # FETCH_HEAD, the config.worktree `sparse-checkout disable` leaves) is what the kit must admit.
         destination.mkdir()
         fixture.git(destination, "init", "-q")
-        fixture.git(destination, "fetch", "-q", "--no-tags", source.as_uri(), sha)
-        fixture.git(destination, "checkout", "-q", "--detach", "FETCH_HEAD")
+        fixture.git(destination, "remote", "add", "origin", source.as_uri())
+        fixture.git(destination, "config", "--local", "gc.auto", "0")
+        fixture.git(destination, "-c", "protocol.version=2", "fetch", "-q", "--no-tags", "--prune",
+                    "--no-recurse-submodules", "--depth=1", "origin", sha)
+        fixture.git(destination, "sparse-checkout", "disable")
+        fixture.git(destination, "config", "--local", "--unset-all", "extensions.worktreeConfig")
+        fixture.git(destination, "checkout", "-q", "--force", sha)
         self.test.assertEqual(fixture.git(destination, "rev-parse", "HEAD"), sha)
         self.test.assertEqual(fixture.git(destination, "status", "--porcelain"), "")
 

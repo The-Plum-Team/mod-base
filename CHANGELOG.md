@@ -7,6 +7,11 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 
 ## v1.1.1
 
+- Admit the `.git/config.worktree` that actions/checkout leaves in every checkout (it runs
+  `git sparse-checkout disable`). v1.1.0 refused that metadata in `stage-candidate`, so no
+  policy, target or lane job could run on a hosted runner; the K7 canary found it. Like `config`,
+  the file is never read or copied. The hosted pipeline test now checks out with the same
+  commands as the action.
 - Restore the managed `.gitattributes` of v1.0.3. v1.1.0 added `eol=lf` rules for the four
   Build/E2E callers, but Block Pops can change that file through no pull request a kit bump can
   be, so v1.1.0 could not be adopted there. A Windows clone with `core.autocrlf=true` gets CRLF

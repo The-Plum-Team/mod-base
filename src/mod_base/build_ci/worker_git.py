@@ -22,7 +22,10 @@ from mod_base.model import grammar, limits
 
 _BOUNDS = dict(max_files=limits.MAX_CI_GIT_METADATA_FILES, max_entries=limits.MAX_CI_GIT_METADATA_ENTRIES,
                max_file_bytes=limits.MAX_CI_GIT_METADATA_FILE_BYTES, max_total_bytes=limits.MAX_CI_GIT_METADATA_TREE_BYTES)
-_IGNORED = {'HEAD', 'config', 'description', 'FETCH_HEAD', 'ORIG_HEAD', 'logs', 'hooks', 'info', 'branches'}
+# Never read or copied. ``config.worktree`` is what ``git sparse-checkout disable`` leaves, and
+# actions/checkout runs that in every checkout; like ``config`` it is the runner's, not the candidate's.
+_IGNORED = {'HEAD', 'config', 'config.worktree', 'description', 'FETCH_HEAD', 'ORIG_HEAD', 'logs', 'hooks',
+            'info', 'branches'}
 _PACK = re.compile(r'^objects/pack/pack-[0-9a-f]{40}\.(?:pack|idx|rev|bitmap|keep|mtimes)$')
 _LOOSE = re.compile(r'^objects/[0-9a-f]{2}/[0-9a-f]{38}$')
 
