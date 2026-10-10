@@ -521,6 +521,73 @@ value only as the caller-side row of G6; it never counts toward the three.
 |---|---|---|---|---|
 | pending | a kit callee job (deferred to v1.1) | | | |
 
+### Build/E2E canary (K7)
+
+K7 ran in The-Plum-Team/mod-base-canary on 2026-10-10, from preflight to closeout: the synthetic
+mod of `tests/fixtures/ci_mod` (two targets, three lanes) in `shadow` and then
+`shared-build-and-e2e`, with the gate App `plum-mod-base-gate` publishing the statuses. The
+operator's ledger holds about 340 observation rows; run URLs are
+`https://github.com/The-Plum-Team/mod-base-canary/actions/runs/<id>`.
+
+| Round | Kit tag | Result | Observed |
+|---|---|---|---|
+| P, S1–S3, P0 | v1.1.0 / `da4fa6a` | failed | the bump and the transitions to `disabled` and `shadow` were admitted; P0 (38013131148) failed in stage-candidate on the `.git/config.worktree` that `actions/checkout` leaves: **defect 1**, fixed in v1.1.1 |
+| S1b, P0 | v1.1.1 / `f30b5b6` | passed | bump PR #5 (mode unchanged); push generation 38021668384 / 38021668386 green with exact `build-full` / `packaged-selected` graphs and records naming kit 1.1.1 |
+| S4, MA | v1.1.1 | passed | `shadow` → `shared-build-and-e2e` (PR #6): the first pull-request generation with App statuses, then the first full push generation |
+| R1a | v1.1.1 | passed | A and B concurrently (PRs #8, #7); B's candidate callers left no trace; 142 requests per pull-request generation |
+| R1b | v1.1.1 | passed | the draft lifecycle D0–D5 (PR #9) and kill safety K (PR #10): never `success` without a complete generation |
+| R1c | v1.1.1 | failed | C1, C3 (all jobs rerun) and H (head push, PR #12) passed; C2 and C4 (PR #11): a rerun of failed jobs only went green and the gate published `success` (38032224931 attempt 2): **defect 2**, fixed in v1.1.2 |
+| R1d | v1.1.1 | failed | F (PR #13): the lanes, the input job and the recovery passed, but the gate status evaluation stopped on the 404 of the deleted bundle and published nothing, so both statuses stayed `pending` (38043290126): **defect 3**, fixed in v1.1.3 |
+| R2 | v1.1.1 | passed | BASE (controller moved mid-run: Seal and Verify refuse), M1, SQ and RB reuse, T full `merged-tree-differs`, EVU full `original-evidence-unavailable`, PEND `ci-original-pending` (PRs #8, #9, #11, #12, #14, #15) |
+| R3 | v1.1.1 | passed | a temporary ruleset requiring both contexts from App 5256389: check runs of the same names and operator statuses never unblock (PR #16); App `success` on the head does |
+| R4 | v1.1.1 | passed | Pages G1–G7 and the v1.0.3 family evidence carried forward (OLD); conformance 391 checks |
+
+Closeout verdict: fix forward. v1.1.0 got no Release; v1.1.1 had been released that morning, by
+owner decision and before R1c ended, so that the mods could pin it inactive, with Release notes
+naming the open rerun defect. Defect 2 published a `success`
+the design forbids; defect 3 failed closed but left the pull request `pending` instead of
+`failure`.
+
+Findings that are not defects:
+
+- `GITHUB_TOKEN` allowance in this organization: 5,000 requests per hour (not 1,000), and each
+  job's token reports its own window, so a probe job cannot observe what other runs spent.
+  Measured: 142–233 requests per pull-request generation of the synthetic mod, which projects to
+  411–433 for Quick Skin and 313–335 for Block Pops.
+- A rerun of failed jobs only lists the jobs GitHub carries over from the previous attempt with
+  new ids and the new `run_attempt`, but their original start times and runners: only the start
+  time against the attempt's `run_started_at` tells them apart (what v1.1.2 checks).
+- `actions/checkout` runs `git sparse-checkout disable`, which leaves `.git/config.worktree`.
+- When the default branch moves during a Build, the status evaluation at the moved base publishes
+  `failure` ("the newest Build run failed") rather than publishing nothing. Still fail-closed.
+- A later `success` status from App 5256389 overrides an operator `failure`, but an operator
+  `failure` blocks the merge: the rule reads the newest status of any writer.
+- The hourly gate status schedule was delivered in 2 of about 16 slots; manual dispatch works.
+- Gaps: a family-less gallery was not observable (carry-forward keeps `demo-pairs` available);
+  the old/new record reader and a bump from a released pin to a candidate one were not executable
+  at the time (v1.1.0 never produced a record).
+- Exception, still open: the App is installed on all repositories of the organization; the owner
+  must restrict it to the canaries and the mods that adopt the gate.
+
+**Verification of the v1.1.2/v1.1.3 fixes: passed** in The-Plum-Team/mod-base-canary-2, a copy of
+the canary's `main` with its own repository identity, bumped from v1.1.1 to v1.1.3 by PR #1 (the
+push generation 38070470454 / 38070470469 is green with exact graphs and records naming kit 1.1.3).
+Cases C (PR #2) and F (PR #3) ran concurrently at v1.1.3 / `4199d85`:
+
+- C2 and C4: the reruns of failed jobs only (38072195557 and 38072195600, attempts 2) failed in
+  Seal and Verify with "a failed-jobs-only rerun mixes attempts; rerun all jobs", and no `success`
+  was ever published from them; the reruns of all jobs (attempts 3) went green with exact graphs
+  and both statuses `success`.
+- F1: with the bundle deleted after selection, the lanes failed their fetch and both statuses
+  became `failure`, naming the gone artifact. F3: the rerun of all jobs sealed a new bundle that
+  the packaged rerun owns; both statuses `success`.
+- F4, now decided: deleting that bundle and evaluating again turned both published `success`
+  statuses into `failure` ("artifact N it needs is gone (HTTP 404)"). v1.1.3 fails closed on any
+  re-evaluation, scheduled or manual, of an open pull request whose bundle has expired or been
+  deleted; the recovery is to rerun the Build, then the packaged run.
+
+The v1.1.3 Release was published after these cases; v1.1.2 has no Release.
+
 ## Rollout
 
 | Stage | Action | Exit criterion |
