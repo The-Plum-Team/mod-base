@@ -105,11 +105,12 @@ protected release first; unsupported future digest/lock formats require a compat
 release. Stage/root record formats and the job graph stay unchanged; conditional checkout steps
 are new. Tag-peel, main-ancestry, digest and lock-format controls reject invalid future kits.
 
-Every lane runs all its obligations: no lane narrows its scenarios to those a pull request
-affects. Quick Skin's native selection (adoption gap QS-G6) needs owner decisions on where a
-selection is bound, which code may read the API for it and which schema and adapter versions carry
-it; [BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md) proposes them. Until they are taken,
-Q7 activates full profiles.
+Every lane is planned with all its obligations, and `derive_runtime` has no authenticated input
+that could narrow its scenarios to those a pull request affects. Quick Skin's native selection
+(adoption gap QS-G6) needs owner decisions on where a selection is bound, which code may read the
+API for it and which schema and adapter versions carry it;
+[BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md) proposes them. Until they are taken and
+a kit release implements them, Q7 activates full profiles.
 
 Subject admission waits up to 15 seconds/four observations for a pending PR test merge. An
 outdated base fails with `ci-pr-base-outdated` and asks for a branch update. A default branch
