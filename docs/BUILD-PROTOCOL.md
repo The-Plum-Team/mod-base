@@ -550,8 +550,9 @@ on GitHub. K7 must still establish:
 - how much real generation traffic, including third-party Actions, spends the repository's
   hourly `GITHUB_TOKEN` allowance;
 - that `actions/cache/restore` and `actions/cache/save` behave on these callers as the seed steps
-  assume: a `pull_request_target` run reads the default branch's entries (and, once GitHub issues
-  read-only cache tokens to it, cannot write any), a protected push saves under the exact key, and
+  assume: a `pull_request_target` run reads the default branch's entries (and, with the read-only
+  cache token GitHub issues to that trigger since 2026-06-26, cannot write any), a protected push
+  saves under the exact key, and
   a seed restored into `$RUNNER_TEMP/mb-seed` passes `--gradle-seed` admission; and how large the
   seeds of each mod are;
 - that a `workflow_run` event of a producer run carries the head branch, head commit and head

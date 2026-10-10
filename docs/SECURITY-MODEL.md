@@ -230,6 +230,6 @@ text is validated and HTML-escaped at build time.
   the candidate is staged; only a protected push or dispatch of the kit's jobs saves one, from a
   root copy of its locked candidate's Gradle home, and no pull request ever does. A cache entry
   carries no provenance the kit can verify, so any other writer of that cache scope (a workflow
-  that runs code under review on the default branch's ref with the runtime token) could plant one.
-  `seeds` is therefore off unless the owner enables it after checking that no such writer exists
-  ([OPERATIONS.md](OPERATIONS.md#protected-seeds)).
+  that runs code under review on the default branch's ref with a writable cache token) could plant
+  one. `seeds` is therefore off unless the owner enables it after checking that no such writer
+  exists ([OPERATIONS.md](OPERATIONS.md#protected-seeds)).

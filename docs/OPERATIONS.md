@@ -390,13 +390,17 @@ dispatch there saves the entries that are missing. Enabling it is a change of th
 config, reviewed like any other, and it is safe only when all of these hold. **Checking them is
 the owner's decision**, before the pull request that adds `seeds` is merged:
 
-1. No workflow of the repository runs code under review on the default branch's ref while the
-   Actions runtime token is reachable: no `pull_request_target`, `workflow_run`, `issue_comment` or
-   other default-ref job that checks out and executes a pull request without dropping the token
-   and the cache variables as the kit's jobs do. Such a job can write a cache entry under any key
-   that every later protected job restores, and the cache action extracts it as the runner. GitHub
-   is moving `pull_request_target` runs to read-only cache tokens (actions/cache v6.1.0, "Read-only
-   access"); until that applies to the repository, this check is the only defence.
+1. No workflow of the repository can write the default branch's cache while it runs code under
+   review. Such a job can write a cache entry under any key that every later protected job
+   restores, and the cache action extracts it as the runner. Since 2026-06-26 GitHub gives a job
+   of an untrusted trigger on the default branch's ref (`pull_request_target`, `issue_comment`, a
+   `workflow_run` started by a fork's pull request) a read-only cache token
+   ([changelog](https://github.blog/changelog/2026-06-26-read-only-actions-cache-for-untrusted-triggers/)),
+   so check the two ways around it: no workflow declares `cache-mode: write` or `write-only`
+   ([changelog](https://github.blog/changelog/2026-09-10-control-github-actions-cache-access-with-cache-mode))
+   for such a trigger, and no job of a trusted trigger (`push`, `schedule`, `workflow_dispatch`,
+   `repository_dispatch`, a `workflow_run` of a branch of the repository itself) checks out and
+   executes a pull request without dropping the token and the cache variables as the kit's jobs do.
 2. The mod's dependency verification is strict (for Quick Skin: step Q2), so a module a stale or
    damaged seed holds is checked before Gradle uses it. A seed restores time, not trust.
 3. The cache has room: one entry per target and one per lane of an enabled kind, each up to the

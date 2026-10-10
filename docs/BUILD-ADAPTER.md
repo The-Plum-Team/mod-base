@@ -135,9 +135,10 @@ home is ever kept: no `gradle.properties`, no `init.d`, no daemon state.
   missing or stale entry is reinstalled.
 
 What the kit cannot check is who else writes to the default branch's cache: any workflow of the mod
-that runs code under review with the Actions runtime token on the default branch's ref (a
-`pull_request_target` or `workflow_run` job that does not drop it, for example) could plant an
-entry under the same key. A restored archive is extracted by the cache action as the runner, so the
+that runs code under review with a writable Actions cache token on the default branch's ref (a
+`pull_request_target` job that declares `cache-mode: write`, or a push, dispatch or same-repository
+`workflow_run` job that executes a pull request without dropping the token, for example) could
+plant an entry under the same key. A restored archive is extracted by the cache action as the runner, so the
 owner enables `seeds` only after checking that no such workflow exists
 ([OPERATIONS.md](OPERATIONS.md#protected-seeds)).
 
