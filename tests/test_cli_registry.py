@@ -114,6 +114,14 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                               "--gradle-seed", "seed", "--bundle"], {"gradle_seed": Path("seed"), "bundle": True}),
     "ci worker-stage future kit": (["ci", "worker-stage", *REPO, "--state", "state", "--candidate", "candidate",
                                     "--future-kit", "candidate-kit"], {"future_kit": Path("candidate-kit")}),
+    "ci seed-key": (["ci", "seed-key", *REPO, "--state", "state", "--kind", "gradle", "--unit", "1.20.1",
+                     "--github-output", "out"],
+                    {"ci_command": "seed-key", "state": Path("state"), "kind": "gradle", "unit": "1.20.1",
+                     "github_output": Path("out")}),
+    "ci seed-export": (["ci", "seed-export", *REPO, "--state", "state", "--kind", "runtime", "--output", "seed",
+                        "--github-output", "out"],
+                       {"ci_command": "seed-export", "state": Path("state"), "kind": "runtime", "output": Path("seed"),
+                        "github_output": Path("out")}),
     "ci worker-run": (["ci", "worker-run", *REPO, "--state", "state", "--hook", "policy"],
                       {"ci_command": "worker-run", "state": Path("state"), "hook": "policy", "unit": None}),
     "ci worker-run target": (["ci", "worker-run", *REPO, "--state", "state", "--hook", "build_target",
@@ -268,6 +276,15 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--bundle", "build/release"],
             ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--gradle-seed"],
             ["ci", "worker-stage", *REPO, "--state", "s", "--candidate", "candidate", "--overlay", "kit"],
+            ["ci", "seed-key", *REPO, "--state", "s", "--kind", "gradle", "--unit", "1.20.1"],
+            ["ci", "seed-key", *REPO, "--state", "s", "--kind", "policy", "--unit", "1.20.1", "--github-output", "o"],
+            ["ci", "seed-key", *REPO, "--state", "s", "--kind", "gradle", "--unit", "a--b", "--github-output", "o"],
+            ["ci", "seed-key", *REPO, "--state", "s", "--kind", "gradle", "--github-output", "o"],
+            ["ci", "seed-key", *REPO, "--state", "s", "--kind", "gradle", "--unit", "1.20.1", "--key", "k",
+             "--github-output", "o"],
+            ["ci", "seed-export", *REPO, "--state", "s", "--kind", "gradle", "--github-output", "o"],
+            ["ci", "seed-export", *REPO, "--state", "s", "--kind", "lane", "--output", "d", "--github-output", "o"],
+            ["ci", "seed-export", *REPO, "--state", "s", "--kind", "runtime", "--output", "d"],
             ["ci", "worker-run", *REPO, "--state", "s"],
             ["ci", "worker-run", *REPO, "--state", "s", "--hook", "verify_target", "--unit", "1.20.1"],
             ["ci", "worker-run", *REPO, "--state", "s", "--hook", "derive_runtime", "--unit", "fabric-1.20.1"],
@@ -378,7 +395,7 @@ class CiVerbsTest(unittest.TestCase):
         from mod_base.build_ci import commands
 
         self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_system",
-                              "mod_base.build_ci.commands_worker",
+                              "mod_base.build_ci.commands_worker", "mod_base.build_ci.commands_seed",
                               "mod_base.build_ci.commands_batch", "mod_base.build_ci.commands_packaged",
                               "mod_base.build_ci.commands_status"}, set(commands.VERB_MODULES))
         self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
@@ -388,7 +405,7 @@ class CiVerbsTest(unittest.TestCase):
         verbs = self.verbs()
         self.assertLessEqual({"subject", "system-profile", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
                               "worker-validate", "worker-finish", "batch-prepare", "batch-settle", "select-build",
-                              "fetch-build", "gate-status", "reuse-admit"}, set(verbs))
+                              "fetch-build", "gate-status", "reuse-admit", "seed-key", "seed-export"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

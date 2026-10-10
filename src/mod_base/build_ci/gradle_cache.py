@@ -1,7 +1,9 @@
-"""Private Gradle seed handoff before a fresh candidate UID starts (MB11).
+"""Private Gradle seed handoff before a fresh candidate UID starts, and back after it ran (MB11).
 
 Protected restore policy must supply a secret-free seed and exclude concurrent writers. This
 copies untrusted candidate cache data, never installer approval or privileged executable code.
+After a protected job's candidate was locked, :func:`export_privileged_gradle_seed` copies the
+seed roots of its Gradle home back out as plain data, which only protected saving consumes.
 """
 
 from __future__ import annotations
@@ -24,6 +26,13 @@ from mod_base.model import limits
 _BOUNDS = {"max_files": limits.MAX_CI_SOURCE_FILES, "max_entries": limits.MAX_CI_SOURCE_ENTRIES,
            "max_total_bytes": limits.MAX_CI_SOURCE_TREE_BYTES, "max_file_bytes": limits.MAX_CI_SOURCE_FILE_BYTES,
            "rule": SEED_PATHS}
+#: The roots of a Gradle user home a seed holds. Configuration, credentials, daemon state and
+#: everything else a Gradle home may carry is never staged and never exported.
+SEED_ROOTS = ("caches", "wrapper")
+#: Where root leaves the copy of a locked candidate's Gradle home that a protected job may save as
+#: the next seed: a fixed root of the worker boundary, the runner's alone once handed over.
+SEED_EXPORT_ROOT = WORKER_ROOT / "seed-export"
+_CANDIDATE_GRADLE_HOME = WORKER_ROOT / "candidate-home" / "gradle-home"
 
 
 def _stamp(info: os.stat_result) -> tuple[int, ...]:
@@ -50,7 +59,7 @@ def _seed_roots(seed: int) -> None:
     """
     with os.scandir(seed) as entries:
         for entry in entries:
-            if entry.name not in {"caches", "wrapper"}:
+            if entry.name not in SEED_ROOTS:
                 raise WorkerError("Gradle seed includes a configuration/credential or unexpected root")
             if not stat.S_ISDIR(entry.stat(follow_symlinks=False).st_mode):
                 raise WorkerError("Gradle seed root child is not a real directory")
@@ -85,7 +94,7 @@ def stage_privileged_gradle_cache(seed: Path, *, boundary: HostBoundary,
             raise WorkerError("Gradle seed root has unsafe ownership or permissions")
         _seed_roots(source)
         expected = _records(seed)
-        target = Path(str(WORKER_ROOT / "candidate-home" / "gradle-home"))
+        target = Path(str(_CANDIDATE_GRADLE_HOME))
         destination = _open_directory(tuple(target.parts[1:]))
         allocated = os.fstat(destination)
         if (not stat.S_ISDIR(allocated.st_mode) or (allocated.st_uid, allocated.st_gid) != (account.uid, account.gid)
@@ -140,3 +149,71 @@ def stage_privileged_gradle_cache(seed: Path, *, boundary: HostBoundary,
         for descriptor in (destination, source):
             if descriptor is not None:
                 os.close(descriptor)
+
+
+def export_privileged_gradle_seed(*, boundary: HostBoundary, account: WorkerAccount) -> list[dict[str, Any]]:
+    """Root-only: copy the seed roots of the locked candidate's Gradle home to ``seed-export/``.
+
+    The candidate is terminated and locked again first and must own no process, so nothing of it
+    changes its home while root reads it. Only ``caches/`` and ``wrapper/`` are copied, each a
+    real directory when present; every file below them must be a regular file with one link, and
+    both together stay within the seed bounds. The copy is made of independent bytes into the
+    fixed ``seed-export/``, which must not exist yet, and becomes the runner's (0700 directories,
+    0600 files) only once it equals the inventory of the original. Returns that inventory, with
+    paths that start at a seed root; it is empty when the candidate left neither root. Nothing of
+    the candidate runs and no account is unlocked. After a refusal the partial copy stays root's.
+    """
+
+    authenticate_privileged_host_boundary(boundary)
+    actual = authenticate_worker_account("candidate")
+    if type(account) is not WorkerAccount or account != actual or account.uid == boundary.uid:
+        raise WorkerError("seed export requires the job's candidate account")
+    terminate_worker(account)
+    home, target = Path(str(_CANDIDATE_GRADLE_HOME)), Path(str(SEED_EXPORT_ROOT))
+    descriptors: list[int] = []
+    try:
+        _quiet(account)
+        parent = _open_directory(tuple(target.parent.parts[1:]))
+        descriptors.append(parent)
+        layout = os.fstat(parent)
+        if (layout.st_uid, layout.st_gid, stat.S_IMODE(layout.st_mode)) != (boundary.uid, boundary.gid, 0o711):
+            raise WorkerError("worker root layout changed before the seed export")
+        os.mkdir(target.name, 0o700, dir_fd=parent)  # Exclusive: a job exports its seed once.
+        destination = _open_directory(tuple(target.parts[1:]))
+        descriptors.append(destination)
+        source = _open_directory(tuple(home.parts[1:]))
+        descriptors.append(source)
+        owner = os.fstat(source)
+        if (owner.st_uid, owner.st_gid) != (account.uid, account.gid):
+            raise WorkerError("the candidate's Gradle home has another owner")
+        records: list[dict[str, Any]] = []
+        for name in SEED_ROOTS:
+            try:
+                root = os.stat(name, dir_fd=source, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISDIR(root.st_mode):
+                raise WorkerError("the candidate's Gradle home holds a link or file in place of a seed root")
+            os.mkdir(name, 0o700, dir_fd=destination)
+            stage = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                            dir_fd=destination)
+            try:
+                copied = copy_regular_data_files(home / name, stage, **_BOUNDS)
+            finally:
+                os.close(stage)
+            records.extend({**record, "path": f"{name}/{record['path']}"} for record in copied)
+        if (len(records) > _BOUNDS["max_files"]
+                or sum(record["size"] for record in records) > _BOUNDS["max_total_bytes"]):
+            raise WorkerError("the candidate's Gradle home exceeds the seed bounds")
+        _quiet(account)
+        if privatize_regular_data_copy(target, source_owner_uid=0, owner_uid=boundary.uid, owner_gid=boundary.gid,
+                                       **_BOUNDS) != records:
+            raise WorkerError("the seed copy differs after its handoff to the runner")
+        authenticate_tree_private_access(target, owner_uid=boundary.uid, owner_gid=boundary.gid,
+                                         max_entries=_BOUNDS["max_entries"])
+        return records
+    except (OSError, UnicodeError, ValueError) as error:
+        raise WorkerError("cannot export the candidate's Gradle home as a seed") from error
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)

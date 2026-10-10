@@ -34,7 +34,7 @@ from tests.test_workflow_policy import ShellHarness, load_yaml, outputs
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = re.compile(r"\$\{\{ (.*?) \}\}")
-ATOM = re.compile(r"(?:inputs\.[a-z-]+|needs\.[a-z]+\.outputs\.[a-z0-9-]+|steps\.[a-z]+\.(?:outputs\.[a-z0-9_]+|outcome)|matrix\.id|github\.(?:token|sha|run_id|run_attempt|event_name)|runner\.temp)")
+ATOM = re.compile(r"(?:inputs\.[a-z-]+|needs\.[a-z]+\.outputs\.[a-z0-9-]+|steps\.[a-z]+\.(?:outputs\.[a-z0-9_-]+|outcome)|matrix\.id|github\.(?:token|sha|run_id|run_attempt|event_name)|runner\.temp)")
 FENCE_LAUNCHES: list[tuple[str, ...]] = []
 
 
@@ -203,11 +203,15 @@ CHECKS += (_future_kit_resolves,)
             return True
         expression = condition.removeprefix("${{ ").removesuffix(" }}")
         expression = expression.removeprefix("always() && ")
-        match = re.fullmatch(r"(.+?) (==|!=) '([^']*)'", expression)
-        if not match:
-            raise AssertionError(f"unsupported workflow condition: {condition!r}")
-        equal = self.expression(match[1], context) == match[3]
-        return equal if match[2] == "==" else not equal
+        # A conjunction of comparisons (a seed export's condition) holds when each one does.
+        for comparison in expression.split(" && "):
+            match = re.fullmatch(r"(.+?) (==|!=) '([^']*)'", comparison)
+            if not match:
+                raise AssertionError(f"unsupported workflow condition: {condition!r}")
+            equal = self.expression(match[1], context) == match[3]
+            if equal != (match[2] == "=="):
+                return False
+        return True
 
     def checkout(self, source: Path, destination: Path, sha: str) -> None:
         # The commands actions/checkout v7 runs on a hosted runner, in order: its metadata (shallow,

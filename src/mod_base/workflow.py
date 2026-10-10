@@ -95,14 +95,16 @@ CI_UPLOAD_STEP = "Upload sealed outputs"
 #: status job issues ``gate-status`` twice: first with ``--settle``, before any subject, and
 #: again with the plan when that first call could not settle (the four steps between and the
 #: second call are skipped when it could). Only the ``lane`` job runs a client and installs the
-#: protected config's system profile, between its subject and its accounts.
+#: protected config's system profile, between its subject and its accounts. The ``target`` and
+#: ``lane`` jobs key their protected seed before staging and, in a protected job whose restore
+#: missed, export the next one after their upload (``build_ci.seeds``).
 CI_JOB_VERBS = {
     "build": {
         "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
         "policy": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
                    "worker-finish"),
-        "target": ("subject", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
-                   "worker-validate", "worker-finish"),
+        "target": ("subject", "worker-prepare", "plan", "seed-key", "worker-stage", "worker-run", "worker-seal",
+                   "worker-validate", "seed-export", "worker-finish"),
         "assemble": ("subject", "worker-prepare", "plan", "assemble", "worker-validate", "worker-finish"),
         "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
     },
@@ -111,8 +113,8 @@ CI_JOB_VERBS = {
     },
     "packaged-e2e": {
         "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
-        "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "worker-stage", "worker-run",
-                 "worker-seal", "worker-validate", "worker-finish"),
+        "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "seed-key", "worker-stage",
+                 "worker-run", "worker-seal", "worker-validate", "seed-export", "worker-finish"),
         "aggregate": ("subject", "worker-prepare", "plan", "aggregate", "worker-finish"),
         "gate": ("subject", "worker-prepare", "plan", "seal-gate", "worker-finish"),
     },

@@ -24,8 +24,8 @@ from mod_base.model import grammar
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json
 from tests.helpers import ci_graph_jobs, ci_plan, ci_push_plan, ci_selection
-from tests.test_workflow_ci_policy import (CANDIDATE_CHECKOUT, FUTURE_KIT_CHECKOUT, JDKS, RECEIVE_STEP, SAMPLES, CiStepRunner, ci_callee,
-                                           step_verb)
+from tests.test_workflow_ci_policy import (CANDIDATE_CHECKOUT, EXPORT_CONDITION, FUTURE_KIT_CHECKOUT, JDKS, RECEIVE_STEP,
+                                           RESTORE_STEP, SAMPLES, SAVE_STEP, CiStepRunner, ci_callee, step_verb)
 from tests.test_workflow_policy import PROLOGUE, UPLOAD, parse_kit_argv, require_tools, step
 
 NAME = "packaged-e2e"
@@ -41,13 +41,15 @@ STAGE = "Stage the candidate and the sealed Build bundle"
 RUN = "Run the lane as the candidate"
 LOCK = "Lock the candidate and freeze its export"
 FINISH = "Terminate and lock the worker accounts"
+SEED = "Derive the protected seed key"
+EXPORT = "Export the protected seed"
 SEAL, SEND = workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP
 #: The steps of each job, in order: section 5 of the architecture, per job type. The aggregate
 #: job's sealing step is ``ci aggregate`` itself: the kit indexes the lane results, no hook runs.
 STEPS = {
     "input": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, SELECT, FINISH],
-    "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PROFILE, PREPARE, REPLAN, RECEIVE, FETCH, FUTURE_KIT_CHECKOUT, STAGE, RUN, LOCK,
-             SEAL, SEND, FINISH],
+    "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PROFILE, PREPARE, REPLAN, RECEIVE, FETCH, FUTURE_KIT_CHECKOUT, SEED,
+             RESTORE_STEP, STAGE, RUN, LOCK, SEAL, SEND, EXPORT, SAVE_STEP, FINISH],
     "aggregate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
     "gate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
 }
@@ -118,7 +120,9 @@ class PackagedStructureTests(unittest.TestCase):
             conditions = {item["name"]: item["if"] for item in job["steps"] if "if" in item}
             expected = {name: condition for name, condition in always.items() if name in STEPS[job_id]}
             if job_id == "lane":
-                expected[FUTURE_KIT_CHECKOUT] = "steps.plan.outputs.candidate_kit_sha != ''"
+                expected.update({FUTURE_KIT_CHECKOUT: "steps.plan.outputs.candidate_kit_sha != ''",
+                                 RESTORE_STEP: "steps.seed.outputs.key != ''", EXPORT: EXPORT_CONDITION,
+                                 SAVE_STEP: "steps.export.outputs.saved == 'true'"})
             with self.subTest(job=job_id):
                 self.assertEqual(conditions, {**expected, **({RECEIVE: NOT_REUSE} if job_id == "gate" else {})})
 
@@ -218,6 +222,7 @@ class PackagedShellTests(unittest.TestCase):
         self.out = ["--github-output", str(self.runner.output)]
         self.upload = ["--output", f"{temp}/mb-upload"]
         self.selection = f"{temp}/{RECEIVED}"
+        self.seed = f"{temp}/mb-seed"
 
     def run_step(self, job_id: str, name: str, **overrides: str | None):
         return self.runner.run(step(self.jobs[job_id]["steps"], name), **overrides)
@@ -316,10 +321,12 @@ class PackagedShellTests(unittest.TestCase):
             "lane": [derived, ["ci", "system-profile", *job], self.prepare("candidate+validator"),
                      ["ci", "plan", *job, "--pin-candidate", "candidate", "--candidate", "candidate", *expected, *out],
                      ["ci", "fetch-build", *job, *selection],
+                     ["ci", "seed-key", *job, "--kind", "runtime", "--unit", "lane-a", *out],
                      ["ci", "worker-stage", *job, "--candidate", "candidate", "--future-kit", "candidate-kit", "--bundle"],
                      ["ci", "worker-run", *job, "--hook", "run_lane", "--unit", "lane-a"],
                      ["ci", "worker-seal", *job],
                      ["ci", "worker-validate", *job, "--hook", "verify_runtime", "--unit", "lane-a", *upload],
+                     ["ci", "seed-export", *job, "--kind", "runtime", "--output", self.seed, *out],
                      finish],
             # The kit indexes the lane results itself: no validator hook and no Build bundle here.
             "aggregate": [subject, self.prepare("validator"), ["ci", "plan", *job, "--pin-candidate", "candidate", *expected, *out],
@@ -328,6 +335,11 @@ class PackagedShellTests(unittest.TestCase):
                      ["ci", "seal-gate", *job, "--gate", "packaged", *selection, *upload], finish],
         })
         self.assertEqual(list(JDKS), ["JAVA_HOME_17_X64", "JAVA_HOME_21_X64", "JAVA_HOME_25_X64"])
+        # A lane's runtime seed is staged into the candidate's Gradle home, and only on an exact hit.
+        stage = ["ci", "worker-stage", *job, "--candidate", "candidate", "--future-kit", "candidate-kit", "--bundle"]
+        for hit, seed in (("true", ["--gradle-seed", self.seed]), ("false", []), ("", [])):
+            with self.subTest(hit=hit):
+                self.assertEqual(self.run_step("lane", STAGE, SEED_HIT=hit).commands, [[*stage, *seed]])
 
     def test_the_input_job_selects_what_the_caller_named_and_waits_the_build_budget(self) -> None:
         for overrides in ({}, SELECTED, {**SELECTED, "BUILD_RUN_ID": "same-run"}):
@@ -403,7 +415,7 @@ class PackagedShellTests(unittest.TestCase):
                               {"TESTED_SHA": "e" * 40})
         ] + [
             ("lane", name, {"LANE": value})
-            for name in (RUN, SEAL)
+            for name in (SEED, RUN, SEAL)
             for value in ("", "a--b", "../x", "A", "a b", "-a", "a" * 81, "a;id", "$(id)")
         ]
         for job_id, name, overrides in cases:
@@ -484,9 +496,9 @@ class PackagedShellTests(unittest.TestCase):
 
     def test_the_unit_check_is_the_unit_grammar(self) -> None:
         # The matrix unit becomes part of an artifact name, so the shell admits exactly the kit's ids.
-        scripts = [step(self.jobs["lane"]["steps"], name)["run"] for name in (RUN, SEAL)]
+        scripts = [step(self.jobs["lane"]["steps"], name)["run"] for name in (SEED, RUN, SEAL)]
         checks = {line for script in scripts for line in script.splitlines() if '"$LANE" =~' in line}
-        self.assertEqual(len(checks), 1, "the two steps that name the unit apply one check")
+        self.assertEqual(len(checks), 1, "the three steps that name the unit apply one check")
         characters = [chr(code) for code in range(1, 128)] + ["é"]
         samples = ["", "lane-a", "1.20.1-fabric", "a" * 79, "a" * 80, "a" * 81, "0" * 80, "a" * 79 + "-", "a--b",
                    "--a", "a--", "a---b", "a-b-c", "a-.-b", "a.-_b", "-", "--", *characters,
@@ -503,7 +515,7 @@ class PackagedShellTests(unittest.TestCase):
             for sample, verdict in zip(samples, result.stdout):
                 with self.subTest(locale=locale, unit=sample):
                     self.assertEqual(verdict == "1", grammar.is_match(grammar.CI_UNIT_ID, sample))
-        for name in (RUN, SEAL):
+        for name in (SEED, RUN, SEAL):
             self.assertEqual(self.run_step("lane", name, LANE="1.20.1-fabric").result.returncode, 0)
 
     def test_a_missing_tool_or_a_failing_command_fails_the_step(self) -> None:

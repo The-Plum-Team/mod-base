@@ -2626,6 +2626,79 @@ class LinuxCandidateStagingTests(HostedWorkerCase):
                 self.assertEqual(self.published(), [])
         self.assertTrue(self.candidate_terminated())
 
+    def export_seed(self):
+        """Publish the request and run the root operation, as ``ci seed-export`` does."""
+        from mod_base.build_ci.root_request import request_seed_export, root_request_path, run_root_operation
+        from mod_base.pin import kit_tree_digest
+        shutil.rmtree(Path(str(root_request_path("export-seed"))), ignore_errors=True)
+        nonce = request_seed_export(boundary=self.host_boundary, candidate=authenticate_worker_account("candidate"),
+                                    validator=authenticate_worker_account("validator"),
+                                    execution={"returncode": 0, "truncated": False, "log_bytes": 0,
+                                               "log_sha256": hashlib.sha256(b"").hexdigest()})
+        run_root_operation("export-seed", python=sys.executable, kit_root=KIT, kit_digest=kit_tree_digest(KIT),
+                           nonce=nonce)
+
+    def test_a_locked_candidates_gradle_home_is_exported_as_the_runners_private_seed(self):
+        fixture = self.staging_fixture()
+        account = authenticate_worker_account("candidate")
+        self.stage(fixture)
+        home = Path(account.home) / "gradle-home"
+        # What a build leaves beside its caches: a daemon log, configuration and a credential. Only
+        # the seed roots leave the home, and a process the candidate left running is ended first.
+        self.as_candidate("/bin/sh", "-euc", 'cd "$1"\nmkdir -p caches/transforms-4/abc daemon/9.8.0 empty/dir\n'
+                          'printf transformed > caches/transforms-4/abc/out.jar\nprintf log > daemon/9.8.0/daemon.log\n'
+                          'printf "orgSecret=1\\n" > gradle.properties', "sh", str(home))
+        self.export_seed()
+        self.assertTrue(self.candidate_terminated())
+        exported = self.root / "seed-export"
+        self.assertEqual({path.relative_to(exported).as_posix(): path.read_bytes()
+                          for path in exported.rglob("*") if path.is_file()},
+                         {**fixture.cached, "caches/transforms-4/abc/out.jar": b"transformed"})
+        # The runner's alone: 0700 directories, 0600 files with one link each, out of both accounts' reach.
+        for leaf in (exported, *exported.rglob("*")):
+            info = leaf.lstat()
+            self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)),
+                             (os.getuid(), os.getgid(), 0o700 if stat.S_ISDIR(info.st_mode) else 0o600), leaf)
+            self.assertTrue(stat.S_ISDIR(info.st_mode) or (stat.S_ISREG(info.st_mode) and info.st_nlink == 1), leaf)
+        for role in WORKER_ACCOUNTS:
+            self.as_worker(role, "/usr/bin/ls", str(exported), accepted=(2,))
+        # The original stays the candidate's, and a job exports once.
+        self.assertEqual(self.as_root("/usr/bin/cat", str(home / "gradle.properties")).stdout, b"orgSecret=1\n")
+        with self.assertRaises(MbError):
+            self.export_seed()
+        self.assertEqual(sorted(os.listdir(exported)), ["caches", "wrapper"])
+
+    def test_a_home_that_is_no_plain_data_is_never_handed_to_the_runner(self):
+        fixture = self.staging_fixture()
+        account = authenticate_worker_account("candidate")
+        home = Path(account.home) / "gradle-home"
+        exported = self.root / "seed-export"
+        self.stage(fixture)
+        cases = {
+            "a link in a seed root": ("ln -s /etc/hostname caches/modules-2/planted", "rm caches/modules-2/planted"),
+            "a hard link in a seed root": ("ln caches/modules-2/modules-2.lock caches/modules-2/second.lock",
+                                           "rm caches/modules-2/second.lock"),
+            "a seed root that is a link": ("mv caches cached && ln -s cached caches", "rm caches && mv cached caches"),
+            "a special file in a seed root": ("mkfifo caches/modules-2/fifo", "rm caches/modules-2/fifo"),
+        }
+        for label, (plant, remove) in cases.items():
+            with self.subTest(case=label):
+                # A locked account still runs what the runner starts for it: the fixture plants as the candidate.
+                self.as_candidate("/bin/sh", "-euc", f'cd "$1"\n{plant}', "sh", str(home))
+                with self.assertRaises(MbError):
+                    self.export_seed()
+                self.assertTrue(self.candidate_terminated())
+                # Whatever root copied before it refused stays root's: the runner cannot read it.
+                self.assertEqual(self.as_root("/usr/bin/stat", "-c", "%u %a", str(exported)).stdout, b"0 700\n")
+                with self.assertRaises(PermissionError):
+                    os.listdir(exported)
+                self.as_root("/usr/bin/rm", "-rf", "--", str(exported))
+                self.as_candidate("/bin/sh", "-euc", f'cd "$1"\n{remove}', "sh", str(home))
+        # The same home, restored, is exported: every refusal above was for its own defect.
+        self.export_seed()
+        self.assertEqual(sorted(path.relative_to(exported).as_posix() for path in exported.rglob("*") if path.is_file()),
+                         sorted(fixture.cached))
+
     def test_seed_with_configuration_is_refused_and_the_candidate_never_runs(self):
         fixture = self.staging_fixture()
         account = authenticate_worker_account("candidate")
@@ -3275,21 +3348,22 @@ class LinuxCandidateCommandTests(unittest.TestCase):
     # -- helpers -------------------------------------------------------------------------------------
 
     def candidate_job(self, *, faults=None, code=None, files=None, profile=None, producer="build", jdks=(),
-                      **timeouts):
+                      seeds=None, **timeouts):
         """A prepared and planned job of ``producer``: both accounts, the plan of the tested tree.
 
         ``faults`` go into the tested inventory; ``code`` is run by the tested tree's own
         dispatcher in every candidate hook and ``files`` are more tracked files of that tree;
-        ``profile`` and ``timeouts`` change the protected Build config. Returns the plan, which is
-        the one the pure planning functions give for the same subject and candidate files."""
+        ``profile``, ``seeds`` and ``timeouts`` change the protected Build config. Returns the plan,
+        which is the one the pure planning functions give for the same subject and candidate files."""
         import json
         from mod_base import runtime
 
         def materialized(name):
             mod = h.materialize(self.temporary / name, faults=faults)
-            if profile is not None:
-                config = mod / "scripts/ci/mod-base-build.json"
-                config.write_bytes(h.pretty({**json.loads(config.read_bytes()), "profile": profile}))
+            for key, value in (("profile", profile), ("seeds", seeds)):
+                if value is not None:
+                    config = mod / "scripts/ci/mod-base-build.json"
+                    config.write_bytes(h.pretty({**json.loads(config.read_bytes()), key: value}))
             if timeouts:
                 job_fixture.rewrite_config(mod, **timeouts)
             return mod
@@ -3671,6 +3745,34 @@ class LinuxCandidateCommandTests(unittest.TestCase):
         # own business: the tracked sources are unchanged.
         self.assertEqual(self.seal(), (0, "worker-seal: candidate terminated and locked; tracked sources unchanged "
                                           "after policy; nothing to export\n", ""))
+        self.assert_finished("candidate", "validator")
+
+    def test_a_pull_request_target_keys_its_seed_from_the_protected_checkout_and_never_exports_one(self):
+        import json
+        from mod_base.build_ci import seeds
+        files = [{"path": "absent.properties"}, {"path": "scripts/ci/mod-base-build.json"}]
+        self.candidate_job(seeds={"gradle": {"key_files": files}})
+        code, stdout, stderr = self.commands.run("seed-key", "--kind", "gradle", "--unit", "1.20.1",
+                                                 "--github-output", str(self.output))
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        key = seeds.seed_key(self.mod, json.loads((self.mod / "scripts/ci/mod-base-build.json").read_bytes()),
+                             "gradle", "1.20.1")
+        self.assertTrue(key.startswith("mb-seed-v1-gradle-1.20.1-"))
+        self.assertIn(f"key={key}\n", self.output.read_text(encoding="utf-8"))
+        self.assertEqual(stdout, f"seed-key: gradle seed {key} for 1.20.1\n")
+        for arguments in (("--kind", "runtime", "--unit", "1.20.1"), ("--kind", "gradle", "--unit", "1.99.9")):
+            code, stdout, stderr = self.commands.run("seed-key", *arguments, "--github-output", str(self.output))
+            self.assertEqual((code, stdout), (2, ""), arguments)
+        self.assertEqual(self.stage()[0], 0)
+        self.assertEqual(self.run_hook("build_target", "1.20.1")[0], 0)
+        self.assertEqual(self.seal()[0], 0)
+        # Whatever the candidate of a pull request left in its Gradle home, no seed is made of it.
+        code, stdout, stderr = self.commands.run("seed-export", "--kind", "gradle", "--output",
+                                                 str(self.temporary / "mb-seed"), "--github-output", str(self.output))
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("only a protected subject exports a seed", stderr)
+        self.assertFalse((self.temporary / "mb-seed").exists() or (self.root / "seed-export").exists())
+        self.assertEqual(self.api.request_count, 4)  # Neither seed command reads the API.
         self.assert_finished("candidate", "validator")
 
     #: A policy hook that runs its suite through the runner of the staged kit, with the profile of its

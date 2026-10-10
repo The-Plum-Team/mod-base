@@ -225,3 +225,11 @@ text is validated and HTML-escaped at build time.
   the site can be framed.
 - **Pre-merge verification in Quick Skin** runs as pull-request code; the runtime `verify-kit` is
   the defense that does not depend on it.
+- **Build/E2E seeds trust the default branch's Actions cache.** A target or lane job restores the
+  exact key protected code derived, and the cache action extracts the entry as the runner before
+  the candidate is staged; only a protected push or dispatch of the kit's jobs saves one, from a
+  root copy of its locked candidate's Gradle home, and no pull request ever does. A cache entry
+  carries no provenance the kit can verify, so any other writer of that cache scope (a workflow
+  that runs code under review on the default branch's ref with the runtime token) could plant one.
+  `seeds` is therefore off unless the owner enables it after checking that no such writer exists
+  ([OPERATIONS.md](OPERATIONS.md#protected-seeds)).

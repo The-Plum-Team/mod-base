@@ -28,6 +28,7 @@ protected default branch, never from a pull request.
 | `contexts.build`, `contexts.packaged` | the two required status contexts |
 | `timeouts` | `validator_seconds` for every protected hook, `policy_seconds`, `target_seconds` and `runtime_seconds` for the three candidate hooks |
 | `runtime.system_profile` | optional: the kit system profile a lane job installs as root before its accounts exist, by name. `xvfb-mesa` is Xvfb, `xauth`, Mesa's software GL and EGL and the audio and X client libraries a Minecraft client loads: the union of both mods' native installs. The mod never lists packages; without `runtime` nothing is installed, and `runtime` without a profile, an unknown profile or another key is refused |
+| `seeds` | optional: the seeds whose jobs restore the candidate's Gradle home before it runs, `gradle` for a target job and `runtime` for a lane job, each `{"key_files": [{"path"}, ...]}`: 1 to 16 files of the protected default branch, sorted by path, whose bytes (or absence) key the seed together with the unit. Name what decides what the home holds, for example `gradle/wrapper/gradle-wrapper.properties`, `gradle/verification-metadata.xml` and the release inventory; a changed file starts a new seed. Without `seeds` no job restores or saves one ("Seeds" below) |
 
 The config bytes, the listed files, the pinned kit, the graph versions and the mod's own control
 files (`site/mod-base-build-activation.json` and the four `mod-base-*.yml` caller workflows, each by
@@ -80,8 +81,8 @@ private copy of the tested commit: every tracked file with its Git mode, a `.git
 tested commit detached (no credential, no hook, an `origin` without a token), and the kit the
 protected branch pins at `out/mod-base-kit` with its stamp, where the managed bootstrap looks for
 a staged kit. Nothing else is there, and the hook reaches nothing of the runner: not the original
-checkout, not the workspace, not a token. When the job restored a Gradle cache,
-`GRADLE_USER_HOME` starts as a private copy of its `caches/` and `wrapper/` directories.
+checkout, not the workspace, not a token. When the job restored a seed, `GRADLE_USER_HOME`
+starts as a private copy of its `caches/` and `wrapper/` directories.
 
 For `run_lane` the checkout also holds the Build at `<bundle.path>`: the candidate's own copy of
 every file of the complete, verified Build under the names the plan gives them
@@ -106,6 +107,39 @@ A candidate hook reads the same files from its own checkout, at the paths the co
 `sealed-build/` and `sealed-runtime/` hold the frozen
 exports; `ci-envelope.json` and `ci-runtime-envelope.json` in them belong to the kit and are to be
 ignored.
+
+## Seeds
+
+A seed is a copy of the `caches/` and `wrapper/` of a candidate's Gradle user home, kept in the
+GitHub Actions cache of the default branch so that the next job of the same target or lane does not
+download the Gradle distribution, Minecraft and the loader artifacts again. Nothing else of the
+home is ever kept: no `gradle.properties`, no `init.d`, no daemon state.
+
+- **Key.** `ci seed-key` derives it from the protected default branch alone: the kind, the target
+  or lane, a format literal and the bytes of the `seeds.<kind>.key_files` of the config. A pull
+  request cannot choose it, and a changed key file starts a new seed instead of reusing an old one.
+- **Restore.** Every target or lane job of an enabled kind restores that exact key (no prefix) into
+  a directory of the runner and stages it as the candidate's `GRADLE_USER_HOME` only when the key
+  matched exactly. A miss, an evicted entry or a cache outage starts with an empty home: it costs
+  time, never a result.
+- **Save.** Only a push to the default branch or a dispatch there, whose exact key was missing,
+  saves one: after its results were uploaded, root copies the seed roots of the locked candidate's
+  home out as plain data (`ci seed-export`) and the cache action saves exactly that. A pull request
+  never saves, so its candidate cannot poison what a later job restores. A home that holds a link,
+  a special file, a file with several links or more than 200,000 files or 20 GiB is not saved; the
+  job is not failed for it.
+- **Runtime seed.** A lane job's seed is the same Gradle home. A lane that wants its installed
+  runtimes (for example the loader servers it installs) to be seeded keeps them below
+  `$GRADLE_USER_HOME/caches/<a directory of its own>`; whatever it finds there is a copy written by
+  an earlier protected lane of the same key, which it revalidates as it would its own cache, and a
+  missing or stale entry is reinstalled.
+
+What the kit cannot check is who else writes to the default branch's cache: any workflow of the mod
+that runs code under review with the Actions runtime token on the default branch's ref (a
+`pull_request_target` or `workflow_run` job that does not drop it, for example) could plant an
+entry under the same key. A restored archive is extracted by the cache action as the runner, so the
+owner enables `seeds` only after checking that no such workflow exists
+([OPERATIONS.md](OPERATIONS.md#protected-seeds)).
 
 ## What each hook writes
 
@@ -195,8 +229,8 @@ locked between hooks; cleanup also revokes their deferred execution and fails cl
    `out/mod-base-kit`), seeds `GRADLE_USER_HOME` when `--gradle-seed` is supplied and, in a lane
    job, copies the complete Build of `sealed-build/` to `repository/<bundle.path>`. Nothing of the
    candidate has run at this point.
-   Current workflows supply no seed and start with empty Gradle homes; cache restore/save and
-   native lane system packages before fencing remain adoption work. For an unchanged pin the
+   A job whose config enables no seed, or whose exact seed is not in the cache, starts with an
+   empty Gradle home ("Seeds" below). For an unchanged pin the
    overlay is the protected executing kit. A candidate that changes the pin gets the kit of its
    admitted release instead, checked out separately and passed as `--future-kit`; only the
    candidate account runs it ([BUILD-PROTOCOL.md](BUILD-PROTOCOL.md), "Candidate kit admission").
