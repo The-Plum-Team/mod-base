@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -51,24 +52,20 @@ QS_GITATTRIBUTES = (
     b"*.bat whitespace=cr-at-eol\n"
 )
 
-#: Every managed and fragment path, including the registered Build/E2E callers, uses LF, so a
-#: ``core.autocrlf=true`` clone (Git for Windows' default) passes ``template check``.
+#: Every managed and fragment path of the template manifest uses LF, so a ``core.autocrlf=true`` clone
+#: (Git for Windows' default) passes ``template check``. The Build/E2E callers have no rule (v1.1.1).
 EOL_RULES = (
     b"\n"
     b"# mod-base manages the files below: `template check` compares the managed ones (the caller's\n"
     b"# managed region included) byte for byte with the kit's template and reads the others line by\n"
     b"# line. Git for Windows' default `core.autocrlf=true` would check them out with CRLF line endings\n"
     b"# and fail that check on a clean clone, so they are always checked out with LF, whatever the local\n"
-    b"# setting. The list is the manifest's managed and fragment paths plus the four Build/E2E callers.\n"
+    b"# setting. The list is exactly the template manifest's managed and fragment paths.\n"
     b"/.gitattributes text eol=lf\n"
     b"/.gitignore text eol=lf\n"
     b"/.github/CODEOWNERS text eol=lf\n"
     b"/.github/dependabot.yml text eol=lf\n"
     b"/.github/pull_request_template.md text eol=lf\n"
-    b"/.github/workflows/mod-base-build.yml text eol=lf\n"
-    b"/.github/workflows/mod-base-gate-status.yml text eol=lf\n"
-    b"/.github/workflows/mod-base-guard.yml text eol=lf\n"
-    b"/.github/workflows/mod-base-packaged-e2e.yml text eol=lf\n"
     b"/.github/workflows/pages.yml text eol=lf\n"
     b"/AGENTS.md text eol=lf\n"
     b"/docs/ai/shared/PUBLIC-EVIDENCE.md text eol=lf\n"
@@ -355,12 +352,20 @@ class KitTemplateTest(unittest.TestCase):
                 self.assertEqual(lock.main(["--root", str(kit), "--write"]), 2)
 
     def test_managed_gitattributes_is_the_qs_file_plus_lf_checkouts(self) -> None:
+        # The bytes of v1.0.3, kept on purpose: Block Pops can change this file through no pull request
+        # a kit bump can be (its controller upgrades may not touch it), so a release that changes it
+        # cannot be adopted there. The four Build/E2E callers therefore have no rule of their own; a
+        # CRLF checkout of one is the line-ending drift `template check` reports with its fix.
         managed = (TEMPLATE_ROOT / "managed" / ".gitattributes").read_bytes()
+        released = KIT_ROOT / "tests" / "fixtures" / "released_templates" / "v1.0.3.zip"
+        with zipfile.ZipFile(released) as archive:
+            self.assertEqual(managed, archive.read("template/managed/.gitattributes"),
+                             "Block Pops can adopt no release whose managed .gitattributes differs from v1.0.3's")
         self.assertEqual(managed, QS_GITATTRIBUTES + EOL_RULES)
         rules = [line.split() for line in managed.decode("ascii").splitlines() if line and not line.startswith("#")]
         self.assertIn(["*.bat", "whitespace=cr-at-eol"], rules)
         checked = {entry["path"] for entry in self.manifest()["files"]
-                   if entry["class"] in ("managed", "fragment")} | set(CALLERS)
+                   if entry["class"] in ("managed", "fragment")}
         self.assertEqual(sorted(rule[0] for rule in rules if rule[1:] == ["text", "eol=lf"]),
                          sorted(f"/{path}" for path in checked))
         self.assertIn(".github/workflows/pages.yml", checked)

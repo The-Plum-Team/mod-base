@@ -1,0 +1,47 @@
+{
+  "bundles": [
+    {
+      "collected_artifact_id": 7001,
+      "collected_digest": "sha256:8ff79c0b90366225120a836324d29ff77309fbc9ce55df84e3346d415032b0f4",
+      "coverage_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "key": "mc1.20.1",
+      "manifest_sha256": "fbb41f29ed2138c2f44486ed6613b1418e2ac0cd3fd96040f9a7c746cfd77073",
+      "selected_artifact_id": 9001
+    }
+  ],
+  "families": [
+    {
+      "available": true,
+      "collected_artifact_id": 7002,
+      "collected_digest": "sha256:d84ec489627e4b643d7e34483d4b7b03cc04a76be816a6295031417ef408569d",
+      "coverage_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "family": "mod-compatibility",
+      "key": "mc1.20.1",
+      "selected_artifact_id": 9101,
+      "status": "available"
+    }
+  ],
+  "heads": {
+    "master": "eb2c848e89009c3f78ec15dddc51f0afdb532989"
+  },
+  "implementation": {
+    "branch": "master",
+    "run_attempt": 1,
+    "run_id": 500,
+    "sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "workflow_ref": "The-Plum-Team/Quick-Skin-Mod/.github/workflows/pages.yml@refs/heads/master"
+  },
+  "kind": "mod-base.promotion",
+  "kit": {
+    "repository": "The-Plum-Team/mod-base",
+    "sha": "734f6e6bc8ba05938734384ab7835c45111af4d3",
+    "version": "0.9.0"
+  },
+  "repository": "The-Plum-Team/Quick-Skin-Mod",
+  "schema_version": 1,
+  "site": {
+    "bytes": 1234567,
+    "files": 42,
+    "inventory_sha256": "7cc0ee8fe5ecc9c13bfcc902ee43a8ec5c00ba1991529e5d0ed88777bb492a5f"
+  }
+}

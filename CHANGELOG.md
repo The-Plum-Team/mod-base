@@ -5,6 +5,21 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.1.1
+
+- Admit the `.git/config.worktree` that actions/checkout leaves in every checkout (it runs
+  `git sparse-checkout disable`). v1.1.0 refused that metadata in `stage-candidate`, so no
+  policy, target or lane job could run on a hosted runner; the K7 canary found it. Like `config`,
+  the file is never read or copied. The hosted pipeline test now checks out with the same
+  commands as the action.
+- Restore the managed `.gitattributes` of v1.0.3. v1.1.0 added `eol=lf` rules for the four
+  Build/E2E callers, but Block Pops can change that file through no pull request a kit bump can
+  be, so v1.1.0 could not be adopted there. A Windows clone with `core.autocrlf=true` gets CRLF
+  copies of the callers, which `template check` reports as line-ending drift with its fix: add
+  `/<path> text eol=lf` to `.git/info/attributes` and check the file out again, or run
+  `template sync --write`; never commit CRLF. Nothing else changes: schemas, `ADAPTER_API`,
+  `BUILD_ADAPTER_API` 1 and `pixel_metrics_version` 1 are those of v1.1.0.
+
 ## v1.1.0
 
 Adds the protected Build and packaged E2E pipeline (design steps K1–K6). Nothing changes for a

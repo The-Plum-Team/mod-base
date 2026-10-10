@@ -295,6 +295,29 @@ class RealCheckoutTests(unittest.TestCase):
         self.assertTrue({"HEAD", "config", "FETCH_HEAD"} <= present, present)
         self.assertEqual({path.split("/")[0] for path in paths}, {"index", "objects", "refs", "shallow"})
 
+    def test_the_checkout_actions_checkout_makes_is_admitted(self):
+        # actions/checkout v7 on a hosted runner: init, origin, gc.auto 0, a depth-1 fetch of the commit,
+        # `sparse-checkout disable` (which leaves .git/config.worktree), then a forced detached checkout.
+        # The K7 canary found the kit refusing exactly this metadata ("unsupported file").
+        upstream = self.base / "upstream"
+        checkout = self.base / "action-checkout"
+        checkout.mkdir(mode=0o755)
+        checkout.chmod(0o755)
+        run_git("init", "-q", ".", cwd=checkout)
+        run_git("remote", "add", "origin", upstream.as_uri(), cwd=checkout)
+        run_git("config", "--local", "gc.auto", "0", cwd=checkout)
+        run_git("-c", "protocol.version=2", "fetch", "-q", "--no-tags", "--prune", "--no-recurse-submodules",
+                "--depth=1", "origin", self.commit, cwd=checkout)
+        run_git("sparse-checkout", "disable", cwd=checkout)
+        run_git("config", "--local", "--unset-all", "extensions.worktreeConfig", cwd=checkout)
+        run_git("checkout", "-q", "--force", self.commit, cwd=checkout)
+        metadata = checkout / ".git"
+        self.assertTrue((metadata / "config.worktree").is_file())
+        paths = git._admit(metadata, self.boundary, self.commit)
+        self.assertNotIn("config.worktree", paths)
+        self.assertIn("index", paths)
+        self.assertTrue(any(path.startswith("objects/") for path in paths))
+
     def test_a_checkout_whose_head_moved_is_refused(self):
         parent = run_git("rev-parse", "HEAD^", cwd=self.checkout).strip()
         run_git("update-ref", "--no-deref", "HEAD", parent, cwd=self.checkout)
