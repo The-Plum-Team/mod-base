@@ -70,7 +70,7 @@ class ReleasedFixtureTest(unittest.TestCase):
 
 
 class ReleasedBootstrapTest(KitsCase):
-    RELEASES = {"v1.1.1": current_kit}
+    RELEASES = {"v1.1.2": current_kit}
 
     def bootstraps(self) -> dict[str, Any]:
         loaded = {}
@@ -82,12 +82,12 @@ class ReleasedBootstrapTest(KitsCase):
 
     def test_every_released_bootstrap_stages_this_kit_with_its_caller_templates(self) -> None:
         controller = mod_repo(self.root / "controller", "c" * 40, "v1.0.3")
-        candidate = real_mod(self.root / "candidate", self.sha("v1.1.1"), "v1.1.1")
+        candidate = real_mod(self.root / "candidate", self.sha("v1.1.2"), "v1.1.2")
         for tag, bootstrap in self.bootstraps().items():
             with self.subTest(bootstrap=tag):
                 output = self.root / f"staged-{tag}"
                 environ = {"MOD_BASE_CACHE_DIR": str(self.root / f"cache-{tag}"), "CI": "true"}
-                self.assertEqual(bootstrap.stage(controller, candidate, output, environ, get_json=self.getter("v1.1.1")),
+                self.assertEqual(bootstrap.stage(controller, candidate, output, environ, get_json=self.getter("v1.1.2")),
                                  output)
                 staged = sorted(path.name for path in output.iterdir())
                 self.assertEqual("actions" in staged, tag != "v0.9.1", "a bootstrap older than v0.9.2 stages none")
@@ -96,7 +96,7 @@ class ReleasedBootstrapTest(KitsCase):
                                      (KIT_ROOT / "template/managed" / path).read_bytes())
                 pin.verify_staged_files(output)
                 stamp = pin.read_stamp(output)
-                self.assertEqual((stamp["sha"], stamp["tree_digest"]), (self.sha("v1.1.1"), pin.kit_tree_digest(KIT_ROOT)))
+                self.assertEqual((stamp["sha"], stamp["tree_digest"]), (self.sha("v1.1.2"), pin.kit_tree_digest(KIT_ROOT)))
                 overlay = candidate / pin.OVERLAY_PATH
                 os.makedirs(overlay.parent, exist_ok=True)
                 os.rename(output, overlay)
@@ -109,7 +109,7 @@ class ReleasedBootstrapTest(KitsCase):
         rendered callers, the guard's pin literal and the local call of the guard are all legal to
         the released parsers, and they find the same pin and references as this kit."""
 
-        repo = real_mod(self.root / "active", self.sha("v1.1.1"), "v1.1.1")
+        repo = real_mod(self.root / "active", self.sha("v1.1.2"), "v1.1.2")
         enter(repo, "shadow")
         tool.sync(repo, kit_root=KIT_ROOT, write=True)
         expected = pin.parse_pin(repo)
@@ -127,8 +127,8 @@ class ReleasedBootstrapTest(KitsCase):
                 (repo / "scripts/ci/mod_base_kit.py").write_bytes(
                     (self.root / f"released-{tag}" / BOOTSTRAP).read_bytes())
                 environ = {"MOD_BASE_CACHE_DIR": str(self.root / f"bump-cache-{tag}")}
-                result = bootstrap.bump(repo, "v1.1.1", environ, get_json=self.getter("v1.1.1"))
-                self.assertEqual((result.sha, result.version), (self.sha("v1.1.1"), "v1.1.1"))
+                result = bootstrap.bump(repo, "v1.1.2", environ, get_json=self.getter("v1.1.2"))
+                self.assertEqual((result.sha, result.version), (self.sha("v1.1.2"), "v1.1.2"))
                 self.assertEqual((repo / "scripts/ci/mod_base_kit.py").read_bytes(), BOOT_BYTES)
                 self.assertFalse(any((repo / path).exists() for path in CALLERS))
                 self.assertEqual(tool.check(repo, kit_root=KIT_ROOT), [])

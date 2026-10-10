@@ -5,17 +5,20 @@ independently mergeable migration steps. [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md) 
 commands and evidence; [ADR 0007](adr/0007-protected-build-and-packaged-runtime.md) records the decisions.
 
 K1–K6 now compose through registered commands and their workflow or operator entries. They are
-tagged as v1.1.0, the K7 release candidate, and v1.1.1, which restores the managed `.gitattributes`
-of v1.0.3 so that Block Pops can adopt it. Nothing is active: no mod has an activation manifest,
-and no managed Build/E2E caller has run on GitHub. The design awaits owner agreement;
-ADR 0007 is Proposed. **K7, Q1–Q10, B1–B7 and GitHub settings remain untouched.**
+tagged as v1.1.0, the K7 release candidate; v1.1.1, which restores the managed `.gitattributes`
+of v1.0.3 so that Block Pops can adopt it; and v1.1.2, which refuses the jobs GitHub carries over
+into a rerun of failed jobs only (K7 canary cases C2 and C4). No mod is active: none has an
+activation manifest, and managed Build/E2E callers have run on GitHub only in the K7 canary
+repository. The design awaits owner agreement; ADR 0007 is Proposed. **K7 is in progress (see its
+row below); Q1–Q10, B1–B7 and the GitHub settings of the mods remain untouched.**
 
 ## Evidence and its scope
 
 - **Ordinary suite:** 3,050 tests on each Python 3.11–3.13 at the v1.1.0 release commit and on
-  Python 3.11 and 3.13 at the v1.1.1 release commit, with one skip and one documented expected
-  failure. GitHub is `FakeGitHub`; integration cases use
-  real files, Git and processes, while older isolated tests also replace system/account operations.
+  Python 3.11 and 3.13 at the v1.1.1 release commit, 3,059 on Python 3.11 and 3.13 at the v1.1.2
+  release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
+  integration cases use real files, Git and processes, while older isolated tests also replace
+  system/account operations.
 - **Hosted account proof:** `ci_linux_worker.py` (132 tests), `ci_linux_deferred.py` (2 tests) and
   `ci_linux_system_profile.py` (1 test, a real `xvfb-mesa` install before the fence) run separately in the kit's own CI on each Python version. They exercise the real accounts,
   host fence, root operations, cleanup and deferred-execution deadlines.
@@ -50,7 +53,7 @@ Paths below are relative to `src/mod_base/build_ci/` unless otherwise stated.
 | K4: callers, activation, bootstrap | Four registered managed callers, activation checks in `template check/sync/init`, `template activation/transition`, bootstrap bump/rollback checks, candidate release admission bound by the plan hash, canonical-base PR filters (the managed `.gitattributes` keeps its v1.0.3 bytes, see v1.1.1). | Owner creates the `mod-base-gate` environment and App variable/secret before the status caller is active. Transition admission is an operator command; no workflow runs it. The executing release must understand the candidate kit's digest and both lock formats. |
 | K5: batches | `ci batch-prepare`, `ci batch-settle`, strict batch manifests and real-Git rebuild/settlement tests. CLI flags and effects are in the protocol. | No workflow or managed caller starts them. The owner/adopter must supply a reviewed batch procedure, protected allowed-path list and App/automation credentials allowed to push `batch/*` and open/close PRs. |
 | K6: post-merge reuse | `ci reuse-admit` is wired into Build planning and protected selection; reuse gates re-admit and seal `ci-reuse.json`. Original gate-pair and Build readers verify retained evidence; policy digests cover the activation manifest and four callers. | No command consumes reuse references yet. Q9/B6 must consume original runtime via the results index and required lane artifacts; unused byte-union runtime readers were removed. Live reuse remains a K7 case. |
-| K7: release candidate and hosted canary | Not started. Existing `canary/` and OPERATIONS.md's canary procedure cover Pages; `tests/fixtures/ci_mod/` supplies the synthetic Build adapter. | Owner-controlled immutable release-candidate tag, isolated repository, activation manifest and gate App; all K7 design cases. A failed tag gets no Release and no mod pin. |
+| K7: release candidate and hosted canary | In progress in The-Plum-Team/mod-base-canary on the tags v1.1.0 and v1.1.1. Passed: preflight, the bump and the activation rounds with the first push and pull-request generations (P, S1–S4, P0 at v1.1.1, MA), concurrent generations and controller versus candidate (R1a), the draft lifecycle and kill safety (R1b), cancellation (C1), the reruns of all jobs (C3, attempts 3 of C4) and a head push (H). Failed: P0 at v1.1.0, on the `.git/config.worktree` that v1.1.1 admits, and the reruns of failed jobs only of C2 and C4, which went green on jobs GitHub carried over from attempt 1; v1.1.2 refuses them. Existing `canary/` and OPERATIONS.md's canary procedure cover Pages; `tests/fixtures/ci_mod/` supplies the synthetic Build adapter. | Owner-controlled immutable release-candidate tag, isolated repository, activation manifest and gate App; the remaining K7 design cases: bundle disappearance (R1d), merges, reuse and default-branch moves (R2), the ruleset experiment (R3) and Pages (R4). C2 and C4 must run again on a v1.1.2 pin: so far the refusal of a carried-over job and the acceptance of a rerun of all jobs rest on the canary's recorded timestamps (`FailedJobsRerunTests`), not on a hosted run of v1.1.2. A failed tag gets no Release and no mod pin. |
 
 ## Measured request budget
 
