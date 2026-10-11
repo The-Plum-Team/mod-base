@@ -184,6 +184,9 @@ KIT: dict[str, tuple[Any, str]] = {
                                                  "(`DPkg::Lock::Timeout`), inside the command's bound"),
     "CI_SYSTEM_PROFILE_FETCH_RETRIES": (3, "apt's retries of one failed download (`Acquire::Retries`)"),
     "MAX_CI_SEED_PATH_DEPTH": (64, "components of one path inside a Gradle seed, the tree walk's own depth"),
+    "MAX_CI_SEED_KEY_FILES": (16, "protected files one seed key binds"),
+    "MAX_CI_SEED_KEY_FILE_BYTES": (8 * MIB, "the bytes read of each one; a strict verification metadata file of "
+                                            "either mod is about 1.1 MB"),
     "MAX_CI_SOURCE_LIST_BYTES": (64 * MIB, "one Git tree listing"),
     "MAX_CI_GIT_REF_BYTES": (4 * KIB, "one loose ref"),
     "MAX_CI_GIT_REF_LIST_BYTES": (64 * MIB, "the packed and shallow ref lists"),

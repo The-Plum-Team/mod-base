@@ -285,6 +285,11 @@ MAX_CI_SOURCE_LINK_BYTES = 4 * KIB
 #: transform output can add a whole package tree. No MB1 walk descends further
 #: (``io.tree.MAX_WALK_DEPTH``).
 MAX_CI_SEED_PATH_DEPTH = 64
+#: Files of the protected checkout one seed key binds (``seeds.<kind>.key_files`` of the Build
+#: config), and the bytes read of each: a strict Gradle verification metadata file of either mod
+#: is about a megabyte.
+MAX_CI_SEED_KEY_FILES = 16
+MAX_CI_SEED_KEY_FILE_BYTES = 8 * MIB
 MAX_CI_GIT_METADATA_FILES = MAX_CI_SOURCE_FILES
 MAX_CI_GIT_METADATA_ENTRIES = MAX_CI_SOURCE_ENTRIES
 MAX_CI_GIT_METADATA_FILE_BYTES = MAX_CI_SOURCE_FILE_BYTES

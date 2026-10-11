@@ -314,6 +314,24 @@ class RootRequestSchemaTests(unittest.TestCase):
             with self.subTest(target=target), self.assertRaises(MbError):
                 validate_root_request(changed)
 
+    def test_a_seed_export_names_both_accounts_and_a_successful_execution_and_no_path(self):
+        document = ci_root_request("export-seed")
+        validate_root_request(document)
+        self.assertEqual(set(document["arguments"]), {"validator", "candidate", "execution"})
+        for mutate in (lambda d: d["arguments"].update(candidate=None),
+                       lambda d: d["arguments"].pop("execution"),
+                       lambda d: d["arguments"]["execution"].update(returncode=1),
+                       lambda d: d["arguments"]["execution"].update(returncode=None),
+                       lambda d: d["arguments"]["candidate"].update(uid=d["arguments"]["validator"]["uid"]),
+                       lambda d: d["arguments"]["candidate"].update(uid=d["boundary"]["uid"]),
+                       lambda d: d["arguments"].update(output="/home/runner/work/_temp/mb-seed"),
+                       lambda d: d["arguments"].update(source="/tmp/mod-base-sandbox-boundary"),
+                       lambda d: d["arguments"].update(kind="gradle")):
+            changed = copy.deepcopy(document)
+            mutate(changed)
+            with self.subTest(changed=str(changed["arguments"])[:80]), self.assertRaises(MbError):
+                validate_root_request(changed)
+
     def test_strict_json_ambiguity_rejected_before_context_admission(self):
         for operation in (BUILD, RUNTIME):
             raw = canonical_json(ci_root_request(operation))

@@ -4,7 +4,8 @@
 the candidate files a plan is derived from (the inventory, the scenario contract and up to
 ``limits.MAX_CI_PLAN_INPUTS`` extra ``plan_inputs``), where a lane's checkout expects the staged
 Build, the two required status contexts, the native timeouts and, optionally, the kit system profile
-a lane installs before its accounts exist (:func:`system_profile`). :func:`validate_build_config` is the
+a lane installs before its accounts exist (:func:`system_profile`) and the seeds its jobs restore
+(:func:`seed_key_files`). :func:`validate_build_config` is the
 pure schema; :func:`load_build_config` reads the file from the protected checkout the prologue
 verified and requires every listed source there to have its configured hash, so its result is the
 complete protected adapter that planning hashes into the policy digest. It also records the mod's
@@ -50,6 +51,10 @@ def _context(value: Any, path: str) -> str:
 
 _FILE = Obj({"path": repo_path, "sha256": Str(g.SHA256, max_len=64)})
 _PATH = Obj({"path": repo_path})
+#: The kinds of seed a protected config may enable, each by the protected files its key binds.
+SEED_KINDS = ("gradle", "runtime")
+_SEED = Obj({"key_files": List(_PATH, min_items=1, max_items=lim.MAX_CI_SEED_KEY_FILES,
+                               unique_by=lambda item: item["path"])})
 #: One more candidate file the plan is derived from: the name it is staged under for the protected
 #: hooks, next to the inventory and the scenario contract, and its path in the tested tree.
 _PLAN_INPUT = Obj({"name": plan_input_name, "path": repo_path})
@@ -74,6 +79,9 @@ _CONFIG = Obj({
     # Optional within schema 1: what a lane job installs on the image before its accounts exist,
     # named, never listed. Absent means none.
     "runtime": Obj({"system_profile": Str(choices=tuple(SYSTEM_PROFILES))}),
+    # Optional within schema 1: the seeds a job restores before its candidate runs and a protected
+    # job saves after it, each keyed by protected files of the default branch. Absent means none.
+    "seeds": Obj({}, {kind: _SEED for kind in SEED_KINDS}),
 })
 
 
@@ -100,6 +108,11 @@ def validate_build_config(document: Any, *, path: str = "$") -> dict[str, Any]:
     contexts = document["contexts"]
     check(contexts["build"].casefold() != contexts["packaged"].casefold(), f"{path}.contexts",
           "Build and packaged contexts must be distinct")
+    if "seeds" in document:
+        check(bool(document["seeds"]), f"{path}.seeds", "names at least one seed; omit it for none")
+        for kind, seed in document["seeds"].items():
+            listed = [item["path"] for item in seed["key_files"]]
+            check(listed == sorted(listed), f"{path}.seeds.{kind}.key_files", "must be sorted by path")
     return document
 
 
@@ -107,6 +120,15 @@ def system_profile(document: dict[str, Any]) -> str | None:
     """The kit system profile a validated config names (``runtime.system_profile``), or ``None``."""
 
     return document["runtime"]["system_profile"] if "runtime" in document else None
+
+
+def seed_key_files(document: dict[str, Any], kind: str) -> tuple[str, ...] | None:
+    """The protected files that key the seed ``kind`` of a validated config, or ``None`` when the
+    config enables no such seed."""
+
+    check(kind in SEED_KINDS, "$.kind", "is not a seed kind")
+    seed = document.get("seeds", {}).get(kind)
+    return None if seed is None else tuple(item["path"] for item in seed["key_files"])
 
 
 @dataclass(frozen=True)
@@ -167,7 +189,15 @@ def _control_file(root: Path, relative: str) -> ControlFile:
     own (a mode manages only some callers); what exists must be a regular file, reached without
     crossing a symlink, within the size of a workflow."""
 
-    current = root
+    return protected_file_state(root, relative, max_bytes=lim.MAX_WORKFLOW_FILE_BYTES)
+
+
+def protected_file_state(root: Path, relative: str, *, max_bytes: int) -> ControlFile:
+    """The state of one file of the protected checkout ``root``: the SHA-256 of its bytes, or
+    ``None`` when the checkout does not have it. What exists must be a regular file of at most
+    ``max_bytes``, reached without crossing a symlink."""
+
+    current = Path(root)
     try:
         for part in relative.split("/"):
             current = current / part
@@ -177,7 +207,7 @@ def _control_file(root: Path, relative: str) -> ControlFile:
         return ControlFile(relative, None)
     except OSError as exc:
         raise BuildConfigError(f"protected source cannot be read: {relative} ({exc.strerror or exc})") from exc
-    data = read_regular_file(current, label=relative, max_bytes=lim.MAX_WORKFLOW_FILE_BYTES, allow_empty=True)
+    data = read_regular_file(current, label=relative, max_bytes=max_bytes, allow_empty=True)
     return ControlFile(relative, sha256_hex(data))
 
 

@@ -21,6 +21,7 @@ VERB_MODULES = (
     "mod_base.build_ci.commands_subject",
     "mod_base.build_ci.commands_system",
     "mod_base.build_ci.commands_worker",
+    "mod_base.build_ci.commands_seed",
     "mod_base.build_ci.commands_packaged",
     "mod_base.build_ci.commands_status",
     "mod_base.build_ci.commands_build",
