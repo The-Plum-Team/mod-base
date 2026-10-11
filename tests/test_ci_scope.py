@@ -24,7 +24,7 @@ from unittest import mock
 from mod_base.build_ci import commands, commands_scope, identity, lifecycle, scope
 from mod_base.build_ci.config import load_build_config, validate_build_config
 from mod_base.build_ci.protocol import plan_sha256
-from mod_base.build_ci.records import bind_scope_record, validate_scope_record
+from mod_base.build_ci.records import bind_scope_record, validate_gate_receipt, validate_scope_record
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256, strict_loads
@@ -397,6 +397,29 @@ class FullTests(ScopeCase):
         world.api.add_artifact({**world.artifacts[BASE_RECORD][0], "name": "mb-ci-runtime--43--a2--lane-a"},
                                world.artifacts[BASE_RECORD][1])
         self.assert_full(world, "baseline-unavailable", requests=6)
+        # Same identity, other work: the base commit ran other obligations than the pull request
+        # plans, so its full run proves nothing about the ones the selection would leave out.
+        world = World()
+        other = copy.deepcopy(world.base)
+        other["lanes"][0]["obligations"] = OBLIGATIONS[:1]
+        other["plan_sha256"] = plan_sha256(other)
+        world.publish(BASE_RUN, BASE_RECORD, world.artifacts[BASE_RECORD][0]["name"], grammar.CI_GATE_NAME,
+                      ci_run_gate(other, "packaged", "selected"), head=(h.BRANCH, h.CONTROLLER_SHA))
+        self.assertTrue(self.assert_full(world, "baseline-differs", requests=8).detail.endswith("(plan)"))
+        self.assertEqual(world.inputs, [])
+
+    def test_a_changed_path_the_hooks_input_cannot_carry_runs_full(self) -> None:
+        # Git allows a DEL in a path; JSON keeps it, a worker environment value may not hold it.
+        world = World()
+        world.changed({"docs/odd\x7fname.md": BLOB["readme"]})
+        self.assert_full(world, "changes-too-large", requests=CHANGES_REQUESTS + 5)
+        self.assertEqual(world.inputs, [])
+        # A newline is escaped by JSON and reaches the hook like any other path.
+        world = World()
+        world.changed({"docs/two\nlines.md": BLOB["readme"]})
+        self.assertIsInstance(world.decide(), dict)
+        self.assertIn("docs/two\nlines.md", strict_loads(world.inputs[0].encode(), label="input",
+                                                         max_bytes=1 << 20)["changed_paths"])
 
     def test_ambiguous_or_foreign_baseline_evidence_stops_the_job(self) -> None:
         cases = {
@@ -506,6 +529,25 @@ class RecordTests(unittest.TestCase):
                           }.items():
             with self.subTest(case=name), self.assertRaises(MbError):
                 self.received(raw)
+
+    def test_a_fork_or_a_changed_kit_pin_never_holds_a_scope(self) -> None:
+        # ``ci scope`` answers full for both before a request; a reader refuses the record and the
+        # tested record's digest too, whoever wrote them.
+        fork = copy.deepcopy(self.record)
+        fork["identity"]["source_repository"] = "fork/synthetic-mod"
+        with self.assertRaisesRegex(MbError, "another repository never runs a narrowed scope"):
+            validate_scope_record(fork)
+        plan = copy.deepcopy(self.world.plan)
+        plan["candidate_kit"] = {"sha": "9" * 40, "version": "1.3.0"}
+        plan["plan_sha256"] = plan_sha256(plan)
+        pinned = {**copy.deepcopy(self.record), "plan_sha256": plan["plan_sha256"]}
+        validate_scope_record(pinned)
+        with self.assertRaisesRegex(MbError, "changes the kit pin never runs a narrowed scope"):
+            validate_scope_record(pinned, plan=plan)
+        receipt = {**ci_run_gate(plan, "packaged", "pull-request"), "scope_sha256": "a" * 64}
+        validate_gate_receipt(receipt)
+        with self.assertRaisesRegex(MbError, "changes the kit pin never runs a narrowed scope"):
+            validate_gate_receipt(receipt, plan=plan)
 
     def test_a_lane_receives_its_own_entry_and_the_records_digest(self) -> None:
         lane = self.world.plan["lanes"][1]["id"]

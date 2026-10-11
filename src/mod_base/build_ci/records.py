@@ -321,7 +321,8 @@ def validate_scope_record(document: Any, *, plan: dict[str, Any] | None = None, 
     the attempt that requested it (``request``, as in a selection record). It says what the scope
     rests on: the input format the protected config named, the changed paths read from the base
     and tested trees, and the base commit's full packaged evidence (``baseline``). ``lanes`` names
-    every lane with the scenarios it runs, at least one. With a plan, the lanes are exactly the
+    every lane with the scenarios it runs, at least one. Only a pull request of this repository
+    under an unchanged kit pin runs one. With a plan, the lanes are exactly the
     planned ones in plan order, each lane's scenarios are its own obligations in plan order, and at
     least one lane runs fewer than all of them: a scope that narrows nothing is no scope. Structure
     only: ``build_ci.scope`` authenticates what the record says before it writes one."""
@@ -330,6 +331,10 @@ def validate_scope_record(document: Any, *, plan: dict[str, Any] | None = None, 
     _plan_binding(document, plan, path)
     identity, request = document["identity"], document["request"]
     check(identity["pr_number"] > 0, f"{path}.identity.pr_number", "only a pull request runs a narrowed scope")
+    check(identity["source_repository"] == identity["repository"], f"{path}.identity.source_repository",
+          "a pull request from another repository never runs a narrowed scope")
+    check(plan is None or "candidate_kit" not in plan, f"{path}.plan_sha256",
+          "a pull request that changes the kit pin never runs a narrowed scope")
     ref = g.WORKFLOW_REF.fullmatch(request["workflow_ref"])
     check(ref is not None and ref["repository"] == identity["repository"]
           and ref["path"] == request["workflow_path"] and ref["branch"] == identity["base_branch"],
@@ -430,6 +435,11 @@ def validate_gate_receipt(document: Any, *, plan: dict[str, Any] | None = None,
     check(mode != "pull-request" or pull_request, f"{path}.mode", "the pull-request mode needs a pull request")
     check("scope_sha256" not in document or (document["gate"], mode) == ("packaged", "pull-request"),
           f"{path}.scope_sha256", "only the packaged gate of a pull request runs a narrowed scope")
+    check("scope_sha256" not in document
+          or document["identity"]["source_repository"] == document["identity"]["repository"],
+          f"{path}.scope_sha256", "a pull request from another repository never runs a narrowed scope")
+    check("scope_sha256" not in document or plan is None or "candidate_kit" not in plan, f"{path}.scope_sha256",
+          "a pull request that changes the kit pin never runs a narrowed scope")
     check((document["owning_build"] is not None) == (document["gate"] == "packaged"), f"{path}.owning_build",
           "packaged gate requires an exact owning Build; Build gate has none")
     if document["owning_build"] is not None:

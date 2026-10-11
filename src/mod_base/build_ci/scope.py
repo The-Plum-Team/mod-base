@@ -45,7 +45,7 @@ from mod_base.build_ci.adapter import parse_derived_scope, plan_sources
 from mod_base.build_ci.config import BUILD_CONFIG_PATH, CONTROL_PATHS, runtime_selection
 from mod_base.build_ci.identity import PULL_REQUEST_EVENT
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.records import bind_scope_record, scope_document
+from mod_base.build_ci.records import bind_scope_record, original_plan, scope_document
 from mod_base.build_ci.reuse import _read_record
 from mod_base.build_ci.selection import newest_run, pending_run
 from mod_base.build_ci.transport import (ArtifactUnavailable, _artifact_state, _availability, _download,
@@ -55,7 +55,7 @@ from mod_base.github.api import GitHubApi
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.model.documents import load_document
-from mod_base.model.validators import Int, check
+from mod_base.model.validators import Int, check, is_evidence_text
 from mod_base.workflow import CI_CALLER_WORKFLOWS, ci_producer
 
 #: The scope record in the state directory of a packaged job whose run attempt narrowed its scope.
@@ -176,7 +176,9 @@ def _artifact(state: dict[str, Any], run_id: int, run_attempt: int) -> dict[str,
 
 def _same_baseline(evidence: dict[str, Any], plan: dict[str, Any]) -> None:
     """The base commit's evidence tests the base commit of the pull request, as a protected push,
-    for the same lanes and obligations under the same policy and kit pin."""
+    for the same lanes and obligations under the same policy and kit pin: its plan hash is the
+    hash of the pull request's plan under the base commit's identity (``records.original_plan``,
+    the one comparison post-merge reuse makes too), so no target, lane or obligation differs."""
 
     then, now = evidence["identity"], plan["identity"]
     check(then["pr_number"] == 0 and then["tested_sha"] == now["base_sha"]
@@ -185,6 +187,8 @@ def _same_baseline(evidence: dict[str, Any], plan: dict[str, Any]) -> None:
     differing = sorted(key for key in _COMPARED if then[key] != now[key])
     if differing or evidence["profile"] != plan["profile"]:
         raise _Full("baseline-differs", ", ".join(differing or ["profile"]))
+    if original_plan(plan, then)["plan_sha256"] != evidence["plan_sha256"]:
+        raise _Full("baseline-differs", "plan")
 
 
 def _baseline(reads: CommandReads, watch: Watch, plan: dict[str, Any], temporary_root: Path) -> dict[str, Any]:
@@ -285,6 +289,10 @@ def _input(*, input_format: str, changes: dict[str, Any], paths: list[str], base
     value = canonical_json(document).decode("utf-8").rstrip("\n")
     if len(value.encode("utf-8")) > limits.MAX_CI_SCOPE_BYTES:
         raise _Full("changes-too-large", f"{len(paths)} paths")
+    # Git allows a path that JSON keeps as it is but a worker environment value may not hold (a
+    # DEL): such a change is not malformed, it only does not fit the hook's input.
+    if not is_evidence_text(value, limits.MAX_CI_SCOPE_BYTES):
+        raise _Full("changes-too-large", "a changed path holds a character the hook's input cannot carry")
     return value
 
 

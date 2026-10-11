@@ -78,7 +78,9 @@ chosen before its result is read, completed successfully as its latest attempt u
 executing kit pin, and its tested record, or, when that push was covered by post-merge reuse, its
 reuse reference and the original packaged record it names. The record must test the base commit
 under the same repository, caller, kit pin, policy, inventory, scenario contract, runtime selection
-and graph version, with the same profile, and must not be narrowed. The new protected hook
+and graph version, with the same profile and the same plan (its plan hash is the pull request's
+plan under the base commit's identity, the comparison post-merge reuse makes), and must not be
+narrowed. The new protected hook
 `derive_scope` runs as the validator from the protected adapter copy, with the plan inputs `ci
 plan` granted and that data as one line of canonical JSON in `MB_SCOPE_INPUT` (format
 `changed-paths-v1`); root hands its one output, `scope.json`, to the runner (root operation

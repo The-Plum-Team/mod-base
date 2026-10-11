@@ -2,7 +2,7 @@
 
 The fourteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
 `mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1: thirteen since v1.1.0,
-`mod-base.ci.scope` after v1.2.0) are
+`mod-base.ci.scope` after v1.2.1) are
 listed in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the
 validator that defines it. This page has the field tables of four of them, in its last four
 sections: the Build config, the batch manifest, the results index and the activation manifest.
@@ -696,7 +696,7 @@ source in the protected checkout to have its configured hash.
 | `contexts.build`, `contexts.packaged` | the two required status contexts: trimmed printable ASCII without `<`, `>`, `{{`, `}}`, 1..100 characters, distinct ignoring case |
 | `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
 | `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.protocol.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
-| `runtime_selection` | optional (added within schema 1 after v1.2.0): exactly `{input}`, where `input` is `changed-paths-v1`, the format of the kit's input to the `derive_scope` hook; absent means a pull request's lanes always run every obligation |
+| `runtime_selection` | optional (added within schema 1 after v1.2.1): exactly `{input}`, where `input` is `changed-paths-v1`, the format of the kit's input to the `derive_scope` hook; absent means a pull request's lanes always run every obligation |
 | `seeds` | optional (added within schema 1): at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..16 `{path}` objects (canonical repository paths, unique, sorted by path) of the protected checkout whose bytes key the seed; absent means no seed |
 
 The config path, every adapter source, every candidate file (the inventory, the scenario contract
@@ -763,7 +763,7 @@ owning_build, build_envelope_sha256 and lanes, and the optional scope.
 | `owning_build` | The descriptor of the complete Build every lane ran: the bundle this same attempt rebuilt (a standalone run only), or the bundle of a separate run of the Build caller. |
 | `build_envelope_sha256` | SHA-256 of that Build's canonical envelope, as the job's selection record carries it. |
 | `lanes` | 1..256 entries: exactly the planned lanes, in plan order. |
-| `scope` | Optional (added within schema 1 after v1.2.0): the `mod-base.ci.scope` record the attempt's `input` job handed to every lane, when a pull request ran a narrowed scope: the same binding, requested by the attempt that sealed the index. Absent for a run in full. The packaged tested record of the attempt carries its SHA-256 as `scope_sha256`. |
+| `scope` | Optional (added within schema 1 after v1.2.1): the `mod-base.ci.scope` record the attempt's `input` job handed to every lane, when a pull request ran a narrowed scope: the same binding, requested by the attempt that sealed the index. Absent for a run in full. The packaged tested record of the attempt carries its SHA-256 as `scope_sha256`. |
 
 A lane has exactly:
 
