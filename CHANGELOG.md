@@ -23,6 +23,13 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   and nothing partial is published. Outputs `generation` (`full`, `reuse`, `none`) and `reason`.
   New module `build_ci.generation`, new limit `MAX_CI_SELECT_GENERATION_REQUESTS` (128: 27
   requests for a full generation, 52 for a reused one, whatever the number of lanes).
+- Add the consumer subject `ci subject --producer generation --pr ""`: a job of the mod's own
+  workflow on the default branch (any workflow of the mod, on a push, `workflow_run`,
+  `workflow_dispatch` or `schedule`) authenticates the live default-branch head exactly like a
+  push and derives the identity, and so the plan, of that commit's own gates; it never has a pull
+  request, runs no candidate hook and seals nothing. With it a consumer job runs the steps of the
+  status callee's evaluate job and then `ci select-generation` (BUILD-PROTOCOL.md, "The subject
+  of a job"). New `identity.GENERATION_PRODUCER`, `GENERATION_EVENTS` and `admits_workflow`.
 - New document kind `mod-base.ci.generation` v1 (`records.validate_generation`,
   `records.generation_record`), written only by `ci select-generation`, never by a gate; a v1.3.0
   reader refuses it as unknown. Every other kind, `ADAPTER_API`, `BUILD_ADAPTER_API`,

@@ -27,6 +27,14 @@ live default branch must still be that commit and the pull request's base, or th
 gates ran for is gone. The identity is therefore the one the Build and the packaged run derived,
 and so is the plan.
 
+The fourth producer, ``generation``, is a consumer's job: a step of the mod's own workflow that
+reads the tested generation of a default-branch commit (``ci select-generation``) for a status
+page, a review, coverage or Pages. It tests nothing and runs no gate. Its subject is always the
+live head of the default branch, authenticated exactly like a push's, on a push, a finished run of
+a managed caller (``workflow_run``), a manual request or a schedule, from any workflow of the mod
+on the default branch; the identity again names the Build caller, so its plan is the plan of the
+generation it reads.
+
 A pull request is observed once, alongside the live default branch; a protected subject reads
 the default branch again before returning. The immutable commit object is read once.
 
@@ -73,8 +81,14 @@ PROTECTED_EVENTS = ("push", "workflow_dispatch", "schedule")
 STATUS_PRODUCER = "status"
 #: The events that start a run of the status caller. Its subject is a pull request on every one.
 STATUS_EVENTS = ("workflow_run", PULL_REQUEST_EVENT, "schedule", "workflow_dispatch")
-#: What ``ci subject --producer`` accepts: the two gates and the status evaluation.
-SUBJECT_PRODUCERS = (*PRODUCERS, STATUS_PRODUCER)
+#: The producer of a consumer's job that reads the tested generation of a default-branch commit
+#: (``ci select-generation``); never a ``protocol.PRODUCERS`` gate and never a pull request.
+GENERATION_PRODUCER = "generation"
+#: The events that start a consumer's run on the default branch: the push itself, a finished run
+#: of a managed caller (``workflow_run``), a manual request and a schedule.
+GENERATION_EVENTS = ("push", "workflow_run", "workflow_dispatch", "schedule")
+#: What ``ci subject --producer`` accepts: the two gates, the status evaluation and a consumer.
+SUBJECT_PRODUCERS = (*PRODUCERS, STATUS_PRODUCER, GENERATION_PRODUCER)
 #: The domain of :func:`policy_sha256`; a change of what the digest covers changes this label.
 POLICY_FORMAT = "mod-base.build.policy-v1"
 
@@ -99,6 +113,8 @@ def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]:
 
     if producer == STATUS_PRODUCER:
         return (CI_CALLER_WORKFLOWS[STATUS_PRODUCER],) if pull_request else ()
+    if producer == GENERATION_PRODUCER:
+        return ()
     if producer == "build" and not pull_request:
         return (CI_CALLER_WORKFLOWS["build"], CI_CALLER_WORKFLOWS["packaged"])
     return (CI_CALLER_WORKFLOWS[producer],)
@@ -113,7 +129,23 @@ def run_events(producer: str, *, pull_request: bool) -> tuple[str, ...]:
 
     if producer == STATUS_PRODUCER:
         return STATUS_EVENTS if pull_request else ()
+    if producer == GENERATION_PRODUCER:
+        return () if pull_request else GENERATION_EVENTS
     return (PULL_REQUEST_EVENT,) if pull_request else PROTECTED_EVENTS
+
+
+def admits_workflow(producer: str, workflow_path: str, *, pull_request: bool) -> bool:
+    """Whether a job of ``producer`` may run from this repository's workflow ``workflow_path``.
+
+    A gate or a status job runs from its managed caller (:func:`run_workflows`). A consumer's job
+    (``generation``) runs from any workflow of the mod on the default branch, which is the mod's
+    own: it only reads, and the identity it derives always names the Build caller as its
+    controller workflow, so its plan is the plan of the generation it reads. It never has a pull
+    request subject."""
+
+    if producer == GENERATION_PRODUCER:
+        return not pull_request
+    return workflow_path in run_workflows(producer, pull_request=pull_request)
 
 
 _RECORD = Obj({
@@ -135,7 +167,7 @@ def validate_subject_record(document: Any, path: str = "$") -> dict[str, Any]:
     check(document["event"] in run_events(document["producer"], pull_request=pull_request), f"{path}.event",
           "a pull request subject needs the pull_request_target event and no other subject may use it; "
           "only a status evaluation, always of a pull request, runs on the events of the status caller")
-    check(document["workflow_path"] in run_workflows(document["producer"], pull_request=pull_request),
+    check(admits_workflow(document["producer"], document["workflow_path"], pull_request=pull_request),
           f"{path}.workflow_path", "the producer does not run from this managed caller")
     check(subject["controller_workflow"] == CI_CALLER_WORKFLOWS["build"], f"{path}.subject.controller_workflow",
           "must name the managed Build caller")
@@ -185,7 +217,7 @@ def _run(invocation: Invocation, api: GitHubApi, *, producer: str, pull_request:
           "a pull request subject needs the pull_request_target event and no other subject may use it; "
           "only a status evaluation, always of a pull request, runs on the events of the status caller")
     caller = grammar.parse_workflow_ref(_environment(invocation, "GITHUB_WORKFLOW_REF"))
-    check(caller.repository == repository and caller.path in run_workflows(producer, pull_request=pull_request),
+    check(caller.repository == repository and admits_workflow(producer, caller.path, pull_request=pull_request),
           "$.workflow_ref", "the run is not this repository's managed caller of the producer")
     return _Run(repository, controller, event, caller,
                 {**invocation.kit, "tree_digest": kit_tree_digest(invocation.kit_root)})
@@ -263,7 +295,7 @@ def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: st
     here. ``wait_for_merge`` enables the command's bounded pending-merge wait; otherwise an
     unavailable merge remains an immediate rejection."""
 
-    check(producer in SUBJECT_PRODUCERS, "$.producer", "must be build, packaged or status")
+    check(producer in SUBJECT_PRODUCERS, "$.producer", "must be build, packaged, status or generation")
     run = _run(invocation, api, producer=producer, pull_request=pr_number is not None)
     if pr_number is not None:
         generation = _ready_generation(

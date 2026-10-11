@@ -59,6 +59,18 @@ observations itself; the final gate repeats them before success. Status jobs use
 - **A protected subject** (`--pr ""`: a push to the default branch or a manual dispatch there).
   The live head of the default branch must be the executing commit, which is the tested commit and
   the controller at once.
+- **A consumer's subject** (`--producer generation --pr ""`): a job of the mod's own workflow on
+  the default branch that reads the tested generation of the live head (`ci select-generation`)
+  for a status page, a review, coverage or Pages. It is authenticated exactly like a protected
+  subject, on a push, a finished run of a managed caller (`workflow_run`), a manual dispatch or a
+  schedule, from any workflow of the mod on the default branch, and derives the identity, and so
+  the plan, of that commit's own gates. It never has a pull request, runs no candidate hook and
+  seals nothing. A consumer job runs the steps of the status callee's evaluate job
+  (`gate-status.yml`): checkouts of the mod at `github.sha` and of the pinned kit, `ci subject
+  --producer generation --pr ""`, a checkout of the same commit as the candidate, `ci
+  worker-prepare --roles validator`, `ci plan --pin-candidate candidate`, then `ci
+  select-generation`, and `ci worker-finish` always; with `actions: read` and `contents: read`
+  and no other credential.
 
 Both give the same tuple (`build_ci.protocol.validate_identity`), written to the job's private
 state as `identity.json`:

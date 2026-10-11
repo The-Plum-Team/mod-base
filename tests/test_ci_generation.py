@@ -131,10 +131,12 @@ class GenerationCase(ReuseCase):
         self.assertFalse((self.scratch / f"generation-{self.outputs}").exists())
         return caught.exception
 
-    def reused(self, *, lanes: int = 1, real_bundle: bool = False, **merged) -> Merged:
-        """The reused generation: pull request 7 and the push's two reuse runs."""
+    def reused(self, *, lanes: int = 1, real_bundle: bool = False, producer: str | None = None, **merged) -> Merged:
+        """The reused generation: pull request 7 and the push's two reuse runs. ``producer`` is
+        the producer of the state's identity record (a Build job's by default)."""
 
-        attempt = self.attempt(listing=REUSE_LISTING["build"], caller="build", push=True, lanes=lanes)
+        attempt = self.attempt(listing=REUSE_LISTING["build"], caller="build", push=True, lanes=lanes,
+                               producer=producer)
         world = (RealBundle if real_bundle else Merged)(attempt, **merged)
         for caller in ("build", "packaged"):
             add_reuse_run(world, caller)
@@ -374,6 +376,13 @@ class CommandTests(GenerationCase):
         self.assertEqual(stdout, "select-generation: reuse generation of pull request #7, Build run 142 attempt 2, "
                                  "packaged run 143 attempt 2\n")
         self.assertEqual(sorted(path.name for path in output.iterdir()), ["build", "generation.json"])
+
+    def test_a_consumer_job_reads_the_generation_of_its_subject(self) -> None:
+        world = self.reused(producer="generation")
+        self.assertEqual(world.attempt.record["producer"], "generation")
+        code, stdout, stderr, outputs, output = self.command(world)
+        self.assertEqual((code, stderr, outputs), (0, "", {"generation": "reuse", "reason": "selected"}))
+        self.assertEqual([path.name for path in output.iterdir()], ["generation.json"])
 
     def test_the_command_reports_an_absent_generation_with_exit_3(self) -> None:
         world = self.reused()
