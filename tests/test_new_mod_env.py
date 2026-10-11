@@ -13,8 +13,12 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from collections.abc import Sequence
 from pathlib import Path
@@ -48,6 +52,8 @@ class FakeGitHub:
         self.calls: list[tuple[list[str], bytes | None]] = []
         self.ignore_put = False
         self.fail: str | None = None
+        self.fail_detail = b"HTTP 502: Bad Gateway"
+        self.app: dict[str, Any] = {"id": 5256389, "slug": "plum-mod-base-gate", "client_id": CLIENT}
 
     def configured(self, *policies: tuple[str, str], rules: Sequence[str] = ()) -> FakeGitHub:
         self.environment = {"name": "mod-base-gate", "deployment_branch_policy": dict(new_mod_env.BRANCH_POLICY),
@@ -63,7 +69,7 @@ class FakeGitHub:
         arguments = list(arguments)
         self.calls.append((arguments, stdin))
         if self.fail is not None and self.fail in " ".join(arguments):
-            return 1, b"", b"HTTP 502: Bad Gateway"
+            return 1, b"", self.fail_detail
         if arguments[0] == "variable":
             self.variables[arguments[2]] = arguments[arguments.index("--body") + 1]
             return 0, b"", b""
@@ -75,7 +81,9 @@ class FakeGitHub:
             method, endpoint = arguments[2], arguments[3]
         path = endpoint.split("?", 1)[0]
         body: Any = None
-        if method == "GET" and path == f"repos/{REPO}":
+        if method == "GET" and path == "apps/plum-mod-base-gate":
+            body = self.app
+        elif method == "GET" and path == f"repos/{REPO}":
             body = {"full_name": REPO, "default_branch": self.default}
         elif method == "GET" and path == f"repos/{REPO}/actions/secrets":
             body = {"total_count": len(self.repo_secrets), "secrets": [{"name": n} for n in self.repo_secrets]}
@@ -111,15 +119,33 @@ class FakeGitHub:
         return 0, json.dumps(body).encode(), b""
 
 
+def private_file(path: Path, data: bytes) -> Path:
+    """A file its owner alone can read: mode 0600 on POSIX; on Windows the temporary directory's
+    inherited access list (the user, SYSTEM and Administrators)."""
+
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
+    return path
+
+
+def share_with_everyone(path: Path) -> None:
+    """Let every user of the machine read ``path``."""
+
+    if os.name == "nt":
+        subprocess.run(["icacls", str(path), "/grant", "*S-1-1-0:R"], check=True, capture_output=True)
+    else:
+        path.chmod(0o644)
+
+
 class NewModEnvTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        self.key_file = self.root / "app.pem"
-        self.key_file.write_bytes(KEY)
-        self.app_json = self.root / "app.json"
-        self.app_json.write_text(json.dumps({"id": 1, "client_id": CLIENT, "pem": KEY.decode()}), encoding="utf-8")
+        self.key_file = private_file(self.root / "app.pem", KEY)
+        self.app_json = private_file(self.root / "app.json", json.dumps(
+            {"id": 1, "client_id": CLIENT, "pem": KEY.decode()}).encode("utf-8"))
 
     def run_program(self, github: FakeGitHub, *extra: str, credentials: Sequence[str] | None = None) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
@@ -229,19 +255,18 @@ class NewModEnvTests(unittest.TestCase):
         self.assertIn("gh secret set MOD_BASE_GATE_APP_PRIVATE_KEY --repo failed (1): HTTP 502", errors)
 
     def test_credentials_are_checked_without_echoing_them(self) -> None:
-        not_a_key = self.root / "notes.txt"
-        not_a_key.write_text("client secret, not a key\n", encoding="utf-8")
-        oversized = self.root / "big.pem"
-        oversized.write_bytes(KEY[:32] + b"A" * (new_mod_env.MAX_KEY_BYTES + 1))
-        broken_json = self.root / "broken.json"
-        broken_json.write_text('{"client_id": "' + CLIENT + '", "pem": ', encoding="utf-8")
+        not_a_key = private_file(self.root / "notes.txt", b"client secret, not a key\n")
+        oversized = private_file(self.root / "big.pem", KEY[:32] + b"A" * (new_mod_env.MAX_KEY_BYTES + 1))
+        broken_json = private_file(self.root / "broken.json", ('{"client_id": "' + CLIENT + '", "pem": ').encode())
         cases = {
             "not a PEM": (["--client-id", CLIENT, "--key-file", str(not_a_key)], "is not a PEM private key"),
             "oversized": (["--client-id", CLIENT, "--key-file", str(oversized)], "is larger than"),
             "missing": (["--client-id", CLIENT, "--key-file", str(self.root / "absent.pem")], "does not exist"),
-            "directory": (["--client-id", CLIENT, "--key-file", str(self.root)], "is not a regular file"),
+            # POSIX opens a directory and refuses its type; Windows refuses to open it.
+            "directory": (["--client-id", CLIENT, "--key-file", str(self.root)],
+                          r"is not a regular file or a pipe|cannot be opened"),
             "bad client": (["--client-id", "12345", "--key-file", str(self.key_file)], "not a GitHub App client ID"),
-            "no key": (["--client-id", CLIENT], "both --client-id and --key-file"),
+            "no key": (["--client-id", CLIENT], "give --key-file"),
             "both forms": (["--app-json", str(self.app_json), "--key-file", str(self.key_file)], "not both"),
             "broken JSON": (["--app-json", str(broken_json)], "is not JSON"),
         }
@@ -250,8 +275,78 @@ class NewModEnvTests(unittest.TestCase):
                 github = FakeGitHub()
                 status, _output, errors = self.run_program(github, credentials=credentials)
                 self.assertEqual(status, 2)
-                self.assertIn(message, errors)
+                self.assertRegex(errors, message)
                 self.assertEqual(github.calls, [])
+
+    def test_a_credential_file_other_users_can_read_is_refused_before_any_call(self) -> None:
+        for name, credentials in (("key file", ["--key-file", str(self.key_file)]),
+                                  ("manifest JSON", ["--app-json", str(self.app_json)])):
+            with self.subTest(name):
+                share_with_everyone(Path(credentials[1]))
+                github = FakeGitHub()
+                status, _output, errors = self.run_program(github, credentials=credentials)
+                self.assertEqual(status, 2)
+                self.assertRegex(errors, r"has mode 0644, open to other users|is readable by Everyone")
+                self.assertEqual(github.calls, [])
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_a_group_readable_key_file_is_refused(self) -> None:
+        self.key_file.chmod(0o640)
+        github = FakeGitHub()
+        status, _output, errors = self.run_program(github)
+        self.assertEqual(status, 2)
+        self.assertIn("has mode 0640, open to other users", errors)
+        self.assertEqual(github.calls, [])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "process substitution paths are /dev/fd/N on Linux")
+    def test_a_pipe_from_a_password_manager_is_accepted(self) -> None:
+        read_end, write_end = os.pipe()
+        self.addCleanup(os.close, read_end)
+        writer = threading.Thread(target=lambda: (os.write(write_end, KEY), os.close(write_end)))
+        writer.start()
+        github = FakeGitHub()
+        status, _output, errors = self.run_program(github, credentials=["--key-file", f"/dev/fd/{read_end}"])
+        writer.join()
+        self.assertEqual((status, errors), (0, ""))
+        self.assertEqual(github.secrets, {"MOD_BASE_GATE_APP_PRIVATE_KEY": KEY})
+        self.assert_key_only_on_stdin(github)
+
+    def test_a_key_piped_on_the_standard_input_is_accepted(self) -> None:
+        program = ("import importlib.util, sys; from pathlib import Path\n"
+                   f"spec = importlib.util.spec_from_file_location('m', {str(PROGRAM)!r})\n"
+                   "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+                   "client, key = m.load_credentials(None, None, Path('-'))\n"
+                   "print(client, len(key), key.startswith(b'-----BEGIN'))\n")
+        # -B: no tools/__pycache__, which the kit tree digest refuses.
+        completed = subprocess.run([sys.executable, "-I", "-B", "-c", program], input=KEY, capture_output=True,
+                                   check=False, timeout=60)
+        self.assertEqual((completed.returncode, completed.stderr), (0, b""))
+        self.assertEqual(completed.stdout.decode().split(), ["None", str(len(KEY)), "True"])
+
+    def test_the_client_id_is_read_from_the_gate_app_when_not_given(self) -> None:
+        github = FakeGitHub()
+        status, output, errors = self.run_program(github, credentials=["--key-file", str(self.key_file)])
+        self.assertEqual((status, errors), (0, ""))
+        self.assertEqual(github.calls[0][0], ["api", "apps/plum-mod-base-gate"])
+        self.assertEqual(github.variables, {"MOD_BASE_GATE_APP_CLIENT_ID": CLIENT})
+        self.assertIn(f"variable MOD_BASE_GATE_APP_CLIENT_ID: {CLIENT}", output)
+        for app, message in (({"id": 1, "client_id": CLIENT}, "is not App 5256389"),
+                             ({"id": 5256389, "client_id": "12345"}, "has no GitHub App client ID")):
+            with self.subTest(app=app):
+                github = FakeGitHub()
+                github.app = app
+                status, _output, errors = self.run_program(github, credentials=["--key-file", str(self.key_file)])
+                self.assertEqual(status, 2)
+                self.assertIn(message, errors)
+                self.assertEqual(github.writes(), [])
+
+    def test_a_gh_diagnostic_that_quotes_the_key_is_redacted(self) -> None:
+        github = FakeGitHub()
+        github.fail = "secret set"
+        github.fail_detail = b"could not parse " + KEY_LINE.encode()
+        status, _output, errors = self.run_program(github)
+        self.assertEqual(status, 2)
+        self.assertIn("could not parse [redacted]", errors)
 
     def test_the_names_are_those_of_the_managed_status_caller(self) -> None:
         caller = (KIT / "template/managed/.github/workflows/mod-base-gate-status.yml").read_text(encoding="utf-8")
@@ -268,8 +363,16 @@ class NewModGuideTests(unittest.TestCase):
         self.assertIn("](docs/NEW-MOD.md)", (KIT / "README.md").read_text(encoding="utf-8"))
         self.assertIn("](NEW-MOD.md)", (KIT / "docs/OPERATIONS.md").read_text(encoding="utf-8"))
         for name in ("tools/new_mod_env.py", new_mod_env.ENVIRONMENT, new_mod_env.CLIENT_ID_VARIABLE,
-                     new_mod_env.PRIVATE_KEY_SECRET):
+                     new_mod_env.PRIVATE_KEY_SECRET, new_mod_env.APP_SLUG, str(new_mod_env.APP_ID)):
             self.assertIn(name, guide)
+
+    def test_the_guide_keeps_the_key_in_a_password_manager_only(self) -> None:
+        guide = " ".join(self.GUIDE.read_text(encoding="utf-8").split())
+        rule = ("generate a new private key in the App settings and keep it in a password manager, "
+                "never in the home folder unencrypted")
+        self.assertTrue(rule in guide, f"docs/NEW-MOD.md must say: {rule}")
+        for forbidden in (".mod-base-secrets", "--app-json ~", "--key-file ~"):
+            self.assertFalse(forbidden in guide, f"docs/NEW-MOD.md names {forbidden}")
 
     def test_every_relative_link_of_the_guide_resolves(self) -> None:
         guide = self.GUIDE.read_text(encoding="utf-8")

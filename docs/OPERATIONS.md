@@ -343,18 +343,22 @@ branch restriction is not optional: it is the only
 thing that keeps the key from a workflow of another branch. Anyone who can push a branch can add
 a job there that names the environment and the secret; GitHub refuses such a job only because
 the environment admits the default branch alone. Keep the key in the environment, never as a
-repository or organization secret. With `R` the repository, `BRANCH` its default branch and
-`app.pem` the downloaded key (`tools/new_mod_env.py` performs these steps, reads the branch
-restriction back before it stores anything and refuses a wider environment; see
-[NEW-MOD.md](NEW-MOD.md#5-the-mod-base-gate-environment-owner-once-per-mod)):
+repository or organization secret. The owner's copy of the key lives in a password manager alone,
+never unencrypted in the home folder; a key that is not at hand is replaced, not recovered
+([NEW-MOD.md](NEW-MOD.md#5-the-mod-base-gate-environment-owner-once-per-mod) step 5: generate a
+new private key in the App settings). With `R` the repository, `BRANCH` its default branch and
+`<password-manager read ...>` the password manager's command that prints the key
+(`tools/new_mod_env.py` performs these steps, reads the branch restriction back before it stores
+anything and refuses a wider environment or a key file other users can read):
 
 ```bash
+CLIENT_ID="$(gh api apps/plum-mod-base-gate --jq .client_id)"   # public
 gh api -X PUT "repos/$R/environments/mod-base-gate" --input - <<'JSON'
 {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
 JSON
 gh api -X POST "repos/$R/environments/mod-base-gate/deployment-branch-policies" -f name="$BRANCH" -f type=branch
 gh variable set MOD_BASE_GATE_APP_CLIENT_ID --repo "$R" --env mod-base-gate --body "$CLIENT_ID"
-gh secret set MOD_BASE_GATE_APP_PRIVATE_KEY --repo "$R" --env mod-base-gate < app.pem
+<password-manager read ...> | gh secret set MOD_BASE_GATE_APP_PRIVATE_KEY --repo "$R" --env mod-base-gate
 gh api "repos/$R/environments/mod-base-gate/deployment-branch-policies" --jq '.branch_policies[].name'   # exactly $BRANCH
 ```
 

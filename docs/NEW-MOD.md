@@ -137,22 +137,57 @@ Check: a clean build with `--refresh-dependencies` passes with the mirror and wi
 
 The status caller mints its token from the variable `MOD_BASE_GATE_APP_CLIENT_ID` and the secret
 `MOD_BASE_GATE_APP_PRIVATE_KEY` of the environment `mod-base-gate`, which must admit the default
-branch alone. `tools/new_mod_env.py` creates the environment, limits it to the default branch,
-reads that restriction back, and only then stores both values. The key goes to
-`gh secret set` on standard input and is never printed:
+branch alone. The App is already installed on the repository; what the mod needs is the key.
+
+**The key.** GitHub shows an App private key once, when it is generated, and keeps no copy the
+owner can read back; the keys already stored in the mods' environments cannot be read out either.
+So, when the owner has no key at hand (the local copy was lost on 2026-10-11): generate a new
+private key in the App settings and keep it in a password manager, never in the home folder
+unencrypted.
+
+1. Open the App's settings
+   (<https://github.com/organizations/The-Plum-Team/settings/apps/plum-mod-base-gate>), "Private
+   keys", "Generate a private key". The browser downloads `plum-mod-base-gate.<date>.private-key.pem`.
+2. Store that file in the password manager, in an item of its own, and delete the downloaded copy.
+   Keep no other copy: not in `~/Downloads`, `~/.ssh`, a dot folder or a synced folder.
+3. A new key does not revoke the older ones, so the other mods keep working with the key they
+   hold. To end with a single key, run the tool below for every mod, then delete the older keys in
+   the App's settings. After a suspected leak, delete the leaked key first
+   ([Security](#security-the-app-key-lives-only-in-default-branch-environments)).
+
+`tools/new_mod_env.py` creates the environment, limits it to the default branch, reads that
+restriction back, and only then stores the client ID (public, read from
+`gh api apps/plum-mod-base-gate`, App id 5256389) and the key. It reads the key from the path you
+pass with `--key-file` and refuses a file that other users can read; the key goes to
+`gh secret set` on standard input and is never printed. It deletes nothing, the key file included.
+Hand it the key straight from the password manager's command line, so that it never lands on
+disk (`<password-manager read ...>` is that command, for example `op read "op://<vault>/<item>/<file>"`):
 
 ```bash
+# Git Bash on Windows or any shell: '-' reads the key from the pipe
+<password-manager read ...> | python3 ../mod-base-$KIT_TAG/tools/new_mod_env.py \
+  --repo "$MOD" --branch "$BRANCH" --key-file - --dry-run    # reads only, prints the plan
+<password-manager read ...> | python3 ../mod-base-$KIT_TAG/tools/new_mod_env.py \
+  --repo "$MOD" --branch "$BRANCH" --key-file -
+# Linux or WSL, with gh logged in there: a process substitution path works too
 python3 ../mod-base-$KIT_TAG/tools/new_mod_env.py --repo "$MOD" --branch "$BRANCH" \
-  --app-json ~/.mod-base-secrets/mod-base-gate-app.json --dry-run    # reads only, prints the plan
-python3 ../mod-base-$KIT_TAG/tools/new_mod_env.py --repo "$MOD" --branch "$BRANCH" \
-  --app-json ~/.mod-base-secrets/mod-base-gate-app.json
+  --key-file <(<password-manager read ...>)
 ```
 
-(`--client-id <id> --key-file app.pem` replaces `--app-json` for a key downloaded from the App's
-settings; the tool needs a kit checkout that has it, or run it from a clone of `main`.) It refuses,
-before writing anything, an environment that admits another branch or has required reviewers or a
-wait timer, a `--branch` that is not the default branch, and a repository or organization secret
-of the key's name. The manual equivalent is in
+Without a password manager command line, export the key for the run only to a file that you
+alone can read, outside synced folders, pass its path, and delete that one file after the run. The
+tool refuses the file when other users can read it: on Linux or WSL any group or other permission
+bit (`chmod 600` it); on Windows an access list that lets Everyone, Users or Authenticated Users
+read it (a new file in your own profile has none; elsewhere, from Git Bash,
+`MSYS_NO_PATHCONV=1 icacls "$KEY_FILE" /inheritance:r /grant:r "$USERNAME:R"`).
+
+`--client-id <id>` overrides the client ID, and `--app-json <path>` reads the JSON of the App
+manifest flow (`client_id` and `pem`, under the same rules). The tool needs a kit checkout that
+has it; until a release ships it, run it from a clone of `main`.
+
+It refuses, before writing anything, an environment that admits another branch or has required
+reviewers or a wait timer, a `--branch` that is not the default branch, and a repository or
+organization secret of the key's name. The manual equivalent is in
 [OPERATIONS.md](OPERATIONS.md#the-gate-status-app). Check:
 
 ```bash
@@ -174,7 +209,8 @@ One pull request adds the protected Build config, the adapter and the activation
 - `scripts/ci/mod_base_build_dispatch.py`, the adapter module and the policy entry point, with the
   eight hooks `derive_plan`, `policy`, `build_target`, `verify_target`, `verify_build`,
   `derive_runtime`, `run_lane` and `verify_runtime`, plus the mod's tests of them;
-- `scripts/ci/mod-base-build.json`: `repository` `$MOD`, `profile` (only `quick-skin` and
+- `scripts/ci/mod-base-build.json` (every field in [SCHEMAS.md](SCHEMAS.md), kind
+  `mod-base.build.config`; start from the fixture's copy): `repository` `$MOD`, `profile` (only `quick-skin` and
   `block-pops` exist; take `block-pops`, whose policy run counts tests exactly, unless the policy
   suite needs Quick Skin's whole-class skips), `adapter.files` with the SHA-256 of every file the
   dispatcher imports (`sha256sum scripts/ci/*.py`), `contexts.build` and `contexts.packaged`
@@ -273,6 +309,8 @@ and cannot merge until they are `success`. A rollback is two pull requests throu
   anyone who can push a branch can add a job that names the environment. It is safe only because
   the default branch takes changes through reviewed pull requests alone (step 1's ruleset, no
   bypass actors).
-- Keep the owner's key file private (`~/.mod-base-secrets/`, owner-only permissions). If the key
-  may have leaked, generate a new one in the App's settings, run `tools/new_mod_env.py` for every
-  mod, then delete the old key in the App's settings.
+- The owner's copy lives in a password manager alone, never unencrypted in the home folder, dot
+  folders included: a wipe of the folder loses it and a backup or sync spreads it. If no copy is at hand, nothing is lost: generate a new key (step 5).
+- If the key may have leaked, delete it in the App's settings at once (the mods' statuses fail,
+  and publish nothing, until they get the new key), generate a new one, and run
+  `tools/new_mod_env.py` for every mod.

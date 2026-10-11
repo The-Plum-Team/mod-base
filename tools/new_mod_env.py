@@ -2,23 +2,32 @@
 """Create a mod's ``mod-base-gate`` environment and store the gate status App's credentials in it.
 
 An owner operation of docs/NEW-MOD.md (step 5) and docs/OPERATIONS.md ("The gate status App"),
-run with the owner's own ``gh`` login before the pull request that makes a mode manage the status
+run with the owner's own ``gh`` login before the pull request that makes a mod manage the status
 caller is merged:
 
-    python3 tools/new_mod_env.py --repo The-Plum-Team/<mod> --app-json <file>
-    python3 tools/new_mod_env.py --repo The-Plum-Team/<mod> --client-id <id> --key-file app.pem
+    python3 tools/new_mod_env.py --repo The-Plum-Team/<mod> --key-file <path> --dry-run
+    python3 tools/new_mod_env.py --repo The-Plum-Team/<mod> --key-file <path>
 
-``--app-json`` is the JSON the App manifest flow returns (``client_id`` and ``pem``). The program
-restricts the environment's deployment branches to the repository's default branch and checks
-that restriction on GitHub before it writes anything else. Only then does it set the variable
-``MOD_BASE_GATE_APP_CLIENT_ID`` and the secret ``MOD_BASE_GATE_APP_PRIVATE_KEY``; the key reaches
-``gh secret set`` on its standard input alone and is never printed, logged or put on a command
-line. It refuses, before any write, when the environment admits another branch, has required
-reviewers or a wait timer (either would hold every status), or when a repository or organization
-secret of the key's name is visible to the repository: the key must live in this environment
-only. It never deletes a branch policy, a variable or a secret, and it changes no ruleset, App
-installation or other setting. ``--dry-run`` performs the reads and prints the plan. Exit status 0
-on success, 2 on any refusal or ``gh`` failure.
+``--key-file`` is the path, chosen by the owner, of the App's private key (PEM) exported from the
+password manager for this run; ``--app-json`` instead reads the JSON the App manifest flow returns
+(``client_id`` and ``pem``). Either file must be readable by its owner alone: the program refuses a
+file other users can read (POSIX: any group or other permission bit; Windows: an access list that
+lets Everyone, Users, Authenticated Users, Guests, Anonymous, Interactive, Local or Network read
+it). On Linux or WSL the path may be a pipe (``--key-file <(password-manager-cli ...)``), so the
+key never lands on disk. The client ID is public: without ``--client-id`` it is read from
+``gh api apps/plum-mod-base-gate``, whose App id must be 5256389.
+
+The program restricts the environment's deployment branches to the repository's default branch
+and checks that restriction on GitHub before it writes anything else. Only then does it set the
+variable ``MOD_BASE_GATE_APP_CLIENT_ID`` and the secret ``MOD_BASE_GATE_APP_PRIVATE_KEY``; the key
+reaches ``gh secret set`` on its standard input alone and is never printed, logged or put on a
+command line (a ``gh`` diagnostic that would quote a line of it is redacted). It refuses, before
+any write, when the environment admits another branch, has required reviewers or a wait timer
+(either would hold every status), or when a repository or organization secret of the key's name
+is visible to the repository: the key must live in this environment only. It never deletes
+anything (no branch policy, variable, secret or file, the key file included), and it changes no
+ruleset, App installation or other setting. ``--dry-run`` performs the reads and prints the plan.
+Exit status 0 on success, 2 on any refusal or ``gh`` failure.
 
 Standard library only, Python 3.11+.
 """
@@ -27,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import stat
 import subprocess
@@ -38,6 +48,9 @@ from typing import Any, TextIO
 ENVIRONMENT = "mod-base-gate"
 CLIENT_ID_VARIABLE = "MOD_BASE_GATE_APP_CLIENT_ID"
 PRIVATE_KEY_SECRET = "MOD_BASE_GATE_APP_PRIVATE_KEY"
+#: The organization's gate status App (docs/OPERATIONS.md, "The gate status App").
+APP_SLUG = "plum-mod-base-gate"
+APP_ID = 5256389
 #: The deployment branch policy the environment must end with: custom policies, which this program
 #: limits to exactly one, the default branch by name.
 BRANCH_POLICY = {"protected_branches": False, "custom_branch_policies": True}
@@ -51,6 +64,16 @@ MAX_APP_JSON_BYTES = 64 * 1024
 MAX_LISTED = 100
 GH_TIMEOUT_SECONDS = 120
 MAX_DIAGNOSTIC_CHARACTERS = 400
+#: POSIX permission bits that let a user other than the owner read or change a credential file.
+SHARED_MODE_BITS = 0o077
+#: Windows well-known SIDs whose read access makes a file readable by other users of the machine.
+BROAD_SIDS = {"S-1-1-0": "Everyone", "S-1-2-0": "Local", "S-1-5-2": "Network", "S-1-5-4": "Interactive",
+              "S-1-5-7": "Anonymous", "S-1-5-11": "Authenticated Users", "S-1-5-32-545": "Users",
+              "S-1-5-32-546": "Guests"}
+#: Access rights that include reading a file's data: FILE_READ_DATA, GENERIC_ALL and GENERIC_READ.
+READ_RIGHTS = 0x0000_0001 | 0x1000_0000 | 0x8000_0000
+#: The shortest line of a key that a diagnostic is searched for (PEM body lines are 64 characters).
+MIN_REDACTED_LINE = 16
 
 #: ``(arguments, stdin) -> (exit status, stdout, stderr)`` for one ``gh`` invocation.
 Runner = Callable[[Sequence[str], bytes | None], tuple[int, bytes, bytes]]
@@ -101,22 +124,114 @@ class GitHub:
         return {item["name"] for item in items}
 
 
-def read_bounded(path: Path, limit: int, label: str) -> bytes:
+def windows_broad_readers(descriptor: int) -> list[str]:
+    """The broad groups that the access list of an open file lets read it (Windows only)."""
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class AclHeader(ctypes.Structure):
+        _fields_ = [("revision", ctypes.c_ubyte), ("sbz1", ctypes.c_ubyte), ("size", ctypes.c_ushort),
+                    ("count", ctypes.c_ushort), ("sbz2", ctypes.c_ushort)]
+
+    class AceHeader(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_ubyte), ("flags", ctypes.c_ubyte), ("size", ctypes.c_ushort)]
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_security_info = advapi32.GetSecurityInfo
+    get_security_info.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p,
+                                  ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    get_security_info.restype = wintypes.DWORD
+    get_ace = advapi32.GetAce
+    get_ace.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    get_ace.restype = wintypes.BOOL
+    sid_to_string = advapi32.ConvertSidToStringSidW
+    sid_to_string.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    sid_to_string.restype = wintypes.BOOL
+    local_free = kernel32.LocalFree
+    local_free.argtypes = [ctypes.c_void_p]
+    local_free.restype = ctypes.c_void_p
+
+    se_file_object, dacl_security_information = 1, 0x4
+    access_allowed_types, inherit_only = (0x0, 0x9), 0x8   # ACCESS_ALLOWED(_CALLBACK)_ACE_TYPE, INHERIT_ONLY_ACE
+    dacl, security_descriptor = ctypes.c_void_p(), ctypes.c_void_p()
+    status = get_security_info(msvcrt.get_osfhandle(descriptor), se_file_object, dacl_security_information,
+                               None, None, ctypes.byref(dacl), None, ctypes.byref(security_descriptor))
+    if status != 0:
+        raise SetupError(f"cannot read the access list of the credential file (Windows error {status})")
+    readers: set[str] = set()
     try:
-        status = path.lstat()
-    except OSError:
+        if not dacl.value:
+            return ["Everyone (the file has no access list)"]
+        for index in range(ctypes.cast(dacl, ctypes.POINTER(AclHeader)).contents.count):
+            ace = ctypes.c_void_p()
+            if not get_ace(dacl, index, ctypes.byref(ace)):
+                raise SetupError("cannot read the access list of the credential file")
+            header = ctypes.cast(ace, ctypes.POINTER(AceHeader)).contents
+            if header.type not in access_allowed_types or header.flags & inherit_only:
+                continue
+            if not ctypes.cast(ace.value + 4, ctypes.POINTER(wintypes.DWORD)).contents.value & READ_RIGHTS:
+                continue
+            text = wintypes.LPWSTR()
+            if not sid_to_string(ctypes.c_void_p(ace.value + 8), ctypes.byref(text)):
+                raise SetupError("cannot read the access list of the credential file")
+            try:
+                if text.value in BROAD_SIDS:
+                    readers.add(BROAD_SIDS[text.value])
+            finally:
+                local_free(ctypes.cast(text, ctypes.c_void_p))
+    finally:
+        local_free(security_descriptor)
+    return sorted(readers)
+
+
+def refuse_shared(descriptor: int, status: os.stat_result, label: str, path: Path) -> None:
+    """Refuse a credential file that a user other than its owner can read. A Windows pipe has no
+    file to share: its bytes go to this process alone."""
+
+    if os.name == "nt":
+        readers = windows_broad_readers(descriptor) if stat.S_ISREG(status.st_mode) else []
+        if readers:
+            raise SetupError(f"{label} {path} is readable by {', '.join(readers)}: keep it readable by you alone "
+                             "(see docs/NEW-MOD.md step 5)")
+    elif status.st_mode & SHARED_MODE_BITS:
+        raise SetupError(f"{label} {path} has mode {stat.S_IMODE(status.st_mode):04o}, open to other users: "
+                         "keep it readable by you alone (chmod 600)")
+
+
+def read_bounded(path: Path, limit: int, label: str) -> bytes:
+    """Read a credential file that its owner alone can read; a pipe (``-`` for the standard input, or
+    a process substitution) is accepted, a terminal is not."""
+
+    try:
+        if str(path) == "-":
+            descriptor = os.dup(sys.stdin.fileno())
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.setmode(descriptor, os.O_BINARY)
+        else:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    except FileNotFoundError:
         raise SetupError(f"{label} {path} does not exist") from None
-    if not stat.S_ISREG(status.st_mode):
-        raise SetupError(f"{label} {path} is not a regular file")
-    with path.open("rb") as stream:
+    except (OSError, ValueError) as error:
+        raise SetupError(f"{label} {path} cannot be opened ({type(error).__name__})") from None
+    with os.fdopen(descriptor, "rb") as stream:
+        status = os.fstat(descriptor)
+        if not (stat.S_ISREG(status.st_mode) or stat.S_ISFIFO(status.st_mode)):
+            raise SetupError(f"{label} {path} is not a regular file or a pipe")
+        refuse_shared(descriptor, status, label, path)
         data = stream.read(limit + 1)
     if len(data) > limit:
         raise SetupError(f"{label} {path} is larger than {limit} bytes")
     return data
 
 
-def load_credentials(app_json: Path | None, client_id: str | None, key_file: Path | None) -> tuple[str, bytes]:
-    """The App's client ID and PEM key, from the manifest flow's JSON or from the two separate values."""
+def load_credentials(app_json: Path | None, client_id: str | None,
+                     key_file: Path | None) -> tuple[str | None, bytes]:
+    """The App's client ID (``None``: read it from GitHub) and PEM key, from the manifest flow's JSON
+    or from ``--key-file`` with an optional ``--client-id``."""
 
     if app_json is not None:
         if client_id is not None or key_file is not None:
@@ -131,11 +246,11 @@ def load_credentials(app_json: Path | None, client_id: str | None, key_file: Pat
         client_id, key = document["client_id"], document["pem"].encode("utf-8")
         source = f"the pem of {app_json}"
     else:
-        if client_id is None or key_file is None:
-            raise SetupError("give --app-json, or both --client-id and --key-file")
+        if key_file is None:
+            raise SetupError("give --key-file (with an optional --client-id) or --app-json")
         key = read_bounded(key_file, MAX_KEY_BYTES, "--key-file")
         source = str(key_file)
-    if CLIENT_ID.fullmatch(client_id) is None:
+    if client_id is not None and CLIENT_ID.fullmatch(client_id) is None:
         raise SetupError("the client ID is not a GitHub App client ID (Iv...)")
     if len(key) > MAX_KEY_BYTES or PEM.fullmatch(key) is None:
         raise SetupError(f"{source} is not a PEM private key")
@@ -195,8 +310,22 @@ def verify_environment(github: GitHub, repository: str, branch: str) -> None:
         raise SetupError(f"{ENVIRONMENT} admits {policies}, not exactly the default branch {branch}")
 
 
-def setup(github: GitHub, repository: str, branch: str | None, client_id: str, key: bytes, *,
+def app_client_id(github: GitHub) -> str:
+    """The gate status App's public client ID, read from GitHub and bound to its App id."""
+
+    app = github.get(f"apps/{APP_SLUG}")
+    if not isinstance(app, dict) or app.get("id") != APP_ID:
+        raise SetupError(f"apps/{APP_SLUG} is not App {APP_ID}; give --client-id")
+    client_id = app.get("client_id")
+    if not isinstance(client_id, str) or CLIENT_ID.fullmatch(client_id) is None:
+        raise SetupError(f"apps/{APP_SLUG} has no GitHub App client ID; give --client-id")
+    return client_id
+
+
+def setup(github: GitHub, repository: str, branch: str | None, client_id: str | None, key: bytes, *,
           dry_run: bool, out: TextIO) -> None:
+    if client_id is None:
+        client_id = app_client_id(github)
     default = github.get(f"repos/{repository}").get("default_branch")
     if not isinstance(default, str) or not default:
         raise SetupError(f"{repository} has no default branch")
@@ -246,9 +375,11 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     result.add_argument("--repo", required=True, metavar="OWNER/NAME", help="the mod's repository")
     result.add_argument("--branch", help="the default branch, checked against GitHub (optional)")
-    result.add_argument("--app-json", type=Path, metavar="FILE", help="the App manifest flow's JSON (client_id, pem)")
-    result.add_argument("--client-id", help="the App's client ID")
-    result.add_argument("--key-file", type=Path, metavar="FILE", help="the App's private key (PEM)")
+    result.add_argument("--key-file", type=Path, metavar="PATH",
+                        help="the App's private key (PEM), readable by you alone, or a pipe")
+    result.add_argument("--client-id", help=f"the App's client ID (default: read from apps/{APP_SLUG})")
+    result.add_argument("--app-json", type=Path, metavar="PATH",
+                        help="the App manifest flow's JSON (client_id, pem), readable by you alone")
     result.add_argument("--dry-run", action="store_true", help="read only and print the plan")
     result.add_argument("--gh", default="gh", help="the GitHub CLI to run (default: gh)")
     return result
@@ -259,6 +390,7 @@ def main(argv: Sequence[str] | None = None, *, run: Runner | None = None,
     arguments = parser().parse_args(argv)
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
+    key = b""
     try:
         if REPOSITORY.fullmatch(arguments.repo) is None:
             raise SetupError(f"--repo {arguments.repo!r} is not OWNER/NAME")
@@ -266,9 +398,20 @@ def main(argv: Sequence[str] | None = None, *, run: Runner | None = None,
         setup(GitHub(run or gh_runner(arguments.gh)), arguments.repo, arguments.branch, client_id, key,
               dry_run=arguments.dry_run, out=out)
     except SetupError as error:
-        print(f"new_mod_env: error: {error}", file=err)
+        print(f"new_mod_env: error: {redact(str(error), key)}", file=err)
         return 2
     return 0
+
+
+def redact(message: str, key: bytes) -> str:
+    """``message`` with every line of ``key`` long enough to identify it replaced (defence in depth:
+    no message is built from the key, but a ``gh`` diagnostic is quoted as it comes)."""
+
+    for line in key.decode("ascii", "replace").splitlines():
+        line = line.strip()
+        if len(line) >= MIN_REDACTED_LINE and not line.startswith("-----"):
+            message = message.replace(line, "[redacted]")
+    return message
 
 
 if __name__ == "__main__":
