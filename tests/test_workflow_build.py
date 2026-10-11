@@ -80,7 +80,7 @@ class BuildStructureTests(unittest.TestCase):
     def test_job_graph_conditions_and_timeouts(self) -> None:
         self.assertEqual(list(self.jobs), ["plan", "policy", "target", "assemble", "gate"])
         self.assertEqual({job_id: job.get("needs") for job_id, job in self.jobs.items()}, {
-            "plan": None, "policy": "plan", "target": "plan", "assemble": ["plan", "target"],
+            "plan": None, "policy": "plan", "target": "plan", "assemble": ["plan", "policy", "target"],
             "gate": ["plan", "policy", "target", "assemble"]})
         # Reuse skips the three worker jobs. The gate runs whenever the run is not cancelled, so a
         # failed or skipped worker makes it fail on the graph instead of being skipped itself.

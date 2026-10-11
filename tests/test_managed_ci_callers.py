@@ -5,9 +5,10 @@ Every case reads the template as ``template sync`` renders it for a mod. Structu
 permissions, calls and their inputs, concurrency, and the guard's closed list of callers. Graphs:
 the ``if:`` conditions are evaluated, with GitHub's expression rules, for every event and selection
 outcome, and the jobs they let run or skip must be the jobs of the literal API listings under
-``tests/fixtures/ci_graphs``. The guard's shell runs against a stub ``gh`` (accepted and rejected
-bindings, bounded retry) and, with the real Git and the real managed bootstrap, against a
-repository that holds the rendered callers.
+``tests/fixtures/ci_graphs``. Order: a job that reads its own running attempt waits, through
+``needs`` in the callers and the kit workflows, for every job it requires to have finished. The
+guard's shell runs against a stub ``gh`` (accepted and rejected bindings, bounded retry) and, with
+the real Git and the real managed bootstrap, against a repository that holds the rendered callers.
 """
 
 from __future__ import annotations
@@ -27,11 +28,12 @@ from pathlib import Path
 from typing import Any
 
 from mod_base import workflow
-from mod_base.build_ci import graph
+from mod_base.build_ci import describe, graph
 from mod_base.build_ci.activation import BUILD_CALLER, GUARD_CALLER, PACKAGED_CALLER, STATUS_CALLER
+from mod_base.errors import MbError
 from mod_base.pin import Pin, parse_pin_files
 from mod_base.template import tool
-from tests.helpers import ci_activation
+from tests.helpers import ci_activation, ci_plan
 from tests.test_pin import BOOT
 from tests.test_template_tool import git
 from tests.test_workflow_policy import (EXPRESSION, ROOT, ShellHarness, caller, load_yaml, outputs, parse_yaml,
@@ -149,6 +151,49 @@ def declared(caller: str) -> str:
 def needed(job: Mapping[str, Any]) -> list[str]:
     needs = job.get("needs", [])
     return [needs] if isinstance(needs, str) else list(needs)
+
+
+def lineage(jobs: Mapping[str, Any]) -> dict[str, set[str]]:
+    """Job id -> every job of the same workflow it needs, directly or not: the jobs GitHub has
+    finished before it starts it."""
+
+    result: dict[str, set[str]] = {}
+
+    def of(job_id: str) -> set[str]:
+        if job_id not in result:
+            result[job_id] = set(needed(jobs[job_id])).union(*(of(name) for name in needed(jobs[job_id])))
+        return result[job_id]
+
+    for job_id in jobs:
+        of(job_id)
+    return result
+
+
+def own_attempt_readers(producer: str, mode: str, plan: dict[str, Any]) -> list[tuple[str, list[str]]]:
+    """Every job of a ``producer`` run in ``mode`` that reads its own attempt while it is still
+    running, with the jobs it requires to have finished as the graph expects
+    (``graph.require_partial_graph``): the assembling and aggregating jobs and the gates
+    (``describe.settled_jobs``, through ``gate.collect_targets``, ``gate.seal_results`` and
+    ``gate.authenticate_attempt``), and the input of a packaged run that rebuilt, which requires every
+    job of the calls before its own (``selection._rebuilt``)."""
+
+    ran = {entry["name"] for entry in graph.run_graph(producer, mode).jobs(plan) if entry["conclusion"] == "success"}
+    readers = []
+    for kind, unit in (("build", None), ("results", None), ("tested", "build"), ("tested", "packaged")):
+        try:
+            reader = graph.upload_job_name(producer, kind, unit)
+            finished = describe.settled_jobs(producer, mode, plan, kind, unit)
+        except MbError:
+            continue
+        if reader in ran:
+            readers.append((reader, finished))
+    if (producer, mode) == ("packaged", "rebuilt"):
+        readers.append((graph.job_name("packaged", "packaged-e2e", "input"), [
+            graph.job_name("packaged", "guard", "verify"), graph.job_name("packaged", "select-build", "select"),
+            graph.job_name("packaged", "build", "plan"), graph.job_name("packaged", "build", "policy"),
+            *(graph.job_name("packaged", "build", "target", target["id"]) for target in plan["targets"]),
+            graph.job_name("packaged", "build", "assemble"), graph.job_name("packaged", "build", "gate")]))
+    return readers
 
 
 def kit_workflow(callee: str) -> str:
@@ -851,6 +896,48 @@ class CallerGraphTests(unittest.TestCase):
             with self.subTest(case=label):
                 results = simulate(document, push, job_outputs=job_outputs, outcomes=outcomes)
                 self.assertEqual({name: results[name] for name in expected}, expected)
+
+    def test_a_reader_of_its_own_attempt_needs_every_job_it_requires_finished(self) -> None:
+        """GitHub starts a job once the jobs it needs have finished and orders nothing else, so a
+        required job that the reader does not need, directly or through its calling job, may still
+        be running when the reader checks it, however quickly it usually ends. A job the mode skips
+        is settled once the jobs it needs have finished: GitHub decides its ``if:`` then."""
+
+        plan = ci_plan()
+        callees = {callee: load_yaml(ROOT / path)["jobs"] for callee, path in workflow.CI_CALLEE_WORKFLOWS.items()}
+        callee_order = {callee: lineage(jobs) for callee, jobs in callees.items()}
+        reached = set()
+        for producer, modes in MODES.items():
+            calls = workflow.CI_CALLS[producer]
+            caller_jobs = self.documents[PRODUCERS[producer]]["jobs"]
+            caller_order = lineage(caller_jobs)
+            for mode in modes:
+                jobs = {job.name: job for job in graph.run_graph(producer, mode)._expected(plan)}
+                for reader_name, finished in own_attempt_readers(producer, mode, plan):
+                    reader = jobs[reader_name]
+                    reached.add((producer, mode, reader.call, reader.key))
+                    for name in finished:
+                        job = jobs[name]
+                        if job.call == reader.call:
+                            before = callee_order[calls[reader.call]][reader.key]
+                            needs = needed(callees[calls[job.call]][job.key])
+                            key = job.key
+                        else:
+                            before = caller_order[reader.call]
+                            needs = needed(caller_jobs[job.call])
+                            key = job.call
+                        with self.subTest(producer=producer, mode=mode, reader=reader_name, finished=name):
+                            self.assertTrue(key in before or (job.conclusion == "skipped" and set(needs) <= before),
+                                            f"{reader_name!r} can start while {name!r} is still running")
+        self.assertEqual(reached, {
+            ("build", "full", "shared", "assemble"), ("build", "full", "shared", "gate"),
+            ("build", "reuse", "shared", "gate"),
+            ("packaged", "pull-request", "shared", "aggregate"), ("packaged", "pull-request", "shared", "gate"),
+            ("packaged", "selected", "shared", "aggregate"), ("packaged", "selected", "shared", "gate"),
+            ("packaged", "rebuilt", "rebuild", "assemble"), ("packaged", "rebuilt", "rebuild", "gate"),
+            ("packaged", "rebuilt", "shared", "input"), ("packaged", "rebuilt", "shared", "aggregate"),
+            ("packaged", "rebuilt", "shared", "gate"), ("packaged", "reuse", "shared", "gate")},
+            "every reader of its own attempt in every mode")
 
     def test_a_pull_request_never_selects_or_compiles_in_the_packaged_run(self) -> None:
         document = self.documents[PACKAGED_CALLER]

@@ -668,7 +668,7 @@ jobs:
 
   assemble:
     name: Seal complete Build bundle
-    needs: [plan, target]
+    needs: [plan, policy, target]
     if: needs.plan.outputs.mode != 'reuse'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
