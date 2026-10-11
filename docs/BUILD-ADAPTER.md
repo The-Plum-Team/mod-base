@@ -29,6 +29,7 @@ protected default branch, never from a pull request.
 | `timeouts` | `validator_seconds` for every protected hook, `policy_seconds`, `target_seconds` and `runtime_seconds` for the three candidate hooks |
 | `runtime.system_profile` | optional: the kit system profile a lane job installs as root before its accounts exist, by name. `xvfb-mesa` is Xvfb, `xauth`, Mesa's software GL and EGL and the audio and X client libraries a Minecraft client loads: the union of both mods' native installs. The mod never lists packages; without `runtime` nothing is installed, and `runtime` without a profile, an unknown profile or another key is refused |
 | `seeds` | optional: the seeds whose jobs restore the candidate's Gradle home before it runs, `gradle` for a target job and `runtime` for a lane job, each `{"key_files": [{"path"}, ...]}`: 1 to 16 files of the protected default branch, sorted by path, whose bytes (or absence) key the seed together with the unit. Name what decides what the home holds, for example `gradle/wrapper/gradle-wrapper.properties`, `gradle/verification-metadata.xml` and the release inventory; a changed file starts a new seed. Without `seeds` no job restores or saves one ("Seeds" below) |
+| `admission` | optional: the paths a pull request may change only with an approver's decision on its exact head, `{"protected_paths": [...], "command": "/controller-upgrade", "approvers": [{"login", "association"}]}`. Without it the kit's gate status checks no protected path ("Protected admission" below) |
 
 The config bytes, the listed files, the pinned kit, the graph versions and the mod's own control
 files (`site/mod-base-build-activation.json` and the four `mod-base-*.yml` caller workflows, each by
@@ -141,6 +142,45 @@ that runs code under review with a writable Actions cache token on the default b
 plant an entry under the same key. A restored archive is extracted by the cache action as the runner, so the
 owner enables `seeds` only after checking that no such workflow exists
 ([OPERATIONS.md](OPERATIONS.md#protected-seeds)).
+
+## Protected admission
+
+While a mode puts a mod's required contexts under the kit's gate status (`shared-build` for the
+Build context, `shared-build-and-e2e` for both), no evaluator of the mod runs on its pull requests.
+Graph and record checks prove what ran; they do not decide who may change how the gates run. The
+optional `admission` of the config states that rule as data, and `ci gate-status` applies it to
+every gate that would otherwise be a `success`:
+
+- **Protected paths.** A protected path is a file or a directory of the repository. A pull request
+  changes it when the tree entry of the path in its tested merge (mode, type and Git object id, or
+  its absence) differs from the one in its base. The list must protect the files that decide how
+  the gates run: this config, every adapter source, the activation manifest and the four caller
+  workflows. Otherwise a pull request could remove its own admission, and the next one would be
+  decided by the weaker config it merged. List the mod's own controllers too (for example its
+  scripts, its workflows, its Gradle wrapper and its release inventory): whatever an ordinary pull
+  request may not change on its own.
+- **Decision.** An approver approves one exact head with a comment on the pull request whose whole
+  text is `<command> approve <40-character head sha>`, and withdraws it with `<command> revoke
+  <head sha>`. Only a comment by a user listed in `approvers`, with the `author_association`
+  listed for them, counts; the latest decision on the head decides. A new head needs a new
+  decision. A decision that was edited after it was written refuses the admission until it is
+  deleted, because anybody with write access can edit a comment; delete it and post the decision
+  again.
+- **Refusal.** Without an approval of its head, a pull request that changes a protected path gets
+  `failure` on every gate that would have been `success`, with the description `admission: ...`.
+  `pending` and `failure` are unchanged. A pull request that changes no protected path reads no
+  comment.
+
+The config is read from the protected default branch that executes the status caller, never from
+the pull request, so a pull request that changes `admission` is judged by the admission it changes.
+The status caller runs when a gate run is requested or completes, when the pull request changes and
+once an hour; a comment does not start it. An approval or a revocation posted after the gates
+finished is published by the next of those runs, or at once by a dispatch of `mod-base gate status`
+for the pull request ([OPERATIONS.md](OPERATIONS.md#protected-admission)).
+
+The admission is the kit's generic rule. A mod's native evaluator may hold more: an exact list of
+the paths an upgrade may touch, files that must exist, restricted transitions with their own
+declarations and decisions. The kit checks none of that; the approver reviews it before approving.
 
 ## What each hook writes
 

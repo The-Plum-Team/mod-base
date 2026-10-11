@@ -16,7 +16,7 @@ from typing import Any
 from unittest.mock import patch
 
 from mod_base.build_ci import commands_status, identity, status
-from mod_base.build_ci.config import load_build_config
+from mod_base.build_ci.config import BUILD_CONFIG_PATH, load_build_config
 from mod_base.build_ci.protocol import plan_sha256
 from mod_base.errors import MbError
 from mod_base.github.api import ApiError
@@ -825,6 +825,113 @@ class SettleGatesTests(unittest.TestCase):
             status.evaluate_gates(world.api, pr_number=7, config=self.config, activation=self.activation,
                                   controller_sha=h.CONTROLLER_SHA, plan=None, temporary_root=None)
         self.assertEqual(world.api.request_count, 0)
+
+
+#: The admission the protected config of :class:`AdmissionStatusTests` names: what decides how the
+#: synthetic mod's gates run lies below these three directories.
+ADMISSION = {"protected_paths": [".github/workflows", "scripts/ci", "site"], "command": "/controller-upgrade",
+             "approvers": [{"login": "AkaNebur", "association": "MEMBER"}]}
+REFUSED = "admission: scripts/ci is protected; needs `/controller-upgrade approve <head sha>` from an approver"
+
+
+class AdmissionStatusTests(GateStatusTestCase):
+    """A protected config with an ``admission``: the verified gates of a pull request that changes
+    a protected path succeed only after an approver's decision on its exact head."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.mod / BUILD_CONFIG_PATH).write_bytes(h.pretty({**h.build_config(), "admission": ADMISSION}))
+
+    def world(self, *, protected_change: bool = False, **options: Any) -> StatusWorld:
+        """A generation whose tested merge changes ``src`` and, when asked, ``scripts/ci`` too."""
+
+        world = super().world(**options)
+        base = [{"path": name, "mode": "040000", "type": "tree", "sha": sha}
+                for name, sha in ((".github", "1" * 40), ("scripts", "2" * 40), ("site", "3" * 40), ("src", "4" * 40))]
+        tested = [row if row["path"] != "src" else {**row, "sha": "5" * 40} for row in base]
+        world.api.add_tree(h.CONTROLLER_TREE, base)
+        if protected_change:
+            tested = [row if row["path"] != "scripts" else {**row, "sha": "6" * 40} for row in tested]
+            world.api.add_tree("2" * 40, [{"path": "ci", "mode": "040000", "type": "tree", "sha": "7" * 40}])
+            world.api.add_tree("6" * 40, [{"path": "ci", "mode": "040000", "type": "tree", "sha": "8" * 40}])
+        world.api.add_tree(h.TESTED_TREE, tested)
+        world.api.set_comments(7, [])
+        return world
+
+    def decide(self, world: StatusWorld, *decisions: tuple[str, str], login: str = "AkaNebur") -> None:
+        world.api.set_comments(7, [
+            {"id": index + 1, "body": f"/controller-upgrade {decision} {head}", "author_association": "MEMBER",
+             "user": {"login": login, "type": "User"}, "created_at": f"2026-10-11T1{index}:00:00Z",
+             "updated_at": f"2026-10-11T1{index}:00:00Z"} for index, (decision, head) in enumerate(decisions)])
+
+    def test_a_pull_request_that_changes_no_protected_path_needs_no_decision(self) -> None:
+        world = self.world().gated()
+        self.assertEqual(self.states(self.intents(world, world.planned())),
+                         {"build": ("success", VERIFIED["build"], run_url(42)),
+                          "packaged": ("success", VERIFIED["packaged"], run_url(43))})
+        # The 36 of an evaluation without admission, the base commit and both roots.
+        self.assertEqual(world.api.request_count, 39)
+
+    def test_a_protected_change_without_an_approval_of_its_head_fails_every_verified_gate(self) -> None:
+        for decisions, login in (((), "AkaNebur"), ((("approve", "b" * 40),), "AkaNebur"),
+                                 ((("approve", h.HEAD_SHA),), "someone-else")):
+            world = self.world(protected_change=True).gated()
+            self.decide(world, *decisions, login=login)
+            with self.subTest(decisions=decisions, login=login):
+                self.assertEqual(self.states(self.intents(world, world.planned())),
+                                 {"build": ("failure", REFUSED, run_url(42)),
+                                  "packaged": ("failure", REFUSED, run_url(43))})
+        # The base commit, both roots, both `scripts` trees and the comments twice.
+        self.assertEqual(world.api.request_count, 36 + 7)
+
+    def test_the_latest_approver_decision_on_the_exact_head_decides(self) -> None:
+        world = self.world(protected_change=True).gated()
+        self.decide(world, ("approve", h.HEAD_SHA))
+        self.assertEqual(self.states(self.intents(world, world.planned())),
+                         {"build": ("success", VERIFIED["build"], run_url(42)),
+                          "packaged": ("success", VERIFIED["packaged"], run_url(43))})
+        self.decide(world, ("approve", h.HEAD_SHA), ("revoke", h.HEAD_SHA))
+        revoked = "admission: the latest `/controller-upgrade` decision on this head revokes it"
+        self.assertEqual(self.states(self.intents(world, world.planned("revoked"))),
+                         {"build": ("failure", revoked, run_url(42)), "packaged": ("failure", revoked, run_url(43))})
+        self.decide(world, ("approve", h.HEAD_SHA), ("revoke", h.HEAD_SHA), ("approve", h.HEAD_SHA))
+        self.assertEqual({gate: state for gate, (state, _, _) in
+                          self.states(self.intents(world, world.planned("approved"))).items()},
+                         {"build": "success", "packaged": "success"})
+
+    def test_only_a_success_is_refused(self) -> None:
+        world = self.world(protected_change=True).gated(packaged=False)
+        self.assertEqual(self.states(self.intents(world, world.planned())),
+                         {"build": ("failure", REFUSED, run_url(42)), "packaged": ("pending", WAITING["packaged"], None)})
+        world = self.world(protected_change=True).gated()
+        world.later_packaged()
+        self.assertEqual(self.states(self.intents(world, world.planned()))["packaged"][:2],
+                         ("failure", "the newest packaged E2E run failed or was cancelled"))
+
+    def test_a_decision_that_arrives_during_the_evaluation_publishes_nothing(self) -> None:
+        world = self.world(protected_change=True).gated()
+        self.decide(world, ("approve", h.HEAD_SHA))
+        listing = f"/repos/{h.REPOSITORY}/issues/7/comments"
+        world.api.during_listing(listing, lambda: self.decide(world, ("approve", h.HEAD_SHA),
+                                                              ("revoke", h.HEAD_SHA)))
+        self.refused(world, world.planned(), "approver decisions on the pull request head changed")
+
+    def test_a_full_comment_listing_stays_within_the_request_budget(self) -> None:
+        world = self.world(protected_change=True).gated()
+        count = limits.MAX_CI_ADMISSION_COMMENTS
+        world.api.set_comments(7, [
+            {"id": index + 1, "body": f"/controller-upgrade approve {h.HEAD_SHA if index == count - 1 else 'b' * 40}",
+             "author_association": "MEMBER", "user": {"login": "AkaNebur", "type": "User"},
+             "created_at": f"2026-10-11T{index // 60:02d}:{index % 60:02d}:00Z",
+             "updated_at": f"2026-10-11T{index // 60:02d}:{index % 60:02d}:00Z"} for index in range(count)])
+        self.assertEqual({gate: state for gate, (state, _, _) in self.states(self.intents(world, world.planned())).items()},
+                         {"build": "success", "packaged": "success"})
+        # The base commit, both roots, both `scripts` trees, and the comments twice: three full
+        # pages and the empty one that ends the listing each time.
+        self.assertEqual(world.api.request_count, 36 + 5 + 2 * 4)
+        # The worst case: every directory of the admission read on both sides.
+        worst = 36 + 1 + 2 * limits.MAX_CI_ADMISSION_DIRECTORIES + 2 * (limits.MAX_CI_ADMISSION_COMMENTS // 100 + 1)
+        self.assertLessEqual(worst, limits.MAX_CI_GATE_STATUS_REQUESTS)
 
 
 class GateContextTests(unittest.TestCase):
