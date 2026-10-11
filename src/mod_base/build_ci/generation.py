@@ -314,7 +314,9 @@ def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], ou
     plan = _plan(plan)
     check(plan["identity"]["pr_number"] == 0, "$.identity.pr_number",
           "a generation covers a commit of the default branch, never a pull request")
-    check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
+    check(isinstance(output, Path) and not os.path.lexists(output) and output.parent.is_dir(), "$.output",
+          "invalid or preexisting output, or no directory to hold it")
+    check(type(with_build) is bool, "$.with_build", "must be a boolean")
     reads, watch, originals = CommandReads.of(api), Watch(), Watch()
     _admit_source(reads, watch, plan["identity"])
     build, packaged = (_newest(reads, watch, plan, producer) for producer in PRODUCERS)

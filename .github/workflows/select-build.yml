@@ -35,7 +35,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:2ff5a6e94fc7c46fa2e8b6a79392e25a2d4bdb8c1f1dad5e2b613e1bdbe06042"
+  MB_KIT_TREE_DIGEST: "sha256:b5852d61e62464d43788fe15f7d30b129e4217aaa6a1c31bd6b0629f809a1d65"
 
 jobs:
   select:
