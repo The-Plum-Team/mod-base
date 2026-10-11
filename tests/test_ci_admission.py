@@ -237,6 +237,14 @@ class RefusalTests(unittest.TestCase):
         self.assertIsNone(self.refusal([approve, revoke, later]))
         self.assertEqual(self.refusal([{**approve, "updated_at": "2026-10-11T10:30:00Z"}, revoke, later]),
                          f"admission: a `{COMMAND}` decision on this head was edited; delete it and decide again")
+        # An edited revocation refuses too, even under a later approval; an edited decision on
+        # another head or by somebody else is no decision on this head and changes nothing.
+        edited = f"admission: a `{COMMAND}` decision on this head was edited; delete it and decide again"
+        self.assertEqual(self.refusal([approve, {**revoke, "updated_at": "2026-10-11T11:30:00Z"}, later]), edited)
+        self.assertIsNone(self.refusal([comment(f"{COMMAND} revoke {OTHER_HEAD}", number=4,
+                                                updated="2026-10-11T10:30:00Z"),
+                                        comment(f"{COMMAND} revoke {HEAD}", number=5, login="someone",
+                                                updated="2026-10-11T10:30:00Z"), approve]))
         for reason in (missing, self.refusal([approve, revoke])):
             self.assertLessEqual(len(reason), limits.MAX_CI_STATUS_DESCRIPTION_CHARS)
 
