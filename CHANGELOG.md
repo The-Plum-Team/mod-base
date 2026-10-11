@@ -21,8 +21,15 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   evidence that has expired or is gone select nothing (exit 3, `ci-generation-pending`,
   `-failed`, `-absent`, `-evidence-unavailable`): the consumer requests a full generation instead,
   and nothing partial is published. Outputs `generation` (`full`, `reuse`, `none`) and `reason`.
-  New module `build_ci.generation`, new limit `MAX_CI_SELECT_GENERATION_REQUESTS` (128: 27
-  requests for a full generation, 52 for a reused one, whatever the number of lanes).
+  With `--lane ID` (repeatable) or `--all-lanes` it also keeps each chosen lane's export (reports,
+  logs, screenshots, as the adapter wrote them) under `lanes/<id>/` (KQ9-2): the results index must
+  list exactly the packaged gate's lanes, Build and reports, and each lane is verified as `ci
+  aggregate` verifies it and must be what the index sealed. A reused bundle or lane keeps the
+  identity it was built or run under. New module `build_ci.generation`, new limit
+  `MAX_CI_SELECT_GENERATION_REQUESTS` (96 + 3 x `MAX_CI_LANES` = 864: 27 requests for a full
+  generation, 52 for a reused one, 2 for the bundle, 2 for the index and 2 per lane kept, 124 for
+  every lane of a reused Quick Skin generation). `transport._read_sealed_lane` can keep the
+  verified export (`keep`).
 - Add the consumer subject `ci subject --producer generation --pr ""`: a job of the mod's own
   workflow on the default branch (any workflow of the mod, on a push, `workflow_run`,
   `workflow_dispatch` or `schedule`) authenticates the live default-branch head exactly like a

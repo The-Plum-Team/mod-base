@@ -41,6 +41,11 @@ Evidence that is gone (an artifact listed as expired, no longer listed, or answe
 consumer runs a full generation on request instead (``ci-generation-evidence-unavailable``, exit
 3). Nothing partial is ever published. Everything mutable is observed again immediately before the
 output directory is published, which happens atomically or not at all.
+
+What is published is the ``mod-base.ci.generation`` record and, on request, the bytes a consumer
+reads: the complete Build bundle the packaged gate tested and the exports of chosen lanes (their
+reports, logs and screenshots, as the adapter wrote them), each verified as the gate's own readers
+verify it, and each keeping the identity it was built or run under.
 """
 
 from __future__ import annotations
@@ -63,7 +68,7 @@ from mod_base.build_ci.records import generation_record, original_plan
 from mod_base.build_ci.selection import newest_run, pending_run, producer_record
 from mod_base.build_ci.transport import (ArtifactUnavailable, OriginalUnavailable, _admit_source, _artifact_state,
                                          _descriptor, _listed_artifact, _materialize_build, _merged, _merged_pair,
-                                         _plan, _read_gate, _run, artifact_gone)
+                                         _plan, _read_gate, _read_results, _read_sealed_lane, _run, artifact_gone)
 from mod_base.errors import MbError, Unavailable
 from mod_base.github.api import ApiError, GitHubApi
 from mod_base.github.jobs import job_graph
@@ -77,6 +82,9 @@ from mod_base.workflow import CI_CALLER_WORKFLOWS, find_job
 GENERATION_NAME = "generation.json"
 #: The directory of the published output that holds the complete Build bundle, when asked for.
 BUILD_DIRECTORY = "build"
+#: The directory of the published output that holds the verified export of each lane asked for,
+#: one directory per lane id.
+LANES_DIRECTORY = "lanes"
 #: The events whose runs of a managed caller test a commit of the default branch.
 _EVENTS = ("push", "workflow_dispatch")
 #: The modes of each managed caller's run that end a push generation, in the order they are tried.
@@ -294,8 +302,39 @@ def _lanes(receipt: dict[str, Any], plan: dict[str, Any]) -> tuple[dict[str, Any
     return results, [by_unit[lane["id"]] for lane in plan["lanes"]]
 
 
+def _publish_lanes(reads: CommandReads, root: Path, temporary_root: Path, *, wanted: tuple[str, ...],
+                   tested: dict[str, Any], packaged: dict[str, Any], results: dict[str, Any],
+                   lanes: list[dict[str, Any]], bundle: dict[str, Any], source_config_sha256: str) -> None:
+    """Verify and keep the exports of the lanes ``wanted`` under ``root``, one directory per lane.
+
+    The results index is read by id and must list exactly the lanes of the packaged receipt, own
+    exactly its Build and carry exactly its native receipts. Each lane is then read as the
+    aggregating job read it (``transport._read_sealed_lane``): its export bound to its descriptor
+    and to the Build, its validation record frozen for those bytes under the protected config,
+    and the hashes of its envelope, validation record and report must be the ones the index
+    sealed."""
+
+    index = _read_results(reads, results, tested, temporary_root)
+    check([lane["descriptor"] for lane in index["lanes"]] == lanes and index["owning_build"] == bundle,
+          "$.results", "the results index lists other lanes or another Build than the packaged gate")
+    check([(lane["id"], lane["report_sha256"]) for lane in index["lanes"]]
+          == [(receipt["unit_id"], receipt["report_sha256"]) for receipt in packaged["native_receipts"]],
+          "$.results.lanes", "the results index and the packaged gate disagree on a lane's report")
+    root.mkdir(mode=0o700)
+    for lane in index["lanes"]:
+        if lane["id"] not in wanted:
+            continue
+        hashes = _read_sealed_lane(reads, lane["descriptor"], tested, owning_build=bundle,
+                                   build_envelope_sha256=index["build_envelope_sha256"],
+                                   source_config_sha256=source_config_sha256, temporary_root=temporary_root,
+                                   keep=root / lane["id"])
+        check(hashes == {key: lane[key] for key in hashes}, f"$.lanes.{lane['id']}",
+              "the lane's export is not the one its results index sealed")
+
+
 def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], output: Path,
-                      with_build: bool = False, source_config_sha256: str | None = None) -> dict[str, Any]:
+                      with_build: bool = False, lanes: tuple[str, ...] = (),
+                      source_config_sha256: str | None = None) -> dict[str, Any]:
     """Select, authenticate and privately publish the tested generation that covers the live
     default-branch commit of ``plan`` (see the module); return its ``mod-base.ci.generation``.
 
@@ -304,8 +343,11 @@ def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], ou
     must not exist; its parent is private to the caller. It receives ``generation.json`` and, with
     ``with_build``, the complete Build bundle the packaged gate tested under ``build/``, verified
     against its validation record (``source_config_sha256`` is the digest of the protected Build
-    config the caller loaded, which the policy digest binds in both modes). A reused bundle keeps
-    its original identity: nothing is rewritten to pretend it was built after the merge.
+    config the caller loaded, which the policy digest binds in both modes). ``lanes`` names planned
+    lanes whose verified exports (their files and runtime envelope) are kept under
+    ``lanes/<id>/``, each checked against the results index (:func:`_publish_lanes`); it needs
+    ``source_config_sha256``. A reused bundle or lane keeps its original identity: nothing is
+    rewritten to pretend it was built or run after the merge.
 
     Raises :class:`GenerationUnavailable` (exit 3) when no generation can be selected or its
     evidence is gone, :class:`MixedGeneration` when the two callers disagree, and the readers'
@@ -317,6 +359,11 @@ def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], ou
     check(isinstance(output, Path) and not os.path.lexists(output) and output.parent.is_dir(), "$.output",
           "invalid or preexisting output, or no directory to hold it")
     check(type(with_build) is bool, "$.with_build", "must be a boolean")
+    planned = [lane["id"] for lane in plan["lanes"]]
+    check(type(lanes) is tuple and len(set(lanes)) == len(lanes) and all(lane in planned for lane in lanes),
+          "$.lanes", "must name distinct planned lanes")
+    check(not lanes or type(source_config_sha256) is str, "$.source_config_sha256",
+          "a lane is verified under the protected Build config the caller loaded")
     reads, watch, originals = CommandReads.of(api), Watch(), Watch()
     _admit_source(reads, watch, plan["identity"])
     build, packaged = (_newest(reads, watch, plan, producer) for producer in PRODUCERS)
@@ -332,15 +379,20 @@ def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], ou
                 source, build_receipt, packaged_receipt = _full(reads, watch, plan, build, packaged, mode,
                                                                 Path(temporary))
                 tested = plan
-    results, lanes = _lanes(packaged_receipt, tested)
+    results, runtime = _lanes(packaged_receipt, tested)
     bundle = packaged_receipt["owning_build"]
     document = generation_record(plan=plan, mode="reuse" if mode == "reuse" else "full", references=references,
-                                 source=source, build=bundle, results=results, lanes=lanes)
+                                 source=source, build=bundle, results=results, lanes=runtime)
 
     def writer(stage: Path, stage_fd: int) -> dict[str, Any]:
         if with_build:
             with _evidence():
                 _materialize_build(reads, bundle, tested, stage / BUILD_DIRECTORY, None, source_config_sha256)
+        if lanes:
+            with tempfile.TemporaryDirectory(prefix="mb-ci-lanes-", dir=stage) as temporary, _evidence():
+                _publish_lanes(reads, stage / LANES_DIRECTORY, Path(temporary), wanted=lanes, tested=tested,
+                               packaged=packaged_receipt, results=results, lanes=runtime, bundle=bundle,
+                               source_config_sha256=source_config_sha256)
         descriptor = os.open(GENERATION_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                              0o600, dir_fd=stage_fd)
         with os.fdopen(descriptor, "wb") as handle:

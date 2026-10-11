@@ -788,7 +788,8 @@ Build (`build_ci.gate`).
 ledger). It is what `ci select-generation` publishes for a consumer of a default-branch commit:
 the one Build bundle and the one set of runtime results that were tested together, whether the
 commit's own runs tested them (`full`) or the merged pull request's gates cover it (`reuse`). The
-file is `generation.json` in the command's private output, canonical JSON of at most 4 MiB. No
+file is `generation.json` in the command's private output, canonical JSON of at most 4 MiB,
+beside the Build bundle (`build/`) and the lane exports (`lanes/<id>/`) the consumer asked for. No
 gate writes or reads it, and it is never uploaded by the kit.
 
 The closed top level has kind, schema_version, identity, plan_sha256, profile, mode, references,

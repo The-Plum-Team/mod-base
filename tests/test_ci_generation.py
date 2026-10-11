@@ -28,17 +28,18 @@ from unittest import mock
 from mod_base import cli
 from mod_base.build_ci import commands, generation
 from mod_base.build_ci.graph import run_graph, sealed_upload, upload_job_name
-from mod_base.build_ci.records import reuse_reference, validate_generation
+from mod_base.build_ci.records import results_index, reuse_reference, validate_generation
 from mod_base.build_ci.selection import producer_record
 from mod_base.errors import MbError, Unavailable
 from mod_base.github.api import ApiError
 from mod_base.model import grammar, limits
-from mod_base.model.canonical import canonical_json
+from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.model.documents import load_document
 from mod_base.workflow import find_job
 from tests import ci_mod_harness as h
-from tests.ci_attempt import ATTEMPT, RUN, expand, record_zip
-from tests.ci_reuse import BUNDLE, LANE, PACKAGED_SEAL, REFERENCE, REUSE_LISTING, Merged, ReuseCase
+from tests.ci_attempt import (ATTEMPT, RUN, config_sha256, expand, lane_archive, record_zip, runtime_input_sha256,
+                              sealed, validation)
+from tests.ci_reuse import BUNDLE, LANE, ORIGINAL_RUN, PACKAGED_SEAL, REFERENCE, REUSE_LISTING, Merged, ReuseCase
 from tests.helpers import ci_api_artifact, ci_api_run, ci_graph_jobs
 from tests.test_ci_gate_timeline import add_gate, gate_world
 from tests.test_ci_gate_transport import reseal
@@ -71,6 +72,37 @@ class RealBundle(Merged):
         if kind == "build":
             data = sealed_build_archive(self.plan, self.producer(producer))[0]
         return super().publish(producer, kind, unit_id, data, artifact_id, **changes)
+
+
+class RealEvidence(RealBundle):
+    """Pull request 7 whose bundle, lane exports and results index are real sealed archives, and
+    whose packaged gate carries the lanes' real report hashes."""
+
+    def publish(self, producer, kind, unit_id, data, artifact_id, **changes):
+        if kind == "build":
+            data, self.build_envelope = sealed_build_archive(self.plan, self.producer(producer))
+        elif kind == "runtime":
+            archive, envelope = lane_archive(self.plan, self.producer(producer), self.bundle, unit_id)
+            record, files = validation(self.plan, hook="verify_runtime", unit_id=unit_id, run_id=ORIGINAL_RUN[producer],
+                                       input_sha256=runtime_input_sha256(
+                                           self.plan, canonical_sha256(self.build_envelope), envelope))
+            data = sealed(archive, record, files)
+            self.lane_hashes = {**getattr(self, "lane_hashes", {}), unit_id: {
+                "envelope_sha256": canonical_sha256(envelope), "validation_sha256": canonical_sha256(record),
+                "report_sha256": record["reports"][0]["sha256"]}}
+        elif kind == "results":
+            index = results_index(plan=self.plan, producer=self.producer(producer), owning_build=self.bundle,
+                                  build_envelope_sha256=canonical_sha256(self.build_envelope),
+                                  lanes=[{"descriptor": descriptor, **self.lane_hashes[lane["id"]]}
+                                         for lane, descriptor in zip(self.plan["lanes"], self.lanes)])
+            data = record_zip(grammar.CI_RESULTS_NAME, canonical_json(index))
+        return Merged.publish(self, producer, kind, unit_id, data, artifact_id, **changes)
+
+    def receipts(self, units):
+        if units != "lanes":
+            return super().receipts(units)
+        return [{"unit_id": lane["id"], "native_contract_sha256": lane["native_contract_sha256"],
+                 "report_sha256": self.lane_hashes[lane["id"]]["report_sha256"]} for lane in self.plan["lanes"]]
 
 
 def add_reuse_run(world: Merged, caller: str, *, source=None, listing: str | None = None,
@@ -131,13 +163,15 @@ class GenerationCase(ReuseCase):
         self.assertFalse((self.scratch / f"generation-{self.outputs}").exists())
         return caught.exception
 
-    def reused(self, *, lanes: int = 1, real_bundle: bool = False, producer: str | None = None, **merged) -> Merged:
-        """The reused generation: pull request 7 and the push's two reuse runs. ``producer`` is
-        the producer of the state's identity record (a Build job's by default)."""
+    def reused(self, *, lanes: int = 1, real_bundle: bool = False, real: bool = False, producer: str | None = None,
+               **merged) -> Merged:
+        """The reused generation: pull request 7 and the push's two reuse runs. ``real_bundle``
+        makes the Build a real sealed archive, ``real`` the lanes and the results index too;
+        ``producer`` is the producer of the state's identity record (a Build job's by default)."""
 
         attempt = self.attempt(listing=REUSE_LISTING["build"], caller="build", push=True, lanes=lanes,
                                producer=producer)
-        world = (RealBundle if real_bundle else Merged)(attempt, **merged)
+        world = (RealEvidence if real else RealBundle if real_bundle else Merged)(attempt, **merged)
         for caller in ("build", "packaged"):
             add_reuse_run(world, caller)
         return world
@@ -302,6 +336,49 @@ class ReusedGenerationTests(GenerationCase):
         self.assertEqual([lane["id"] for lane in document["lanes"]], [lane["id"] for lane in world.covered["lanes"]])
         self.assertEqual(world.api.request_count, REUSE_REQUESTS)
 
+    def test_chosen_lanes_are_kept_as_verified_exports(self) -> None:
+        world = self.reused(lanes=3, real=True)
+        chosen = (world.covered["lanes"][2]["id"], world.covered["lanes"][0]["id"])
+        document, output = self.select(world, lanes=chosen, source_config_sha256=config_sha256())
+        # The index (2) and each chosen lane (2): the other lane is never downloaded.
+        self.assertEqual(world.api.request_count, REUSE_REQUESTS + 2 + 2 * len(chosen))
+        self.assertEqual(sorted(path.name for path in output.iterdir()), ["generation.json", "lanes"])
+        self.assertEqual(sorted(path.name for path in (output / "lanes").iterdir()), sorted(chosen))
+        for lane_id in chosen:
+            root = output / "lanes" / lane_id
+            self.assertEqual(exported(root), sorted([grammar.CI_RUNTIME_ENVELOPE_NAME, f"lanes/{lane_id}/result.json",
+                                                     f"lanes/{lane_id}/runtime.log"]))
+            envelope = json.loads((root / grammar.CI_RUNTIME_ENVELOPE_NAME).read_bytes())
+            # A reused lane keeps the identity it ran under and names the original bundle.
+            self.assertEqual((envelope["identity"], envelope["owning_build"]), (world.plan["identity"], world.bundle))
+        self.assertEqual(document["mode"], "reuse")
+
+    def test_lanes_need_the_config_and_planned_ids(self) -> None:
+        world = self.reused(real=True)
+        lane = world.covered["lanes"][0]["id"]
+        for changes in ({"lanes": (lane,)}, {"lanes": ("lane-zz",), "source_config_sha256": config_sha256()},
+                        {"lanes": (lane, lane), "source_config_sha256": config_sha256()}, {"lanes": [lane]}):
+            with self.subTest(changes=changes), self.assertRaises(MbError):
+                self.select(world, **changes)
+        self.assertEqual(world.api.request_count, 0)
+
+    def test_a_lane_is_checked_against_the_index_and_the_gate(self) -> None:
+        # The packaged gate sealed another report for the lane than the results index holds.
+        world = self.reused(real=True)
+        world.documents["packaged"]["native_receipts"][0]["report_sha256"] = "0" * 64
+        world.seal("packaged")
+        for caller in ("build", "packaged"):
+            add_reuse_run(world, caller)
+        lane = world.covered["lanes"][0]["id"]
+        self.rejected(world, "disagree on a lane", lanes=(lane,), source_config_sha256=config_sha256())
+        # A lane verified under another protected config is refused.
+        world = self.reused(real=True)
+        self.rejected(world, lanes=(lane,), source_config_sha256="0" * 64)
+        # A lane that expires is gone, not corrupt; nothing is published.
+        world = self.reused(real=True)
+        world.set_artifact(LANE, expired=True)
+        self.absent(world, "ci-generation-evidence-unavailable", lanes=(lane,), source_config_sha256=config_sha256())
+
     def test_a_mixed_generation_is_rejected(self) -> None:
         # The Build caller tested in full while the packaged caller reused.
         attempt = self.attempt(listing="build-full", caller="build", push=True)
@@ -376,6 +453,13 @@ class CommandTests(GenerationCase):
         self.assertEqual(stdout, "select-generation: reuse generation of pull request #7, Build run 142 attempt 2, "
                                  "packaged run 143 attempt 2\n")
         self.assertEqual(sorted(path.name for path in output.iterdir()), ["build", "generation.json"])
+
+    def test_the_command_keeps_every_lane(self) -> None:
+        world = self.reused(lanes=2, real=True)
+        code, stdout, stderr, outputs, output = self.command(world, "--all-lanes")
+        self.assertEqual((code, stderr, outputs), (0, "", {"generation": "reuse", "reason": "selected"}))
+        self.assertEqual(sorted(path.name for path in (output / "lanes").iterdir()),
+                         sorted(lane["id"] for lane in world.covered["lanes"]))
 
     def test_a_consumer_job_reads_the_generation_of_its_subject(self) -> None:
         world = self.reused(producer="generation")

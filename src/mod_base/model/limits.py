@@ -354,11 +354,13 @@ MAX_CI_COMMIT_PULLS = 100
 #: merged tree differs, whatever the number of targets and lanes; the rest is for retries and for
 #: the further pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_REUSE_ADMIT_REQUESTS = 96
-#: ``ci select-generation`` sends 30 requests for a full generation and 58 for a reused one (each
-#: reference read as ``reuse.download_reuse_reference`` reads it, the original pair once), one
-#: more with the Build bundle, whatever the number of targets and lanes; the rest is for retries
-#: and for the further pages of a run that lists more than 100 jobs or artifacts.
-MAX_CI_SELECT_GENERATION_REQUESTS = 128
+#: ``ci select-generation`` sends 27 requests for a full generation and 52 for a reused one (each
+#: reference read as ``reuse.download_reuse_reference`` reads it, the original pair once), 2 more
+#: for the Build bundle and, when lanes are kept, 2 for the results index and 2 per lane (archive
+#: REST redirect and storage GET): 124 for every lane of Quick Skin's 34 in a reused generation;
+#: the rest is for retries and for the further pages of a run that lists more than 100 jobs or
+#: artifacts.
+MAX_CI_SELECT_GENERATION_REQUESTS = 96 + 3 * MAX_CI_LANES
 #: ``ci aggregate`` sends 13 requests and 2 per lane (archive REST redirect and storage GET;
 #: metadata is already authenticated from the listing), 81 for 34 lanes; the
 #: rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.

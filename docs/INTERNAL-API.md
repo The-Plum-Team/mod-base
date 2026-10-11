@@ -723,7 +723,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_GATE_REQUESTS`: the 96-request budget of one `ci seal-gate` (a Build gate costs 15, the packaged gate of a pull request 22 and the gate of a reuse run, which decides the reuse again, 47, whatever the number of targets and lanes).
 * `MAX_CI_COMMIT_PULLS`: 100, the pull requests GitHub associates with one pushed commit: the one page post-merge reuse reads to find the merge.
 * `MAX_CI_REUSE_ADMIT_REQUESTS`: 96, the request budget of `ci reuse-admit` (38 for an admitted reuse, 1 for a direct push, 11 when the merged tree differs, whatever the number of targets and lanes).
-* `MAX_CI_SELECT_GENERATION_REQUESTS`: 128, the request budget of `ci select-generation` (27 for a full generation, 52 for a reused one, 2 more with the Build bundle, whatever the number of targets and lanes).
+* `MAX_CI_SELECT_GENERATION_REQUESTS`: 864, the request budget of `ci select-generation`, 96 + 3 * `MAX_CI_LANES` (27 for a full generation, 52 for a reused one, 2 more with the Build bundle, 2 for the results index and 2 per lane kept).
 * `CI_ARTIFACT_UPLOAD_SKEW_SECONDS`: Two seconds of tolerance for artifact creation versus upload-step bounds only; other chronology stays exact.
 * `CI_TEST_MERGE_WAIT_SECONDS`: Fifteen-second deadline for GitHub to compute a pending test merge.
 * `CI_TEST_MERGE_POLL_SECONDS`: Five-second interval between pending test-merge observations.
@@ -2706,8 +2706,8 @@ more before it seals. It also registers `ci select-generation`, the read-only st
 of a default-branch commit (`generation.select_generation`).
 
 * `ADMISSION_NAME = 'ci-reuse-admission.json'`: the state record the command writes: `{"mode": "reuse", "reason", "pr_number", "identity", "plan_sha256", "profile", "source"}` (the covered binding and the source the gate's reference will name) or `{"mode": "full", "reason", "detail"}`.
-* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `reuse-admit --github-output FILE` and `select-generation --output DIR [--with-build] --github-output FILE` on the `ci` verb group.
-* `def run_select_generation(args: argparse.Namespace) -> int`: The `select-generation` handler (`--output DIR [--with-build] --github-output FILE`): for the protected subject and plan of the state, publishes `generation.select_generation`'s output and prints one line. Outputs `generation` (`full`, `reuse` or `none`) and `reason` (`selected` or the error's reason) before it returns or raises, so a step that tolerates exit 3 can branch on them. Budget `MAX_CI_SELECT_GENERATION_REQUESTS`.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `reuse-admit --github-output FILE` and `select-generation --output DIR [--with-build] [--lane ID ... | --all-lanes] --github-output FILE` on the `ci` verb group.
+* `def run_select_generation(args: argparse.Namespace) -> int`: The `select-generation` handler (`--output DIR [--with-build] [--lane ID ... | --all-lanes] --github-output FILE`): for the protected subject and plan of the state, publishes `generation.select_generation`'s output and prints one line. Outputs `generation` (`full`, `reuse` or `none`) and `reason` (`selected` or the error's reason) before it returns or raises, so a step that tolerates exit 3 can branch on them. Budget `MAX_CI_SELECT_GENERATION_REQUESTS`.
 * `def run_reuse_admit(args: argparse.Namespace) -> int`: The `reuse-admit` handler: outputs `mode` (`reuse` or `full`) and `reason` (`reuse.ADMITTED_REASON` or a key of `reuse.FULL_RUN_REASONS`), writes the state record and prints one line. A `reuse` is written only after the admission was rechecked; what must stop the job writes nothing and fails the step. The state must belong to the executing repository and controller commit. Budget `MAX_CI_REUSE_ADMIT_REQUESTS`.
 
 ## `mod_base.build_ci.generation`
@@ -2723,10 +2723,11 @@ corrupt; nothing partial is published.
 
 * `GENERATION_NAME = 'generation.json'`: the file of the output that holds the record.
 * `BUILD_DIRECTORY = 'build'`: the directory of the output that holds the complete Build bundle.
+* `LANES_DIRECTORY = 'lanes'`: the directory of the output that holds one verified lane export per kept lane id.
 * `ABSENT_REASONS`: reason token -> one line of words, for the four ways no generation is selected: `ci-generation-absent`, `ci-generation-pending`, `ci-generation-failed`, `ci-generation-evidence-unavailable`.
 * `class GenerationUnavailable(Unavailable)`: No tested generation can be selected (exit 3); `reason` is a key of `ABSENT_REASONS`.
 * `class MixedGeneration(MbError)`: The two callers' newest runs do not form one tested generation: reason `ci-generation-mixed`, exit 2.
-* `def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], output: Path, with_build: bool = False, source_config_sha256: str | None = None) -> dict[str, Any]`: Select, authenticate and privately publish the generation of the live default-branch commit of the consumer's own protected `plan`; return its `mod-base.ci.generation`. `output` must not exist; it receives `generation.json` and, with `with_build`, the complete bundle the packaged gate tested under `build/`, verified against its validation record (`source_config_sha256`: the digest of the protected Build config the caller loaded). A reused bundle keeps its original identity. Everything mutable is observed again before the atomic publication.
+* `def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], output: Path, with_build: bool = False, lanes: tuple[str, ...] = (), source_config_sha256: str | None = None) -> dict[str, Any]`: Select, authenticate and privately publish the generation of the live default-branch commit of the consumer's own protected `plan`; return its `mod-base.ci.generation`. `output` must not exist; it receives `generation.json` and, with `with_build`, the complete bundle the packaged gate tested under `build/`, verified against its validation record (`source_config_sha256`: the digest of the protected Build config the caller loaded); `lanes` names distinct planned lanes whose verified exports are kept under `lanes/<id>/`, after the results index was found to list exactly the packaged gate's lanes, Build and reports, each lane equal to what the index sealed (needs `source_config_sha256`). A reused bundle or lane keeps its original identity. Everything mutable is observed again before the atomic publication.
 
 ## `mod_base.build_ci.handoff`
 

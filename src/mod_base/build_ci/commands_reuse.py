@@ -57,6 +57,10 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
                         help="a new private directory for generation.json (and build/ with --with-build)")
     select.add_argument("--with-build", action="store_true",
                         help="also copy the complete Build bundle the packaged gate tested")
+    lanes = select.add_mutually_exclusive_group()
+    lanes.add_argument("--lane", action="append", default=[], metavar="ID",
+                       help="also keep the verified export of this planned lane (repeatable)")
+    lanes.add_argument("--all-lanes", action="store_true", help="also keep the verified export of every lane")
     select.add_argument("--github-output", type=cli.PATH, required=True, metavar="FILE")
     select.set_defaults(handler=run_select_generation)
 
@@ -95,7 +99,9 @@ def run_reuse_admit(args: argparse.Namespace) -> int:
 
 
 def run_select_generation(args: argparse.Namespace) -> int:
-    """``ci select-generation``: publish the tested generation of the job's protected subject.
+    """``ci select-generation``: publish the tested generation of the job's protected subject, with
+    the Build bundle (``--with-build``) and the verified exports of lanes (``--lane ID`` or
+    ``--all-lanes``) when asked for.
 
     Outputs ``generation`` (``full``, ``reuse`` or ``none``) and ``reason`` (``selected`` or a key
     of ``generation.ABSENT_REASONS``) before it returns or raises, so a step that tolerates exit 3
@@ -106,8 +112,9 @@ def run_select_generation(args: argparse.Namespace) -> int:
     config = load_build_config(invocation.repo_root, repository=invocation.repository)
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_SELECT_GENERATION_REQUESTS)
     try:
+        lanes = tuple(lane["id"] for lane in plan["lanes"]) if args.all_lanes else tuple(args.lane)
         document = generation.select_generation(api, plan=plan, output=args.output, with_build=args.with_build,
-                                                source_config_sha256=config.sha256)
+                                                lanes=lanes, source_config_sha256=config.sha256)
     except MbError as error:
         cli.write_github_output(args.github_output, {"generation": "none", "reason": error.reason})
         raise
