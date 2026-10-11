@@ -1,0 +1,39 @@
+{
+  "arguments": {
+    "candidate": {
+      "gid": 2002,
+      "uid": 2002
+    },
+    "gradle_seed": "/home/runner/work/_temp/gradle-seed",
+    "inventory": [
+      {
+        "git_blob": "17265be557d9e1cf987aed9b725a1e1c4cdf3bbe",
+        "mode": "100644",
+        "path": "file",
+        "size": 20
+      }
+    ],
+    "overlay": {
+      "path": "/home/runner/work/_temp/kit-overlay",
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tree_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "version": "1.0.3"
+    },
+    "repository": "example/mod",
+    "source": "/home/runner/work/project/project/candidate",
+    "tested_sha": "5555555555555555555555555555555555555555",
+    "tested_tree": "0d601e76d65bb2a69026d1d1a5016afcbabf40c6"
+  },
+  "boundary": {
+    "device": 1,
+    "gid": 121,
+    "home": "/home/runner",
+    "inode": 10,
+    "original_mode": 493,
+    "uid": 1001
+  },
+  "kind": "mod-base.ci.root-request",
+  "nonce": "cbf55746cd4ae99b18e5a4d05de18382711a3ea8cafed2ed24db61905e94bcbe",
+  "operation": "stage-candidate",
+  "schema_version": 1
+}
