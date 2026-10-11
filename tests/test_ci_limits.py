@@ -185,6 +185,12 @@ KIT: dict[str, tuple[Any, str]] = {
     "CI_SYSTEM_PROFILE_FETCH_RETRIES": (3, "apt's retries of one failed download (`Acquire::Retries`)"),
     "MAX_CI_SEED_PATH_DEPTH": (64, "components of one path inside a Gradle seed, the tree walk's own depth"),
     "MAX_CI_SEED_KEY_FILES": (16, "protected files one seed key binds"),
+    "MAX_CI_ADMISSION_PATHS": (64, "protected paths of one admission of the Build config; Block Pops' evaluator "
+                                   "protects 25 and two per loader"),
+    "MAX_CI_ADMISSION_DIRECTORIES": (16, "directories, the root included, that hold an admission's protected paths: "
+                                         "each is one tree read on either side of a pull request; Block Pops needs 12"),
+    "MAX_CI_ADMISSION_APPROVERS": (8, "approvers one admission lists"),
+    "MAX_CI_ADMISSION_COMMENTS": (300, "comments of one pull request an admission reads for decisions: three pages"),
     "MAX_CI_SEED_KEY_FILE_BYTES": (8 * MIB, "the bytes read of each one; a strict verification metadata file of "
                                             "either mod is about 1.1 MB"),
     "MAX_CI_SOURCE_LIST_BYTES": (64 * MIB, "one Git tree listing"),

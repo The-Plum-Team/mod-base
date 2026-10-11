@@ -9,7 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mod_base.build_ci.config import BUILD_CONFIG_PATH, AdapterFile, BuildConfig, load_build_config, validate_build_config
+from mod_base.build_ci.config import (BUILD_CONFIG_PATH, AdapterFile, BuildConfig, admission, admission_directories,
+                                      load_build_config, protects, validate_build_config)
 from mod_base.build_ci.protocol import PROFILES
 from mod_base.errors import MbError
 from mod_base.model import limits
@@ -166,6 +167,116 @@ class SchemaTests(unittest.TestCase):
         same["contexts"]["packaged"] = same["contexts"]["build"]
         with self.assertRaises(MbError):
             validate_build_config(same)
+
+
+#: An admission that protects what it must for ``ci_config()``: the config and the adapter under
+#: ``scripts/ci``, the activation manifest under ``site`` and the callers under ``.github/workflows``.
+ADMISSION = {"protected_paths": [".github/workflows", "scripts/ci", "site"], "command": "/controller-upgrade",
+             "approvers": [{"login": "AkaNebur", "association": "MEMBER"}]}
+#: Every file ``ci_config()`` requires an admission to protect.
+REQUIRED = sorted([BUILD_CONFIG_PATH, "scripts/ci/mod_base_build_adapter.py", "scripts/ci/mod_base_build_dispatch.py",
+                   "scripts/ci/pr_gate.py", "site/mod-base-build-activation.json", ".github/workflows/mod-base-guard.yml",
+                   ".github/workflows/mod-base-build.yml", ".github/workflows/mod-base-packaged-e2e.yml",
+                   ".github/workflows/mod-base-gate-status.yml"])
+
+
+class AdmissionSchemaTests(unittest.TestCase):
+    """The optional ``admission`` (within schema 1): which paths need an approver's decision."""
+
+    def document(self, **changes: object) -> dict:
+        return {**ci_config(), "admission": {**copy.deepcopy(ADMISSION), **changes}}
+
+    def test_it_is_optional_and_closed(self) -> None:
+        self.assertIsNone(admission(validate_build_config(ci_config())))
+        self.assertEqual(admission(validate_build_config(self.document())), ADMISSION)
+        for key in ADMISSION:
+            changed = self.document()
+            del changed["admission"][key]
+            with self.subTest(missing=key), self.assertRaises(MbError):
+                validate_build_config(changed)
+        with self.assertRaises(MbError):
+            validate_build_config(self.document(reviewers=[]))
+        for value in (None, {}, [], "scripts/ci"):
+            with self.subTest(admission=value), self.assertRaises(MbError):
+                validate_build_config({**ci_config(), "admission": value})
+
+    def test_protected_paths_are_canonical_sorted_and_never_nested(self) -> None:
+        for paths in ([], ["scripts/ci", ".github/workflows", "site"],
+                      [".github/workflows", "scripts/ci", "scripts/ci", "site"],
+                      [".github/workflows", "scripts", "scripts/ci", "site"],
+                      [".github/workflows", "scripts/ci", "site", "site/a"],
+                      [".github/workflows", "/scripts/ci", "site"], [".github/workflows", "scripts/../ci", "site"],
+                      [".git/hooks", ".github/workflows", "scripts/ci", "site"],
+                      [".github/workflows", "scripts/ci/", "site"], [".github/workflows", "scripts\\ci", "site"],
+                      [".github/workflows", "scripts/ci", "site", 7]):
+            with self.subTest(paths=paths), self.assertRaises(MbError):
+                validate_build_config(self.document(protected_paths=paths))
+        # A sibling that shares a prefix lies inside nothing.
+        validate_build_config(self.document(protected_paths=[".github/workflows", "scripts/ci", "scripts/cia", "site"]))
+        most = [".github/workflows", "scripts/ci", "site",
+                *(f"z{index:02}" for index in range(limits.MAX_CI_ADMISSION_PATHS - 3))]
+        validate_build_config(self.document(protected_paths=most))
+        with self.assertRaises(MbError):
+            validate_build_config(self.document(protected_paths=[*most, "zz"]))
+
+    def test_the_files_that_decide_how_the_gates_run_must_be_protected(self) -> None:
+        # The config, every adapter source, the activation manifest and each caller the kit manages:
+        # without them a pull request could remove its own admission.
+        for paths, missing in (([".github/workflows", "site"], BUILD_CONFIG_PATH),
+                               ([".github/workflows", BUILD_CONFIG_PATH, "site"], "scripts/ci/mod_base_build_adapter.py"),
+                               ([".github/workflows", "scripts/ci"], "site/mod-base-build-activation.json"),
+                               ([".github/workflows/mod-base-build.yml", "scripts/ci", "site"],
+                                ".github/workflows/mod-base-gate-status.yml"),
+                               (["scripts/ci", "site"], ".github/workflows/mod-base-build.yml")):
+            with self.subTest(missing=missing), self.assertRaises(MbError) as caught:
+                validate_build_config(self.document(protected_paths=paths))
+            self.assertIn(missing, str(caught.exception))
+        validate_build_config(self.document(protected_paths=REQUIRED))
+        for index in range(len(REQUIRED)):
+            with self.subTest(without=REQUIRED[index]), self.assertRaises(MbError):
+                validate_build_config(self.document(protected_paths=REQUIRED[:index] + REQUIRED[index + 1:]))
+        self.assertTrue(protects(["scripts/ci"], "scripts/ci/pr_gate.py"))
+        self.assertTrue(protects(["scripts/ci"], "scripts/ci"))
+        self.assertFalse(protects(["scripts/ci"], "scripts/cia/pr_gate.py"))
+        self.assertFalse(protects(["scripts/ci"], "scripts"))
+
+    def test_the_directories_holding_the_paths_are_bounded(self) -> None:
+        self.assertEqual(admission_directories([".github/workflows", "scripts/ci", "site"]), {"", ".github", "scripts"})
+        self.assertEqual(admission_directories(["common/src/e2e", "fabric/build.gradle", "fabric/src/e2e"]),
+                         {"", "common", "common/src", "fabric", "fabric/src"})
+        deep = [".github/workflows", "a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p", "scripts/ci", "site"]
+        with self.assertRaises(MbError) as caught:
+            validate_build_config(self.document(protected_paths=deep))
+        self.assertIn(f"more than {limits.MAX_CI_ADMISSION_DIRECTORIES} directories", str(caught.exception))
+        # Three directories and thirteen more: sixteen.
+        validate_build_config(self.document(protected_paths=[".github/workflows", "a/b/c/d/e/f/g/h/i/j/k/l/m/n",
+                                                             "scripts/ci", "site"]))
+
+    def test_the_command_is_a_slash_and_a_lowercase_word(self) -> None:
+        for command in ("/controller-upgrade", "/approve", "/a", "/" + "a" * 62):
+            validate_build_config(self.document(command=command))
+        for command in ("", "/", "controller-upgrade", "/Controller-upgrade", "/controller upgrade", "/-upgrade",
+                        "/controller-upgrade approve", "/" + "a" * 63, "//x", "/x\n", None, 7):
+            with self.subTest(command=command), self.assertRaises(MbError):
+                validate_build_config(self.document(command=command))
+
+    def test_approvers_are_logins_with_one_exact_association_each(self) -> None:
+        for association in ("OWNER", "MEMBER", "COLLABORATOR"):
+            validate_build_config(self.document(approvers=[{"login": "AkaNebur", "association": association}]))
+        most = [{"login": f"user-{index}", "association": "MEMBER"} for index in range(limits.MAX_CI_ADMISSION_APPROVERS)]
+        validate_build_config(self.document(approvers=most))
+        for approvers in ([], [*most, {"login": "user-x", "association": "MEMBER"}],
+                          [{"login": "AkaNebur", "association": "MEMBER"}, {"login": "akanebur", "association": "OWNER"}],
+                          [{"login": "AkaNebur", "association": "CONTRIBUTOR"}],
+                          [{"login": "AkaNebur", "association": "member"}],
+                          [{"login": "AkaNebur", "association": "NONE"}],
+                          [{"login": "AkaNebur[bot]", "association": "MEMBER"}],
+                          [{"login": "-AkaNebur", "association": "MEMBER"}],
+                          [{"login": "a" * 40, "association": "MEMBER"}],
+                          [{"login": "AkaNebur"}],
+                          [{"login": "AkaNebur", "association": "MEMBER", "type": "User"}]):
+            with self.subTest(approvers=approvers), self.assertRaises(MbError):
+                validate_build_config(self.document(approvers=approvers))
 
 
 class LoadTests(unittest.TestCase):

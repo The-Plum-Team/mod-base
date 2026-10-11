@@ -323,7 +323,7 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject`, `mod_base.build_ci.lifecycle`, `mod_base.build_ci.commands_worker` |
 | MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.root_request_operations`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff` |
 | MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
-| MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
+| MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.admission`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
 | MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
 | MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse` |
 | MB11 | `mod_base.build_ci.checkout`, `mod_base.build_ci.candidate_kit` |
@@ -738,7 +738,8 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_SELECT_BUILD_REQUESTS`: 155, the request budget of `ci select-build`: a pull request whose Build is complete costs 16 and each earlier poll of its wait one more (91 polls at most); a protected subject costs 14 (15 for the Build its own run built), or 16 plus one for each poll that found its Build run still in progress (at most 90). The rest is for retries and for the further pages of a run that lists more than 100 jobs.
 * `MAX_CI_FETCH_BUILD_REQUESTS`: 8, the request budget of `ci fetch-build` (one REST redirect and one credential-free storage GET, with room for retries).
 * `MAX_CI_GENERATION_REQUESTS`: 440, a regression budget enforced by `tests/test_ci_generation_budget.py` for the two enrolled native profiles, including one final status evaluation and no waiting polls; not runtime plan admission.
-* `MAX_CI_GATE_STATUS_REQUESTS`: 96, the request budget of `ci gate-status` (36 with both runs complete).
+* `MAX_CI_GATE_STATUS_REQUESTS`: 96, the request budget of `ci gate-status` (36 with both runs complete; a protected admission adds at most 1 + 2 * `MAX_CI_ADMISSION_DIRECTORIES` + 6).
+* `MAX_CI_ADMISSION_PATHS`, `MAX_CI_ADMISSION_DIRECTORIES`, `MAX_CI_ADMISSION_APPROVERS`, `MAX_CI_ADMISSION_COMMENTS`: The 64 protected paths of one `admission` of the Build config, the 16 directories that may hold them (the root included: the trees read on either side of a pull request), its 8 approvers and the 300 comments of a pull request read for their decisions.
 * `MAX_CI_PRIVATE_RECORD_ENTRIES`: Exact entry budget of a fixed single-leaf private record directory. MB1 entry caps count the root, so the directory plus its one leaf; an empty stage stays 1.
 * `MAX_CI_POLICY_TESTS`, `MAX_CI_POLICY_WORKERS`: Policy discovery/count and worker ceilings.
 * `MAX_CI_ENVELOPE_BYTES`, `MAX_CI_RECORD_BYTES`, `MAX_CI_ARTIFACTS_PER_GATE`
@@ -1172,6 +1173,7 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
   * `add_blob(self, data: bytes, *, oid: str | None = None, repository: str | None = None) -> str`: Seed ``/git/blobs/{oid}`` (``contents.blob``) and return its oid: the Git blob id of ``data`` unless ``oid`` forces another one (a corrupt object the reader must reject).
   * `add_ref(self, ref: str, sha: str, *, annotated_tag_sha: str | None = None, repository: str | None = None) -> None`: Seed ``/git/ref/{ref}`` (``ref`` like ``tags/v1.0.0`` or ``heads/main``). With ``annotated_tag_sha`` the ref points at that tag object, which peels to ``sha`` through ``/git/tags/{annotated_tag_sha}`` (``pin.verify``'s tag peel).
   * `add_pull(self, record: Mapping[str, Any]) -> None`: Seed (or replace) ``/repos/{own}/pulls/{number}``: one pull request as the API reports it, kept verbatim. ``POST /pulls`` creates the next number from a seeded head ref and base branch, ``PATCH /pulls/{number}`` changes ``state``, ``title`` or ``body``, ``POST /issues/{number}/comments`` answers for a seeded pull request and ``DELETE /git/refs/{ref}`` removes a seeded ref (with its branch); each needs a writable fake and is recorded in ``mutations``.
+  * `set_comments(self, number: int, comments: Sequence[Mapping[str, Any]]) -> None`: Seed (or replace) ``/repos/{own}/issues/{number}/comments``: the comments of an issue or a pull request as the API lists them, oldest first and kept verbatim. A comment posted through ``POST /issues/{number}/comments`` is not listed.
   * `add_response(self, path: str, payload: Any, *, params: Mapping[str, str | int] | None = None) -> None`: Seed the exact JSON body of one GET ``path`` (with exactly ``params``) that no typed seeder covers; a request for an unseeded path answers 404 like the API.
   * `skew_listing(self, path: str, *, responses: int, offset: int = 1) -> None`: Serve the next ``responses`` responses of the listing ``path`` (any parameters) with a ``total_count`` ``offset`` rows off the rows it lists, as GitHub's eventually consistent listing does while a sibling job uploads.
   * `during_listing(self, path: str, action: Callable[[], None], *, after_pages: int = 1) -> None`: Run ``action`` once, right after the listing ``path`` served its ``after_pages``-th response from now: an upload or deletion landing between two pages of one read.
@@ -1993,9 +1995,14 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 Owner: MB11. Closed data at scripts/ci/mod-base-build.json. Protected policy must authenticate
 every source hash/path before import and confirm native timeout parity before activation.
 
-* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `plan_inputs` (0..`MAX_CI_PLAN_INPUTS` extra candidate files `{name, path}` sorted by name, each name an `adapter.plan_input_name`), `bundle.path`, the two `contexts` and the timeouts, the optional `runtime: {system_profile}` (a key of `protocol.SYSTEM_PROFILES`; absent means none) and the optional `seeds` (at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..`MAX_CI_SEED_KEY_FILES` `{path}` rows sorted by path, unique; absent means no seed); no named path may alias or contain another.
+* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `plan_inputs` (0..`MAX_CI_PLAN_INPUTS` extra candidate files `{name, path}` sorted by name, each name an `adapter.plan_input_name`), `bundle.path`, the two `contexts` and the timeouts, the optional `runtime: {system_profile}` (a key of `protocol.SYSTEM_PROFILES`; absent means none) the optional `seeds` (at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..`MAX_CI_SEED_KEY_FILES` `{path}` rows sorted by path, unique; absent means no seed) and the optional `admission` (exactly `{protected_paths, command, approvers}`: 1..`MAX_CI_ADMISSION_PATHS` canonical repository paths, strictly ascending, none inside another, held by at most `MAX_CI_ADMISSION_DIRECTORIES` directories, that protect the config, `CONTROL_PATHS` and every adapter source; a command of `ADMISSION_COMMAND`; 1..`MAX_CI_ADMISSION_APPROVERS` `{login, association}` rows, logins unique ignoring case, each association one of `ADMISSION_ASSOCIATIONS`; absent means no admission); no named path may alias or contain another.
 * `def system_profile(document: dict[str, Any]) -> str | None`: The system profile a validated config names (`runtime.system_profile`), or `None` when it has no `runtime`.
 * `SEED_KINDS = ('gradle', 'runtime')`: The seeds a protected config may enable: a target job's and a lane job's.
+* `ADMISSION_COMMAND`: The grammar of an admission command, a slash and a lowercase word of at most 63 characters (`/controller-upgrade`).
+* `ADMISSION_ASSOCIATIONS = ('COLLABORATOR', 'MEMBER', 'OWNER')`: The `author_association` values an approver may be listed with.
+* `def admission(document: dict[str, Any]) -> dict[str, Any] | None`: The protected admission of a validated config, or `None` when it names none.
+* `def protects(protected_paths: list[str] | tuple[str, ...], path: str) -> bool`: Whether `path` is one of `protected_paths` or lies below one of them.
+* `def admission_directories(protected_paths: list[str] | tuple[str, ...]) -> frozenset[str]`: The directories holding the protected paths, the root (`''`) included.
 * `def seed_key_files(document: dict[str, Any], kind: str) -> tuple[str, ...] | None`: The protected files that key the seed `kind` of a validated config, or `None` when it enables no such seed; another kind is a rejection.
 * `def protected_file_state(root: Path, relative: str, *, max_bytes: int) -> ControlFile`: The state of one file of the protected checkout `root`: the SHA-256 of its bytes, or `None` for a file the checkout does not have. What exists must be a regular file of at most `max_bytes`, reached without crossing a symlink. A control file is read with `MAX_WORKFLOW_FILE_BYTES`.
 * `class BuildConfigError(MbError)`: The protected Build configuration or a source it lists cannot be trusted (reason `ci-config`).
@@ -2862,8 +2869,9 @@ gate the newest run of its managed caller under the head is chosen before any re
 (`selection.newest_run`). `pending`: a draft, no run yet, a run in progress or a newest run that is
 a draft deferral. `success`: the newest run is complete, its exact graph for its mode
 authenticates, its tested record downloads and binds to the plan, the packaged gate's owning Build
-is the bundle the Build gate sealed, and the live pull request still has the plan's head, base and
-test merge and is no draft. `failure`: anything else, including a gate whose evidence is gone
+is the bundle the Build gate sealed, the live pull request still has the plan's head, base and
+test merge and is no draft, and the protected admission of the config admits it
+(`admission.admission_refusal`, which turns every such `success` into a `failure`). `failure`: anything else, including a gate whose evidence is gone
 (`transport.artifact_gone`). Any other API failure is never a state. The job asks
 twice: `settle_gates` first, without a plan, and `evaluate_gates` with the plan only when a newest
 run finished successfully.
@@ -2907,6 +2915,21 @@ most `MAX_CI_GATE_STATUS_REQUESTS`.
 * `UNSETTLED`: the line the `--settle` call prints when a finished run needs the plan.
 * `def add_verbs(verbs: argparse._SubParsersAction) -> None`
 * `def run_gate_status(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.admission`
+
+Owner: MB11. The protected admission of a pull request (`admission` of the Build config, read
+from the protected checkout that executes): a pull request whose tested merge changes a protected
+path (a file or a directory, by its tree entry against the pull request's base) needs an
+approver's decision on its exact head before `status.evaluate_gates` lets any gate succeed. A
+decision is a comment whose whole text is `<command> approve <head sha>` or `<command> revoke
+<head sha>` by a `User` listed among the approvers with its association; the latest counts and
+must approve, and an edited one refuses until it is deleted. Read-only; trees are read once, the
+decisions through the evaluation's watch.
+
+* `def changed_protected_path(api: GitHubApi | CommandReads, *, base_sha: str, tested_tree: str, protected_paths: list[str] | tuple[str, ...]) -> str | None`: The first protected path whose tree entry (mode, type, object id; absence included) differs between the commit `base_sha` and the tree `tested_tree`, or `None`. One commit read, then non-recursive tree reads from the root down, never below a directory whose object is equal on both sides.
+* `def head_decisions(api: GitHubApi | CommandReads, *, pr_number: int, head_sha: str, command: str, approvers: list[dict[str, Any]]) -> list[dict[str, Any]]`: The approver decisions on `head_sha` among the comments of the pull request (at most `MAX_CI_ADMISSION_COMMENTS`), oldest first, each `{id, decision, created_at, edited}`; a malformed comment is a rejection.
+* `def admission_refusal(api: GitHubApi | CommandReads, watch: Watch, *, config: BuildConfig, plan: dict[str, Any]) -> str | None`: Why the gates of the verified generation `plan` may not succeed (one line), or `None`: no admission, no protected path changed, or the latest decision approves. The decisions are read through `watch`.
 
 ## `mod_base.build_ci.runtime_schema`
 

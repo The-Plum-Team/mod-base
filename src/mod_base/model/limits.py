@@ -316,9 +316,18 @@ MAX_CI_FETCH_BUILD_REQUESTS = 8
 #: credential-free artifact storage GETs and one final status evaluation, without waiting polls.
 #: Enforced by tests/test_ci_generation_budget.py, not a runtime plan-admission rule.
 MAX_CI_GENERATION_REQUESTS = 440
-#: API requests of one ``ci gate-status`` (36 with both runs complete); the rest is for retries and
+#: API requests of one ``ci gate-status`` (36 with both runs complete, and a protected admission at
+#: most 1 + 2 * MAX_CI_ADMISSION_DIRECTORIES + 2 * 3 more, 39 at most); the rest is for retries and
 #: pages.
 MAX_CI_GATE_STATUS_REQUESTS = 96
+#: A protected admission (``admission`` of the Build config): the paths it protects, the
+#: directories holding them (the root included: each one is a tree read on either side of the pull
+#: request), its approvers and the comments of one pull request it reads for their decisions
+#: (three pages).
+MAX_CI_ADMISSION_PATHS = 64
+MAX_CI_ADMISSION_DIRECTORIES = 16
+MAX_CI_ADMISSION_APPROVERS = 8
+MAX_CI_ADMISSION_COMMENTS = 300
 #: The description of a status intent: GitHub's own bound for a commit status description.
 MAX_CI_STATUS_DESCRIPTION_CHARS = 140
 #: ``ci assemble`` sends 13 requests and 2 per target (archive REST redirect and storage GET;

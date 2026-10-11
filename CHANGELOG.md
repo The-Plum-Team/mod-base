@@ -5,6 +5,31 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- Add an optional protected admission to the kit's gate status (the B3 blocker of the Block Pops
+  activation: in `shared-build-and-e2e` no evaluator of the mod runs on a pull request, and the
+  gate status checked no protected path, no owner approval and no restricted transition). The
+  optional `admission` of `mod-base.build.config` (within schema 1: `protected_paths`, `command`,
+  `approvers`) is read from the protected default branch. When the tested merge of a pull request
+  changes a protected path (its tree entry against the base), `ci gate-status` turns every gate
+  that would have been `success` into `failure` unless the latest decision of a listed approver on
+  the exact head, a comment `<command> approve <head sha>`, approves it; a revocation, an edited
+  decision or none at all refuses. The list must protect the config, the adapter sources, the
+  activation manifest and the four callers. New module `build_ci.admission`, limits
+  `MAX_CI_ADMISSION_PATHS` (64), `MAX_CI_ADMISSION_DIRECTORIES` (16), `MAX_CI_ADMISSION_APPROVERS`
+  (8) and `MAX_CI_ADMISSION_COMMENTS` (300), and `FakeGitHub.set_comments`. Cost: none without
+  `admission`; 3 requests for a pull request that changes no protected directory, and at most
+  1 + 2 * 16 + 6 more otherwise, within the unchanged `MAX_CI_GATE_STATUS_REQUESTS` (96). Opt-in:
+  without `admission` every evaluation is that of v1.2.1. A comment does not start the status
+  caller: after a decision on a finished generation the owner dispatches it
+  (OPERATIONS.md, "Protected admission").
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files, the workflows' jobs, steps and permissions are
+  those of v1.2.1. A kit before this change refuses a config that has `admission`. The
+  compatibility ledger now compares against the archived v1.2.1 reader
+  (`tests/fixtures/previous_release/v1.2.1`, built from the release commit like v1.2.0's).
+
 ## v1.2.1
 
 Supersedes v1.2.0, which stays a tag and is never released. v1.2.1 contains everything of

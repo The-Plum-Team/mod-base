@@ -8,9 +8,10 @@ sections: the Build config, the batch manifest, the results index and the activa
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.2.0, which
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.2.1, which
 already reads every kind of this release, so every kind is `unchanged`. The optional `seeds` of
 the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config that
+sets it. So does the optional `admission` (unreleased); a v1.2.1 reader refuses a config that
 sets it.
 
 The v1 Build plan (since v1.1.0) optionally carries `candidate_kit: {sha, version}` when
@@ -694,6 +695,7 @@ source in the protected checkout to have its configured hash.
 | `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
 | `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.protocol.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
 | `seeds` | optional (added within schema 1): at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..16 `{path}` objects (canonical repository paths, unique, sorted by path) of the protected checkout whose bytes key the seed; absent means no seed |
+| `admission` | optional (added within schema 1, unreleased): exactly `{protected_paths, command, approvers}`. `protected_paths`: 1..64 canonical repository paths (files or directories), strictly ascending, none inside another, held by at most 16 directories counting the root, that together protect this config, every `adapter.files` path, `site/mod-base-build-activation.json` and the four `.github/workflows/mod-base-*.yml` callers. `command`: `/` and a lower-case word of `a-z 0-9 -` starting with a letter, at most 63 characters. `approvers`: 1..8 `{login, association}` objects, logins (GitHub login grammar) unique ignoring case, each `association` one of `OWNER`, `MEMBER`, `COLLABORATOR`; absent means no admission |
 
 The config path, every adapter source, every candidate file (the inventory, the scenario contract
 and each `plan_inputs` path) and the bundle directory are

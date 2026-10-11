@@ -412,6 +412,45 @@ key, an owner operation) or change one of the key files; to stop, remove `seeds`
 A kit release older than the one that added `seeds` refuses a config that has it: remove `seeds`
 before a pin rollback below that release.
 
+### Protected admission
+
+`admission` of `scripts/ci/mod-base-build.json` ([BUILD-ADAPTER.md](BUILD-ADAPTER.md#protected-admission))
+keeps the owner's approval of changes to protected paths once the kit's gate status writes the
+required contexts. **Every mod whose ruleset requires a context that the kit writes, and that
+protects its controllers by an owner's approval today, adds it before the activation that removes
+its own evaluator from pull requests**: for Block Pops before `shared-build-and-e2e` (B3), for
+Quick Skin before its required contexts move to the kit (Q5 to Q7). Without it the kit's gate
+status checks no protected path, and an ordinary pull request that changes the mod's evaluator, a
+workflow or the config itself gets both contexts once its gates pass.
+
+1. Add `admission` to the config in a pull request that goes through the mod's existing approval
+   route (for Block Pops a `controller-upgrade/*` pull request with the owner's exact-head
+   approval). The config of the default branch decides, so the admission applies from the merge
+   on. A kit release older than the one that added `admission` refuses a config that has it:
+   remove it before a pin rollback below that release.
+2. List as `protected_paths` what an ordinary pull request may not change. Block Pops lists the
+   `PROTECTED_PATHS` of `scripts/ci/gate_controller.py`, the `build.gradle` and `src/e2e` of every
+   loader, the exact base-owned files outside them (the release matrix and
+   `gradle/verification-metadata.xml`) and its forbidden paths (`.gradle`, `buildSrc`): 34 paths in
+   13 directories counting the root, where at most 16 are allowed. Use the command of the mod's existing route (`/controller-upgrade`) and list
+   the owner with the association GitHub shows on their comments (`MEMBER` in an organization).
+3. Approve each exact head after reviewing it, and revoke before a merge if anything changes:
+
+   ```bash
+   gh pr comment <N> --repo "$R" --body "/controller-upgrade approve <40-character head sha>"
+   gh workflow run mod-base-gate-status.yml --repo "$R" --ref "$BRANCH" -f pr-number=<N>   # when the gates already finished
+   ```
+
+   A comment does not start the status caller. Its next run publishes the decision: a gate run, a
+   change of the pull request, the hourly reconciliation or the dispatch above. A revocation needs
+   the dispatch too, and like every status a success already published stays until a newer one
+   replaces it, so check the live statuses before merging. Never edit a decision: an edited one
+   refuses the admission until it is deleted.
+
+The kit checks the generic rule only. A mod's native evaluator may check more (an upgrade's exact
+path list, required files, the loader bootstrap, a restricted transition's declaration); while it
+no longer runs on pull requests, the approver checks those by review.
+
 ## Canary procedure
 
 The canary is a separate public caller repository, so it exercises exactly the cross-repository
