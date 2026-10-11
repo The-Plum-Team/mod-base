@@ -30,7 +30,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:edf06bfe1852e79cb591755656afe93c89ed7991cec14ce312503a0c004a124b"
+  MB_KIT_TREE_DIGEST: "sha256:9354c48923265c0f8b7c85d67787f174fe339d050c729908edce3d7d5ebb4ccc"
 
 jobs:
   plan:
@@ -668,7 +668,7 @@ jobs:
 
   assemble:
     name: Seal complete Build bundle
-    needs: [plan, target]
+    needs: [plan, policy, target]
     if: needs.plan.outputs.mode != 'reuse'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
