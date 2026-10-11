@@ -217,12 +217,15 @@ def read_bounded(path: Path, limit: int, label: str) -> bytes:
         raise SetupError(f"{label} {path} does not exist") from None
     except (OSError, ValueError) as error:
         raise SetupError(f"{label} {path} cannot be opened ({type(error).__name__})") from None
-    with os.fdopen(descriptor, "rb") as stream:
+    try:
         status = os.fstat(descriptor)
         if not (stat.S_ISREG(status.st_mode) or stat.S_ISFIFO(status.st_mode)):
             raise SetupError(f"{label} {path} is not a regular file or a pipe")
         refuse_shared(descriptor, status, label, path)
-        data = stream.read(limit + 1)
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            data = stream.read(limit + 1)
+    finally:
+        os.close(descriptor)
     if len(data) > limit:
         raise SetupError(f"{label} {path} is larger than {limit} bytes")
     return data
