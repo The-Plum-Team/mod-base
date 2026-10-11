@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from mod_base.imaging.compare import CHANGED_LUMA_THRESHOLD, compare
+from mod_base.imaging import metrics
 from mod_base.imaging.metrics import ImageError
 from mod_base.imaging.png import pattern_png
 from mod_base.model import limits
@@ -42,6 +43,9 @@ def shifted_pair() -> tuple[bytes, bytes]:
 
 
 class CompareTest(unittest.TestCase):
+    def setUp(self) -> None:
+        metrics._MEMO.clear()  # every case measures, so a patched Pillow is reached (test_imaging_memo)
+
     def test_the_measurement_is_the_luma_difference_histogram(self) -> None:
         first, second = shifted_pair()
         result = compare(first, second, minimum_changed_fraction=0.2)
