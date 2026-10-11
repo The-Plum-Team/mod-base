@@ -155,3 +155,11 @@ Block Pops keeps its existing App and its two required contexts, so the design l
 provision and no ruleset to change for it. What it needs from the owner is those approvals, the
 environment `mod-base-gate` with the client id and a key of that App before a mode manages the
 status caller, and, before B1, a released kit to pin.
+
+B3 removes Block Pops' own evaluator from pull requests into `master`. Its owner approval of
+changes to protected paths then lives only in the kit's gate status: the optional `admission` of
+the Build config (unreleased), which a kit release, a pin bump and a `controller-upgrade/*` change
+adding it to `scripts/ci/mod-base-build.json` must bring to `master` before B3 merges
+([OPERATIONS.md](OPERATIONS.md#protected-admission)). The kit checks the generic rule (a protected
+path changed needs an approver's decision on the exact head); the evaluator's upgrade path list,
+required files, loader bootstrap and restricted transitions are left to the owner's review.

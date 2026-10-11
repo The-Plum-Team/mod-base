@@ -12,8 +12,11 @@ read, by the listing rules of :mod:`mod_base.build_ci.selection`. The state is
   in progress, or when the newest run is a draft deferral;
 * ``success`` only when the newest run is complete, its exact graph for its mode authenticates,
   its tested record downloads by numeric id and binds to the plan this job derived, the packaged
-  gate's owning Build is exactly the bundle the Build gate sealed, and the live pull request still
-  has the head, base and test merge of that plan and is not a draft;
+  gate's owning Build is exactly the bundle the Build gate sealed, the live pull request still
+  has the head, base and test merge of that plan and is not a draft, and the protected admission
+  of the Build config, when it names one, admits the pull request
+  (:func:`~mod_base.build_ci.admission.admission_refusal`: a change to a protected path needs an
+  approver's decision on the exact head);
 * ``failure`` otherwise, with one bounded line that says why. A newer failed run is a failure
   whatever an older run proved, and so is a run whose evidence is gone: an artifact it needs that
   has expired, that its run no longer lists or whose numeric id GitHub answers with 404 or 410.
@@ -46,6 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mod_base.build_ci.admission import admission_refusal
 from mod_base.build_ci.activation import BUILD_CALLER, PACKAGED_CALLER, STATUS_CALLER, managed_callers, managed_mode
 from mod_base.build_ci.config import BuildConfig
 from mod_base.build_ci.graph import authenticate_graph, run_graph
@@ -259,6 +263,11 @@ def _evaluate(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation
             return None
         if "packaged" in verdicts:
             verdicts["packaged"] = _coupled(verdicts["build"], verdicts["packaged"])
+        if plan is not None and any(verdict.state == "success" for verdict in verdicts.values()):
+            refusal = admission_refusal(reads, watch, config=config, plan=plan)
+            if refusal is not None:
+                verdicts = {gate: _Verdict("failure", refusal, verdict.run_id) if verdict.state == "success"
+                            else verdict for gate, verdict in verdicts.items()}
     watch.recheck()
     return {"repository": reads.repository, "pr_number": pr_number, "target_sha": pull["head"]["sha"],
             "gates": {gate: {"context": contexts[gate], "state": verdict.state,
