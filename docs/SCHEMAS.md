@@ -809,8 +809,9 @@ Artifact ids are distinct across both seals, the bundle, the index, the lanes an
 The record is evidence only together with what its writer authenticated
 (`generation.select_generation`): the two newest runs, their exact graphs and latest attempts, both
 tested records, every artifact's metadata, owner and availability and, for a reuse, both
-references and the original pair as `reuse.download_reuse_reference` proves them. A consumer that
-reads a lane downloads it by the numeric id named here.
+references and the original pair as `reuse.download_reuse_reference` proves them. A consumer
+reads a lane from `lanes/<id>/`, kept and verified against the results index by `ci
+select-generation --lane` or `--all-lanes`, rather than downloading it by the numeric id named here.
 
 ## Profile activation data v1
 

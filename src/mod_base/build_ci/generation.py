@@ -397,8 +397,10 @@ def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], ou
                              0o600, dir_fd=stage_fd)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(canonical_json(document))
-        watch.recheck()
-        originals.recheck()
+        # Evidence that is gone by now is as unavailable as evidence that was gone at the start.
+        with _evidence():
+            watch.recheck()
+            originals.recheck()
         return document
 
     try:

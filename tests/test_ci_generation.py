@@ -28,6 +28,7 @@ from unittest import mock
 from mod_base import cli
 from mod_base.build_ci import commands, generation
 from mod_base.build_ci.graph import run_graph, sealed_upload, upload_job_name
+from mod_base.build_ci.protocol import plan_sha256
 from mod_base.build_ci.records import results_index, reuse_reference, validate_generation
 from mod_base.build_ci.selection import producer_record
 from mod_base.errors import MbError, Unavailable
@@ -43,7 +44,7 @@ from tests.ci_reuse import BUNDLE, LANE, ORIGINAL_RUN, PACKAGED_SEAL, REFERENCE,
 from tests.helpers import ci_api_artifact, ci_api_run, ci_graph_jobs
 from tests.test_ci_gate_timeline import add_gate, gate_world
 from tests.test_ci_gate_transport import reseal
-from tests.test_ci_transport import World, exported, sealed_build_archive
+from tests.test_ci_transport import World, after_download, exported, sealed_build_archive
 
 #: Requests of a full selected generation: the live subject, both newest runs with their run,
 #: jobs and artifact listings, both tested records (sources, timeline, download) and everything
@@ -106,9 +107,10 @@ class RealEvidence(RealBundle):
 
 
 def add_reuse_run(world: Merged, caller: str, *, source=None, listing: str | None = None,
-                  artifact_id: int | None = None) -> dict:
+                  artifact_id: int | None = None, forged: bool = False) -> dict:
     """The push's finished run of ``caller`` that sealed a reuse reference to ``source`` (the pull
-    request's pair by default); returns the reference."""
+    request's pair by default); returns the reference. ``forged`` writes the reference as given,
+    without the checks a reuse gate makes before it seals one."""
 
     plan, api = world.covered, world.api
     run_id = RUN[caller]
@@ -117,7 +119,12 @@ def add_reuse_run(world: Merged, caller: str, *, source=None, listing: str | Non
     api.add_jobs(run_id, ATTEMPT, jobs)
     producer = producer_record(plan, caller=caller, run_id=run_id, run_attempt=ATTEMPT, event="push",
                                graph_sha256=run_graph(caller, "reuse").sha256(plan))
-    document = reuse_reference(plan=plan, producer=producer, source=source or world.source)
+    if forged:
+        document = {"kind": "mod-base.ci.reuse", "schema_version": 1, "identity": plan["identity"],
+                    "plan_sha256": plan["plan_sha256"], "profile": plan["profile"], "producer": producer,
+                    "source": source or world.source}
+    else:
+        document = reuse_reference(plan=plan, producer=producer, source=source or world.source)
     data = record_zip(grammar.CI_REUSE_NAME, canonical_json(document))
     created = sealed_upload(find_job(jobs, upload_job_name(caller, "reuse", None), run_attempt=ATTEMPT))[0]
     expires = (grammar.parse_timestamp(created) + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -425,9 +432,82 @@ class ReusedGenerationTests(GenerationCase):
         self.absent(world, "ci-generation-pending")
 
 
+def other_plan(plan: dict, **identity) -> dict:
+    """``plan`` with fields of its identity changed and its hash recomputed: a consumer whose own
+    protected plan is not the one the gates of the commit were sealed for."""
+
+    changed = copy.deepcopy(plan)
+    changed["identity"].update(copy.deepcopy(identity))
+    changed["plan_sha256"] = plan_sha256(changed)
+    return changed
+
+
+class AnotherGenerationTests(GenerationCase):
+    """A result is never accepted for a tree, a policy, a kit or a plan other than the one it was
+    tested for, however authentic its runs are; and nothing that changes or goes away before
+    publication is published."""
+
+    def test_a_reference_to_gates_that_tested_something_else_is_refused(self) -> None:
+        cases = {"tree": lambda identity: {"tested_tree": "7" * 40},
+                 "policy": lambda identity: {"policy_sha256": "f" * 64},
+                 "kit": lambda identity: {"kit": {**identity["kit"], "tree_digest": "sha256:" + "f" * 64}},
+                 "inventory": lambda identity: {"inventory_sha256": "f" * 64},
+                 "plan input": lambda identity: {"edit": lambda plan: plan["plan_inputs"][0].update(sha256="f" * 64)},
+                 "native contract": lambda identity: {
+                     "edit": lambda plan: plan["targets"][0].update(native_contract_sha256="f" * 64)}}
+        for name, change in cases.items():
+            attempt = self.attempt(listing=REUSE_LISTING["build"], caller="build", push=True)
+            world = Merged(attempt, **change(attempt.plan["identity"]))
+            # The push's own runs are authentic; only the references they sealed name those gates.
+            for caller in ("build", "packaged"):
+                add_reuse_run(world, caller, forged=True)
+            with self.subTest(differs=name):
+                self.rejected(world, "reuse semantics differ|sealed for another plan than the covered one")
+
+    def test_a_consumer_plan_that_is_not_the_tested_one_is_refused(self) -> None:
+        changes = {"policy": lambda identity: {"policy_sha256": "f" * 64},
+                   "scenario": lambda identity: {"scenario_sha256": "f" * 64},
+                   "kit": lambda identity: {"kit": {**identity["kit"], "tree_digest": "sha256:" + "f" * 64}}}
+        for label in ("full", "reuse"):
+            for name, change in changes.items():
+                if label == "full":
+                    world = full_world()
+                    world.covered = world.plan
+                else:
+                    world = self.reused()
+                plan = other_plan(world.covered, **change(world.covered["identity"]))
+                with self.subTest(generation=label, differs=name):
+                    self.rejected(world, "does not equal the complete admitted binding", plan=plan)
+
+    def test_a_newer_run_that_appears_before_publication_is_refused(self) -> None:
+        for caller in ("build", "packaged"):
+            world = full_world()
+            world.covered = world.plan
+            newer = ci_api_run(world.plan, caller, id=4242, status="in_progress", conclusion=None, run_attempt=1,
+                               created_at="2026-10-07T23:00:00Z", run_started_at="2026-10-07T23:00:00Z")
+            with self.subTest(caller=caller), after_download(world.api, lambda: world.api.add_run(newer)):
+                self.rejected(world, "changed between the start of the command and its effect")
+
+    def test_evidence_that_goes_away_before_publication_is_unavailable(self) -> None:
+        world = full_world()
+        world.covered = world.plan
+        path = f"/repos/{world.api.repository}/actions/artifacts/201"
+        original = world.api.get_json
+
+        def gone(request, *args, **kwargs):
+            if request == path:
+                raise ApiError("Not Found", status=404, method="GET", path=path)
+            return original(request, *args, **kwargs)
+
+        # Both tested records are read; then the packaged one is deleted before publication.
+        with after_download(world.api, lambda: setattr(world.api, "get_json", gone), count=2):
+            self.absent(world, "ci-generation-evidence-unavailable")
+
+
 class CommandTests(GenerationCase):
-    def command(self, world, *flags):
+    def command(self, world, *flags, state=None):
         attempt = world.attempt
+        state = state or attempt.state
         output, github_output = self.scratch / "generation", self.scratch.parent / "github-output"
 
         def client(environ, *, writable=False, max_requests=None):
@@ -436,7 +516,7 @@ class CommandTests(GenerationCase):
             return world.api
 
         argv = ["ci", "select-generation", "--repo", str(h.MOD), "--config", str(h.MOD / "site" / "mod-base.json"),
-                "--state", str(attempt.state), "--output", str(output), "--github-output", str(github_output), *flags]
+                "--state", str(state), "--output", str(output), "--github-output", str(github_output), *flags]
         stdout, stderr = io.StringIO(), io.StringIO()
         with mock.patch.object(cli, "environ", return_value=attempt.environment), \
                 mock.patch.object(commands.github_api, "from_environment", side_effect=client), \
@@ -475,6 +555,17 @@ class CommandTests(GenerationCase):
         self.assertEqual((code, stdout), (3, ""))
         self.assertTrue(stderr.startswith("mod_base: ci-generation-evidence-unavailable: "), stderr)
         self.assertEqual(outputs, {"generation": "none", "reason": "ci-generation-evidence-unavailable"})
+        self.assertFalse(output.exists())
+
+    def test_a_job_state_that_cannot_be_read_still_outputs_none(self) -> None:
+        # A step that tolerates exit 3 branches on the outputs: they say no generation was
+        # selected even when the job's own state is what fails.
+        world = self.reused()
+        code, stdout, stderr, outputs, output = self.command(world, state=self.scratch.parent / "no-state")
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertEqual(outputs["generation"], "none")
+        self.assertTrue(stderr.startswith(f"mod_base: {outputs['reason']}: "), stderr)
+        self.assertEqual(world.api.request_count, 0)
         self.assertFalse(output.exists())
 
 

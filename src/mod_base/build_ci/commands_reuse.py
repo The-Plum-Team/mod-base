@@ -107,11 +107,11 @@ def run_select_generation(args: argparse.Namespace) -> int:
     of ``generation.ABSENT_REASONS``) before it returns or raises, so a step that tolerates exit 3
     can still branch on them; a rejection writes ``none`` and the error's own reason."""
 
-    invocation, _, plan = _job(args)
-    check(plan["identity"]["pr_number"] == 0, "$.state", "a generation covers a commit of the default branch")
-    config = load_build_config(invocation.repo_root, repository=invocation.repository)
-    api = commands.api_client(invocation, max_requests=limits.MAX_CI_SELECT_GENERATION_REQUESTS)
     try:
+        invocation, _, plan = _job(args)
+        check(plan["identity"]["pr_number"] == 0, "$.state", "a generation covers a commit of the default branch")
+        config = load_build_config(invocation.repo_root, repository=invocation.repository)
+        api = commands.api_client(invocation, max_requests=limits.MAX_CI_SELECT_GENERATION_REQUESTS)
         lanes = tuple(lane["id"] for lane in plan["lanes"]) if args.all_lanes else tuple(args.lane)
         document = generation.select_generation(api, plan=plan, output=args.output, with_build=args.with_build,
                                                 lanes=lanes, source_config_sha256=config.sha256)
