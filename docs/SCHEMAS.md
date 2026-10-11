@@ -8,8 +8,9 @@ sections: the Build config, the batch manifest, the results index and the activa
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.1.1, which
-already reads every kind of this release, so every kind is `unchanged`.
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.1.3, which
+already reads every kind of this release, so every kind is `unchanged`. The optional `seeds` of
+the Build config (v1.2.0) stays within schema 1; a v1.1.3 reader refuses a config that sets it.
 
 The v1 Build plan (since v1.1.0) optionally carries `candidate_kit: {sha, version}` when
 candidate tests use a different released kit. The plan hash binds it; `identity.kit`
