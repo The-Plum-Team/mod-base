@@ -583,3 +583,114 @@ def bind_reuse_reference(document: dict[str, Any], *, descriptor: dict[str, Any]
     _bind_record_producer(document, descriptor, kind="reuse", unit=None,
                           inputs=[document["source"][key] for key in ("build_seal", "packaged_seal")])
     return document
+
+
+#: The modes of a generation: the commit's own tested runs, or the merged pull request's.
+GENERATION_MODES = ("full", "reuse")
+_GENERATION_LANE = Obj({"id": UNIT, "native_contract_sha256": SHA256, "descriptor": validate_descriptor})
+_GENERATION = Obj({
+    **_header("mod-base.ci.generation"), **_binding(), "mode": Str(choices=GENERATION_MODES),
+    "references": Nullable(Obj({"build": validate_descriptor, "packaged": validate_descriptor})),
+    "source": _REUSE_SOURCE, "build": validate_descriptor, "results": validate_descriptor,
+    "lanes": List(_GENERATION_LANE, min_items=1, max_items=lim.MAX_CI_LANES, unique_by=lambda item: item["id"]),
+})
+
+
+def _same_attempt(descriptor: dict[str, Any], producer: dict[str, Any], path: str) -> None:
+    check(all(descriptor["producer"][key] == producer[key] for key in producer if key != "upload_window"),
+          f"{path}.producer", "is not of the attempt that sealed the packaged gate")
+
+
+def validate_generation(document: Any, *, plan: dict[str, Any] | None = None, path: str = "$") -> dict[str, Any]:
+    """``mod-base.ci.generation`` v1: the tested generation that covers one default-branch commit,
+    as ``ci select-generation`` selected and authenticated it for a consumer.
+
+    ``identity``, ``plan_sha256`` and ``profile`` are the covered commit. ``source`` is the
+    generation that was tested: the commit itself in a ``full`` generation, the merged pull request
+    in a ``reuse`` generation, whose two ``references`` are the reuse references of the commit's
+    Build and packaged runs. ``source`` names both tested records; ``build`` is the complete Build
+    bundle the packaged gate consumed, ``results`` its results index and ``lanes`` each lane's
+    runtime artifact, all of the source binding and of the packaged gate's attempt. With the
+    covered ``plan`` the source plan hash must be the plan's own (full) or that of
+    :func:`original_plan` (reuse), and the lanes are the planned ones in plan order. Structure
+    only: ``generation.select_generation`` authenticates every run, record and artifact first."""
+
+    _GENERATION(document, path)
+    _plan_binding(document, plan, path)
+    covered, source, references = document["identity"], document["source"], document["references"]
+    check(covered["pr_number"] == 0 and covered["head_branch"] == covered["base_branch"], f"{path}.identity",
+          "a generation covers a commit of the protected default branch")
+    if document["mode"] == "full":
+        check(references is None, f"{path}.references", "a full generation has no reuse reference")
+        _same_binding(source, document, f"{path}.source")
+    else:
+        check(references is not None, f"{path}.references", "a reuse generation names both reuse references")
+        check(source["identity"]["pr_number"] > 0, f"{path}.source.identity",
+              "a reuse generation was tested for a pull request")
+        for key in _REUSE_SEMANTICS:
+            check(covered[key] == source["identity"][key], f"{path}.source.identity.{key}", "reuse semantics differ")
+        check(document["profile"] == source["profile"], f"{path}.source.profile", "reuse profile differs")
+        for key in ("build", "packaged"):
+            descriptor = references[key]
+            _same_binding(descriptor, document, f"{path}.references.{key}")
+            name = g.parse_ci_artifact_name(descriptor["artifact"]["name"])
+            check(name.kind == "reuse" and ci_producer(descriptor["producer"]["workflow_path"]) == key
+                  and descriptor["producer"]["event"] == "push", f"{path}.references.{key}",
+                  "must be the reuse reference of this caller's push run")
+        check(references["build"]["producer"]["run_id"] != references["packaged"]["producer"]["run_id"],
+              f"{path}.references", "the two reuse references come from the two callers' own runs")
+        if plan is not None:
+            check(source["plan_sha256"] == original_plan(plan, source["identity"])["plan_sha256"],
+                  f"{path}.source.plan_sha256", "the original gates were sealed for another plan than the covered one")
+    for key, gate in (("build_seal", "build"), ("packaged_seal", "packaged")):
+        descriptor = source[key]
+        _same_binding(descriptor, source, f"{path}.source.{key}")
+        name = g.parse_ci_artifact_name(descriptor["artifact"]["name"])
+        check((name.kind, name.unit_id) == ("tested", gate), f"{path}.source.{key}",
+              "must be the tested record of this gate")
+    packaged = source["packaged_seal"]["producer"]
+    ids = [source[key]["artifact"]["id"] for key in ("build_seal", "packaged_seal")]
+    for key, kind in (("build", "build"), ("results", "results")):
+        descriptor = document[key]
+        _same_binding(descriptor, source, f"{path}.{key}")
+        check(g.parse_ci_artifact_name(descriptor["artifact"]["name"]).kind == kind, f"{path}.{key}",
+              f"must name the {kind} artifact")
+        ids.append(descriptor["artifact"]["id"])
+    _same_attempt(document["results"], packaged, f"{path}.results")
+    for index, lane in enumerate(document["lanes"]):
+        here = f"{path}.lanes[{index}].descriptor"
+        descriptor = lane["descriptor"]
+        _same_binding(descriptor, source, here)
+        _same_attempt(descriptor, packaged, here)
+        name = g.parse_ci_artifact_name(descriptor["artifact"]["name"])
+        check((name.kind, name.unit_id) == ("runtime", lane["id"]), f"{here}.artifact.name",
+              "must name the runtime artifact of this lane")
+        ids.append(descriptor["artifact"]["id"])
+    if references is not None:
+        ids += [references[key]["artifact"]["id"] for key in ("build", "packaged")]
+    check(len(set(ids)) == len(ids), f"{path}.artifacts", "repeats an artifact id")
+    if plan is not None:
+        check(document["mode"] == "reuse" or source["plan_sha256"] == plan["plan_sha256"],
+              f"{path}.source.plan_sha256", "a full generation was tested for the covered plan")
+        expected = [(lane["id"], lane["native_contract_sha256"]) for lane in plan["lanes"]]
+        check([(lane["id"], lane["native_contract_sha256"]) for lane in document["lanes"]] == expected,
+              f"{path}.lanes", "does not list every planned lane and no other, in plan order")
+    return document
+
+
+def generation_record(*, plan: dict[str, Any], mode: str, references: dict[str, Any] | None,
+                      source: dict[str, Any], build: dict[str, Any], results: dict[str, Any],
+                      lanes: list[dict[str, Any]]) -> dict[str, Any]:
+    """The ``mod-base.ci.generation`` document for the covered ``plan``, valid for that plan and
+    independent of its arguments. ``lanes`` holds each planned lane's runtime descriptor, in plan
+    order; the lane's id and native contract are the plan's. Writing one proves nothing: the
+    caller authenticated everything it names first."""
+
+    validate_plan(plan)
+    check(type(lanes) is list and len(lanes) == len(plan["lanes"]), "$.lanes", "must hold every planned lane")
+    document = {"kind": "mod-base.ci.generation", "schema_version": SCHEMA_VERSIONS["mod-base.ci.generation"],
+                "identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+                "mode": mode, "references": references, "source": source, "build": build, "results": results,
+                "lanes": [{"id": planned["id"], "native_contract_sha256": planned["native_contract_sha256"],
+                           "descriptor": descriptor} for planned, descriptor in zip(plan["lanes"], lanes)]}
+    return validate_generation(copy.deepcopy(document), plan=plan)

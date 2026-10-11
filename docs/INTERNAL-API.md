@@ -325,7 +325,7 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
 | MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.admission`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
 | MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
-| MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse` |
+| MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse`, `mod_base.build_ci.generation` |
 | MB11 | `mod_base.build_ci.checkout`, `mod_base.build_ci.candidate_kit` |
 | MB11 | `mod_base.build_ci.system_profile`, `mod_base.build_ci.commands_system` |
 | MB11 | `mod_base.build_ci.seeds`, `mod_base.build_ci.commands_seed` |
@@ -723,6 +723,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_GATE_REQUESTS`: the 96-request budget of one `ci seal-gate` (a Build gate costs 15, the packaged gate of a pull request 22 and the gate of a reuse run, which decides the reuse again, 47, whatever the number of targets and lanes).
 * `MAX_CI_COMMIT_PULLS`: 100, the pull requests GitHub associates with one pushed commit: the one page post-merge reuse reads to find the merge.
 * `MAX_CI_REUSE_ADMIT_REQUESTS`: 96, the request budget of `ci reuse-admit` (38 for an admitted reuse, 1 for a direct push, 11 when the merged tree differs, whatever the number of targets and lanes).
+* `MAX_CI_SELECT_GENERATION_REQUESTS`: 128, the request budget of `ci select-generation` (27 for a full generation, 52 for a reused one, 2 more with the Build bundle, whatever the number of targets and lanes).
 * `CI_ARTIFACT_UPLOAD_SKEW_SECONDS`: Two seconds of tolerance for artifact creation versus upload-step bounds only; other chronology stays exact.
 * `CI_TEST_MERGE_WAIT_SECONDS`: Fifteen-second deadline for GitHub to compute a pending test merge.
 * `CI_TEST_MERGE_POLL_SECONDS`: Five-second interval between pending test-merge observations.
@@ -1987,6 +1988,9 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 * `def original_plan(plan: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]`: `plan` under another subject's `identity`: the same profile, plan inputs, targets and lanes, bound by a hash of its own. The gates of a merged pull request were sealed for the work a push plans exactly when the plan hash of their records is the hash of the push's plan under the pull request's identity.
 * `def validate_reuse_reference(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.reuse` v1: the covered merge (a non-PR subject on the default branch), the reuse run that sealed the reference (always a push) and `source`, the original pull-request identity, plan hash and profile with the descriptors of both original tested records. Covered and original agree in repository, protected caller, kit pin, complete tested tree, policy digest, inventory, scenario contract, runtime selection, graph version and profile; a seal is always a direct tested record, never another reference; the two seals come from different runs. With the covered `plan` the original plan hash must be that of `original_plan`. Structure only.
 * `def reuse_reference(*, plan: dict[str, Any], producer: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]`: The reference the gate job of `producer` (a reuse run's identity, without an upload window) seals for the covered `plan`: a new `mod-base.ci.reuse` document, valid for the plan and independent of its arguments. `source` is what `reuse.admit_post_merge_reuse` authenticated. It renews no retention.
+* `GENERATION_MODES = ('full', 'reuse')`: the modes of a `mod-base.ci.generation`.
+* `def validate_generation(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.generation` v1: the tested generation of one default-branch commit for a consumer. The covered binding; `mode`; `references` (`null` when full, else the reuse references of the commit's Build and packaged push runs); `source`, the tested binding with both tested records (the covered one when full; the merged pull request's when reused, agreeing in every reuse-compared field and the profile, and with the covered `plan` its plan hash is that of `original_plan`); `build`, `results` and `lanes` of the source binding and the packaged gate's attempt, lanes in plan order; distinct artifact ids. Structure only.
+* `def generation_record(*, plan: dict[str, Any], mode: str, references: dict[str, Any] | None, source: dict[str, Any], build: dict[str, Any], results: dict[str, Any], lanes: list[dict[str, Any]]) -> dict[str, Any]`: The `mod-base.ci.generation` document for the covered `plan`, valid for it; `lanes` are the planned lanes' runtime descriptors in plan order. Writing one proves nothing.
 * `def bind_reuse_reference(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]`: Bind a reuse reference to the reuse artifact it was read from: the same run sealed both, no id is shared with an original seal and both seals were uploaded before the reference. That the original runs had finished before the reuse gate started, their graphs, the merged tree and every artifact's availability are proven by whoever reads the reference (`mod_base.build_ci.reuse`).
 
 ## `mod_base.build_ci.config`
@@ -2695,11 +2699,31 @@ plan job of a Build run and in the one job of `select-build.yml`, on a push to t
 It takes the job arguments and `--github-output FILE`, reads `identity.json` and `ci-plan.json`
 of the state and decides (`reuse.admit_post_merge_reuse`). Both managed callers run the same
 decision over the same evidence; neither takes the other's answer, and each gate decides once
-more before it seals.
+more before it seals. It also registers `ci select-generation`, the read-only step of a consumer
+of a default-branch commit (`generation.select_generation`).
 
 * `ADMISSION_NAME = 'ci-reuse-admission.json'`: the state record the command writes: `{"mode": "reuse", "reason", "pr_number", "identity", "plan_sha256", "profile", "source"}` (the covered binding and the source the gate's reference will name) or `{"mode": "full", "reason", "detail"}`.
-* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `reuse-admit --github-output FILE` on the `ci` verb group.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `reuse-admit --github-output FILE` and `select-generation --output DIR [--with-build] --github-output FILE` on the `ci` verb group.
+* `def run_select_generation(args: argparse.Namespace) -> int`: The `select-generation` handler (`--output DIR [--with-build] --github-output FILE`): for the protected subject and plan of the state, publishes `generation.select_generation`'s output and prints one line. Outputs `generation` (`full`, `reuse` or `none`) and `reason` (`selected` or the error's reason) before it returns or raises, so a step that tolerates exit 3 can branch on them. Budget `MAX_CI_SELECT_GENERATION_REQUESTS`.
 * `def run_reuse_admit(args: argparse.Namespace) -> int`: The `reuse-admit` handler: outputs `mode` (`reuse` or `full`) and `reason` (`reuse.ADMITTED_REASON` or a key of `reuse.FULL_RUN_REASONS`), writes the state record and prints one line. A `reuse` is written only after the admission was rechecked; what must stop the job writes nothing and fails the step. The state must belong to the executing repository and controller commit. Budget `MAX_CI_REUSE_ADMIT_REQUESTS`.
+
+## `mod_base.build_ci.generation`
+
+Owner: MB11. The tested generation that covers a default-branch commit, for a consumer (Q9/B6,
+KQ9-1). The newest run of each managed caller for the commit is selected before any result is
+read; the packaged run decides the mode and the Build run must agree (both reuse runs naming the
+same original pair, a packaged run that selected the newest full Build, or a packaged run that
+rebuilt with no Build run). Both tested records, every source artifact and, for a reuse, both
+references and the original pair are authenticated as the gates and
+`reuse.download_reuse_reference` authenticate them. Evidence that is gone is unavailable, never
+corrupt; nothing partial is published.
+
+* `GENERATION_NAME = 'generation.json'`: the file of the output that holds the record.
+* `BUILD_DIRECTORY = 'build'`: the directory of the output that holds the complete Build bundle.
+* `ABSENT_REASONS`: reason token -> one line of words, for the four ways no generation is selected: `ci-generation-absent`, `ci-generation-pending`, `ci-generation-failed`, `ci-generation-evidence-unavailable`.
+* `class GenerationUnavailable(Unavailable)`: No tested generation can be selected (exit 3); `reason` is a key of `ABSENT_REASONS`.
+* `class MixedGeneration(MbError)`: The two callers' newest runs do not form one tested generation: reason `ci-generation-mixed`, exit 2.
+* `def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], output: Path, with_build: bool = False, source_config_sha256: str | None = None) -> dict[str, Any]`: Select, authenticate and privately publish the generation of the live default-branch commit of the consumer's own protected `plan`; return its `mod-base.ci.generation`. `output` must not exist; it receives `generation.json` and, with `with_build`, the complete bundle the packaged gate tested under `build/`, verified against its validation record (`source_config_sha256`: the digest of the protected Build config the caller loaded). A reused bundle keeps its original identity. Everything mutable is observed again before the atomic publication.
 
 ## `mod_base.build_ci.handoff`
 

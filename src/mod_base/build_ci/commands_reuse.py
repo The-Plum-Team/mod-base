@@ -28,11 +28,13 @@ import argparse
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from mod_base import cli, runtime
-from mod_base.build_ci import commands, identity, planning, reuse
+from mod_base.build_ci import commands, generation, identity, planning, reuse
 from mod_base.build_ci.commands_packaged import job_plan
-from mod_base.errors import single_line
+from mod_base.build_ci.config import load_build_config
+from mod_base.errors import MbError, single_line
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json
 from mod_base.model.validators import check
@@ -48,15 +50,30 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     commands.add_job_arguments(admit)
     admit.add_argument("--github-output", type=cli.PATH, required=True, metavar="FILE")
     admit.set_defaults(handler=run_reuse_admit)
+    select = verbs.add_parser("select-generation",
+                              help="select and authenticate the tested generation of this default-branch commit")
+    commands.add_job_arguments(select)
+    select.add_argument("--output", type=cli.PATH, required=True, metavar="DIR",
+                        help="a new private directory for generation.json (and build/ with --with-build)")
+    select.add_argument("--with-build", action="store_true",
+                        help="also copy the complete Build bundle the packaged gate tested")
+    select.add_argument("--github-output", type=cli.PATH, required=True, metavar="FILE")
+    select.set_defaults(handler=run_select_generation)
 
 
-def run_reuse_admit(args: argparse.Namespace) -> int:
+def _job(args: argparse.Namespace) -> tuple[runtime.Invocation, dict[str, Any], dict[str, Any]]:
+    """The invocation, the identity record and the plan of the job whose state ``args`` names."""
+
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
     record = identity.read_subject(args.state)
     subject = record["subject"]
     check(invocation.repository == subject["repository"] and invocation.implementation_sha == subject["controller_sha"],
           "$.state", "the state directory belongs to another repository or controller commit")
-    plan = planning.require_plan(job_plan(args.state), subject=subject)
+    return invocation, record, planning.require_plan(job_plan(args.state), subject=subject)
+
+
+def run_reuse_admit(args: argparse.Namespace) -> int:
+    invocation, record, plan = _job(args)
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_REUSE_ADMIT_REQUESTS)
     with tempfile.TemporaryDirectory(prefix="mb-ci-reuse-", dir=args.state) as temporary:
         outcome = reuse.admit_post_merge_reuse(api, plan=plan, event=record["event"], temporary_root=Path(temporary))
@@ -74,4 +91,32 @@ def run_reuse_admit(args: argparse.Namespace) -> int:
     identity.write_state_record(args.state, ADMISSION_NAME, canonical_json(admission))
     cli.write_github_output(args.github_output, {"mode": admission["mode"], "reason": admission["reason"]})
     sys.stdout.write(f"reuse-admit: {single_line(line)}\n")
+    return 0
+
+
+def run_select_generation(args: argparse.Namespace) -> int:
+    """``ci select-generation``: publish the tested generation of the job's protected subject.
+
+    Outputs ``generation`` (``full``, ``reuse`` or ``none``) and ``reason`` (``selected`` or a key
+    of ``generation.ABSENT_REASONS``) before it returns or raises, so a step that tolerates exit 3
+    can still branch on them; a rejection writes ``none`` and the error's own reason."""
+
+    invocation, _, plan = _job(args)
+    check(plan["identity"]["pr_number"] == 0, "$.state", "a generation covers a commit of the default branch")
+    config = load_build_config(invocation.repo_root, repository=invocation.repository)
+    api = commands.api_client(invocation, max_requests=limits.MAX_CI_SELECT_GENERATION_REQUESTS)
+    try:
+        document = generation.select_generation(api, plan=plan, output=args.output, with_build=args.with_build,
+                                                source_config_sha256=config.sha256)
+    except MbError as error:
+        cli.write_github_output(args.github_output, {"generation": "none", "reason": error.reason})
+        raise
+    source = document["source"]
+    seals = (source["build_seal"]["producer"], source["packaged_seal"]["producer"])
+    line = (f"{document['mode']} generation of pull request #{source['identity']['pr_number']}"
+            if document["mode"] == "reuse" else "full generation")
+    line += "".join(f", {gate} run {seal['run_id']} attempt {seal['run_attempt']}"
+                    for gate, seal in zip(("Build", "packaged"), seals))
+    cli.write_github_output(args.github_output, {"generation": document["mode"], "reason": "selected"})
+    sys.stdout.write(f"select-generation: {single_line(line)}\n")
     return 0

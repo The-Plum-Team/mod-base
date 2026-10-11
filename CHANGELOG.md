@@ -5,6 +5,33 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- Add `ci select-generation` (Q9 groundwork, KQ9-1): the read-only step of a consumer of a
+  default-branch commit selects and authenticates the tested generation that covers it, whether
+  the commit's own runs tested it or post-merge reuse covers it with the merged pull request's
+  gates, and publishes it privately and atomically as `generation.json` (and, with
+  `--with-build`, the complete Build bundle the packaged gate tested). Before this, `ci
+  reuse-admit` could admit a reuse but no command consumed a reuse reference, so no consumer of a
+  push could follow one. The newest run of each managed caller is selected before any result is
+  read; the packaged run decides the mode and the Build run must agree, or the generation is
+  mixed and rejected (`ci-generation-mixed`, exit 2). Both reuse references must name the same
+  original pair, which is authenticated once as `reuse.download_reuse_reference` authenticates
+  it (references never chain). A run in progress, a failed newest run, no packaged run and
+  evidence that has expired or is gone select nothing (exit 3, `ci-generation-pending`,
+  `-failed`, `-absent`, `-evidence-unavailable`): the consumer requests a full generation instead,
+  and nothing partial is published. Outputs `generation` (`full`, `reuse`, `none`) and `reason`.
+  New module `build_ci.generation`, new limit `MAX_CI_SELECT_GENERATION_REQUESTS` (128: 27
+  requests for a full generation, 52 for a reused one, whatever the number of lanes).
+- New document kind `mod-base.ci.generation` v1 (`records.validate_generation`,
+  `records.generation_record`), written only by `ci select-generation`, never by a gate; a v1.3.0
+  reader refuses it as unknown. Every other kind, `ADAPTER_API`, `BUILD_ADAPTER_API`,
+  `pixel_metrics_version`, the managed files and the workflows are unchanged. The compatibility
+  baseline moves to the archived v1.3.0 reader (`tests/fixtures/previous_release/v1.3.0`).
+- `reuse.download_reuse_reference` is split into the reference read and the original pair read
+  (`reuse._read_reference`, `reuse._originals_finished`) so that `ci select-generation` reads two
+  references and the pair once; its behaviour and request count are unchanged.
+
 ## v1.3.1
 
 Patch release: one kit process remembers its successful pixel checks by content (#26), which

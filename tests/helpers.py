@@ -1089,6 +1089,40 @@ def ci_reuse() -> dict[str, Any]:
                        "packaged_seal": ci_descriptor("tested", gate="packaged", unit_id="packaged", artifact_id=103)}}
 
 
+def ci_generation() -> dict[str, Any]:
+    """A reused generation: the commit :func:`ci_reuse` covers, the reuse references of its Build
+    run (44) and packaged run (45) and the original pull request's pair, bundle, index and lanes."""
+
+    from mod_base.build_ci.graph import run_graph
+
+    plan, reference = ci_plan(), ci_reuse()
+    identity = reference["identity"]
+
+    def covering(caller: str, run_id: int, artifact_id: int) -> dict[str, Any]:
+        workflow = CI_WORKFLOWS[caller]
+        return {"identity": copy.deepcopy(identity), "plan_sha256": reference["plan_sha256"],
+                "profile": reference["profile"],
+                "producer": {"run_id": run_id, "run_attempt": 2, "workflow_path": workflow,
+                             "workflow_ref": f"{identity['repository']}/{workflow}@refs/heads/{identity['base_branch']}",
+                             "api_head_sha": identity["tested_sha"], "event": "push",
+                             "graph_sha256": run_graph(caller, "reuse").sha256(plan),
+                             "upload_window": {"started_at": "2026-10-08T10:01:00Z",
+                                               "completed_at": "2026-10-08T10:02:00Z"}},
+                "artifact": {"id": artifact_id, "name": grammar.ci_artifact_name("reuse", run_id, 2),
+                             "digest": "sha256:" + h(f"reuse-{caller}-zip"), "size": 512,
+                             "created_at": "2026-10-08T10:01:30Z", "expires_at": "2027-01-06T10:01:30Z"}}
+
+    return {"kind": "mod-base.ci.generation", "schema_version": 1, "identity": copy.deepcopy(identity),
+            "plan_sha256": reference["plan_sha256"], "profile": reference["profile"], "mode": "reuse",
+            "references": {"build": covering("build", 44, 130), "packaged": covering("packaged", 45, 131)},
+            "source": reference["source"], "build": ci_descriptor("build", artifact_id=110),
+            "results": ci_descriptor("results", gate="packaged", artifact_id=120),
+            "lanes": [{"id": lane["id"], "native_contract_sha256": lane["native_contract_sha256"],
+                       "descriptor": ci_descriptor("runtime", gate="packaged", unit_id=lane["id"],
+                                                   artifact_id=111 + index)}
+                      for index, lane in enumerate(plan["lanes"])]}
+
+
 def ci_execution() -> dict[str, Any]:
     """Inert local execution handoff fixture; metadata does not establish physical origin."""
 
@@ -1254,6 +1288,7 @@ def sample_documents() -> dict[str, dict[str, Any]]:
         "ci-gate-packaged": ci_gate("packaged"),
         "ci-results": ci_results(),
         "ci-reuse": ci_reuse(),
+        "ci-generation": ci_generation(),
         "ci-validation": ci_validation(),
         "ci-execution": ci_execution(),
         "ci-root-request": ci_root_request(),
@@ -1290,6 +1325,7 @@ VALID_FIXTURE_KINDS = {
     "ci-gate-packaged": "mod-base.ci.gate",
     "ci-results": "mod-base.ci.results",
     "ci-reuse": "mod-base.ci.reuse",
+    "ci-generation": "mod-base.ci.generation",
     "ci-validation": "mod-base.ci.validation",
     "ci-execution": "mod-base.ci.execution",
     "ci-root-request": "mod-base.ci.root-request",

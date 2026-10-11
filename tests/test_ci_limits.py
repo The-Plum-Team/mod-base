@@ -140,6 +140,10 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_REUSE_ADMIT_REQUESTS": (96, "API requests one `ci reuse-admit` may spend: 38 for an admitted reuse, 1 "
                                         "for a direct push and 11 when the merged tree differs, whatever the plan's "
                                         "size, and room for retries and further listing pages"),
+    "MAX_CI_SELECT_GENERATION_REQUESTS": (128, "API requests one `ci select-generation` may spend: 27 for a full "
+                                               "generation and 52 for a reused one, 2 more with the Build bundle, "
+                                               "whatever the plan's size, and room for retries and further listing "
+                                               "pages"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),
     "MAX_CI_WORKER_RECORD_BYTES": (256 * KIB, "the private worker record of one job"),
     "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation and initial changed-release admission may spend"),
