@@ -666,9 +666,11 @@ jobs:
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci worker-finish --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state"
 
+  # `ci assemble` authenticates its own attempt with every job but itself and the gate settled
+  # (describe.settled_jobs), so it waits for the policy job as well as for every target.
   assemble:
     name: Seal complete Build bundle
-    needs: [plan, target]
+    needs: [plan, policy, target]
     if: needs.plan.outputs.mode != 'reuse'
     runs-on: ubuntu-24.04
     timeout-minutes: 30

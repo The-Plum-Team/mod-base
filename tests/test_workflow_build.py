@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 from mod_base import workflow
-from mod_base.build_ci import adapter, graph, planning
+from mod_base.build_ci import adapter, describe, graph, planning
 from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.model import grammar
 from mod_base.model import limits as lim
@@ -80,7 +80,7 @@ class BuildStructureTests(unittest.TestCase):
     def test_job_graph_conditions_and_timeouts(self) -> None:
         self.assertEqual(list(self.jobs), ["plan", "policy", "target", "assemble", "gate"])
         self.assertEqual({job_id: job.get("needs") for job_id, job in self.jobs.items()}, {
-            "plan": None, "policy": "plan", "target": "plan", "assemble": ["plan", "target"],
+            "plan": None, "policy": "plan", "target": "plan", "assemble": ["plan", "policy", "target"],
             "gate": ["plan", "policy", "target", "assemble"]})
         # Reuse skips the three worker jobs. The gate runs whenever the run is not cancelled, so a
         # failed or skipped worker makes it fail on the graph instead of being skipped itself.
@@ -152,6 +152,32 @@ class BuildStructureTests(unittest.TestCase):
                     self.assertEqual(conclusions[name], "skipped" if skipped else "success")
                     self.assertEqual(name in sealed, not skipped and SEAL in STEPS[job_id])
                     self.assertEqual(mode in workflow.CI_JOB_ARTIFACTS["build"].get(job_id, {}), name in sealed)
+
+    def test_a_sealing_job_needs_every_job_its_seal_requires_settled(self) -> None:
+        """`ci assemble` and the gate authenticate their own attempt with every job of their call but
+        themselves and the gate settled (``describe.settled_jobs``). A job outside their transitive
+        needs can still be running when they read the attempt: on Quick Skin, whose policy suite
+        outlasts its compiles, every pull request Build failed at "Seal complete Build bundle" with
+        "required job 'Shared Build / Verify protected policy' has not finished as the graph
+        expects" (kit v1.1.3, Quick Skin pull requests #2090 and #2091, 2026-10-11)."""
+
+        plan = ci_plan()
+        owner = {}
+        for job_id in self.jobs:
+            for fields in ([{"id": target["id"]} for target in plan["targets"]] if job_id == "target" else [{}]):
+                owner[workflow.ci_api_job_name("build", "shared", job_id, **fields)] = job_id
+
+        def closure(job_id: str) -> set[str]:
+            needs = self.jobs[job_id].get("needs") or []
+            needs = [needs] if isinstance(needs, str) else list(needs)
+            return set(needs).union(*(closure(need) for need in needs))
+
+        for job_id, kind, units in (("assemble", "build", ()), ("gate", "tested", ("build",))):
+            settled = describe.settled_jobs("build", "full", plan, kind, *units)
+            required = {owner[name] for name in settled if name in owner} - {job_id}
+            with self.subTest(job=job_id):
+                self.assertTrue(required)
+                self.assertLessEqual(required, closure(job_id))
 
     def test_uploads_spelled_out(self) -> None:
         common = {"path": "${{ runner.temp }}/mb-upload", "if-no-files-found": "error",
