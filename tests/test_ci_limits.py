@@ -186,9 +186,9 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_SEED_PATH_DEPTH": (64, "components of one path inside a Gradle seed, the tree walk's own depth"),
     "MAX_CI_SEED_KEY_FILES": (16, "protected files one seed key binds"),
     "MAX_CI_ADMISSION_PATHS": (64, "protected paths of one admission of the Build config; Block Pops' evaluator "
-                                   "protects 25 and two per loader"),
+                                   "protects 24, two per loader and four more: 34 with three loaders"),
     "MAX_CI_ADMISSION_DIRECTORIES": (16, "directories, the root included, that hold an admission's protected paths: "
-                                         "each is one tree read on either side of a pull request; Block Pops needs 12"),
+                                         "each is one tree read on either side of a pull request; Block Pops needs 13"),
     "MAX_CI_ADMISSION_APPROVERS": (8, "approvers one admission lists"),
     "MAX_CI_ADMISSION_COMMENTS": (300, "comments of one pull request an admission reads for decisions: three full pages"),
     "MAX_CI_SEED_KEY_FILE_BYTES": (8 * MIB, "the bytes read of each one; a strict verification metadata file of "
