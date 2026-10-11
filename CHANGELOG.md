@@ -20,7 +20,7 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   `MAX_CI_ADMISSION_PATHS` (64), `MAX_CI_ADMISSION_DIRECTORIES` (16), `MAX_CI_ADMISSION_APPROVERS`
   (8) and `MAX_CI_ADMISSION_COMMENTS` (300), and `FakeGitHub.set_comments`. Cost: none without
   `admission`; 3 requests for a pull request that changes no protected directory, and at most
-  1 + 2 * 16 + 6 more otherwise, within the unchanged `MAX_CI_GATE_STATUS_REQUESTS` (96). Opt-in:
+  1 + 2 * 16 + 8 more otherwise, within the unchanged `MAX_CI_GATE_STATUS_REQUESTS` (96). Opt-in:
   without `admission` every evaluation is that of v1.2.1. A comment does not start the status
   caller: after a decision on a finished generation the owner dispatches it
   (OPERATIONS.md, "Protected admission").

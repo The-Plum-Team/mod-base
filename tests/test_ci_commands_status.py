@@ -916,6 +916,23 @@ class AdmissionStatusTests(GateStatusTestCase):
                                                               ("revoke", h.HEAD_SHA)))
         self.refused(world, world.planned(), "approver decisions on the pull request head changed")
 
+    def test_a_full_comment_listing_stays_within_the_request_budget(self) -> None:
+        world = self.world(protected_change=True).gated()
+        count = limits.MAX_CI_ADMISSION_COMMENTS
+        world.api.set_comments(7, [
+            {"id": index + 1, "body": f"/controller-upgrade approve {h.HEAD_SHA if index == count - 1 else 'b' * 40}",
+             "author_association": "MEMBER", "user": {"login": "AkaNebur", "type": "User"},
+             "created_at": f"2026-10-11T{index // 60:02d}:{index % 60:02d}:00Z",
+             "updated_at": f"2026-10-11T{index // 60:02d}:{index % 60:02d}:00Z"} for index in range(count)])
+        self.assertEqual({gate: state for gate, (state, _, _) in self.states(self.intents(world, world.planned())).items()},
+                         {"build": "success", "packaged": "success"})
+        # The base commit, both roots, both `scripts` trees, and the comments twice: three full
+        # pages and the empty one that ends the listing each time.
+        self.assertEqual(world.api.request_count, 36 + 5 + 2 * 4)
+        # The worst case: every directory of the admission read on both sides.
+        worst = 36 + 1 + 2 * limits.MAX_CI_ADMISSION_DIRECTORIES + 2 * (limits.MAX_CI_ADMISSION_COMMENTS // 100 + 1)
+        self.assertLessEqual(worst, limits.MAX_CI_GATE_STATUS_REQUESTS)
+
 
 class GateContextTests(unittest.TestCase):
     def test_contexts_are_the_protected_strings_for_the_managed_gates(self) -> None:

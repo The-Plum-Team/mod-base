@@ -445,7 +445,9 @@ workflow or the config itself gets both contexts once its gates pass.
    change of the pull request, the hourly reconciliation or the dispatch above. A revocation needs
    the dispatch too, and like every status a success already published stays until a newer one
    replaces it, so check the live statuses before merging. Never edit a decision: an edited one
-   refuses the admission until it is deleted.
+   refuses the admission until it is deleted. The decisions are read from at most 300 comments: a
+   pull request with more that changes a protected path gets no status at all, so move it to a
+   new pull request.
 
 The kit checks the generic rule only. A mod's native evaluator may check more (an upgrade's exact
 path list, required files, the loader bootstrap, a restricted transition's declaration); while it
