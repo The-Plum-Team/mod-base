@@ -5,6 +5,48 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- Let a pull request's packaged lanes run a narrowed scope (kit gap QS-G6 of the Quick Skin
+  mapping), as the owner decided D1-D5 of docs/BUILD-RUNTIME-SELECTION.md on 11 October 2026. The
+  plan still holds every obligation of every lane, so the Build, the packaged run and the status
+  evaluation keep one plan. The packaged `input` job runs the new `ci scope` after `select-build`:
+  with the job's read-only token it reads the paths the tested merge changes against its base
+  (both Git trees) and the base commit's full packaged evidence (the tested record of its newest
+  successful push run under the same kit pin, or the reuse reference of one and the original it
+  names), then runs the new protected hook `derive_scope` as the validator, without a token, with
+  that data in `MB_SCOPE_INPUT`. What the hook selects must be each lane's own obligations in plan
+  order; a lane it names none for runs in full. The result is sealed as a new kind,
+  `mod-base.ci.scope`, bound to the plan and to the requesting run attempt, and handed to the
+  later jobs as the job output `scope`, like the selection record. A lane gives its entry to
+  `derive_runtime` and `verify_runtime` in `MB_RUNTIME_SCOPE`; the results index holds the record
+  (optional `scope`) and the packaged tested record its digest (optional `scope_sha256`); the
+  status description says "for a narrowed scope". Full is the answer, without a record, whenever
+  anything is unknown: no `runtime_selection` in the protected config, a push, a dispatch or a
+  release, a pull request from a fork, a changed kit pin, a pull request that changes the config, an adapter source, a plan
+  input or a control file, a tree the API lists incompletely, a base without complete,
+  successful, unnarrowed evidence of the same policy and plan, or a selection that narrows
+  nothing (`scope.FULL_SCOPE_REASONS`). Post-merge reuse never lets a narrowed pull request cover
+  the push after its merge (new `FULL_RUN_REASONS` entry `original-run-narrowed`), and a reuse
+  reference that names a narrowed original is refused. New root operation `take-derived-scope`,
+  limits `MAX_CI_SCOPE_REQUESTS` (32), `MAX_CI_SCOPE_BYTES` (64 KiB) and
+  `MAX_CI_SCOPE_TREE_ENTRIES` (100,000). Cost: `ci scope` sends no request without
+  `runtime_selection`, so the generation ledger is unchanged (198 / 398 / 300); with it, 11
+  requests behind a direct baseline and 15 behind a reuse reference, which puts Quick Skin's
+  generation at 409 (or 413), within the test budget of 440.
+- Compatibility: a new document kind, `mod-base.ci.scope` at schema version 1, which v1.2.1
+  rejects as unknown; optional fields within schema 1: `runtime_selection` of
+  `mod-base.build.config`, `scope` of `mod-base.ci.results` and `scope_sha256` of
+  `mod-base.ci.gate`, which a v1.2.1 reader refuses. `BUILD_ADAPTER_API` stays 1: `derive_scope`
+  is an optional hook that runs only for a config with `runtime_selection`. The compatibility
+  ledger moves its baseline to v1.2.1, whose reader is archived. `ADAPTER_API`,
+  `pixel_metrics_version` 1 and the managed files are those of v1.2.1. The packaged E2E callee
+  gains the `input` job's step "Derive the narrowed runtime scope" and its output `scope`, which
+  the receiving step of the later jobs writes for `fetch-build`, `aggregate` and `seal-gate`
+  (`--scope`); the job graph, job names and permissions are unchanged. Opt-in: without
+  `runtime_selection` every run is that of v1.2.1. Remove `runtime_selection` before rolling a pin
+  back below this release.
+
 ## v1.2.1
 
 Supersedes v1.2.0, which stays a tag and is never released. v1.2.1 contains everything of

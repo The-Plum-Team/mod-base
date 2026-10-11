@@ -36,6 +36,9 @@ What admission requires, in the order it is established:
    gate's bundle.
 5. Every artifact both records name is still available. One that has expired or is gone is a
    reason for a full run; one that is still there and differs is an error.
+6. The packaged run of the pull request ran every obligation of every lane. A pull request whose
+   packaged run narrowed its scope (``build_ci.scope``) never covers the push after its merge:
+   its plan equals the push's, so only its tested record says that it ran less.
 
 A reference covers the merged commit and names the original identity, runs, attempts and
 artifacts separately. It renews no retention: the original artifacts expire when they would have.
@@ -93,6 +96,7 @@ FULL_RUN_REASONS = {
     "runtime-selection-differs": "the runtime selection of the push is not the one the pull request ran",
     "plan-differs": "the original gates were sealed for another plan than the push derives",
     "original-evidence-unavailable": "an original artifact has expired or is gone",
+    "original-run-narrowed": "the pull request's packaged run ran a narrowed scope, which never covers a push",
 }
 #: The ``reason`` of an admitted reuse.
 ADMITTED_REASON = "identical-tested-tree"
@@ -387,8 +391,12 @@ def _admit(reads: CommandReads, watch: Watch, plan: dict[str, Any], temporary_ro
     packaged.artifact("results")
 
     build_seal, packaged_seal = _seal_descriptor(original, build), _seal_descriptor(original, packaged)
-    _merged_pair(reads, watch, build_descriptor=build_seal, packaged_descriptor=packaged_seal, plan=original,
-                 merged=_merged(original, now["controller_sha"], now["tested_sha"]), temporary_root=temporary_root)
+    merged = _merged(original, now["controller_sha"], now["tested_sha"])
+    _, packaged_receipt = _merged_pair(reads, watch, build_descriptor=build_seal, packaged_descriptor=packaged_seal,
+                                       plan=original, merged=merged, temporary_root=temporary_root)
+    # A narrowed run never proved the obligations it left out, and the push is not narrowed.
+    if "scope_sha256" in packaged_receipt:
+        raise _FullRun("original-run-narrowed", f"pull request #{pull.number}")
     return {"identity": original["identity"], "plan_sha256": original["plan_sha256"], "profile": original["profile"],
             "build_seal": build_seal, "packaged_seal": packaged_seal}
 
@@ -472,6 +480,8 @@ def download_reuse_reference(api: GitHubApi | CommandReads, *, descriptor: dict[
                             packaged_descriptor=source["packaged_seal"], plan=original,
                             merged=_merged(original, covered["controller_sha"], covered["tested_sha"]),
                             temporary_root=temporary_root)
+    check("scope_sha256" not in receipts[1], "$.source.packaged_seal",
+          "a reuse reference never covers a push with a narrowed pull request run")
     for seal in (source["build_seal"], source["packaged_seal"]):
         for job in reads.attempt_jobs(seal["producer"]["run_id"], seal["producer"]["run_attempt"]):
             check(job["conclusion"] == "skipped" or _job_window(job)[1] <= verifier, "$.source.jobs",

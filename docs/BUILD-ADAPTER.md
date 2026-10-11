@@ -28,6 +28,7 @@ protected default branch, never from a pull request.
 | `contexts.build`, `contexts.packaged` | the two required status contexts |
 | `timeouts` | `validator_seconds` for every protected hook, `policy_seconds`, `target_seconds` and `runtime_seconds` for the three candidate hooks |
 | `runtime.system_profile` | optional: the kit system profile a lane job installs as root before its accounts exist, by name. `xvfb-mesa` is Xvfb, `xauth`, Mesa's software GL and EGL and the audio and X client libraries a Minecraft client loads: the union of both mods' native installs. The mod never lists packages; without `runtime` nothing is installed, and `runtime` without a profile, an unknown profile or another key is refused |
+| `runtime_selection` | optional: `{"input": "changed-paths-v1"}` lets a pull request's packaged lanes run a narrowed scope, which the protected `derive_scope` hook selects ("Narrowed runtime scope" below, [BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md)). Without it every lane runs every obligation and `derive_scope` never runs |
 | `seeds` | optional: the seeds whose jobs restore the candidate's Gradle home before it runs, `gradle` for a target job and `runtime` for a lane job, each `{"key_files": [{"path"}, ...]}`: 1 to 16 files of the protected default branch, sorted by path, whose bytes (or absence) key the seed together with the unit. Name what decides what the home holds, for example `gradle/wrapper/gradle-wrapper.properties`, `gradle/verification-metadata.xml` and the release inventory; a changed file starts a new seed. Without `seeds` no job restores or saves one ("Seeds" below) |
 
 The config bytes, the listed files, the pinned kit, the graph versions and the mod's own control
@@ -68,9 +69,10 @@ evidence.
 | `build_target` | candidate, `repository/` | `MB_TARGET_ID`, `MB_JAVA_HOMES` | its checkout | every planned output of that target at `candidate-home/export/<path>`, and nothing else |
 | `verify_target` | validator, `controller/` | `MB_TARGET_ID` | `validation-input/`, `sealed-build/` (that target) | `validator-home/validation/<target id>.json` |
 | `verify_build` | validator, `controller/` | none | `validation-input/`, `sealed-build/` (every target) | one `<target id>.json` for every target |
-| `derive_runtime` | validator, `controller/` | `MB_LANE_ID` | `validation-input/` | `validator-home/validation/runtime.json` |
+| `derive_scope` | validator, `controller/` | `MB_SCOPE_INPUT` | `validation-input/` | `validator-home/validation/scope.json` |
+| `derive_runtime` | validator, `controller/` | `MB_LANE_ID`, `MB_RUNTIME_SCOPE` when the lane runs a narrowed scope | `validation-input/` | `validator-home/validation/runtime.json` |
 | `run_lane` | candidate, `repository/` | `MB_LANE_ID`, `E2E_ROW_JSON`, `E2E_SCENARIOS`, `MB_JAVA_HOMES` | its checkout, the Build at `repository/<bundle.path>` | its native results below `candidate-home/export/` |
-| `verify_runtime` | validator, `controller/` | `MB_LANE_ID` | `validation-input/`, `sealed-build/`, `sealed-runtime/` | `validator-home/validation/<lane id>.json` |
+| `verify_runtime` | validator, `controller/` | `MB_LANE_ID`, `MB_RUNTIME_SCOPE` when the lane runs a narrowed scope | `validation-input/`, `sealed-build/`, `sealed-runtime/` | `validator-home/validation/<lane id>.json` |
 
 `controller/` is the protected copy (the config and `adapter.files`). `repository/` is the tested
 commit, so a candidate hook runs the pull request's own copy of the dispatcher; whatever it
@@ -185,6 +187,31 @@ and the hashes must agree.
 **`runtime.json`**: exactly `{"values": {"E2E_ROW_JSON": "...", "E2E_SCENARIOS": "..."}}`. Both are
 non-blank text without control characters, at most 128 KiB each. `run_lane` receives them
 unchanged as environment variables.
+
+**`scope.json`**: exactly `{"lanes": [{"id": "...", "scenarios": ["...", ...]}, ...]}`, at most
+64 KiB: every planned lane in plan order, each with the obligations it runs, its own and in plan
+order, without repeats. A lane with no scenario runs every obligation, so a lane nothing affects
+names its smoke scenario instead. Anything else stops the `input` job.
+
+### Narrowed runtime scope
+
+`derive_scope` is optional within `BUILD_ADAPTER_API` 1: it runs only when the protected config
+names `runtime_selection`, once, in the packaged `input` job of a pull request of this repository
+whose kit pin is unchanged and whose base commit has complete, successful full packaged evidence
+of the same policy and plan. It runs as the validator from the protected copy, without a token,
+and selects from data alone. `MB_SCOPE_INPUT` is one line of canonical JSON (format
+`changed-paths-v1`): `base_sha`, `base_tree`, `tested_tree`, `changed_paths` (every path whose
+entry differs between the two trees, sorted, files and links and submodules but no directories)
+and `baseline`, the provenance of the base commit's evidence the kit authenticated. A pull request
+that changes the protected config, an adapter source, a candidate file a plan is derived from or a
+control file never reaches the hook: it runs full. What the selection may not do is the kit's to
+check, what it means is the mod's: a lane of a narrowed run gives its `derive_runtime` and
+`verify_runtime` the line `MB_RUNTIME_SCOPE`, `{"lane_id": "...", "scenarios": [...],
+"scope_sha256": "..."}`. `derive_runtime` narrows `E2E_SCENARIOS` to those scenarios, and
+`verify_runtime` must prove that the native results cover exactly them: it is the only check of
+coverage. Without the variable the lane runs every obligation, as before. The synthetic mod
+(`tests/fixtures/ci_mod`) keeps the smoke scenario of every lane unless a path below `src/`
+changed.
 
 **Build outputs**: the files the plan lists for the target, byte for byte what later steps verify
 and ship. A missing or an extra file fails the job, and so does an empty one, a link, a file with

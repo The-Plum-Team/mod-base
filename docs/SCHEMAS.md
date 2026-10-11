@@ -1,17 +1,20 @@
 # Schemas (v1)
 
-The thirteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
-`mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1 since v1.1.0) are
+The fourteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
+`mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1: thirteen since v1.1.0,
+`mod-base.ci.scope` after v1.2.0) are
 listed in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the
 validator that defines it. This page has the field tables of four of them, in its last four
 sections: the Build config, the batch manifest, the results index and the activation manifest.
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.2.0, which
-already reads every kind of this release, so every kind is `unchanged`. The optional `seeds` of
-the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config that
-sets it.
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.2.1, which
+reads every kind of this tree unchanged except `mod-base.ci.scope`, a `new-kind` it rejects as
+unknown. The optional `seeds` of the Build config (v1.2.0) stays within schema 1; a reader older
+than v1.2.0 refuses a config that sets it. So do the optional `runtime_selection` of the Build
+config, `scope` of the results index and `scope_sha256` of a tested record (after v1.2.1), which a
+v1.2.1 reader refuses ([BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md), D3).
 
 The v1 Build plan (since v1.1.0) optionally carries `candidate_kit: {sha, version}` when
 candidate tests use a different released kit. The plan hash binds it; `identity.kit`
@@ -693,6 +696,7 @@ source in the protected checkout to have its configured hash.
 | `contexts.build`, `contexts.packaged` | the two required status contexts: trimmed printable ASCII without `<`, `>`, `{{`, `}}`, 1..100 characters, distinct ignoring case |
 | `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
 | `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.protocol.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
+| `runtime_selection` | optional (added within schema 1 after v1.2.0): exactly `{input}`, where `input` is `changed-paths-v1`, the format of the kit's input to the `derive_scope` hook; absent means a pull request's lanes always run every obligation |
 | `seeds` | optional (added within schema 1): at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..16 `{path}` objects (canonical repository paths, unique, sorted by path) of the protected checkout whose bytes key the seed; absent means no seed |
 
 The config path, every adapter source, every candidate file (the inventory, the scenario contract
@@ -750,7 +754,7 @@ lanes hold more than the 512 MiB one complete runtime export may. The aggregatin
 of at most 4 MiB.
 
 The closed top level has kind, schema_version, identity, plan_sha256, profile, producer,
-owning_build, build_envelope_sha256 and lanes.
+owning_build, build_envelope_sha256 and lanes, and the optional scope.
 
 | Field | Meaning |
 | --- | --- |
@@ -759,6 +763,7 @@ owning_build, build_envelope_sha256 and lanes.
 | `owning_build` | The descriptor of the complete Build every lane ran: the bundle this same attempt rebuilt (a standalone run only), or the bundle of a separate run of the Build caller. |
 | `build_envelope_sha256` | SHA-256 of that Build's canonical envelope, as the job's selection record carries it. |
 | `lanes` | 1..256 entries: exactly the planned lanes, in plan order. |
+| `scope` | Optional (added within schema 1 after v1.2.0): the `mod-base.ci.scope` record the attempt's `input` job handed to every lane, when a pull request ran a narrowed scope: the same binding, requested by the attempt that sealed the index. Absent for a run in full. The packaged tested record of the attempt carries its SHA-256 as `scope_sha256`. |
 
 A lane has exactly:
 

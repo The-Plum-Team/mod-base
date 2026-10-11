@@ -1,9 +1,11 @@
 # Feature-selected runtime scope: design note
 
-Draft for owner decision, 10 October 2026. This note proposes how a packaged lane could run only
-the scenarios a pull request affects (Quick Skin adoption gap QS-G6). It is not an
-implementation. It changes no code, schema, workflow, digest or lock, and it authorizes no
-release.
+Proposed 10 October 2026; decided by the owner on 11 October 2026 and implemented on the branch
+`kit/runtime-selection` (unreleased). This note describes how a packaged lane runs only the
+scenarios a pull request affects (Quick Skin adoption gap QS-G6). The owner took the recommended
+option of every decision; where the note gave none, the implementation took the most fail-closed
+option. [Decisions taken](#decisions-taken) says which and why. The note authorizes no release:
+the feature ships with the next kit release, and a mod enables it in its protected Build config.
 
 ## What is asked
 
@@ -50,7 +52,93 @@ whether a baseline exists or has expired, at different times. The plan would the
 Build, packaged and status. That fails closed, but it would make gates fail at random, so it is not
 a safe optimization.
 
-## Decisions for the owner
+## Decisions taken
+
+**D1 b: a sealed packaged scope record bound outside the plan.** The plan keeps every obligation
+of every lane, so the Build, the packaged run and the status evaluation keep deriving one plan and
+nothing about the selection reaches a Build envelope. The packaged `input` job runs `ci scope`
+after `ci select-build` and seals a new kind, `mod-base.ci.scope`, bound to its plan and to its own
+run attempt (`request`, as in a selection record). It reaches every later job as the job output
+`scope`, the way the selection record does, and the same receiving step writes it to a file:
+empty for a run in full. `fetch-build` keeps it in the lane's state for the lane's protected hooks;
+`aggregate` binds the whole record into the results index (optional `scope`); the packaged
+`seal-gate` requires the index to hold exactly the record its job was handed and seals its
+digest into the tested record (optional `scope_sha256`). A run in full has no record, so its
+documents are byte for byte those of a kit without the feature. Why: it is the note's
+recommendation, it changes no graph, job name or public context, and the Build stays independent
+of scope.
+
+**D2: kit-authenticated inputs and a token-free hook.** The note gave no recommendation; this is
+the option that does not move the trust boundary. No mod code holds a token: protected kit code
+reads, with the input job's read-only token, (1) every path whose entry differs between the
+recursive Git trees of the pull request's base commit (`identity.base_sha`) and of the tested tree
+(a truncated listing, or one over `MAX_CI_SCOPE_TREE_ENTRIES`, is unknown and runs full), and (2)
+the base commit's full packaged evidence: the newest packaged run of a push of the base commit,
+chosen before its result is read, completed successfully as its latest attempt under the
+executing kit pin, and its tested record, or, when that push was covered by post-merge reuse, its
+reuse reference and the original packaged record it names. The record must test the base commit
+under the same repository, caller, kit pin, policy, inventory, scenario contract, runtime selection
+and graph version, with the same profile, and must not be narrowed. The new protected hook
+`derive_scope` runs as the validator from the protected adapter copy, with the plan inputs `ci
+plan` granted and that data as one line of canonical JSON in `MB_SCOPE_INPUT` (format
+`changed-paths-v1`); root hands its one output, `scope.json`, to the runner (root operation
+`take-derived-scope`, as for `derive_plan` and `derive_runtime`). `BUILD_ADAPTER_API` stays 1:
+`derive_scope` is an optional hook that runs only for a config with `runtime_selection`, so no mod
+without it needs a change. Quick Skin's baseline becomes the kit's sealed full evidence of the base
+commit instead of its own certificate, which is the consequence of this option the note named.
+
+The request cost is measured and pinned (`tests/test_ci_scope.py`, `MAX_CI_SCOPE_REQUESTS` 32):
+none without `runtime_selection`, for a push, a dispatch or a changed kit pin; 11 behind a direct
+baseline record (3 for the trees, 5 for the run, its listing and the record, 3 to observe the run
+listing, the run and the record again before the effect) and 15 behind a reuse reference. The gate,
+the status evaluation and reuse read the scope from documents they already download and add none.
+The generation ledger is unchanged without the feature (198 / 398 / 300); with it Quick Skin's
+generation is 409, or 413 behind a reference, within the test budget of 440.
+
+**D3: a new kind and optional fields within schema 1.** `mod-base.ci.scope` is a new kind at
+schema version 1; the compatibility ledger records it as `new-kind`, moves its baseline to v1.2.1
+(whose reader is archived in `tests/fixtures/previous_release/v1.2.1`) and the v1.2.1 reader
+rejects it as an unknown kind. `runtime_selection` of `mod-base.build.config`, `scope` of
+`mod-base.ci.results` and `scope_sha256` of `mod-base.ci.gate` are optional fields within schema 1,
+validated whenever present, as `candidate_kit` and `seeds` were: a v1.2.1 reader refuses a
+document that has one. Why: it is what the schema rules allow without a version change, and
+nothing a mod does today changes until its protected config names `runtime_selection`; a pin must
+not be rolled back below this release while it does.
+
+**D4: what a scope may say.** The kit enforces what the note listed: the record names every
+planned lane in plan order, each lane's scenarios are its own obligations in plan order, the
+record is bounded (`MAX_CI_SCOPE_BYTES`, 64 KiB) and carries the baseline provenance and the digest
+of the changed paths. A lane with nothing selected still runs: the hook names its smoke scenario,
+and a lane the hook names no scenario for runs every obligation. No record ever says
+"selected-empty". Why: the design requires every required lane; full is the fail-closed reading of
+"nothing selected", and the kit cannot pick a smoke scenario because it does not interpret
+obligations. A selection that narrows no lane writes no record. Coverage is the mod's own
+`verify_runtime`: a lane gives its entry, `{"lane_id", "scenarios", "scope_sha256"}`, to
+`derive_runtime` and `verify_runtime` in `MB_RUNTIME_SCOPE` (an environment value of the validator,
+not a file of `validation-input/`, so the root-granted input layout does not change), and the
+verifier proves that its native results cover exactly those scenarios.
+
+**D5: a narrowed pull request never covers its push.** `reuse.FULL_RUN_REASONS` gains
+`original-run-narrowed`: when the pull request's packaged tested record carries `scope_sha256`,
+the push runs in full. A reuse reference that names a narrowed original is refused when it is read
+back. A narrowed record is never a baseline either: `ci scope` refuses one behind a reference
+(`baseline-narrowed`), and a push, a dispatch or a release rehearsal never narrows. Releases keep
+their full rehearsals.
+
+### What runs full
+
+`scope.FULL_SCOPE_REASONS` names every reason, and `ci scope` outputs it as `reason`: no
+`runtime_selection` in the protected config; a subject that is not a pull request, or a pull
+request from another repository; a changed kit
+pin (`candidate_kit`); a pull request that changes the protected Build config, an adapter source
+(the selection policy is one of them), a candidate file a plan is derived from (inventory, scenario
+contract, extra plan inputs) or a control file (`scope.selection_inputs`); changes that the API does
+not list completely or that do not fit the hook's input; a base commit without a push run, with
+one still running, failed, under another kit pin, whose evidence has expired, differs or is
+narrowed; a selection that narrows nothing; a record over its byte cap. A malformed API answer,
+an API failure, a failed hook and a malformed selection stop the `input` job instead.
+
+## Decisions for the owner (as proposed)
 
 **D1. Where the selection is bound.**
 
@@ -142,7 +230,23 @@ run. Releases keep their full rehearsals either way.
 - Every planned lane stays required, and the job graph and the public contexts do not change
   under (b).
 
+The implementation keeps each of them. The candidate's environment is unchanged
+(`worker.worker_environment` refuses a scope for any account but the validator). The fence,
+`worker-run`'s candidate path and the root-granted input layout do not change; the hook's
+output reaches the runner through its own fixed root operation. Unknown proof is a
+`FullScope` before the hook runs, and an API failure, a malformed answer, a failed hook or a
+malformed selection raises (`tests/test_ci_scope.py`). `scope.selection_inputs` names the config,
+every adapter source, every plan input and the control files. Every run that is not a pull
+request of this repository runs full (`not-a-pull-request`, `foreign-pull-request`), release
+rehearsals and recovery dispatches included, and a pull request's packaged run takes no `mode`
+that could ask for less. The job
+graph, the job names and the contexts are those of v1.2.1 (`tests/test_workflow_packaged_e2e.py`).
+A selected run is never full-baseline proof: no reader takes a record with `scope_sha256` as a
+full run (`reuse`, `scope`), and only the packaged gate of a pull request may carry one.
+
 ## What it unblocks
+
+*As proposed on 10 October; the decisions above are now taken and implemented, unreleased.*
 
 Q1–Q6 do not need this. The native workflows, with their selection, stay required through Q6,
 and the shadow runs of Q4 can run full profiles, which fit the lane budget (180 minutes, the same

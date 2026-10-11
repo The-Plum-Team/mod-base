@@ -51,6 +51,10 @@ COSTS = {
                                  "test_the_two_calls_of_one_job_end_in_the_verified_document"),
     "gate-status": Cost(36, "test_ci_commands_status.GateStatusTests."
                             "test_both_green_gates_are_success_on_the_pull_request_head_within_budget"),
+    # Only with a runtime selection in the protected config (``runtime_selection`` below): the
+    # cost of a scope that rests on the base commit's direct tested record.
+    "scope": Cost(11, "test_ci_scope.ScopeCommandTests."
+                      "test_a_narrowed_scope_is_written_and_output_in_eleven_budgeted_requests"),
 }
 #: These commands execute local protected work and cannot create an API client. PR reuse admission
 #: is tested to return full without a request. The hosted generation pins all their observed zeros.
@@ -62,10 +66,12 @@ LOCAL_VERBS = frozenset({"system-profile", "worker-prepare", "seed-key", "worker
 
 
 def request_cost(route: str, *, targets: int = 1, lanes: int = 1, extra_inputs: int = 0,
-                 polls: int = WAITING_POLLS) -> int:
-    """The pinned cost for a command, for a run whose job/artifact listings fit one page."""
+                 polls: int = WAITING_POLLS, runtime_selection: bool = False) -> int:
+    """The pinned cost for a command, for a run whose job/artifact listings fit one page.
+    ``ci scope`` sends no request unless the protected config has a ``runtime_selection``, which
+    no enrolled profile has yet."""
 
-    if route in LOCAL_VERBS:
+    if route in LOCAL_VERBS or (route == "scope" and not runtime_selection):
         return 0
     cost = COSTS[route]
     return cost.base + cost.targets * targets + cost.lanes * lanes + cost.extra_inputs * extra_inputs + cost.polls * polls
@@ -82,7 +88,8 @@ def command_route(verb: str, script: str, workflow: str) -> str:
 
 
 def generation_breakdown(*, targets: int, lanes: int, extra_inputs: int = 0,
-                         polls: int = WAITING_POLLS, candidate_upgrade: bool = False) -> dict[str, int]:
+                         polls: int = WAITING_POLLS, candidate_upgrade: bool = False,
+                         runtime_selection: bool = False) -> dict[str, int]:
     """Requests per job of Build, packaged E2E and one final status evaluation, from their YAML.
 
     Above 100 jobs/artifacts this is a strict lower bound: further listing pages add requests.
@@ -103,7 +110,7 @@ def generation_breakdown(*, targets: int, lanes: int, extra_inputs: int = 0,
                     raise AssertionError(f"unbudgeted matrix {workflow}/{job_id}: {matrix}")
             result[f"{workflow}/{job_id}"] = multiplier * sum(
                 request_cost(command_route(verb, item["run"], workflow), targets=targets, lanes=lanes,
-                             extra_inputs=extra_inputs, polls=polls)
+                             extra_inputs=extra_inputs, polls=polls, runtime_selection=runtime_selection)
                 for item in job["steps"] if (verb := step_verb(item)) is not None)
             if candidate_upgrade and (workflow, job_id) in {
                     ("build", "plan"), ("packaged-e2e", "input"), ("gate-status", "evaluate")}:

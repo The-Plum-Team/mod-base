@@ -62,8 +62,8 @@ from mod_base.build_ci import describe
 from mod_base.build_ci.graph import run_graph
 from mod_base.build_ci.identity import validate_subject_record
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.records import (GATE_MODES, bind_source_selection, gate_receipt, results_index,
-                                       reuse_reference)
+from mod_base.build_ci.records import (GATE_MODES, bind_scope_record, bind_source_selection, gate_receipt,
+                                       results_index, reuse_reference)
 from mod_base.build_ci.reuse import FullRunRequired, ReuseRefused, admit_post_merge_reuse
 from mod_base.build_ci.selection import revalidate_latest_pr_build, revalidate_protected_build
 from mod_base.build_ci.transport import (_admit_source, _authenticate_build, _authenticate_run, _bound, _plan,
@@ -71,6 +71,7 @@ from mod_base.build_ci.transport import (_admit_source, _authenticate_build, _au
                                          _run, _target_inputs)
 from mod_base.github.api import GitHubApi
 from mod_base.model import grammar
+from mod_base.model.canonical import canonical_sha256
 from mod_base.model.validators import check
 from mod_base.workflow import ci_producer
 
@@ -167,16 +168,24 @@ def _build_gate(attempt: Attempt, config_sha256: str, temporary_root: Path) -> d
                         artifacts=[build], owning_build=None, native_receipts=receipts)
 
 
-def _packaged_gate(attempt: Attempt, selection: dict[str, Any] | None, temporary_root: Path) -> dict[str, Any]:
+def _packaged_gate(attempt: Attempt, selection: dict[str, Any] | None, scope: dict[str, Any] | None,
+                   temporary_root: Path) -> dict[str, Any]:
     plan, producer = attempt.plan, attempt.producer
     check(selection is not None, "$.selection", "a packaged gate judges the Build its input job selected")
     selection = bind_source_selection(selection, plan=plan, run_id=producer["run_id"],
                                       run_attempt=producer["run_attempt"], workflow_path=producer["workflow_path"])
+    if scope is not None:
+        check(attempt.mode == "pull-request", "$.scope", "only a pull request runs a narrowed scope")
+        scope = bind_scope_record(scope, plan=plan, run_id=producer["run_id"], run_attempt=producer["run_attempt"],
+                                  workflow_path=producer["workflow_path"])
     results = attempt.descriptor("results")
     lanes = [attempt.descriptor("runtime", lane["id"]) for lane in plan["lanes"]]
     index = _read_results(attempt.reads, results, plan, temporary_root)
     check([lane["descriptor"] for lane in index["lanes"]] == lanes, "$.results.lanes",
           "the results index lists other lane artifacts than this attempt uploaded")
+    # The lanes ran the scope their input job handed over, and the index says which: the same one.
+    check(index.get("scope") == scope, "$.results.scope",
+          "the results index holds another scope than this run attempt's input job handed over")
     owning = index["owning_build"]
     check((owning, index["build_envelope_sha256"]) == (selection["build"], selection["envelope_sha256"]),
           "$.results.owning_build", "the results index owns another Build than this run attempt selected")
@@ -195,11 +204,13 @@ def _packaged_gate(attempt: Attempt, selection: dict[str, Any] | None, temporary
     receipts = [{"unit_id": lane["id"], "native_contract_sha256": lane["native_contract_sha256"],
                  "report_sha256": lane["report_sha256"]} for lane in index["lanes"]]
     return gate_receipt(plan=plan, producer=attempt.producer, gate="packaged", mode=attempt.mode,
-                        artifacts=[*lanes, results], owning_build=owning, native_receipts=receipts)
+                        artifacts=[*lanes, results], owning_build=owning, native_receipts=receipts,
+                        scope_sha256=None if scope is None else canonical_sha256(scope))
 
 
 def seal_gate(attempt: Attempt, *, config_sha256: str, temporary_root: Path,
-              selection: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+              selection: dict[str, Any] | None = None,
+              scope: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
     """Verify what the gate of an authenticated attempt judges and return its receipt as
     ``(file name, document)``, ready to be written as the one file of the tested record.
 
@@ -207,14 +218,17 @@ def seal_gate(attempt: Attempt, *, config_sha256: str, temporary_root: Path,
     record of a Build must have been frozen under it. ``selection`` is the selection record the
     ``input`` job of this run attempt handed to a packaged gate job, and None for a Build gate.
     The results index must own exactly the Build of that record and, unless this run rebuilt it,
-    that Build must still be the newest exact Build of the live subject. ``temporary_root`` is a
-    private directory for the downloads, which are removed again. The attempt's watch is
-    rechecked before return."""
+    that Build must still be the newest exact Build of the live subject. ``scope`` is the narrowed
+    scope that ``input`` job handed over, or ``None`` for a run in full: the results index must
+    hold exactly that scope, and the receipt carries its digest (``scope_sha256``).
+    ``temporary_root`` is a private directory for the downloads, which are removed again. The
+    attempt's watch is rechecked before return."""
 
     check(attempt.mode != "reuse", "$.mode", "a reuse run seals a reuse reference, not a tested record")
     check(attempt.gate == "packaged" or selection is None, "$.selection", "a Build gate judges no selected Build")
+    check(attempt.gate == "packaged" or scope is None, "$.scope", "a Build gate judges no narrowed scope")
     document = (_build_gate(attempt, config_sha256, temporary_root) if attempt.gate == "build"
-                else _packaged_gate(attempt, selection, temporary_root))
+                else _packaged_gate(attempt, selection, scope, temporary_root))
     attempt.watch.recheck()
     return grammar.CI_GATE_NAME, document
 
@@ -246,7 +260,7 @@ def seal_reuse(attempt: Attempt, *, temporary_root: Path) -> tuple[str, dict[str
 
 def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan: dict[str, Any],
                  selection: dict[str, Any], run_id: int, run_attempt: int, config_sha256: str,
-                 temporary_root: Path) -> tuple[str, dict[str, Any]]:
+                 temporary_root: Path, scope: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
     """Authenticate the lanes of the running attempt whose aggregating job calls this and return
     its results index as ``(file name, document)``, ready to be written as the one file of the
     results artifact.
@@ -256,14 +270,19 @@ def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan:
     by this very attempt (``records.bind_source_selection``). Every planned lane must have
     uploaded exactly one artifact in this attempt and no other lane may have. ``config_sha256`` is
     the digest of the protected Build config this job loaded; ``temporary_root`` a private
-    directory for one lane's download at a time. Everything mutable is observed once more before
-    return."""
+    directory for one lane's download at a time. ``scope`` is the narrowed scope the same
+    ``input`` job handed to every lane, bound to this attempt like the selection
+    (``records.bind_scope_record``), or ``None`` for a run in full; the index holds it. Everything
+    mutable is observed once more before return."""
 
     plan = _plan(plan)
     reads, watch = CommandReads.of(api), Watch()
     modes = tuple(mode for mode in admissible_modes(record, "packaged") if mode != "reuse")
     selection = bind_source_selection(selection, plan=plan, run_id=run_id, run_attempt=run_attempt,
                                       workflow_path=record["workflow_path"])
+    if scope is not None:
+        scope = bind_scope_record(scope, plan=plan, run_id=run_id, run_attempt=run_attempt,
+                                  workflow_path=record["workflow_path"])
     owning = selection["build"]
     _admit_source(reads, watch, plan["identity"])
     # The run is observed before its jobs are read: its record says when this attempt started.
@@ -279,7 +298,7 @@ def seal_results(api: GitHubApi | CommandReads, *, record: dict[str, Any], plan:
         reads, descriptor, plan, owning_build=owning, build_envelope_sha256=selection["envelope_sha256"],
         source_config_sha256=config_sha256, temporary_root=temporary_root)} for descriptor in descriptors]
     document = results_index(plan=plan, producer=producer, owning_build=owning,
-                             build_envelope_sha256=selection["envelope_sha256"], lanes=lanes)
+                             build_envelope_sha256=selection["envelope_sha256"], lanes=lanes, scope=scope)
     watch.recheck()
     return grammar.CI_RESULTS_NAME, document
 

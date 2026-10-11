@@ -10,11 +10,12 @@ import copy
 from typing import Any
 
 from mod_base import SCHEMA_VERSIONS, readable_schema_versions
+from mod_base.build_ci.config import SCOPE_INPUTS
 from mod_base.build_ci.protocol import (OUTPUT_ROLES, PROFILES, check_output_paths, check_output_scope,
                                         plan_sha256, validate_identity, validate_plan)
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
-from mod_base.model.canonical import canonical_sha256
+from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.model.validators import Const, Int, List, Nullable, Obj, Str, check, fail
 from mod_base.errors import MbError
 from mod_base.workflow import ci_producer
@@ -285,6 +286,119 @@ def build_source_selection(*, plan: dict[str, Any], request: dict[str, Any], bui
                                  workflow_path=request["workflow_path"])
 
 
+#: The paths the tested merge changes against its base, as ``ci scope`` read them from the two Git
+#: trees: the base commit and its tree, the tested tree, how many paths differ and the SHA-256 of
+#: their sorted canonical list (the list itself went to ``derive_scope`` only).
+_SCOPE_CHANGES = Obj({"base_sha": SHA1, "base_tree": SHA1, "tested_tree": SHA1,
+                      "paths": Int(0, 2 * lim.MAX_CI_SCOPE_TREE_ENTRIES), "paths_sha256": SHA256})
+_SCOPE_ARTIFACT = Obj({"run_id": RUN, "run_attempt": ATTEMPT, "artifact_id": RUN,
+                       "artifact_name": Str(max_len=lim.MAX_ARTIFACT_NAME_BYTES), "digest": Str(g.DIGEST, max_len=71)})
+#: The full packaged evidence of the base commit a narrowed scope rests on: the tested record of a
+#: push run of the base commit (``evidence: tested``), or the reuse reference of one and the
+#: original packaged record it names (``reuse``); the SHA-256 of the canonical record ``ci scope``
+#: read, and the plan hash that record was sealed for.
+_SCOPE_BASELINE = Obj({"evidence": Str(choices=("tested", "reuse")), "record": _SCOPE_ARTIFACT,
+                       "original": Nullable(_SCOPE_ARTIFACT), "record_sha256": SHA256, "plan_sha256": SHA256})
+_SCOPE_LANE = Obj({"id": UNIT, "scenarios": List(Str(g.IDENT, max_len=200), min_items=1,
+                                                 max_items=lim.MAX_CI_OBLIGATIONS_PER_LANE, unique=True)})
+_SCOPE = Obj({**_header("mod-base.ci.scope"), **_binding(), "request": _REQUEST,
+              "input": Str(choices=SCOPE_INPUTS), "changes": _SCOPE_CHANGES, "baseline": _SCOPE_BASELINE,
+              "lanes": List(_SCOPE_LANE, min_items=1, max_items=lim.MAX_CI_LANES, unique_by=lambda item: item["id"])})
+
+
+def _baseline_artifact(value: dict[str, Any], kind: str, unit: str | None, path: str) -> None:
+    name = g.parse_ci_artifact_name(value["artifact_name"])
+    check(name is not None and (name.kind, name.unit_id, name.run_id, name.run_attempt)
+          == (kind, unit, value["run_id"], value["run_attempt"]), f"{path}.artifact_name",
+          f"must name the {kind} artifact of its own run attempt")
+
+
+def validate_scope_record(document: Any, *, plan: dict[str, Any] | None = None, path: str = "$") -> dict[str, Any]:
+    """``mod-base.ci.scope`` v1: the narrowed scope one run attempt of a pull request's packaged
+    caller runs (docs/BUILD-RUNTIME-SELECTION.md, D1 b).
+
+    The record binds the plan of the pull request, which keeps every lane's full obligations, and
+    the attempt that requested it (``request``, as in a selection record). It says what the scope
+    rests on: the input format the protected config named, the changed paths read from the base
+    and tested trees, and the base commit's full packaged evidence (``baseline``). ``lanes`` names
+    every lane with the scenarios it runs, at least one. With a plan, the lanes are exactly the
+    planned ones in plan order, each lane's scenarios are its own obligations in plan order, and at
+    least one lane runs fewer than all of them: a scope that narrows nothing is no scope. Structure
+    only: ``build_ci.scope`` authenticates what the record says before it writes one."""
+
+    _SCOPE(document, path)
+    _plan_binding(document, plan, path)
+    identity, request = document["identity"], document["request"]
+    check(identity["pr_number"] > 0, f"{path}.identity.pr_number", "only a pull request runs a narrowed scope")
+    ref = g.WORKFLOW_REF.fullmatch(request["workflow_ref"])
+    check(ref is not None and ref["repository"] == identity["repository"]
+          and ref["path"] == request["workflow_path"] and ref["branch"] == identity["base_branch"],
+          f"{path}.request.workflow_ref", "request must name its protected workflow/default ref")
+    try:
+        caller = ci_producer(request["workflow_path"])
+    except MbError as error:
+        raise fail(f"{path}.request.workflow_path", "must be a managed Build/E2E producer caller") from error
+    check(caller == "packaged", f"{path}.request.workflow_path", "only a packaged run narrows its scope")
+    changes = document["changes"]
+    check((changes["base_sha"], changes["tested_tree"]) == (identity["base_sha"], identity["tested_tree"]),
+          f"{path}.changes", "must compare the tested tree with the tree of the pull request's base")
+    baseline = document["baseline"]
+    if baseline["evidence"] == "tested":
+        _baseline_artifact(baseline["record"], "tested", "packaged", f"{path}.baseline.record")
+        check(baseline["original"] is None, f"{path}.baseline.original", "a direct record names no original")
+    else:
+        _baseline_artifact(baseline["record"], "reuse", None, f"{path}.baseline.record")
+        check(baseline["original"] is not None, f"{path}.baseline.original", "a reuse reference names its original")
+        _baseline_artifact(baseline["original"], "tested", "packaged", f"{path}.baseline.original")
+        check(baseline["original"]["run_id"] != baseline["record"]["run_id"], f"{path}.baseline.original",
+              "the original record comes from another run than its reference")
+    check(len(canonical_json(document)) <= lim.MAX_CI_SCOPE_BYTES, path, "the scope record exceeds its byte cap")
+    if plan is not None:
+        check([lane["id"] for lane in document["lanes"]] == [lane["id"] for lane in plan["lanes"]],
+              f"{path}.lanes", "must name every planned lane and no other, in plan order")
+        narrowed = False
+        for index, (lane, planned) in enumerate(zip(document["lanes"], plan["lanes"])):
+            obligations, selected = planned["obligations"], set(lane["scenarios"])
+            check(lane["scenarios"] == [name for name in obligations if name in selected],
+                  f"{path}.lanes[{index}].scenarios", "must be obligations of the lane, in plan order")
+            narrowed |= len(lane["scenarios"]) < len(obligations)
+        check(narrowed, f"{path}.lanes", "narrows no lane: a run of every obligation has no scope record")
+    return document
+
+
+def bind_scope_record(document: dict[str, Any], *, plan: dict[str, Any], run_id: int, run_attempt: int,
+                      workflow_path: str) -> dict[str, Any]:
+    """Bind a scope record to the plan and to the run attempt that consumes it, exactly as a
+    selection record is bound (:func:`bind_source_selection`): only the attempt of the packaged
+    caller whose input job requested it may use it, so a rerun of failed jobs alone never inherits
+    the scope of an earlier attempt."""
+
+    validate_scope_record(document, plan=plan)
+    check(ci_producer(workflow_path) == "packaged", "$.request.workflow_path",
+          "only a run of the packaged caller narrows its scope")
+    request = document["request"]
+    check((request["run_id"], request["run_attempt"], request["workflow_path"]) == (run_id, run_attempt, workflow_path),
+          "$.request", "the scope was requested by another run, attempt or workflow; rerun all jobs")
+    return document
+
+
+def scope_document(*, plan: dict[str, Any], request: dict[str, Any], input_format: str, changes: dict[str, Any],
+                   baseline: dict[str, Any], lanes: list[dict[str, Any]]) -> dict[str, Any]:
+    """The ``mod-base.ci.scope`` document ``ci scope`` writes for one run attempt of the packaged
+    caller, not yet validated: the writer binds it the way its consumers do
+    (:func:`bind_scope_record`) once it has decided what a document over the byte cap means.
+    ``request`` names the requesting run, its attempt and its managed caller on the default branch,
+    with a nonce of its own; the other arguments are what the command authenticated and the hook
+    selected."""
+
+    _REQUEST(request, "$.request")
+    kind = "mod-base.ci.scope"
+    return {"kind": kind, "schema_version": max(readable_schema_versions(kind)),
+            "identity": copy.deepcopy(plan["identity"]), "plan_sha256": plan["plan_sha256"],
+            "profile": plan["profile"], "request": copy.deepcopy(request), "input": input_format,
+            "changes": copy.deepcopy(changes), "baseline": copy.deepcopy(baseline), "lanes": copy.deepcopy(lanes)}
+
+
 _NATIVE_RECEIPT = Obj({"unit_id": UNIT, "native_contract_sha256": SHA256, "report_sha256": SHA256})
 _GATE = Obj({
     **_header("mod-base.ci.gate"), **_binding(), "producer": _PRODUCER_IDENTITY,
@@ -295,6 +409,11 @@ _GATE = Obj({
     "owning_build": Nullable(validate_descriptor),
     "native_receipts": List(_NATIVE_RECEIPT, min_items=1, max_items=lim.MAX_CI_LANES,
                             unique_by=lambda item: item["unit_id"]),
+}, {
+    # Optional within schema 1: the SHA-256 of the canonical scope record (``mod-base.ci.scope``)
+    # a pull request's packaged run narrowed its lanes to, as its results index holds it. Absent
+    # means every lane ran every obligation.
+    "scope_sha256": SHA256,
 })
 
 
@@ -309,6 +428,8 @@ def validate_gate_receipt(document: Any, *, plan: dict[str, Any] | None = None,
     check(mode not in ("selected", "rebuilt") or not pull_request, f"{path}.mode",
           "a pull request never selects or rebuilds its Build inside the packaged run")
     check(mode != "pull-request" or pull_request, f"{path}.mode", "the pull-request mode needs a pull request")
+    check("scope_sha256" not in document or (document["gate"], mode) == ("packaged", "pull-request"),
+          f"{path}.scope_sha256", "only the packaged gate of a pull request runs a narrowed scope")
     check((document["owning_build"] is not None) == (document["gate"] == "packaged"), f"{path}.owning_build",
           "packaged gate requires an exact owning Build; Build gate has none")
     if document["owning_build"] is not None:
@@ -356,16 +477,20 @@ def validate_gate_receipt(document: Any, *, plan: dict[str, Any] | None = None,
 
 def gate_receipt(*, plan: dict[str, Any], producer: dict[str, Any], gate: str, mode: str,
                  artifacts: list[dict[str, Any]], owning_build: dict[str, Any] | None,
-                 native_receipts: list[dict[str, Any]]) -> dict[str, Any]:
+                 native_receipts: list[dict[str, Any]], scope_sha256: str | None = None) -> dict[str, Any]:
     """The receipt the gate job of ``producer`` (an attempt's identity, without a window) seals
     for ``plan``: a new ``mod-base.ci.gate`` document that is valid for the plan, independent of
-    its arguments. Writing one proves nothing: the gate authenticates what it names first."""
+    its arguments. ``scope_sha256`` is the digest of the narrowed scope a pull request's packaged
+    run ran, and ``None`` for a run in full. Writing one proves nothing: the gate authenticates
+    what it names first."""
 
     validate_plan(plan)
     document = {"kind": "mod-base.ci.gate", "schema_version": SCHEMA_VERSIONS["mod-base.ci.gate"],
                 "identity": plan["identity"], "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
                 "producer": producer, "gate": gate, "mode": mode, "artifacts": artifacts,
                 "owning_build": owning_build, "native_receipts": native_receipts}
+    if scope_sha256 is not None:
+        document["scope_sha256"] = scope_sha256
     return validate_gate_receipt(copy.deepcopy(document), plan=plan)
 
 
@@ -378,6 +503,10 @@ _RESULTS = Obj({
     **_header("mod-base.ci.results"), **_binding(), "producer": _PRODUCER_IDENTITY,
     "owning_build": validate_descriptor, "build_envelope_sha256": SHA256,
     "lanes": List(_RESULT_LANE, min_items=1, max_items=lim.MAX_CI_LANES, unique_by=lambda item: item["id"]),
+}, {
+    # Optional within schema 1: the narrowed scope (``mod-base.ci.scope``) every lane of a pull
+    # request's packaged run attempt received from its input job. Absent means a run in full.
+    "scope": lambda value, path: validate_scope_record(value, path=path),
 })
 
 
@@ -417,6 +546,14 @@ def validate_results_index(document: Any, *, plan: dict[str, Any] | None = None,
         check(descriptor["artifact"]["id"] not in artifact_ids, f"{here}.descriptor.artifact.id",
               "repeats an artifact id")
         artifact_ids.add(descriptor["artifact"]["id"])
+    if "scope" in document:
+        scope = document["scope"]
+        _same_binding(scope, document, f"{path}.scope")
+        check((scope["request"]["run_id"], scope["request"]["run_attempt"], scope["request"]["workflow_path"])
+              == (producer["run_id"], producer["run_attempt"], producer["workflow_path"]), f"{path}.scope.request",
+              "the scope was requested by another run attempt than the one that indexed its lanes")
+        if plan is not None:
+            validate_scope_record(scope, plan=plan, path=f"{path}.scope")
     if plan is not None:
         expected = [(lane["id"], lane["native_contract_sha256"]) for lane in plan["lanes"]]
         check([(lane["id"], lane["native_contract_sha256"]) for lane in document["lanes"]] == expected,
@@ -541,12 +678,15 @@ def bind_gate_receipt(document: dict[str, Any], *, descriptor: dict[str, Any],
 
 
 def results_index(*, plan: dict[str, Any], producer: dict[str, Any], owning_build: dict[str, Any],
-                  build_envelope_sha256: str, lanes: list[dict[str, Any]]) -> dict[str, Any]:
+                  build_envelope_sha256: str, lanes: list[dict[str, Any]],
+                  scope: dict[str, Any] | None = None) -> dict[str, Any]:
     """The results index the aggregating job of ``producer`` (an attempt's identity, without a
     window) seals for ``plan``: a new ``mod-base.ci.results`` document that is valid for the plan,
     independent of its arguments. ``lanes`` holds, in plan order, ``descriptor``,
     ``envelope_sha256``, ``validation_sha256`` and ``report_sha256`` of every planned lane; the
-    lane's id and native contract are the plan's. The job authenticates each of them first."""
+    lane's id and native contract are the plan's. ``scope`` is the narrowed scope the attempt's
+    input job handed to its lanes, or ``None`` for a run in full. The job authenticates each of
+    them first."""
 
     validate_plan(plan)
     check(type(lanes) is list and len(lanes) == len(plan["lanes"]), "$.lanes", "must hold every planned lane")
@@ -555,6 +695,8 @@ def results_index(*, plan: dict[str, Any], producer: dict[str, Any], owning_buil
                 "producer": producer, "owning_build": owning_build, "build_envelope_sha256": build_envelope_sha256,
                 "lanes": [{"id": planned["id"], "native_contract_sha256": planned["native_contract_sha256"], **lane}
                           for planned, lane in zip(plan["lanes"], lanes)]}
+    if scope is not None:
+        document["scope"] = scope
     return validate_results_index(copy.deepcopy(document), plan=plan)
 
 

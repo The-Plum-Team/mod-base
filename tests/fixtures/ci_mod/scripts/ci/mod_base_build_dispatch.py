@@ -2,9 +2,11 @@
 
 The kit runs it in a disposable account whose ``HOME`` lies directly below the worker root:
 
-* a protected hook (``derive_plan``, ``derive_runtime``, ``verify_*``) runs from the protected copy
-  of this directory. It reads ``<root>/validation-input/`` and the sealed exports
-  (``<root>/sealed-build/``, ``<root>/sealed-runtime/``) and writes ``$HOME/validation/``;
+* a protected hook (``derive_plan``, ``derive_scope``, ``derive_runtime``, ``verify_*``) runs from
+  the protected copy of this directory. It reads ``<root>/validation-input/`` and the sealed
+  exports (``<root>/sealed-build/``, ``<root>/sealed-runtime/``) and writes ``$HOME/validation/``;
+  ``derive_scope`` also reads the kit's ``MB_SCOPE_INPUT``, and a narrowed lane's
+  ``derive_runtime`` and ``verify_runtime`` its ``MB_RUNTIME_SCOPE``;
 * a candidate hook (``policy``, ``build_target``, ``run_lane``) runs from the tested checkout,
   its working directory, and writes ``$HOME/export/``.
 
@@ -131,7 +133,8 @@ def _verify_runtime(root: Path, output: Output, lane: str) -> None:
     production = [item["path"] for item in _unit(plan, "targets", entry["target_id"])["outputs"]
                   if item["lane_id"] == lane and item["role"] == "production"]
     results = root / "sealed-runtime" / "lanes" / lane
-    summary = adapter.verify_run(lane, entry["obligations"], adapter.runtime_row(inventory, lane),
+    obligations = adapter.lane_scope(os.environ.get("MB_RUNTIME_SCOPE"), lane, entry["obligations"])
+    summary = adapter.verify_run(lane, obligations, adapter.runtime_row(inventory, lane),
                                  tested_sha=plan["identity"]["tested_sha"],
                                  production=_read(root / "sealed-build", production[0]),
                                  read=lambda path: _read(results, path))
@@ -165,10 +168,18 @@ def _hook(hook: str, unit: str | None, root: Path, output: Output) -> None:
     if hook == "derive_plan":
         inventory, contract, _ = _protected_inputs(root)
         output.write("plan.json", adapter.encode(adapter.derive_plan(inventory, contract)))
+    elif hook == "derive_scope":
+        _, _, raw = _protected_inputs(root)
+        scope_input = adapter.decode(os.environ["MB_SCOPE_INPUT"].encode("utf-8"), "MB_SCOPE_INPUT")
+        if type(scope_input) is not dict or scope_input.get("format") != "changed-paths-v1":
+            raise adapter.AdapterError("the scope input is not of the changed-paths-v1 format")
+        output.write("scope.json", adapter.encode(adapter.derive_scope(_plan(root, raw), scope_input["changed_paths"])))
     elif hook == "derive_runtime":
         inventory, contract, raw = _protected_inputs(root)
-        _unit(_plan(root, raw), "lanes", unit)
-        output.write("runtime.json", adapter.encode({"values": adapter.runtime_values(inventory, contract, unit)}))
+        entry = _unit(_plan(root, raw), "lanes", unit)
+        obligations = adapter.lane_scope(os.environ.get("MB_RUNTIME_SCOPE"), unit, entry["obligations"])
+        output.write("runtime.json", adapter.encode({"values": adapter.runtime_values(
+            inventory, contract, unit, obligations)}))
     elif hook in ("verify_target", "verify_build"):
         _verify_targets(root, output, hook, unit)
     elif hook == "verify_runtime":

@@ -341,6 +341,19 @@ def request_candidate_staging(*, boundary: HostBoundary, candidate: WorkerAccoun
         raise WorkerError("cannot publish private root request") from error
 
 
+def request_derived_scope(*, boundary: HostBoundary, validator: WorkerAccount) -> str:
+    """Runner-only request for what ``derive_scope`` left in the validator's home; return the nonce.
+
+    Made after the hook returned and the validator was terminated. The request names only the
+    accounts: the output's place, name and bound are fixed in root.
+    """
+    try:
+        authenticate_host_boundary(boundary)
+        return _publish("take-derived-scope", boundary, _job_arguments(boundary, validator))
+    except OSError as error:
+        raise WorkerError("cannot publish private root request") from error
+
+
 def request_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) -> str:
     """Runner-only request for what ``derive_runtime`` left in the validator's home; return the nonce.
 

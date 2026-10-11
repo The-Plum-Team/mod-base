@@ -97,7 +97,10 @@ CI_UPLOAD_STEP = "Upload sealed outputs"
 #: second call are skipped when it could). Only the ``lane`` job runs a client and installs the
 #: protected config's system profile, between its subject and its accounts. The ``target`` and
 #: ``lane`` jobs key their protected seed before staging and, in a protected job whose restore
-#: missed, export the next one after their upload (``build_ci.seeds``).
+#: missed, export the next one after their upload (``build_ci.seeds``). The packaged ``input`` job
+#: derives the run attempt's scope after its selection (``ci scope``), which reaches the later jobs
+#: the same way as the selection record and the same step writes it to a file, empty for a run in
+#: full, for ``fetch-build``, ``aggregate`` and ``seal-gate``.
 CI_JOB_VERBS = {
     "build": {
         "plan": ("subject", "worker-prepare", "plan", "reuse-admit", "worker-finish"),
@@ -112,7 +115,7 @@ CI_JOB_VERBS = {
         "select": ("subject", "worker-prepare", "plan", "reuse-admit", "select-build", "worker-finish"),
     },
     "packaged-e2e": {
-        "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
+        "input": ("subject", "worker-prepare", "plan", "select-build", "scope", "worker-finish"),
         "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "seed-key", "worker-stage",
                  "worker-run", "worker-seal", "worker-validate", "seed-export", "worker-finish"),
         "aggregate": ("subject", "worker-prepare", "plan", "aggregate", "worker-finish"),

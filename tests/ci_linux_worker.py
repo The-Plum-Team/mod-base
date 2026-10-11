@@ -2953,6 +2953,47 @@ class LinuxLifecycleCommandTests(unittest.TestCase):
         self.assertIn("ci-worker: runner host fence identity or private mode changed", stderr)
         self.assert_resting("validator")
 
+    def test_a_packaged_input_job_derives_its_scope_once_and_root_hands_the_one_output_over(self):
+        # docs/BUILD-RUNTIME-SELECTION.md, D2: the selection hook runs as the validator from the
+        # protected adapter copy, without a token, with the plan inputs `ci plan` granted and the
+        # kit's line in MB_SCOPE_INPUT; `take-derived-scope` hands the runner its one output.
+        import dataclasses
+        from mod_base import runtime
+        from mod_base.build_ci import adapter
+
+        self.job()
+        self.assertEqual(self.prepare("validator")[0], 0)
+        code, stdout, stderr = self.plan()
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        job = lifecycle.open_job(runtime.build_invocation(self.mod, None, self.environment), self.state)
+        job = dataclasses.replace(job, record={**job.record, "producer": "packaged"})
+        worker = lifecycle.open_worker(job)
+        plan = lifecycle.read_plan(job)
+        value = canonical_json({"changed_paths": ["README.md"], "format": "changed-paths-v1"}).decode().rstrip("\n")
+        log = []
+        raw = lifecycle.derive_scope(job, worker, plan, value, log=log.append)
+        self.assertEqual(log, ["[validator] synthetic derive_scope: ok, 1 files\n"])
+        self.assertEqual(adapter.parse_derived_scope(raw), {"lanes": [
+            {"id": lane["id"], "scenarios": [name for name in lane["obligations"] if name.startswith("scenario/smoke/")]}
+            for lane in plan["lanes"]]})
+        derived = self.root / "derived-scope"
+        self.assertEqual(self.owner(derived), (os.getuid(), os.getgid(), 0o700))
+        self.assertEqual(self.owner(derived / "scope.json"), (os.getuid(), os.getgid(), 0o600))
+        self.assertEqual(self.as_account("validator", "/usr/bin/test", "-r", str(derived / "scope.json")), 1)
+        home = self.root / "validator-home"
+        self.assertEqual(sorted(command("/usr/bin/sudo", "-n", "/usr/bin/find", str(home), "-mindepth", "1",
+                                        "-maxdepth", "1", "-printf", "%f\\n").stdout.split()),
+                         [b"gradle-home", b"tmp"])
+        self.assert_resting("validator")
+        # A job derives its scope once, and only a packaged job derives one.
+        with self.assertRaisesRegex(MbError, "already derived its scope"):
+            lifecycle.derive_scope(job, worker, plan, value, log=log.append)
+        with self.assertRaisesRegex(MbError, "a step of a packaged job"):
+            lifecycle.derive_scope(dataclasses.replace(job, record={**job.record, "producer": "build"}), worker,
+                                   plan, value, log=log.append)
+        self.assertEqual(len(log), 1)
+        self.assert_finished("validator")
+
     def test_candidate_and_validator_job_plans_from_the_candidate_checkout_without_the_api(self):
         commands = self.job(candidate=True)
         # The working files are not what is tested: only the commit's objects are read.

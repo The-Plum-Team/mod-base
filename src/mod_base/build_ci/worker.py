@@ -157,9 +157,13 @@ def worker_environment(*, role: str, python: str, java_home: str | None,
                             "GIT_CONFIG_VALUE_0": str(WORKER_ROOT / "repository")})
     check(isinstance(values, Mapping), "$.values", "must be an explicit environment mapping")
     allowed = {*_DISPLAY_ENV, "SOURCE_DATE_EPOCH", "MB_TARGET_ID", "MB_LANE_ID", "E2E_ROW_JSON", "E2E_SCENARIOS",
-               JAVA_HOMES_ENVIRONMENT}
+               "MB_SCOPE_INPUT", "MB_RUNTIME_SCOPE", JAVA_HOMES_ENVIRONMENT}
     for key, value in values.items():
         check(isinstance(key, str) and key in allowed, "$.values", "unsupported worker environment name")
+        # A scope is protected kit data for the validator; the candidate gets its narrowed
+        # scenarios only through the values derive_runtime returns.
+        check(role == "validator" or key not in {"MB_SCOPE_INPUT", "MB_RUNTIME_SCOPE"}, f"$.values.{key}",
+              "only the validator receives a runtime scope")
         check(isinstance(value, str) and "\0" not in value, f"$.values.{key}", "must be a NUL-free string")
         try:
             size = len(value.encode("utf-8"))

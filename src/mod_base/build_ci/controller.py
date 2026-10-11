@@ -433,14 +433,17 @@ def execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAcc
                                  sources: ControllerSources, tools: ToolTreeProof,
                                  plan: dict[str, Any] | None, hook: str, unit_id: str | None,
                                  python: str, java_home: str | None, run_id: int,
-                                 run_attempt: int, subject: dict[str, Any] | None = None) -> WorkerResult:
+                                 run_attempt: int, subject: dict[str, Any] | None = None,
+                                 scope: str | None = None) -> WorkerResult:
     """Run one protected hook of the adapter contract from the protected adapter copy.
 
     ``derive_plan`` runs before any plan exists: it takes the ``subject`` that ``ci subject``
     authenticated and no plan. Every other protected hook runs against the protected ``plan``,
     for the target or lane the contract gives it, and takes its identity from that plan alone.
     The argv, the unit environment and the timeout come from :mod:`mod_base.build_ci.adapter`
-    and the protected config; no command or environment is accepted from the caller. Exit zero
+    and the protected config; no command is accepted from the caller, and no environment but
+    ``scope``, the kit's own line of scope data that ``adapter.hook_values`` admits for
+    ``derive_scope`` and a narrowed lane's ``derive_runtime`` and ``verify_runtime``. Exit zero
     and logs do not authorize receipts, upload or status. The validator is terminated and locked
     whatever happens.
     """
@@ -465,7 +468,7 @@ def execute_controller_validator(*, boundary: HostBoundary, validator: WorkerAcc
             if config["profile"] != plan["profile"]:
                 raise WorkerError("controller hook profile differs from the protected plan")
             adapter.plan_unit(plan, hook, unit_id)
-        values = adapter.hook_values(hook, unit_id=unit_id)
+        values = adapter.hook_values(hook, unit_id=unit_id, scope=scope)
         authenticate_host_boundary(boundary)
         authenticate_peer_account(validator, runner_uid=boundary.uid, runner_gid=boundary.gid)
         observed = _authenticate_controller_read_copy(boundary, validator, sources, identity)

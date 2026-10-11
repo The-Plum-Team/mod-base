@@ -102,7 +102,7 @@ EXPORT_CONDITION = ("steps.seed.outputs.key != '' && steps.restore.outputs.cache
 CANDIDATE_VERBS = frozenset({"worker-stage", "worker-run"})
 #: The verbs that call the API: exactly the steps that run one hold the step-scoped token.
 API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate", "select-build", "fetch-build",
-                       "aggregate", "gate-status"})
+                       "aggregate", "gate-status", "scope"})
 #: The verbs that must also run after a failure or a cancellation, and the step each depends on.
 #: A bare ``always()`` would run kit Python in a job whose prologue failed, that is from a kit tree
 #: nobody verified; a step that follows the prologue can only have succeeded when the prologue did.
@@ -186,6 +186,7 @@ CI_VERB_OUTPUTS = {
     "plan": frozenset({"plan_sha256", "targets", "lanes", "candidate_kit_sha"}),
     "reuse-admit": frozenset({"mode", "reason"}),
     "select-build": frozenset({"found", "run_id", "selection"}),
+    "scope": frozenset({"scope", "reason"}),
     "gate-status": frozenset({"settled", "intents"}),
     "seed-key": frozenset({"key"}),
     "seed-export": frozenset({"saved"}),
@@ -343,10 +344,11 @@ def strings(value: Any) -> Iterator[str]:
 #: One value for every name a step's ``env:`` may define; an unknown name fails the run. ``MODE``
 #: and ``BUILD_RUN_ID`` are the packaged call inputs of a pull request (both empty); the record
 #: of the Build the ``input`` job then selected reaches the later jobs as ``SELECTION``, the one
-#: line ``ci select-build`` writes as its ``selection`` output.
+#: line ``ci select-build`` writes as its ``selection`` output, and its narrowed scope as ``SCOPE``,
+#: the line ``ci scope`` writes, which is empty for a run in full.
 SAMPLES = {"KIT_SHA": "b" * 40, "PR_NUMBER": "17", "GH_TOKEN": "step-token", "PLAN_SHA256": "c" * 64,
            "TESTED_SHA": "d" * 40, "TARGET": "target-a", "LANE": "lane-a", "MODE": "", "BUILD_RUN_ID": "", "SEED_HIT": "",
-           "SELECTION": canonical_json(ci_selection()).decode("utf-8").rstrip("\n")}
+           "SELECTION": canonical_json(ci_selection()).decode("utf-8").rstrip("\n"), "SCOPE": ""}
 #: What the runner could leak into a step: every script scrubs these before it runs anything.
 AMBIENT = ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
            "ACTIONS_ID_TOKEN_REQUEST_URL", "GITHUB_TOKEN", "GH_TOKEN")
@@ -438,7 +440,7 @@ class CiRegistryTests(unittest.TestCase):
                 "select": ("subject", "worker-prepare", "plan", "reuse-admit", "select-build", "worker-finish"),
             },
             "packaged-e2e": {
-                "input": ("subject", "worker-prepare", "plan", "select-build", "worker-finish"),
+                "input": ("subject", "worker-prepare", "plan", "select-build", "scope", "worker-finish"),
                 "lane": ("subject", "system-profile", "worker-prepare", "plan", "fetch-build", "seed-key",
                          "worker-stage", "worker-run", "worker-seal", "worker-validate", "seed-export",
                          "worker-finish"),
@@ -577,7 +579,7 @@ class CiOutputTests(unittest.TestCase):
         # Everything that leaves a job or decides a later step is among them.
         self.assertLessEqual({("subject", "tested_sha"), ("plan", "plan_sha256"), ("plan", "targets"),
                               ("plan", "lanes"), ("reuse-admit", "mode"), ("select-build", "found"),
-                              ("select-build", "run_id"), ("select-build", "selection"),
+                              ("select-build", "run_id"), ("select-build", "selection"), ("scope", "scope"),
                               ("gate-status", "settled"), ("gate-status", "intents"), ("seed-key", "key"),
                               ("seed-export", "saved"), (CACHE_RESTORE, "cache-hit")}, read)
 

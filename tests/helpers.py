@@ -1024,6 +1024,30 @@ def ci_selection() -> dict[str, Any]:
             "build": ci_descriptor(), "envelope_sha256": canonical_sha256(ci_envelope())}
 
 
+def ci_scope(plan: dict[str, Any] | None = None, *, lanes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """A ``mod-base.ci.scope`` record of the plan's pull request, requested by the packaged run of
+    ``ci_producer``: every lane with its first obligation, or ``lanes``. Its baseline is the
+    tested record of a push run of the base commit."""
+
+    plan = ci_plan() if plan is None else plan
+    request = ci_producer("packaged")
+    identity = plan["identity"]
+    return {"kind": "mod-base.ci.scope", "schema_version": 1, "identity": copy.deepcopy(identity),
+            "plan_sha256": plan["plan_sha256"], "profile": plan["profile"],
+            "request": {key: request[key] for key in ("run_id", "run_attempt", "workflow_path", "workflow_ref")}
+                       | {"nonce": h("scope-nonce")},
+            "input": "changed-paths-v1",
+            "changes": {"base_sha": identity["base_sha"], "base_tree": "9" * 40, "tested_tree": identity["tested_tree"],
+                        "paths": 2, "paths_sha256": canonical_sha256(["README.md", "docs/guide.md"])},
+            "baseline": {"evidence": "tested",
+                         "record": {"run_id": 40, "run_attempt": 1, "artifact_id": 90,
+                                    "artifact_name": grammar.ci_artifact_name("tested", 40, 1, "packaged"),
+                                    "digest": "sha256:" + h("baseline-archive")},
+                         "original": None, "record_sha256": h("baseline-record"), "plan_sha256": h("base-plan")},
+            "lanes": copy.deepcopy(lanes) if lanes is not None else
+            [{"id": lane["id"], "scenarios": lane["obligations"][:1]} for lane in plan["lanes"]]}
+
+
 def ci_run_gate(plan: dict[str, Any], gate: str, mode: str) -> dict[str, Any]:
     """The receipt of ``gate`` for the plan's subject, sealed by a run in ``mode``: ``full`` is a
     Build run; ``pull-request``, ``selected`` and ``rebuilt`` are packaged runs, and a rebuilt
@@ -1159,7 +1183,7 @@ def ci_root_request(operation: str = "freeze-build-validation") -> dict[str, Any
             "grant-build-validation": {"plan": plan, "envelope": ci_envelope()},
             "grant-runtime-validation": {"plan": plan, "build": ci_envelope(), "runtime": lane,
                                          "lane_id": "lane-a", "run_id": 43, "run_attempt": 2}}[operation]}
-    elif operation == "take-derived-runtime":
+    elif operation in ("take-derived-runtime", "take-derived-scope"):
         arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000}}
     elif operation == "export-seed":
         arguments = {"validator": validator, "candidate": {"uid": 2000, "gid": 2000},
@@ -1250,6 +1274,7 @@ def sample_documents() -> dict[str, dict[str, Any]]:
         "ci-runtime-envelope": ci_runtime_envelope(),
         "ci-envelope": ci_envelope(),
         "ci-selection": ci_selection(),
+        "ci-scope": ci_scope(),
         "ci-gate-build": ci_gate(),
         "ci-gate-packaged": ci_gate("packaged"),
         "ci-results": ci_results(),
@@ -1286,6 +1311,7 @@ VALID_FIXTURE_KINDS = {
     "ci-runtime-envelope": "mod-base.ci.runtime-envelope",
     "ci-envelope": "mod-base.build.envelope",
     "ci-selection": "mod-base.ci.selection",
+    "ci-scope": "mod-base.ci.scope",
     "ci-gate-build": "mod-base.ci.gate",
     "ci-gate-packaged": "mod-base.ci.gate",
     "ci-results": "mod-base.ci.results",

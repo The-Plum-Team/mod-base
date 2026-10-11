@@ -6,12 +6,14 @@ from __future__ import annotations
 import copy
 import json
 import unittest
+from unittest import mock
 
+from mod_base.build_ci.protocol import plan_sha256
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.model.documents import load_document
-from tests.ci_attempt import expand, lane_archive, record_zip, runtime_input_sha256, sealed, validation
-from tests.helpers import ci_graph_jobs, h
+from tests.ci_attempt import expand, lane_archive, plan_of, record_zip, runtime_input_sha256, sealed, validation
+from tests.helpers import ci_graph_jobs, ci_scope, h
 from tests.test_ci_describe import RERUN
 from tests.test_ci_gate import AGGREGATE, LANE, LISTINGS, PACKAGED_GATE, GateCase, seed_build
 from tests.test_ci_transport import after_download
@@ -75,6 +77,105 @@ class AggregateCase(GateCase):
         self.assertEqual(code, 2)
         self.assertTrue(stderr.startswith(f"mod_base: {reason}: "), stderr)
         self.assertIn(message, stderr)
+
+
+def two_obligations(subject, **options):
+    """``ci_attempt.plan_of`` with a second obligation in every lane, so that a scope can narrow."""
+
+    plan = plan_of(subject, **options)
+    for lane in plan["lanes"]:
+        lane["obligations"] = [*lane["obligations"], "scenario/example/server/second"]
+    plan["plan_sha256"] = plan_sha256(plan)
+    return plan
+
+
+class ScopeTests(AggregateCase):
+    """A narrowed scope (docs/BUILD-RUNTIME-SELECTION.md, D1 b): the index holds the record the
+    input job handed to every lane, and the gate seals its digest after it found that very record."""
+
+    def world(self, **options):
+        with mock.patch("tests.ci_attempt.plan_of", two_obligations):
+            attempt = super().world(lanes=2, **options)
+        producer = attempt.producer("pull-request")
+        attempt.scope = ci_scope(attempt.plan)
+        attempt.scope["request"].update(run_id=attempt.run_id, run_attempt=producer["run_attempt"],
+                                        workflow_path=producer["workflow_path"], workflow_ref=producer["workflow_ref"])
+        attempt.scope_file = attempt.directory / "scope.json"
+        attempt.scope_file.write_bytes(canonical_json(attempt.scope))
+        return attempt
+
+    def aggregated(self, attempt, *scope: str):
+        output = attempt.directory / "index"
+        return attempt.command("aggregate", "--selection", str(attempt.selection), *scope, "--output", str(output)), \
+            output / grammar.CI_RESULTS_NAME
+
+    def sealed(self, attempt, raw: bytes, *scope: str):
+        attempt.jobs = expand(ci_graph_jobs(LISTINGS["pull-request"]), attempt.plan)
+        attempt.sealing(PACKAGED_GATE)
+        attempt.publish("results", None, record_zip(grammar.CI_RESULTS_NAME, raw), artifact_id=400)
+        output = attempt.directory / "upload"
+        return attempt.command("seal-gate", "--gate", "packaged", "--selection", str(attempt.selection), *scope,
+                               "--output", str(output)), output / grammar.CI_GATE_NAME
+
+    def test_the_index_holds_the_scope_and_the_tested_record_its_digest(self) -> None:
+        attempt = self.world()
+        (code, stdout, stderr), index = self.aggregated(attempt, "--scope", str(attempt.scope_file))
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        document = load_document(index.read_bytes(), kind="mod-base.ci.results", plan=attempt.plan)
+        self.assertEqual(document["scope"], attempt.scope)
+        self.assertEqual(attempt.api.request_count, 13 + 2 * 2, "the scope costs the aggregate no request")
+        (code, stdout, stderr), receipt = self.sealed(attempt, index.read_bytes(), "--scope", str(attempt.scope_file))
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        record = load_document(receipt.read_bytes(), kind="mod-base.ci.gate", plan=attempt.plan)
+        self.assertEqual(record["scope_sha256"], canonical_sha256(attempt.scope))
+        self.assertEqual(record["mode"], "pull-request")
+
+    def test_an_empty_scope_file_is_a_run_in_full(self) -> None:
+        attempt = self.world()
+        attempt.scope_file.write_bytes(b"")
+        (code, _, stderr), index = self.aggregated(attempt, "--scope", str(attempt.scope_file))
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertNotIn("scope", load_document(index.read_bytes(), kind="mod-base.ci.results", plan=attempt.plan))
+        (code, _, stderr), receipt = self.sealed(attempt, index.read_bytes(), "--scope", str(attempt.scope_file))
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertNotIn("scope_sha256", json.loads(receipt.read_bytes()))
+
+    def test_the_gate_requires_the_index_to_hold_exactly_the_scope_it_was_handed(self) -> None:
+        attempt = self.world()
+        (code, _, _), index = self.aggregated(attempt, "--scope", str(attempt.scope_file))
+        self.assertEqual(code, 0)
+        raw = index.read_bytes()
+        (code, _, stderr), receipt = self.sealed(attempt, raw)
+        self.assertEqual(code, 2)
+        self.assertIn("the results index holds another scope than this run attempt's input job handed over", stderr)
+        self.assertFalse(receipt.exists())
+        attempt = self.world()
+        (code, _, _), index = self.aggregated(attempt)
+        self.assertEqual(code, 0)
+        (code, _, stderr), _ = self.sealed(attempt, index.read_bytes(), "--scope", str(attempt.scope_file))
+        self.assertEqual(code, 2)
+        self.assertIn("holds another scope", stderr)
+
+    def test_a_scope_of_another_attempt_or_plan_is_refused_before_any_request(self) -> None:
+        for name, change in {"another attempt": lambda scope: scope["request"].update(run_attempt=1),
+                             "another run": lambda scope: scope["request"].update(run_id=44),
+                             "another plan": lambda scope: scope.update(plan_sha256="f" * 64),
+                             "nothing narrowed": lambda scope: [lane.update(scenarios=[
+                                 "scenario/example/server/probe", "scenario/example/server/second"])
+                                 for lane in scope["lanes"]]}.items():
+            attempt = self.world()
+            change(attempt.scope)
+            attempt.scope_file.write_bytes(canonical_json(attempt.scope))
+            with self.subTest(case=name):
+                (code, _, stderr), index = self.aggregated(attempt, "--scope", str(attempt.scope_file))
+                self.assertEqual(code, 2, stderr)
+                self.assertEqual(attempt.api.request_count, 0)
+                self.assertFalse(index.exists())
+        attempt = self.world()
+        attempt.scope_file.write_bytes(canonical_json(attempt.scope).replace(b",", b", ", 1))
+        (code, _, stderr), _ = self.aggregated(attempt, "--scope", str(attempt.scope_file))
+        self.assertEqual(code, 2)
+        self.assertIn("not canonical", stderr)
 
 
 class AggregateCommandTests(AggregateCase):

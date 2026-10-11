@@ -188,7 +188,7 @@ class Sandbox:
         return self.subject if self.plan is None else self.plan["identity"]
 
     def run(self, hook: str, *, unit_id: str | None = None, runtime: dict[str, str] | None = None,
-            timeout: float = 60.0) -> subprocess.CompletedProcess[bytes]:
+            timeout: float = 60.0, scope: str | None = None) -> subprocess.CompletedProcess[bytes]:
         """Run one hook exactly as the contract says, as this user, and return the finished process."""
 
         role = adapter.HOOKS[hook].role
@@ -196,7 +196,7 @@ class Sandbox:
                                        dispatcher=self.config.data["adapter"]["dispatcher"])
         pairs = worker_environment(role=role, python=sys.executable, java_home=None, identity=self.identity(),
                                    run_id=42, run_attempt=1,
-                                   values=adapter.hook_values(hook, unit_id=unit_id, runtime=runtime))
+                                   values=adapter.hook_values(hook, unit_id=unit_id, runtime=runtime, scope=scope))
         environment = {name: value.replace(str(WORKER_ROOT), str(self.root))
                        for name, value in (pair.split("=", 1) for pair in pairs)}
         return subprocess.run(command, cwd=self.checkout[role], env=environment, stdin=subprocess.DEVNULL,
@@ -238,11 +238,11 @@ class Sandbox:
             raise AssertionError(f"build_target {target_id} failed: {process.stdout!r}")
         self.seal(self.export, self.sealed_build)
 
-    def run_lane(self, lane_id: str) -> None:
-        """Derive a lane's runtime values, stage the sealed Build where its checkout expects it,
-        run the lane and seal its results."""
+    def run_lane(self, lane_id: str, *, scope: str | None = None) -> None:
+        """Derive a lane's runtime values, with the lane's narrowed ``scope`` when there is one,
+        stage the sealed Build where its checkout expects it, run the lane and seal its results."""
 
-        process = self.run("derive_runtime", unit_id=lane_id)
+        process = self.run("derive_runtime", unit_id=lane_id, scope=scope)
         if process.returncode != 0 or files(self.validation) != {adapter.RUNTIME_OUTPUT}:
             raise AssertionError(f"derive_runtime {lane_id} failed: {process.stdout!r}")
         runtime = adapter.parse_runtime_values((self.validation / adapter.RUNTIME_OUTPUT).read_bytes())

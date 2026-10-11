@@ -293,6 +293,26 @@ class ReaderTests(SealCase):
             with self.subTest(change=name):
                 self.unreadable(world, descriptor, message)
 
+    def test_a_reference_never_names_a_narrowed_original(self) -> None:
+        # No admission of this kit seals one (D5); a reference that names one anyway is refused.
+        world = self.sealing("build")
+        document = copy.deepcopy(world.documents["packaged"])
+        document["scope_sha256"] = "a" * 64
+        world.seal("packaged", document)
+        merged_pair = reuse._merged_pair
+
+        def unnarrowed(*arguments, **options):
+            build, packaged = merged_pair(*arguments, **options)
+            return build, {key: value for key, value in packaged.items() if key != "scope_sha256"}
+
+        attempt = world.attempt
+        with patch.object(reuse, "_merged_pair", unnarrowed):
+            authenticated = gate.authenticate_attempt(attempt.api, record=attempt.record, plan=attempt.plan,
+                                                      gate="build", run_id=attempt.run_id, run_attempt=ATTEMPT)
+            _, reference = gate.seal_reuse(authenticated, temporary_root=self.scratch)
+        descriptor = publish_reference(attempt, canonical_json(reference))
+        self.unreadable(world, descriptor, "never covers a push with a narrowed pull request run")
+
     def test_originals_that_have_expired_since_are_unavailable_not_corrupt(self) -> None:
         for artifact_id in (BUILD_SEAL, PACKAGED_SEAL, BUNDLE, LANE, RESULTS):
             world, _, descriptor = self.sealed()

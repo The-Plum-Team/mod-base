@@ -338,6 +338,16 @@ class ComparisonTests(ReuseCase):
             with self.subTest(edit=name):
                 self.assert_full(world, "plan-differs", requests=CLAIM_REQUESTS)
 
+    def test_a_narrowed_pull_request_never_covers_the_push_after_its_merge(self) -> None:
+        # D5 of docs/BUILD-RUNTIME-SELECTION.md: the plans are equal, so only the packaged tested
+        # record says that the pull request ran fewer obligations than the push would.
+        world = self.world()
+        document = copy.deepcopy(world.documents["packaged"])
+        document["scope_sha256"] = "a" * 64
+        world.seal("packaged", document)
+        outcome = self.assert_full(world, "original-run-narrowed", requests=ADMITTED_REQUESTS)
+        self.assertIn("pull request #7", outcome.detail)
+
     def test_a_record_of_another_caller_or_repository_stops_the_job(self) -> None:
         workflow = ".github/workflows/other-build.yml"
         world = self.world(controller_workflow=workflow,
@@ -562,7 +572,7 @@ class EventTests(ReuseCase):
         self.assertEqual((world.api.request_count, pull_request.api.request_count), (0, 0))
 
     def test_every_reason_has_its_words_and_no_other_is_given(self) -> None:
-        self.assertEqual(len(reuse.FULL_RUN_REASONS), 17)
+        self.assertEqual(len(reuse.FULL_RUN_REASONS), 18)
         for reason, words in reuse.FULL_RUN_REASONS.items():
             self.assertRegex(reason, r"^[a-z]+(?:-[a-z]+)+$")
             self.assertEqual(reuse.FullRunRequired(reason, words).detail, words)
