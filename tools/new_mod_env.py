@@ -58,7 +58,7 @@ BRANCH_POLICY = {"protected_branches": False, "custom_branch_policies": True}
 REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}")
 CLIENT_ID = re.compile(r"Iv[0-9A-Za-z._-]{4,64}")
 PEM = re.compile(rb"-----BEGIN (?:RSA )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+"
-                 rb"-----END (?:RSA )?PRIVATE KEY-----\r?\n?")
+                 rb"-----END (?:RSA )?PRIVATE KEY-----[\r\n]*")   # a password manager may add line ends
 MAX_KEY_BYTES = 16 * 1024
 MAX_APP_JSON_BYTES = 64 * 1024
 MAX_LISTED = 100

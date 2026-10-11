@@ -318,10 +318,10 @@ class NewModEnvTests(unittest.TestCase):
                    "client, key = m.load_credentials(None, None, Path('-'))\n"
                    "print(client, len(key), key.startswith(b'-----BEGIN'))\n")
         # -B: no tools/__pycache__, which the kit tree digest refuses.
-        completed = subprocess.run([sys.executable, "-I", "-B", "-c", program], input=KEY, capture_output=True,
-                                   check=False, timeout=60)
+        completed = subprocess.run([sys.executable, "-I", "-B", "-c", program], input=KEY + b"\n",
+                                   capture_output=True, check=False, timeout=60)
         self.assertEqual((completed.returncode, completed.stderr), (0, b""))
-        self.assertEqual(completed.stdout.decode().split(), ["None", str(len(KEY)), "True"])
+        self.assertEqual(completed.stdout.decode().split(), ["None", str(len(KEY) + 1), "True"])
 
     def test_the_client_id_is_read_from_the_gate_app_when_not_given(self) -> None:
         github = FakeGitHub()
