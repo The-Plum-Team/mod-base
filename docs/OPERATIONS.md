@@ -435,8 +435,8 @@ workflow or the config itself gets both contexts once its gates pass.
 1. Add `admission` to the config in a pull request that goes through the mod's existing approval
    route (for Block Pops a `controller-upgrade/*` pull request with the owner's exact-head
    approval). The config of the default branch decides, so the admission applies from the merge
-   on. A kit release older than the one that added `admission` refuses a config that has it:
-   remove it before a pin rollback below that release.
+   on. A kit release older than v1.3.0, which added `admission`, refuses a config that has it:
+   remove it before a pin rollback below v1.3.0.
 2. List as `protected_paths` what an ordinary pull request may not change. Block Pops lists the
    `PROTECTED_PATHS` of `scripts/ci/gate_controller.py`, the `build.gradle` and `src/e2e` of every
    loader, the exact base-owned files outside them (the release matrix and

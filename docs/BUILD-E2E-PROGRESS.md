@@ -11,9 +11,12 @@ into a rerun of failed jobs only (K7 canary cases C2 and C4); v1.1.3, whose gate
 decides a gate whose bundle is gone instead of publishing nothing (K7 canary case F1); v1.2.0,
 a release candidate (tag only, never a Release) that reads a mutable state once to start watching
 it (QS-G7, 14 requests less per generation) and adds optional protected seeds (QS-G2/G3, off
-unless a mod's protected config enables `seeds`); and v1.2.1, which supersedes v1.2.0 with all of
+unless a mod's protected config enables `seeds`); v1.2.1, which supersedes v1.2.0 with all of
 it and seals the Build only after the protected policy job has finished (found in the Quick Skin
-and Block Pops shadow runs, whose policy outlives their targets). No mod is active: none has an
+and Block Pops shadow runs, whose policy outlives their targets); and v1.3.0, whose gate status
+refuses a success for an unapproved change to protected paths when a mod's protected config
+enables `admission` (the B3 blocker of Block Pops), with the new-mod guide and its gate
+environment tool. No mod is active: none has an
 activation manifest, and managed Build/E2E callers have run on GitHub only in the K7 canary
 repository. The design awaits owner agreement; ADR 0007 is Proposed. **K7 is done: its rounds ran at v1.1.1 and the v1.1.3 fixes passed in a second canary (see its row
 below); the v1.1.3 Release is published. When K7 closed, Quick Skin and Block Pops pinned v1.1.1
@@ -25,7 +28,7 @@ without an activation manifest, and Q1–Q10, B1–B7 and the GitHub settings of
   Python 3.11 and 3.13 at the v1.1.1 release commit, 3,059 on Python 3.11 and 3.13 at the v1.1.2
   release commit, 3,060 on Python 3.11 and 3.13 at the v1.1.3 release commit, 3,080 tests on
   each Python 3.11–3.13 at the v1.2.0 release commit, 3,081 on each Python 3.11–3.13 at the v1.2.1
-  release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
+  release commit, 3,124 on each Python 3.11–3.13 at the v1.3.0 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
   integration cases use real files, Git and processes, while older isolated tests also replace
   system/account operations.
 - **Hosted account proof:** `ci_linux_worker.py` (132 tests), `ci_linux_deferred.py` (2 tests) and
@@ -158,7 +161,7 @@ status caller, and, before B1, a released kit to pin.
 
 B3 removes Block Pops' own evaluator from pull requests into `master`. Its owner approval of
 changes to protected paths then lives only in the kit's gate status: the optional `admission` of
-the Build config (unreleased), which a kit release, a pin bump and a `controller-upgrade/*` change
+the Build config (v1.3.0), which a pin bump to v1.3.0 or newer and a `controller-upgrade/*` change
 adding it to `scripts/ci/mod-base-build.json` must bring to `master` before B3 merges
 ([OPERATIONS.md](OPERATIONS.md#protected-admission)). The kit checks the generic rule (a protected
 path changed needs an approver's decision on the exact head); the evaluator's upgrade path list,

@@ -183,7 +183,7 @@ read it (a new file in your own profile has none; elsewhere, from Git Bash,
 
 `--client-id <id>` overrides the client ID, and `--app-json <path>` reads the JSON of the App
 manifest flow (`client_id` and `pem`, under the same rules). The tool needs a kit checkout that
-has it; until a release ships it, run it from a clone of `main`.
+has it: v1.3.0 or newer.
 
 It refuses, before writing anything, an environment that admits another branch or has required
 reviewers or a wait timer, a `--branch` that is not the default branch, and a repository or

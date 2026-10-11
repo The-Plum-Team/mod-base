@@ -5,11 +5,17 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased
+## v1.3.0
 
-- Add an optional protected admission to the kit's gate status (the B3 blocker of the Block Pops
-  activation: in `shared-build-and-e2e` no evaluator of the mod runs on a pull request, and the
-  gate status checked no protected path, no owner approval and no restricted transition). The
+Minor release: an optional protected admission in the kit's gate status (#18), which Block Pops
+needs before B3 (`shared-build-and-e2e`) and Quick Skin before its required contexts move to the
+kit, and the new-mod guide with its gate environment tool (#19). Nothing changes for a mod that
+does not add `admission` to its protected config. v1.3.0 is tagged first and becomes a GitHub
+Release once the canary passes it.
+
+- Add an optional protected admission to the kit's gate status (#18, the B3 blocker of the Block
+  Pops activation: in `shared-build-and-e2e` no evaluator of the mod runs on a pull request, and
+  the gate status checked no protected path, no owner approval and no restricted transition). The
   optional `admission` of `mod-base.build.config` (within schema 1: `protected_paths`, `command`,
   `approvers`) is read from the protected default branch. When the tested merge of a pull request
   changes a protected path (its tree entry against the base), `ci gate-status` turns every gate
@@ -26,9 +32,35 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   (OPERATIONS.md, "Protected admission").
 - Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
   `pixel_metrics_version` 1, the managed files, the workflows' jobs, steps and permissions are
-  those of v1.2.1. A kit before this change refuses a config that has `admission`. The
-  compatibility ledger now compares against the archived v1.2.1 reader
-  (`tests/fixtures/previous_release/v1.2.1`, built from the release commit like v1.2.0's).
+  those of v1.2.1. A kit before v1.3.0 refuses a config that has `admission`. The compatibility
+  baseline moves to the archived v1.2.1 reader (`tests/fixtures/previous_release/v1.2.1`, built
+  from the release commit like v1.2.0's), the immediate predecessor in this changelog.
+- Add the new-mod guide and the gate environment tool (#19). `docs/NEW-MOD.md` orders the
+  steps from an empty repository to the shared gates: repository settings and ruleset, the kit
+  files, Pages and the evidence adapter, the Maven mirror, the `mod-base-gate` environment, the
+  Build adapter, `disabled -> shadow` and `shadow -> shared-build(-and-e2e)`, with what to check
+  before each move. `tools/new_mod_env.py` (stdlib, Python 3.11+) creates that environment,
+  limits it to the default branch and reads the restriction back before it stores the client id
+  variable and the key secret; it reads the key only from the path it is given (a file, a pipe or
+  `-`), refuses a key file other users can read, never prints the key and deletes nothing.
+  OPERATIONS.md records the gate App (`plum-mod-base-gate`, installed on every repository of the
+  organization, its key only in each mod's environment and the owner's copy only in a password
+  manager). No `src/` code and no managed template file change; the staged-file lock covers the
+  new tool.
+- Upgrade: bump the pin to v1.3.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.3.0`, then `verify --network` and `template check`; OPERATIONS.md, "Bumping the kit in a
+  mod"). Admission stays off until the mod enables it: add `admission` (`protected_paths`,
+  `command`, `approvers`) to `scripts/ci/mod-base-build.json` in a pull request that goes through
+  the mod's existing approval route; the config of the default branch decides, so it applies from
+  that merge on. The list must cover the config, every adapter source, the activation manifest and
+  the four `mod-base-*.yml` callers. From then on approve each exact head of a pull request that
+  changes a protected path with `<command> approve <head sha>` and dispatch
+  `mod-base-gate-status.yml` when its gates already finished (OPERATIONS.md, "Protected
+  admission").
+- Rollback: to switch admission off, remove `admission` from the config through the same
+  protected route; v1.3.0 without it evaluates as v1.2.1. To pin back to v1.2.1, remove
+  `admission` first: v1.2.1 refuses a config that has it. Without `admission` the rollback is an
+  ordinary pin bump to v1.2.1.
 
 ## v1.2.1
 
