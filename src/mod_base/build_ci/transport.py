@@ -104,11 +104,14 @@ def _admit_source(reads: CommandReads, watch: Watch, identity: dict[str, Any],
                   merged: tuple[str, str] | None = None) -> None:
     """The live subject, or a merged pull request's history, observed now and before the effect."""
 
+    # The key names the identity, so that a watch started after another one (``Watch.after``) is
+    # never lent the admission of another identity, or of the merged history instead.
+    key = ("source", canonical_sha256(identity))
     if merged is None:
-        watch.read(("source",), functools.partial(authenticate_source_identity, reads, identity))
+        watch.read(key, functools.partial(authenticate_source_identity, reads, identity))
     else:
-        watch.read(("source",), functools.partial(authenticate_merged_pr_identity, reads, identity,
-                                                  controller_sha=merged[0], merged_sha=merged[1]))
+        watch.read((*key, *merged), functools.partial(
+            authenticate_merged_pr_identity, reads, identity, controller_sha=merged[0], merged_sha=merged[1]))
 
 
 def _run_state(reads: CommandReads, run_id: int) -> dict[str, Any]:
@@ -196,6 +199,20 @@ def _artifact_states(reads: CommandReads, run_id: int, ids: tuple[int, ...]) -> 
     return states
 
 
+def _availability(reads: CommandReads, run_id: int, ids: tuple[int, ...]) -> tuple[tuple[Any, ...], Any]:
+    """The watch key and reader of the availability of the artifacts ``ids`` of one run."""
+
+    return ("artifact availability", run_id, ids), functools.partial(_artifact_states, reads, run_id, ids)
+
+
+def _listed_artifact(reads: CommandReads, watch: Watch, run_id: int, state: dict[str, Any]) -> None:
+    """Start watching one artifact from its row in a listing of its run that the command has just
+    read (``state``, as :func:`_artifact_state` projects it), instead of reading it by id as well.
+    The recheck before the effect reads it by id."""
+
+    watch.observe(*_availability(reads, run_id, (state["id"],)), {state["id"]: state})
+
+
 def _authenticate_artifacts(reads: CommandReads, watch: Watch, descriptors: list[dict[str, Any]],
                             identity: dict[str, Any]) -> None:
     """Immutable metadata, owner run and head, and availability of every selected artifact."""
@@ -207,8 +224,7 @@ def _authenticate_artifacts(reads: CommandReads, watch: Watch, descriptors: list
     for run_id, group in runs.items():
         ids = tuple(sorted(descriptor["artifact"]["id"] for descriptor in group))
         check(len(set(ids)) == len(ids), "$.artifact.id", "duplicate selected artifact")
-        states = watch.read(("artifact availability", run_id, ids),
-                            functools.partial(_artifact_states, reads, run_id, ids))
+        states = watch.read(*_availability(reads, run_id, ids))
         for descriptor in group:
             selected, state = descriptor["artifact"], states[descriptor["artifact"]["id"]]
             for key in ("id", "name", "size", "digest", "created_at", "expires_at"):
@@ -320,25 +336,9 @@ def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], pl
     """
 
     plan = _plan(plan)
-    List(validate_descriptor, min_items=1, max_items=limits.MAX_CI_TARGETS)(descriptors, "$.descriptors")
-    descriptors = [_descriptor(descriptor) for descriptor in descriptors]
-    Int(1, limits.MAX_RUN_ID)(run_id, "$.run_id")
-    Int(1, limits.MAX_RUN_ATTEMPT)(run_attempt, "$.run_attempt")
-    check(len(descriptors) == len(plan["targets"]), "$.descriptors", "incomplete target input set")
-    check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
-    producer = {key: value for key, value in descriptors[0]["producer"].items() if key != "upload_window"}
-    check((producer["run_id"], producer["run_attempt"]) == (run_id, run_attempt),
-          "$.producer", "targets do not belong to the assembler's exact run and attempt")
-    for descriptor, target in zip(descriptors, plan["targets"]):
-        _bound(descriptor, plan, "target", target["id"])
-        check({key: value for key, value in descriptor["producer"].items() if key != "upload_window"} == producer,
-              "$.producer", "mixed target producer")
-    check(sum(descriptor["artifact"]["size"] for descriptor in descriptors) <= limits.MAX_CI_TARGET_DOWNLOAD_BYTES,
-          "$.descriptors", "target archive set exceeds its additional compressed-byte budget")
+    descriptors, producer = _target_inputs(descriptors, plan, run_id=run_id, run_attempt=run_attempt, output=output)
     caller = ci_producer(producer["workflow_path"])
     mode = "full" if caller == "build" else "rebuilt"
-    check(producer["graph_sha256"] == run_graph(caller, mode).sha256(plan),
-          "$.producer.graph_sha256", "targets do not carry the graph of their run")
     targets = [upload_job_name(caller, "target", target["id"]) for target in plan["targets"]]
     finished = [job_name(caller, "build", "plan"), job_name(caller, "build", "policy"), *targets]
     reads, watch = CommandReads.of(api), Watch()
@@ -356,6 +356,43 @@ def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], pl
         check(tuple(window) == (expected["started_at"], expected["completed_at"]),
               "$.producer.upload_window", "wrong target upload window")
     _authenticate_artifacts(reads, watch, descriptors, plan["identity"])
+    return _publish_target_set(reads, descriptors, plan, output=output, source_config_sha256=source_config_sha256,
+                               recheck=watch.recheck)
+
+
+def _target_inputs(descriptors: list[dict[str, Any]], plan: dict[str, Any], *, run_id: int, run_attempt: int,
+                   output: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The admission of a target input set that needs no API: one descriptor per planned target,
+    in plan order, all of one producer (returned without an upload window) that is the reader's
+    own run attempt with the graph of its mode, within the download budget; ``output`` is new."""
+
+    List(validate_descriptor, min_items=1, max_items=limits.MAX_CI_TARGETS)(descriptors, "$.descriptors")
+    descriptors = [_descriptor(descriptor) for descriptor in descriptors]
+    Int(1, limits.MAX_RUN_ID)(run_id, "$.run_id")
+    Int(1, limits.MAX_RUN_ATTEMPT)(run_attempt, "$.run_attempt")
+    check(len(descriptors) == len(plan["targets"]), "$.descriptors", "incomplete target input set")
+    check(isinstance(output, Path) and not os.path.lexists(output), "$.output", "invalid or preexisting output")
+    producer = {key: value for key, value in descriptors[0]["producer"].items() if key != "upload_window"}
+    check((producer["run_id"], producer["run_attempt"]) == (run_id, run_attempt),
+          "$.producer", "targets do not belong to the assembler's exact run and attempt")
+    for descriptor, target in zip(descriptors, plan["targets"]):
+        _bound(descriptor, plan, "target", target["id"])
+        check({key: value for key, value in descriptor["producer"].items() if key != "upload_window"} == producer,
+              "$.producer", "mixed target producer")
+    check(sum(descriptor["artifact"]["size"] for descriptor in descriptors) <= limits.MAX_CI_TARGET_DOWNLOAD_BYTES,
+          "$.descriptors", "target archive set exceeds its additional compressed-byte budget")
+    caller = ci_producer(producer["workflow_path"])
+    check(producer["graph_sha256"] == run_graph(caller, "full" if caller == "build" else "rebuilt").sha256(plan),
+          "$.producer.graph_sha256", "targets do not carry the graph of their run")
+    return descriptors, producer
+
+
+def _publish_target_set(reads: CommandReads, descriptors: list[dict[str, Any]], plan: dict[str, Any], *,
+                        output: Path, source_config_sha256: str | None,
+                        recheck: Callable[[], None]) -> list[dict[str, Any]]:
+    """Download the admitted target inputs ``descriptors`` by id, verify each and publish them
+    privately at ``output`` (:func:`download_target_set`). The caller has authenticated the run,
+    its jobs and every artifact; ``recheck`` repeats those reads before anything is published."""
 
     def writer(stage: Path, stage_fd: int) -> list[dict[str, Any]]:
         partitions = []
@@ -377,7 +414,7 @@ def download_target_set(api: GitHubApi, *, descriptors: list[dict[str, Any]], pl
                   "$.partitions", "target inputs exceed the original logical export budget")
         validate_target_partitions(partitions, plan=plan)
         validate_tree_entries(stage, max_entries=limits.MAX_CI_TARGET_INPUT_ENTRIES)
-        watch.recheck()
+        recheck()
         return partitions
 
     try:
@@ -571,8 +608,17 @@ def download_gate_receipt(api: GitHubApi, *, descriptor: dict[str, Any], plan: d
     newest one and status authority remain additional proofs. Reuse references are not read here.
     """
 
+    return _gate_receipt(CommandReads.of(api), Watch(), descriptor=descriptor, plan=plan, gate=gate,
+                         temporary_root=temporary_root)
+
+
+def _gate_receipt(reads: CommandReads, watch: Watch, *, descriptor: dict[str, Any], plan: dict[str, Any],
+                  gate: str, temporary_root: Path) -> dict[str, Any]:
+    """:func:`download_gate_receipt` in ``watch``: a watch of its own, which may already hold the
+    run and the record's availability as the reader just observed them, or start from what the
+    watch of a receipt read before it rechecked (``reads.Watch.after``). It is rechecked here."""
+
     plan, descriptor = _plan(plan), _descriptor(descriptor)
-    reads, watch = CommandReads.of(api), Watch()
     _gate_mode(descriptor, plan, gate)
     _admit_source(reads, watch, plan["identity"])
     document = _read_gate(reads, watch, descriptor, plan, gate, temporary_root)

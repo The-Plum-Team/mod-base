@@ -33,9 +33,9 @@ class LatestDownloadTests(unittest.TestCase):
             self.assertEqual(list(Path(directory).iterdir()), [output])
         download.assert_called_once_with("/repos/example/mod/actions/artifacts/100/zip",
                                          max_bytes=world.bundle["artifact"]["size"])
-        # Select 9 (source 4, listing, run, jobs, bundle listing and record), download 2, and before
-        # publication the source 3, the listing, the run and the bundle record once more.
-        self.assertEqual(world.api.request_count, 17)
+        # Select 8 (source 4, listing, run, jobs, the bundle's row in its listing), download 2, and
+        # before publication the source 3, the listing, the run and the bundle record by id.
+        self.assertEqual(world.api.request_count, 16)
         self.assertEqual(world.api.mutations, [])
 
     def test_newer_run_attempt_or_expiry_during_download_leaves_no_published_output(self):

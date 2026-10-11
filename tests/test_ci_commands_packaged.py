@@ -157,14 +157,14 @@ class SelectBuildCommandTests(CommandTestCase):
                          [grammar.CI_PLAN_NAME, selection.SELECTION_NAME, identity.IDENTITY_NAME])
         return document
 
-    def test_a_pull_request_selects_the_newest_build_of_its_head_in_seventeen_requests(self) -> None:
+    def test_a_pull_request_selects_the_newest_build_of_its_head_in_sixteen_requests(self) -> None:
         for argv in ((), ("--build-run-id", ""), ("--wait-seconds", "60")):
             with self.subTest(argv=argv):
                 self.fresh()
                 world = JobWorld(self.directory).build()
                 state = world.state("input")
                 self.assertEqual(self.select(world, state, *argv), (0, ""))
-                self.assert_selected(world, state, requests=17)
+                self.assert_selected(world, state, requests=16)
 
     def test_selection_rejects_validation_for_another_protected_config(self) -> None:
         world = JobWorld(self.directory)
@@ -197,7 +197,7 @@ class SelectBuildCommandTests(CommandTestCase):
         world = JobWorld(self.directory, push=True).build()
         state = world.state("select")
         self.assertEqual(self.select(world, state), (0, ""))
-        self.assert_selected(world, state, requests=15)
+        self.assert_selected(world, state, requests=14)
 
     def test_a_protected_subject_without_a_build_answers_found_false(self) -> None:
         for listing in (None, "build-reuse"):
@@ -232,7 +232,7 @@ class SelectBuildCommandTests(CommandTestCase):
         world = JobWorld(self.directory, push=True, event="workflow_dispatch").build()
         state = world.state("input")
         self.assertEqual(self.select(world, state, "--build-run-id", "42"), (0, ""))
-        self.assert_selected(world, state, requests=15)
+        self.assert_selected(world, state, requests=14)
         self.fresh()
         world = JobWorld(self.directory, push=True).build()
         state = world.state("input")

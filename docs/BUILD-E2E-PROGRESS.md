@@ -29,7 +29,8 @@ without an activation manifest, and Q1–Q10, B1–B7 and the GitHub settings of
   root launches, selection hand-over and generated upload ZIPs. Both status intents succeed;
   corrupt lane ZIP, missing target, newer Build attempt and draft controls reject. A second
   generation uses a released future kit with different bytes, proves candidate resolution and
-  refuses privileged imports of it: **212/221 requests and 26 real fence launches** per Python leg.
+  refuses privileged imports of it: **198/207 requests and 26 real fence launches** per Python leg
+  (212/221 before the observations were reused; see Measured request budget).
   The release commit is merged only once its CI passes every ordinary and hosted module on
   Python 3.11–3.13.
   GitHub, caller orchestration and third-party Actions remain simulated. Latest-head acceptance
@@ -60,19 +61,28 @@ Paths below are relative to `src/mod_base/build_ci/` unless otherwise stated.
 ## Measured request budget
 
 The workflow-derived ledger includes Build, packaged E2E and one final status evaluation:
-synthetic 2 targets/3 lanes/1 extra input: **62 + 92 + 58 = 212**; Quick Skin 17/34/1:
-**107 + 247 + 58 = 412**; Block Pops 10/20/0: **83 + 174 + 57 = 314**. It counts kit
+synthetic 2 targets/3 lanes/1 extra input: **59 + 90 + 49 = 198**; Quick Skin 17/34/1:
+**104 + 245 + 49 = 398**; Block Pops 10/20/0: **80 + 172 + 48 = 300**. It counts kit
 traffic through FakeGitHub, including storage GETs, with single-page listings and no waiting,
 retries, other generations or earlier status events. Third-party Actions' internal traffic is
-outside this measurement. Every pending poll adds one; Quick Skin plus 89 polls is 501 (<600).
+outside this measurement. Every pending poll adds one; Quick Skin plus 89 polls is 487 (<600).
 
 Changing the candidate pin adds three release-admission requests in each run's first plan:
-**221 synthetic, 421 Quick Skin, 323 Block Pops** for the pinned annotated-tag case. Workers
+**207 synthetic, 407 Quick Skin, 309 Block Pops** for the pinned annotated-tag case. Workers
 verify the protected plan hash locally; they do not repeat admission. Equal pins add nothing.
 
-A job's `GITHUB_TOKEN` allowance is 1,000 REST requests/hour/repository, shared by runs.
+These totals are 14 lower than v1.1.3's (212, 412, 314; 221, 421, 323). The kit gap QS-G7 of
+the Quick Skin mapping found states read twice in a row inside one protected command, and they
+are now read once to start watching them (BUILD-PROTOCOL.md, Request budget): `ci assemble`
+13 instead of 16, `ci select-build` 16 instead of 17, the packaged `ci seal-gate` 22 instead of
+23 and the final `ci gate-status` 36 instead of 45. Every recheck before an effect is unchanged.
+
+GitHub documents a job's `GITHUB_TOKEN` allowance as 1,000 REST requests/hour/repository, shared
+by runs; K7 measured 5,000/hour in this organization, with each job's token reporting its own
+window, and 142–233 requests per pull-request generation of the synthetic mod (OPERATIONS.md,
+"Build/E2E canary (K7)"). The ledger keeps the documented 1,000 as its bound.
 `MAX_CI_GENERATION_REQUESTS = 440` is a test-only no-wait regression budget. The coordinator
-retained structural bounds of 256 targets/256 lanes, whose cost is at least 2,288 plus pagination;
+retained structural bounds of 256 targets/256 lanes, whose cost is at least 2,274 plus pagination;
 those bounds do not promise an executable generation within the allowance.
 
 ## Cold host-fence cost

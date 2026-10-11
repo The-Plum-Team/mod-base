@@ -299,9 +299,10 @@ MAX_CI_OBLIGATIONS_PER_LANE = 1024
 CI_BUILD_WAIT_SECONDS = 5400
 CI_BUILD_POLL_SECONDS = 60
 MAX_CI_BUILD_POLLS = CI_BUILD_WAIT_SECONDS // CI_BUILD_POLL_SECONDS + 1
-#: API requests of one ``ci select-build``. A pull request whose Build is complete costs 17, and
+#: API requests of one ``ci select-build``. A pull request whose Build is complete costs 16, and
 #: one more for every poll before that (91 polls at most, one a minute); a protected subject costs
-#: 15. The rest is for retried attempts and for the further pages of a run with over 100 jobs.
+#: 14, or 15 for the Build its own run built. The rest is for retried attempts and for the further
+#: pages of a run with over 100 jobs.
 MAX_CI_SELECT_BUILD_REQUESTS = MAX_CI_BUILD_POLLS + 64
 #: ``ci fetch-build`` sends one REST request for the selected archive and one credential-free
 #: storage request; the rest is for retries. Freshness is the input job's and the gate's decision.
@@ -310,18 +311,18 @@ MAX_CI_FETCH_BUILD_REQUESTS = 8
 #: credential-free artifact storage GETs and one final status evaluation, without waiting polls.
 #: Enforced by tests/test_ci_generation_budget.py, not a runtime plan-admission rule.
 MAX_CI_GENERATION_REQUESTS = 440
-#: API requests of one ``ci gate-status`` (45 with both runs complete); the rest is for retries and
+#: API requests of one ``ci gate-status`` (36 with both runs complete); the rest is for retries and
 #: pages.
 MAX_CI_GATE_STATUS_REQUESTS = 96
 #: The description of a status intent: GitHub's own bound for a commit status description.
 MAX_CI_STATUS_DESCRIPTION_CHARS = 140
-#: ``ci assemble`` sends 16 requests and 2 per target (archive REST redirect and storage GET;
-#: metadata is already authenticated from the listing), 50 for 17 targets. One of the 16 is the
-#: record of its own attempt, read before the run is: when the attempt started, so a job that
-#: GitHub carried over from an earlier attempt is refused. The rest is for retries and for the
-#: further pages of a run that lists more than 100 jobs or artifacts.
+#: ``ci assemble`` sends 13 requests and 2 per target (archive REST redirect and storage GET;
+#: metadata is already authenticated from the listing), 47 for 17 targets. It reads its run before
+#: the jobs of its attempt: the run's record says when the attempt started, so a job that GitHub
+#: carried over from an earlier attempt is refused. The rest is for retries and for the further
+#: pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_ASSEMBLE_REQUESTS = 48 + 3 * MAX_CI_TARGETS
-#: ``ci seal-gate`` sends 15 requests for a Build gate, 23 for the packaged gate of a pull request
+#: ``ci seal-gate`` sends 15 requests for a Build gate, 22 for the packaged gate of a pull request
 #: and 47 for the gate of a reuse run, which decides the reuse again (``gate.seal_reuse``), whatever
 #: the number of targets and lanes; the rest is for retries and for the further pages of a run that
 #: lists more than 100 jobs or artifacts.

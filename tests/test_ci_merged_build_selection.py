@@ -39,8 +39,8 @@ class MergedBuildSelectionTests(unittest.TestCase):
 
     def test_original_controller_attempt_and_descriptor_survive_final_merge(self):
         # Merged source: 3 mutable reads and two commits and two ancestries (one commit when the final
-        # merge is the tested merge). Then the listing, the run, its jobs, the bundle listing and record.
-        for same, requests in ((False, 12), (True, 11)):
+        # merge is the tested merge). Then the listing, the run, its jobs and the bundle's row in its listing.
+        for same, requests in ((False, 11), (True, 10)):
             world = merged_build_world(same=same)
             before = copy.deepcopy((world.plan, world.bundle))
             with self.subTest(same=same):

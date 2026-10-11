@@ -55,7 +55,8 @@ from mod_base.build_ci.protocol import PRODUCERS
 from mod_base.build_ci.reads import CommandReads, Watch
 from mod_base.build_ci.records import bind_source_selection, build_source_selection
 from mod_base.build_ci.transport import (_admit_source, _artifact_state, _authenticate_artifacts, _authenticate_run,
-                                         _descriptor, _download_build, _materialize_build, _merged, _plan, _run)
+                                         _descriptor, _download_build, _listed_artifact, _materialize_build, _merged,
+                                         _plan, _run)
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.jobs import job_graph
@@ -155,6 +156,13 @@ def describe_artifact(api: GitHubApi, *, plan: dict[str, Any], producer: dict[st
     artifact's metadata, owner and availability.
     """
 
+    return _described(api, plan=plan, producer=producer, jobs=jobs, kind=kind, unit_id=unit_id)[0]
+
+
+def _described(api: GitHubApi, *, plan: dict[str, Any], producer: dict[str, Any], jobs: list[dict[str, Any]],
+               kind: str, unit_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """:func:`describe_artifact` and the artifact's state as its row in the listing shows it."""
+
     attempt = producer["run_attempt"]
     caller = ci_producer(producer["workflow_path"])
     started, completed = sealed_upload(find_job(jobs, upload_job_name(caller, kind, unit_id), run_attempt=attempt))
@@ -168,7 +176,18 @@ def describe_artifact(api: GitHubApi, *, plan: dict[str, Any], producer: dict[st
                   "producer": {**producer, "upload_window": {"started_at": started, "completed_at": completed}},
                   "artifact": {key: state[key] for key in ("id", "name", "digest", "size", "created_at",
                                                            "expires_at")}}
-    return _descriptor(descriptor)
+    return _descriptor(descriptor), state
+
+
+def describe_watched(reads: CommandReads, watch: Watch, *, plan: dict[str, Any], producer: dict[str, Any],
+                     jobs: list[dict[str, Any]], kind: str, unit_id: str | None = None) -> dict[str, Any]:
+    """:func:`describe_artifact`, with the artifact's availability observed in ``watch`` from the
+    listing row it was described from: authenticating the artifact then reads nothing more, and
+    the recheck before the effect reads it by id."""
+
+    descriptor, state = _described(reads, plan=plan, producer=producer, jobs=jobs, kind=kind, unit_id=unit_id)
+    _listed_artifact(reads, watch, producer["run_id"], state)
+    return descriptor
 
 
 def _observe(reads: CommandReads, watch: Watch, plan: dict[str, Any],
@@ -208,7 +227,7 @@ def _observe(reads: CommandReads, watch: Watch, plan: dict[str, Any],
     producer = producer_record(plan, caller="build", run_id=newest["id"], run_attempt=attempt, event=newest["event"],
                                graph_sha256=digest)
     _authenticate_run(reads, watch, producer, plan, mode="full", complete=True)
-    descriptor = describe_artifact(reads, plan=plan, producer=producer, jobs=jobs, kind="build")
+    descriptor = describe_watched(reads, watch, plan=plan, producer=producer, jobs=jobs, kind="build")
     _authenticate_artifacts(reads, watch, [descriptor], identity)
     return "bundle", descriptor
 

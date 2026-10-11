@@ -182,10 +182,11 @@ class GateStatusTests(GateStatusTestCase):
             "gates": {gate: {"context": CONTEXTS[gate], "state": "success", "description": VERIFIED[gate],
                              "target_url": run_url(run_id)} for gate, run_id in (("build", 42), ("packaged", 43))}})
         self.assertEqual(list(document["gates"]), ["build", "packaged"])
-        # The pull request and both listings (3), the Build run with its jobs, record listing and
-        # receipt read (18), the packaged run likewise with the Build it consumed (21), and the
-        # pull request and both listings once more (3).
-        self.assertEqual(world.api.request_count, 45)
+        # The pull request and both listings (3); the Build run, its jobs and its record's row,
+        # then the receipt read, which starts from those (16); the packaged run likewise, starting
+        # from the source and the Build bundle the Build gate's read has just rechecked (14); and
+        # the pull request and both listings once more (3).
+        self.assertEqual(world.api.request_count, 36)
         self.assertLess(world.api.request_count, 60)
         self.assertLessEqual(limits.MAX_CI_GATE_STATUS_REQUESTS, 100)
 
@@ -475,7 +476,7 @@ class GateStatusTests(GateStatusTestCase):
 
             with self.subTest(path=path), patch.object(world.api, "get_json", side_effect=get):
                 self.refused(world, world.planned(f"state-{index}"), "github-api")
-        for budget in (1, 5, 20, 44):
+        for budget in (1, 5, 20, 35):
             world = self.world(max_requests=budget).gated()
             with self.subTest(budget=budget):
                 self.refused(world, world.planned(), "request-budget")
@@ -536,6 +537,35 @@ class GateStatusTests(GateStatusTestCase):
             world = self.world().gated()
             with self.subTest(path=path, status=status_), failing(world, path, gone(path, status_)):
                 self.refused(world, world.planned(), "github-api")
+
+    def test_a_bundle_that_goes_after_the_build_gate_was_verified_fails_the_packaged_gate(self) -> None:
+        # The packaged gate's read starts from the bundle as the Build gate's read has just
+        # rechecked it (Watch.after); its own recheck still reads the bundle by id.
+        world = self.world().gated()
+        bundle = world.documents["build"]["artifacts"][0]["artifact"]["id"]
+        path, gone = f"/repos/{h.REPOSITORY}/actions/artifacts/{bundle}", []
+        original = world.api.get_json
+
+        def get(target, **arguments):
+            if target in gone:
+                raise ApiError(f"GitHub API GET {target} failed: HTTP 404", status=404, method="GET", path=target)
+            return original(target, **arguments)
+
+        # The packaged run listing is read only once the Build gate is decided.
+        world.api.during_listing(PACKAGED_LISTING, lambda: gone.append(path))
+        with patch.object(world.api, "get_json", side_effect=get):
+            states = self.states(self.intents(world, world.planned()))
+        self.assertEqual(states, {
+            "build": ("success", VERIFIED["build"], run_url(42)),
+            "packaged": ("failure", f"the newest packaged E2E run was rejected: artifact {bundle} it needs is gone "
+                                    "(HTTP 404)", run_url(43))})
+        # The same bundle, still listed but expired, is a change the packaged gate's recheck sees.
+        world = self.world().gated()
+        world.api.during_listing(PACKAGED_LISTING, lambda: world.set_artifact(bundle, expired=True))
+        states = self.states(self.intents(world, world.planned()))
+        self.assertEqual(states["build"], ("success", VERIFIED["build"], run_url(42)))
+        self.assertEqual(states["packaged"][0], "failure")
+        self.assertIn("changed between the start of the command and its effect", states["packaged"][1])
 
     def test_a_closed_foreign_or_unknown_pull_request_is_refused(self) -> None:
         world = self.world().gated()
@@ -676,7 +706,7 @@ class GateSettleTests(GateStatusTestCase):
         self.assertEqual(self.states(document), {gate: ("success", VERIFIED[gate], run_url(run_id))
                                                  for gate, run_id in (("build", 42), ("packaged", 43))})
         self.assertEqual(self.output.read_text(encoding="utf-8"), "settled=false\nintents=" + stdout.decode("utf-8"))
-        self.assertEqual(world.api.request_count, 5 + 4 + 45)
+        self.assertEqual(world.api.request_count, 5 + 4 + 36)
         self.assertEqual(world.budgets, [limits.MAX_CI_GATE_STATUS_REQUESTS, limits.MAX_CI_SUBJECT_REQUESTS,
                                          limits.MAX_CI_GATE_STATUS_REQUESTS])
 

@@ -160,19 +160,49 @@ class Watch:
 
     :meth:`read` performs a read the first time its key is asked for and answers from that
     observation afterwards, so one phase of a command reads each thing once. :meth:`recheck`,
-    called immediately before the effect, performs every read again and requires the same answers."""
+    called immediately before the effect, performs every read again and requires the same answers.
+
+    A command that has just read a state through another request does not read it again to start
+    watching it: :meth:`observe` takes that answer as the first observation, and a watch made
+    :meth:`after` an earlier one of the same command starts from what that one has just rechecked.
+    Either way the recheck before the effect reads everything again, so a state that the other
+    request showed differently fails it, closed."""
 
     def __init__(self) -> None:
         self._reads: dict[tuple[Any, ...], tuple[Callable[[], Any], Any]] = {}
+        self._lent: dict[tuple[Any, ...], Any] = {}
+        self._confirmed: dict[tuple[Any, ...], Any] = {}
+
+    @classmethod
+    def after(cls, earlier: Watch | None) -> Watch:
+        """A watch for the next effect of the command whose ``earlier`` watch served the effect
+        before. Whatever ``earlier`` found unchanged in its last :meth:`recheck` is this watch's
+        first observation of that key when it is read here, and is read again by this watch's
+        own recheck; nothing that ``earlier`` did not recheck is lent."""
+
+        watch = cls()
+        if earlier is not None:
+            watch._lent = copy.deepcopy(earlier._confirmed)
+        return watch
+
+    def observe(self, key: tuple[Any, ...], reader: Callable[[], Any], value: Any) -> None:
+        """Take ``value`` as the first observation under ``key``: what ``reader()`` would answer,
+        as this command has just read it through another request (an artifact's row in a listing
+        of its run, which the watch then reads by id). A key already observed keeps its first
+        observation."""
+
+        if key not in self._reads:
+            self._reads[key] = (reader, copy.deepcopy(value))
 
     def read(self, key: tuple[Any, ...], reader: Callable[[], _T]) -> _T:
         """``reader()`` as first observed under ``key``; ``key[0]`` names the state in errors."""
 
         if key not in self._reads:
-            self._reads[key] = (reader, reader())
+            self._reads[key] = (reader, self._lent.pop(key) if key in self._lent else reader())
         return copy.deepcopy(self._reads[key][1])
 
     def recheck(self) -> None:
         for key, (reader, value) in list(self._reads.items()):
             check(reader() == value, "$.admission",
                   f"{key[0]} changed between the start of the command and its effect")
+        self._confirmed = {key: copy.deepcopy(value) for key, (_, value) in self._reads.items()}

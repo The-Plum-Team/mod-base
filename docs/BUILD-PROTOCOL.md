@@ -444,24 +444,37 @@ the mods: choosing their budgets and setup margin belongs to K7 and the Q/B migr
 
 ## Request budget
 
-The allowance for a job's `GITHUB_TOKEN` is 1,000 REST requests per hour per repository, shared
-by runs in that repository; a new run does not get a separate allowance. Every
+GitHub documents the allowance for a job's `GITHUB_TOKEN` as 1,000 REST requests per hour per
+repository, shared by runs in that repository; a new run does not get a separate allowance. The
+K7 canary measured 5,000 per hour in The-Plum-Team, with each job's token reporting its own
+window ([OPERATIONS.md](OPERATIONS.md#builde2e-canary-k7)); this section keeps the documented
+1,000 as its bound. Every
 command that reads the API therefore builds its client with an explicit `max_requests`, retries
 included (`commands.api_client`), a test pins the number of requests of a typical case, and
 objects named by SHA and the job list of a completed attempt are fetched once per command
 (`reads.CommandReads`). The six `worker-*` verbs receive no token.
+
+A command does not read a mutable state twice to start watching it (`reads.Watch`). An artifact
+described from its row in a listing of its run is watched from that row (`Watch.observe`) and read
+by id only by the recheck before the effect; the run a status evaluation has just read to decide
+a gate is the first observation of that gate's receipt read; and the packaged gate's receipt read
+starts from what the Build gate's read has just rechecked (`Watch.after`): the source and the
+Build bundle it names. `ci assemble` authenticates its attempt as the gates do
+(`gate.collect_targets`): its one description of the attempt's jobs and target artifacts is what
+the downloads are checked against and what is read again before the sealed root appears. Every
+recheck still reads everything its command depends on.
 
 | Command | Requests in the pinned case | Cap in `model/limits.py` | Pinned in |
 | --- | --- | --- | --- |
 | `ci subject` | 4 for a ready pull request, 5 for a protected subject; 1 with `--candidate` | `MAX_CI_SUBJECT_REQUESTS`, 16; `MAX_CI_DERIVED_SUBJECT_REQUESTS`, 4 | `tests/test_ci_commands_subject.py` |
 | `ci plan` | 0 with local candidate sources; otherwise the tree and one blob per configured file, 3 to 11; a changed pin adds 3 in the first plan for the pinned annotated-tag case | `MAX_CI_PLAN_REQUESTS`, 24 | `tests/test_ci_lifecycle.py`, `tests/test_ci_candidate_kit.py` |
 | `ci reuse-admit` | 38 for an admitted reuse, 11 when the merged tree differs, 1 for a push that merges no pull request | `MAX_CI_REUSE_ADMIT_REQUESTS`, 96 | `tests/test_ci_reuse.py` |
-| `ci select-build` | 17 for a pull request whose Build is complete and one more for every poll before that; 15 for a protected subject | `MAX_CI_SELECT_BUILD_REQUESTS`, 155 | `tests/test_ci_commands_packaged.py` |
+| `ci select-build` | 16 for a pull request whose Build is complete and one more for every poll before that; 14 for a protected subject, 15 for the Build its own run built | `MAX_CI_SELECT_BUILD_REQUESTS`, 155 | `tests/test_ci_commands_packaged.py` |
 | `ci fetch-build` | 2 for every route, including the storage GET | `MAX_CI_FETCH_BUILD_REQUESTS`, 8 | `tests/test_ci_commands_packaged.py` |
-| `ci assemble` | 16 and 2 for each target: 50 for 17 targets | `MAX_CI_ASSEMBLE_REQUESTS`, 816 | `tests/test_ci_commands_build.py` |
+| `ci assemble` | 13 and 2 for each target: 47 for 17 targets | `MAX_CI_ASSEMBLE_REQUESTS`, 816 | `tests/test_ci_commands_build.py` |
 | `ci aggregate` | 13 and 2 for each lane: 81 for 34 lanes | `MAX_CI_AGGREGATE_REQUESTS`, 816 | `tests/test_ci_aggregate.py` |
-| `ci seal-gate` | 15 for a Build gate, 23 for the packaged gate of a pull request, 47 for the gate of a reuse run | `MAX_CI_GATE_REQUESTS`, 96 | `tests/test_ci_gate.py`, `tests/test_ci_reuse_seal.py` |
-| `ci gate-status` | 2 to 8 with `--settle`; 45 with both runs complete | `MAX_CI_GATE_STATUS_REQUESTS`, 96 | `tests/test_ci_commands_status.py` |
+| `ci seal-gate` | 15 for a Build gate, 22 for the packaged gate of a pull request, 47 for the gate of a reuse run | `MAX_CI_GATE_REQUESTS`, 96 | `tests/test_ci_gate.py`, `tests/test_ci_reuse_seal.py` |
+| `ci gate-status` | 2 to 8 with `--settle`; 36 with both runs complete | `MAX_CI_GATE_STATUS_REQUESTS`, 96 | `tests/test_ci_commands_status.py` |
 | `ci batch-prepare` | 10 and 3 for each member: 160 for 50 | `MAX_CI_BATCH_PREPARE_REQUESTS`, 216 | `tests/test_ci_batch_commands.py` |
 | `ci batch-settle` | 3, 28 for both gates and at most 5 for each member: 281 for 50 | `MAX_CI_BATCH_SETTLE_REQUESTS`, 348 | `tests/test_ci_batch_commands.py` |
 
@@ -472,12 +485,16 @@ including subject and plan). Jobs and artifact listings fit one page; waiting po
 
 | Case | Targets / lanes / extra plan inputs | Build | Packaged | Status | Total |
 | --- | --- | --- | --- | --- | --- |
-| Synthetic hosted command chain | 2 / 3 / 1 | 62 | 92 | 58 | 212 |
-| Quick Skin fixture | 17 / 34 / 1 | 107 | 247 | 58 | 412 |
-| Block Pops fixture | 10 / 20 / 0 | 83 | 174 | 57 | 314 |
-| Synthetic, changed candidate pin | 2 / 3 / 1 | 65 | 95 | 61 | 221 |
-| Quick Skin, changed candidate pin | 17 / 34 / 1 | 110 | 250 | 61 | 421 |
-| Block Pops, changed candidate pin | 10 / 20 / 0 | 86 | 177 | 60 | 323 |
+| Synthetic hosted command chain | 2 / 3 / 1 | 59 | 90 | 49 | 198 |
+| Quick Skin fixture | 17 / 34 / 1 | 104 | 245 | 49 | 398 |
+| Block Pops fixture | 10 / 20 / 0 | 80 | 172 | 48 | 300 |
+| Synthetic, changed candidate pin | 2 / 3 / 1 | 62 | 93 | 52 | 207 |
+| Quick Skin, changed candidate pin | 17 / 34 / 1 | 107 | 248 | 52 | 407 |
+| Block Pops, changed candidate pin | 10 / 20 / 0 | 83 | 175 | 51 | 309 |
+
+Before the observations were reused (v1.1.3), the same six cases cost 212, 412, 314, 221, 421
+and 323: 14 requests less per generation, 3 in Build, 2 in packaged E2E and 9 in the final status
+evaluation.
 
 The hosted pipeline observes every command's traffic through `FakeGitHub` and compares it with
 this ledger while running the real workflow-derived command lines, files, Git, accounts, hooks
@@ -488,10 +505,10 @@ It is not a measurement of a live GitHub generation. Changed-pin totals add one 
 release admission in each run's first plan, nine requests per generation. Extra checkout Actions'
 traffic is also outside this kit ledger; unchanged pins retain their ordinary totals.
 
-Each pending selection poll adds one request: Quick Skin plus 89 pending polls is 501, below
+Each pending selection poll adds one request: Quick Skin plus 89 pending polls is 487, below
 the target of 600. `MAX_CI_GENERATION_REQUESTS = 440` is a test-only regression budget for the
 no-wait native fixtures, not runtime admission. The structural maxima of 256 targets and 256
-lanes cost at least 2,288 requests before extra listing pages, exceeding the 1,000 allowance.
+lanes cost at least 2,274 requests before extra listing pages, exceeding the 1,000 allowance.
 The coordinator explicitly retained those structural bounds without promising that such a
 generation fits; concurrent runs, polling and real hosted traffic must be considered at adoption.
 

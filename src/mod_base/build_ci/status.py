@@ -52,8 +52,8 @@ from mod_base.build_ci.graph import authenticate_graph, run_graph
 from mod_base.build_ci.identity import policy_sha256
 from mod_base.build_ci.protocol import subject_of
 from mod_base.build_ci.reads import CommandReads, Watch
-from mod_base.build_ci.selection import describe_artifact, newest_run, pending_run, producer_record
-from mod_base.build_ci.transport import _plan, _run_state, artifact_gone, download_gate_receipt
+from mod_base.build_ci.selection import describe_watched, newest_run, pending_run, producer_record
+from mod_base.build_ci.transport import _gate_receipt, _plan, _run, artifact_gone
 from mod_base.errors import MbError, single_line
 from mod_base.github.api import ApiError, GitHubApi, RequestBudgetExhausted
 from mod_base.github.jobs import job_graph
@@ -147,9 +147,13 @@ def _generation_plan(plan: dict[str, Any], *, config: BuildConfig, controller_sh
 
 
 def _run_verdict(reads: CommandReads, gate: str, newest: dict[str, Any], plan: dict[str, Any] | None,
-                 temporary_root: Path | None) -> _Verdict:
+                 temporary_root: Path | None, receipt_watch: Watch) -> _Verdict:
     """What the newest run of a gate's caller proves: its latest attempt, then its exact graph and
-    its tested record. A rejection of that evidence is raised."""
+    its tested record. A rejection of that evidence is raised.
+
+    ``receipt_watch`` is the watch of the tested record's read, which rechecks it before the
+    receipt is used: the run and the record's row in the artifact listing are its first
+    observations, so the read does not ask for them again."""
 
     producer, mode, label = _GATES[gate]
     run_id = newest["id"]
@@ -157,7 +161,7 @@ def _run_verdict(reads: CommandReads, gate: str, newest: dict[str, Any], plan: d
     if newest["status"] != "completed":
         pending_run(newest)
         return waiting
-    run = _run_state(reads, run_id)
+    run = _run(reads, receipt_watch, run_id)
     check(run["created_at"] == newest["created_at"] and type(run["run_attempt"]) is int
           and run["run_attempt"] >= newest["run_attempt"], "$.run", "run listing and run disagree")
     if run["status"] != "completed":
@@ -175,16 +179,19 @@ def _run_verdict(reads: CommandReads, gate: str, newest: dict[str, Any], plan: d
     digest = authenticate_graph(reads, plan=plan, producer=producer, mode=mode, run_id=run_id, run_attempt=attempt)
     record = producer_record(plan, caller=producer, run_id=run_id, run_attempt=attempt, event=newest["event"],
                              graph_sha256=digest)
-    descriptor = describe_artifact(reads, plan=plan, producer=record, jobs=jobs, kind="tested", unit_id=gate)
-    receipt = download_gate_receipt(reads, descriptor=descriptor, plan=plan, gate=gate, temporary_root=temporary_root)
+    descriptor = describe_watched(reads, receipt_watch, plan=plan, producer=record, jobs=jobs, kind="tested",
+                                  unit_id=gate)
+    receipt = _gate_receipt(reads, receipt_watch, descriptor=descriptor, plan=plan, gate=gate,
+                            temporary_root=temporary_root)
     return _Verdict("success", f"the newest {label} run is complete and its gate is verified", run_id, receipt)
 
 
 def _gate(reads: CommandReads, watch: Watch, gate: str, pull: dict[str, Any], plan: dict[str, Any] | None,
-          temporary_root: Path | None) -> _Verdict:
+          temporary_root: Path | None, receipt_watch: Watch) -> _Verdict:
     """The verdict of one gate from the newest run of its caller under the pull request's head.
     A rejection of that run's evidence is a failure, and so is an artifact GitHub says is gone;
-    every other API failure propagates."""
+    every other API failure propagates. ``receipt_watch`` serves the read of its tested record
+    (:func:`_run_verdict`)."""
 
     producer, _, label = _GATES[gate]
     newest = watch.read((f"newest {label} run",), functools.partial(
@@ -193,7 +200,7 @@ def _gate(reads: CommandReads, watch: Watch, gate: str, pull: dict[str, Any], pl
     if newest is None:
         return _Verdict("pending", f"waiting: no {label} run exists for this head yet")
     try:
-        return _run_verdict(reads, gate, newest, plan, temporary_root)
+        return _run_verdict(reads, gate, newest, plan, temporary_root, receipt_watch)
     except ApiError as error:
         if not artifact_gone(error):
             raise
@@ -241,7 +248,13 @@ def _evaluate(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation
     else:
         if plan is not None:
             plan = _generation_plan(plan, config=config, controller_sha=controller_sha, pr_number=pr_number, pull=pull)
-        verdicts = {gate: _gate(reads, watch, gate, pull, plan, temporary_root) for gate in contexts}
+        # Each tested record is read in a watch of its own, rechecked before its receipt is used.
+        # The packaged gate's starts from what the Build gate's has just rechecked: the source and
+        # the Build bundle its owning Build names are not read twice in a row.
+        verdicts, receipt_watch = {}, None
+        for gate in contexts:
+            receipt_watch = Watch.after(receipt_watch)
+            verdicts[gate] = _gate(reads, watch, gate, pull, plan, temporary_root, receipt_watch)
         if temporary_root is None and any(verdict.unverified for verdict in verdicts.values()):
             return None
         if "packaged" in verdicts:
