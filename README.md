@@ -3,7 +3,8 @@
 mod-base is the shared public-evidence and project-site kit of The Plum Team's Minecraft mods. It
 turns a mod's successful packaged end-to-end run into a validated, SHA-bound static site on GitHub
 Pages (a landing page and an evidence gallery), and it ships the repository files every mod shares.
-Quick Skin and Block Pops use it; [docs/ONBOARDING.md](docs/ONBOARDING.md) connects another mod.
+Quick Skin and Block Pops use it; [docs/NEW-MOD.md](docs/NEW-MOD.md) takes a new mod from an empty
+repository to the shared gates, and [docs/ONBOARDING.md](docs/ONBOARDING.md) details its Pages part.
 
 Mods never vendor the kit: every mod runs it **fetched at one pinned commit**, and every mod-base
 reference in a mod carries that same commit and its release tag:
@@ -75,7 +76,9 @@ run it through their bootstrap (`python3 scripts/ci/mod_base_kit.py run conforma
   [docs/INTERNAL-API.md](docs/INTERNAL-API.md): the frozen contracts.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): owner activation, releases, the canary, rollout,
   admission reasons, the kill switch and recovery commands.
-- [docs/ONBOARDING.md](docs/ONBOARDING.md): connecting a new mod.
+- [docs/NEW-MOD.md](docs/NEW-MOD.md): a new mod end to end, from the repository to the shared
+  Build and packaged E2E gates.
+- [docs/ONBOARDING.md](docs/ONBOARDING.md): connecting a mod's Pages evidence.
 - [docs/adr](docs/adr): the decisions behind the design.
 - [CHANGELOG.md](CHANGELOG.md): what each release changes for mods.
 

@@ -1,7 +1,8 @@
 # Operations
 
 Owner activation, releases, the canary, rollout, publication admission, the kill switch and
-recovery. Every command is a `gh` or `git` invocation that the rollout operator, acting for the
+recovery. [NEW-MOD.md](NEW-MOD.md) orders these operations for a new mod, from the repository to
+the shared gates. Every command is a `gh` or `git` invocation that the rollout operator, acting for the
 maintainer, runs at the rollout stage named (the rulesets included); the kit's workflows never
 change repository settings themselves. [SECURITY-MODEL.md](SECURITY-MODEL.md) explains why each
 setting matters.
@@ -334,22 +335,30 @@ publishes nothing (it can never publish a success instead).
 | variable of that environment | `MOD_BASE_GATE_APP_CLIENT_ID` | the client ID of the gate status App |
 | secret of that environment | `MOD_BASE_GATE_APP_PRIVATE_KEY` | a private key of that App (the PEM file) |
 
-The App has the one repository permission "Commit statuses: Read and write" and is installed on
-the mod's repository alone; Block Pops keeps the App that writes its `Trusted PR / ...` contexts
-today, Quick Skin gets a dedicated one. The branch restriction is not optional: it is the only
+The App is `plum-mod-base-gate` (App id 5256389), with the one repository permission "Commit
+statuses: Read and write". By owner decision of 2026-10-11 it is installed on every repository of
+the organization, so that a new mod needs no installation step, and its key is kept instead: it
+lives only in each mod's `mod-base-gate` environment and in no canary or test repository. The
+branch restriction is not optional: it is the only
 thing that keeps the key from a workflow of another branch. Anyone who can push a branch can add
 a job there that names the environment and the secret; GitHub refuses such a job only because
 the environment admits the default branch alone. Keep the key in the environment, never as a
-repository or organization secret. With `R` the repository, `BRANCH` its default branch and
-`app.pem` the downloaded key:
+repository or organization secret. The owner's copy of the key lives in a password manager alone,
+never unencrypted in the home folder; a key that is not at hand is replaced, not recovered
+([NEW-MOD.md](NEW-MOD.md#5-the-mod-base-gate-environment-owner-once-per-mod) step 5: generate a
+new private key in the App settings). With `R` the repository, `BRANCH` its default branch and
+`<password-manager read ...>` the password manager's command that prints the key
+(`tools/new_mod_env.py` performs these steps, reads the branch restriction back before it stores
+anything and refuses a wider environment or a key file other users can read):
 
 ```bash
+CLIENT_ID="$(gh api apps/plum-mod-base-gate --jq .client_id)"   # public
 gh api -X PUT "repos/$R/environments/mod-base-gate" --input - <<'JSON'
 {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
 JSON
 gh api -X POST "repos/$R/environments/mod-base-gate/deployment-branch-policies" -f name="$BRANCH" -f type=branch
 gh variable set MOD_BASE_GATE_APP_CLIENT_ID --repo "$R" --env mod-base-gate --body "$CLIENT_ID"
-gh secret set MOD_BASE_GATE_APP_PRIVATE_KEY --repo "$R" --env mod-base-gate < app.pem
+<password-manager read ...> | gh secret set MOD_BASE_GATE_APP_PRIVATE_KEY --repo "$R" --env mod-base-gate
 gh api "repos/$R/environments/mod-base-gate/deployment-branch-policies" --jq '.branch_policies[].name'   # exactly $BRANCH
 ```
 
