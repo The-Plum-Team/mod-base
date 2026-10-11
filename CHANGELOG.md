@@ -5,6 +5,31 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.2.1
+
+Supersedes v1.2.0, which stays a tag and is never released. v1.2.1 contains everything of
+v1.2.0: the single read of a mutable state to start watching it (QS-G7, #15) with its smaller
+request budget, and the optional protected seeds (QS-G2/G3, #16); see the v1.2.0 section below. A
+mod moves from v1.1.3 straight to v1.2.1. v1.2.1 is tagged first and becomes a GitHub Release once
+a canary Build whose protected policy outlives its targets passes on it.
+
+- Seal the Build only after the protected policy has finished (#20). `ci assemble` requires every
+  job before it in its attempt (the plan, the policy and every target) to have finished as the
+  graph expects, but the `assemble` job of `build.yml` needed only the plan and the targets.
+  Wherever the protected policy outlives the targets, as in the Quick Skin and Block Pops shadow
+  runs, assemble refused ("required job 'Shared Build / Verify protected policy' has not finished
+  as the graph expects") and the gate then failed on the missing bundle; the synthetic canaries
+  never showed it because their policy is faster than their targets. The gap dates from v1.1.0.
+  `assemble` now needs `[plan, policy, target]`: it waits for the slowest leg, as the gate already
+  did, so a Build takes no longer; a failed policy skips the assembly and the gate fails, as
+  before. A new test requires every job that reads its own running attempt (assemble, aggregate,
+  both gates and the input of a rebuilt run) to need every job it requires to have finished, in
+  every mode of both producers.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files, the job graphs and their digests, job names,
+  permissions and request counts are those of v1.2.0. The compatibility baseline moves to the
+  archived v1.2.0 reader, a tag without a Release as v1.1.2 was.
+
 ## v1.2.0
 
 Release candidate. v1.2.0 is tagged but has no GitHub Release: it becomes one only after the
