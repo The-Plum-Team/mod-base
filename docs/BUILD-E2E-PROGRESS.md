@@ -7,8 +7,12 @@ commands and evidence; [ADR 0007](adr/0007-protected-build-and-packaged-runtime.
 K1–K6 now compose through registered commands and their workflow or operator entries. They are
 tagged as v1.1.0, the K7 release candidate; v1.1.1, which restores the managed `.gitattributes`
 of v1.0.3 so that Block Pops can adopt it; v1.1.2, which refuses the jobs GitHub carries over
-into a rerun of failed jobs only (K7 canary cases C2 and C4); and v1.1.3, whose gate status
-decides a gate whose bundle is gone instead of publishing nothing (K7 canary case F1). No mod is active: none has an
+into a rerun of failed jobs only (K7 canary cases C2 and C4); v1.1.3, whose gate status
+decides a gate whose bundle is gone instead of publishing nothing (K7 canary case F1); and v1.2.0,
+a release candidate (tag only, no Release until the owner decides the questions of pull request
+#16) that reads a mutable state once to start watching it (QS-G7, 14 requests less per
+generation) and adds optional protected seeds (QS-G2/G3, off unless a mod's protected config
+enables `seeds`). No mod is active: none has an
 activation manifest, and managed Build/E2E callers have run on GitHub only in the K7 canary
 repository. The design awaits owner agreement; ADR 0007 is Proposed. **K7 is done: its rounds ran at v1.1.1 and the v1.1.3 fixes passed in a second canary (see its row
 below); the v1.1.3 Release is published. When K7 closed, Quick Skin and Block Pops pinned v1.1.1
@@ -18,7 +22,8 @@ without an activation manifest, and Q1–Q10, B1–B7 and the GitHub settings of
 
 - **Ordinary suite:** 3,050 tests on each Python 3.11–3.13 at the v1.1.0 release commit and on
   Python 3.11 and 3.13 at the v1.1.1 release commit, 3,059 on Python 3.11 and 3.13 at the v1.1.2
-  release commit, 3,060 on Python 3.11 and 3.13 at the v1.1.3 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
+  release commit, 3,060 on Python 3.11 and 3.13 at the v1.1.3 release commit, 3,080 tests on
+  each Python 3.11–3.13 at the v1.2.0 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
   integration cases use real files, Git and processes, while older isolated tests also replace
   system/account operations.
 - **Hosted account proof:** `ci_linux_worker.py` (132 tests), `ci_linux_deferred.py` (2 tests) and

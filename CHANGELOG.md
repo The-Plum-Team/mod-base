@@ -5,6 +5,42 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.2.0
+
+Release candidate. v1.2.0 is tagged but has no GitHub Release: it becomes one only after the
+owner's decisions listed in pull request #16 (cache-scope trust, cache storage, the per-lane
+runtime keys, a job-level `cache-mode`, required key files and the runtime store layout) and a K7
+canary run on this kit, which pull request #15 asks for before a release.
+
+- Read a mutable state once to start watching it (kit gap QS-G7 of the Quick Skin mapping). A
+  protected command that has just read an artifact through its run's listing, or a receipt read
+  that has just rechecked the Build run and bundle, starts watching that state from the answer it
+  already has instead of reading it again (`reads.Watch.observe`, `reads.Watch.after`). Only what
+  an earlier recheck found unchanged is lent, and every recheck before an effect still reads
+  everything its command depends on; a listing row that the read by id contradicts fails the
+  recheck, closed. `ci assemble` authenticates its attempt as the gates do and then publishes
+  (`gate.collect_targets`). Costs: `ci assemble` 13 + 2 per target (was 16), `ci select-build`
+  16 / 14 (was 17 / 15), the packaged `ci seal-gate` 22 (was 23), `ci gate-status` 36 (was 45).
+  The generation ledger is 198 / 398 / 300 for the synthetic mod, Quick Skin and Block Pops (was
+  212 / 412 / 314), or 207 / 407 / 309 with a changed candidate pin (was 221 / 421 / 323). The
+  caps in `model/limits.py` are unchanged. `transport.download_target_set` and
+  `transport.download_gate_receipt` keep their documented behaviour but no longer have a
+  production caller; whether to retire them is an owner decision.
+- Add optional protected seeds (kit gaps QS-G2 and QS-G3): the optional `seeds` of
+  `mod-base.build.config` (within schema 1), `ci seed-key`, `ci seed-export` and the root
+  operation `export-seed`. Target and lane jobs restore an exact protected key (derived from the
+  protected checkout of the default branch and the planned unit, never chosen by the candidate)
+  with `actions/cache/restore` v6.1.0 and stage it only on an exact hit; only protected pushes and
+  dispatches export the candidate's Gradle home after the upload and save it, never a pull
+  request. No request is added to the ledger. The feature is opt-in: without `seeds` every job
+  behaves exactly as in v1.1.3, and `seeds` stays off until the owner has made the checks in
+  OPERATIONS.md, "Protected seeds".
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1 and the managed files are those of v1.1.3. The Build and packaged E2E
+  callee workflows gain the seed steps; their job graph, job names and permissions are unchanged.
+  A kit older than v1.2.0 refuses a Build config with `seeds`: remove `seeds` before rolling a pin
+  back below v1.2.0.
+
 ## v1.1.3
 
 - Decide a gate whose evidence is gone instead of failing the status evaluation. The K7 canary
