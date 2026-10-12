@@ -2,16 +2,16 @@
 
 The fourteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
 `mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1: thirteen since v1.1.0,
-`mod-base.ci.generation` since the unreleased version after v1.3.0) are listed in
+`mod-base.ci.generation` since the unreleased version after v1.3.1) are listed in
 [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the validator that
 defines it. This page has the field tables of five of them, in its last five sections: the Build
 config, the batch manifest, the results index, the tested generation and the activation manifest.
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.3.0, which
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.3.1, which
 reads every kind of this release but one: `mod-base.ci.generation` is a `new-kind`, written at 1
-and refused by the v1.3.0 reader as unknown. Every other kind is `unchanged`. The optional `seeds`
+and refused by the v1.3.1 reader as unknown. Every other kind is `unchanged`. The optional `seeds`
 of the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config
 that sets it. So does the optional `admission` (v1.3.0); a v1.2.1 reader refuses a config that
 sets it.
@@ -784,7 +784,7 @@ Build (`build_ci.gate`).
 
 ## Tested generation data v1
 
-`mod-base.ci.generation` writes and reads 1. The kind is new after v1.3.0 (`new-kind` in the
+`mod-base.ci.generation` writes and reads 1. The kind is new after v1.3.1 (`new-kind` in the
 ledger). It is what `ci select-generation` publishes for a consumer of a default-branch commit:
 the one Build bundle and the one set of runtime results that were tested together, whether the
 commit's own runs tested them (`full`) or the merged pull request's gates cover it (`reuse`). The

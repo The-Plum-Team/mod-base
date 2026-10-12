@@ -38,10 +38,10 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   status callee's evaluate job and then `ci select-generation` (BUILD-PROTOCOL.md, "The subject
   of a job"). New `identity.GENERATION_PRODUCER`, `GENERATION_EVENTS` and `admits_workflow`.
 - New document kind `mod-base.ci.generation` v1 (`records.validate_generation`,
-  `records.generation_record`), written only by `ci select-generation`, never by a gate; a v1.3.0
+  `records.generation_record`), written only by `ci select-generation`, never by a gate; a v1.3.1
   reader refuses it as unknown. Every other kind, `ADAPTER_API`, `BUILD_ADAPTER_API`,
   `pixel_metrics_version`, the managed files and the workflows are unchanged. The compatibility
-  baseline moves to the archived v1.3.0 reader (`tests/fixtures/previous_release/v1.3.0`).
+  baseline moves to the archived v1.3.1 reader (`tests/fixtures/previous_release/v1.3.1`).
 - `reuse.download_reuse_reference` is split into the reference read and the original pair read
   (`reuse._read_reference`, `reuse._originals_finished`) so that `ci select-generation` reads two
   references and the pair once; its behaviour and request count are unchanged.
