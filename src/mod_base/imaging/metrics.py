@@ -143,12 +143,15 @@ def _inspect(source: Path | bytes, policy: SizePolicy, image_format: str) -> dic
     label = _label(source, image_format)
     payload = _read_source(source, formats=(image_format,), label=label)
     file_sha256 = hashlib.sha256(payload).hexdigest()
-    key = ("inspect", image_format, file_sha256, policy.mode, policy.width, policy.height)
-    remembered = _MEMO.get(key)
+    # Only the kit's own policy class is a key: a subclass may judge sizes differently.
+    key = (("inspect", image_format, file_sha256, policy.mode, policy.width, policy.height)
+           if type(policy) is SizePolicy else None)
+    remembered = _MEMO.get(key) if key is not None else None
     if remembered is not None:
         return remembered
     rgb = _decode_rgb(payload, formats=(image_format,), label=label, policy=policy)[1]
-    return _MEMO.put(key, _metrics(payload, rgb, label, file_sha256))
+    result = _metrics(payload, rgb, label, file_sha256)
+    return _MEMO.put(key, result) if key is not None else result
 
 
 def _metrics(payload: bytes, rgb: Any, label: str, file_sha256: str) -> dict[str, Any]:

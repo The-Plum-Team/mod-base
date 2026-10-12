@@ -122,6 +122,34 @@ class InspectionMemoTest(MemoTestCase):
             with self.subTest(policy=policy), self.assertRaisesRegex(ImageError, "dimensions 320x180 violate"):
                 inspect_png(payload, policy)
 
+    def test_a_policy_subclass_is_measured_every_time(self) -> None:
+        class Stricter(SizePolicy):
+            def allows(self, width: int, height: int) -> bool:
+                return False
+
+        payload = pattern_png(320, 180, 8)
+        inspect_png(payload, EXACT)
+        with self.decodes(metrics) as decoded:
+            with self.assertRaisesRegex(ImageError, "dimensions 320x180 violate"):
+                inspect_png(payload, Stricter("exact", 320, 180))
+        self.assertEqual(decoded.call_count, 1)
+        self.assertEqual(len(metrics._MEMO), 1)
+
+    def test_one_changed_byte_is_measured_again(self) -> None:
+        payload = pattern_png(320, 180, 9)
+        inspect_png(payload, EXACT)
+        changed = bytearray(payload)
+        changed[len(changed) // 2] ^= 0x01  # inside the compressed image data
+        with self.decodes(metrics) as decoded:
+            try:
+                result = inspect_png(bytes(changed), EXACT)
+            except ImageError:
+                result = None
+        self.assertEqual(decoded.call_count, 1)
+        if result is not None:
+            self.assertEqual(result["file_sha256"], hashlib.sha256(bytes(changed)).hexdigest())
+        self.assertEqual(inspect_png(payload, EXACT)["file_sha256"], hashlib.sha256(payload).hexdigest())
+
     def test_the_format_is_part_of_the_key(self) -> None:
         derivative = derive_webp(pattern_png(320, 180, 2), box=(160, 90), quality=80, method=4)
         policy = SizePolicy.exact(160, 90)
