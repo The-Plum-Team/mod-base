@@ -1,7 +1,8 @@
 a2762dc1f34d57b2f7be02c0cc46c26518ce7a6850fe409c047769496a0ec9a3  ./template/managed/.gitattributes
+23f38adbe33eead2a917a52cd676210dbd557a360035f60e28b3fe49e24b6738  ./template/managed/.github/workflows/mod-base-batch.yml
 e112952ffd5892abcbd9bca33e3cb0aaffee22a1c7c2a42a50bc768eada9899b  ./template/managed/.github/workflows/mod-base-build.yml
 d4789a2b35ed36b902596ca2c92325563e17f3d8d51699a952d9c602f93804ff  ./template/managed/.github/workflows/mod-base-gate-status.yml
-39eb62809ec3737142e31d96ad9375837940d476ec9169ed4eba8e0dce6fe248  ./template/managed/.github/workflows/mod-base-guard.yml
+89caa430d02e80de5340323a33205a38a71f08092c07c5791fb4aacb8d24646d  ./template/managed/.github/workflows/mod-base-guard.yml
 7885f9a3e4f8268c40ed3d544ec44441afb41ea47863b2e0df6c7bf063baf986  ./template/managed/.github/workflows/mod-base-packaged-e2e.yml
 bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/managed/.github/workflows/pages.yml
 9b3aef4f40e08a64d004e67809b55641cf323b23ccbe32623e4940903d4c60a7  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
@@ -26,5 +27,5 @@ d415e3397105484be72dfcbb97c53181cc01258be36b928e671f37283c19dcd2  ./tools/ci_pri
 e76682a038da8e09118a2bae4b9d2c7f7868ab9b05abf7d4c0f8852775395855  ./tools/kit_digest.sh
 ca4a5e6ffeca9a223e1b5e11c65846c5cbda46f6cff605a849ec689b31442daa  ./tools/new_mod_env.py
 807b29e3a67b41b6f8fca974ee022a284ba885e726938d89ebdeba03e93d1fd1  ./tools/parallel_unittest.py
-c7b967fba79ffb348f3cca3dc4871780bd5043c2fba87a8e06430820ffb3a65d  ./tools/update_tree_digest.py
+3b8156c71470ffa08d811a69610dbb1baaf43fb5316c56f33f4b6b527d171fd5  ./tools/update_tree_digest.py
 020bd17f6c52f05922d99b8e4f85b04b209bf05a5c47d91560957cdd1fc68d8f  ./tools/verify_action_tree.py

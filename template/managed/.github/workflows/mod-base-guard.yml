@@ -1,7 +1,7 @@
 # mod-base managed: guard workflow, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-guard.yml
 name: mod-base guard
 
-# The caller-owned defence of the managed Build, packaged E2E and gate status callers. Each calls
+# The caller-owned defence of the managed Build, packaged E2E, gate status and batch callers. Each calls
 # it first and as a local workflow, so GitHub lists this file in the run's referenced_workflows at
 # the commit the caller itself ran from: the controller commit, which a pull_request_target run
 # names nowhere else. Before any kit code runs, the one job admits the event, checks out the
@@ -69,17 +69,24 @@ jobs:
           fail() { printf 'Pinned mod-base: %s\n' "$1" >&2; exit 1; }
           # The calling workflow, the kit workflows it declares and the events that start it are
           # closed lists. The gate status caller tests nothing and is started by other events
-          # than the two callers whose runs it evaluates.
+          # than the two callers whose runs it evaluates; the batch caller never runs for a pull
+          # request's event.
           case "$CALLEES" in
             build) caller=.github/workflows/mod-base-build.yml ;;
             "select-build build packaged-e2e") caller=.github/workflows/mod-base-packaged-e2e.yml ;;
             gate-status) caller=.github/workflows/mod-base-gate-status.yml ;;
+            batch) caller=.github/workflows/mod-base-batch.yml ;;
             *) fail "the calling workflow declares kit workflows outside the closed list" ;;
           esac
           if [[ "$CALLEES" == gate-status ]]; then
             case "$GITHUB_EVENT_NAME" in
               workflow_run | pull_request_target | schedule | workflow_dispatch) ;;
               *) fail "the gate status caller runs only on workflow_run, pull_request_target, schedule or workflow_dispatch" ;;
+            esac
+          elif [[ "$CALLEES" == batch ]]; then
+            case "$GITHUB_EVENT_NAME" in
+              push | workflow_dispatch) ;;
+              *) fail "the batch caller runs only on push or workflow_dispatch" ;;
             esac
           else
             case "$GITHUB_EVENT_NAME" in

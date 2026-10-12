@@ -29,7 +29,7 @@ from typing import Any
 
 from mod_base import workflow
 from mod_base.build_ci import describe, graph
-from mod_base.build_ci.activation import BUILD_CALLER, GUARD_CALLER, PACKAGED_CALLER, STATUS_CALLER
+from mod_base.build_ci.activation import BATCH_CALLER, BUILD_CALLER, GUARD_CALLER, PACKAGED_CALLER, STATUS_CALLER
 from mod_base.errors import MbError
 from mod_base.pin import Pin, parse_pin_files
 from mod_base.template import tool
@@ -758,13 +758,16 @@ class CallerStructureTests(unittest.TestCase):
         script = step(self.documents[GUARD_CALLER]["jobs"]["verify"]["steps"], GUARD_STEP)["run"]
         arms = re.findall(r'^  (?:"([a-z0-9 -]+)"|([a-z0-9-]+))\) caller=(\S+) ;;$', script, re.MULTILINE)
         closed = {quoted or plain: path for quoted, plain, path in arms}
-        self.assertEqual((len(arms), script.count(" caller=")), (3, 3))
+        self.assertEqual((len(arms), script.count(" caller=")), (4, 4))
         self.assertEqual({callees: path for callees, path in closed.items() if path in PRODUCERS.values()},
                          {self.documents[path]["jobs"]["guard"]["with"]["callees"]:
                           workflow.CI_CALLER_WORKFLOWS[producer] for producer, path in PRODUCERS.items()})
-        # The third caller of the guard is the gate status caller, with the one kit workflow it calls.
-        self.assertEqual(closed, {declared(caller): workflow.CI_CALLER_WORKFLOWS[caller] for caller in GUARDED_CALLERS})
+        # The third caller of the guard is the gate status caller and the fourth the batch caller,
+        # each with the one kit workflow it calls.
+        self.assertEqual(closed, {**{declared(caller): workflow.CI_CALLER_WORKFLOWS[caller] for caller in GUARDED_CALLERS},
+                                  "batch": BATCH_CALLER})
         self.assertEqual(closed["gate-status"], STATUS_CALLER)
+        self.assertEqual(workflow.CI_BATCH_CALLS, {"guard": "guard", "evaluate": "batch"})
         self.assertEqual(GUARDED_CALLERS, {caller: workflow.CI_CALLER_WORKFLOWS[caller]
                                            for caller in (*workflow.CI_CALLS, "status")})
         self.assertEqual(set(PRODUCERS.values()), {workflow.CI_CALLER_WORKFLOWS[producer] for producer in workflow.CI_CALLS})
@@ -772,11 +775,14 @@ class CallerStructureTests(unittest.TestCase):
         self.assertIn(f'"{KIT}/.github/workflows/\\(.).yml@\\($kit)"', script)
         self.assertEqual(sorted({path.rsplit("/", 1)[1][:-4] for path in workflow.CI_CALLEE_WORKFLOWS.values()}),
                          sorted(workflow.CI_CALLEE_WORKFLOWS), "a callee id is its file name, as the guard assumes")
-        # Two closed lists of events: the status caller's first, then the two producers'.
+        # Three closed lists of events: the status caller's first, then the batch caller's (never a
+        # pull request's event), then the two producers'.
         events = re.findall(r"^    ([a-z_ |]+)\) ;;$", script, re.MULTILINE)
-        self.assertEqual([arm.split(" | ") for arm in events], [list(STATUS_EVENTS), list(EVENTS)])
+        self.assertEqual([arm.split(" | ") for arm in events],
+                         [list(STATUS_EVENTS), ["push", "workflow_dispatch"], list(EVENTS)])
         self.assertEqual(script.count('if [[ "$CALLEES" == gate-status ]]; then'), 1)
-        self.assertEqual(len(re.findall(r"^\s+[a-z_ |]+\) ;;$", script, re.MULTILINE)), 2, "no third list")
+        self.assertEqual(script.count('elif [[ "$CALLEES" == batch ]]; then'), 1)
+        self.assertEqual(len(re.findall(r"^\s+[a-z_ |]+\) ;;$", script, re.MULTILINE)), 3, "no fourth list")
 
     def test_the_retry_function_is_the_pages_caller_s(self) -> None:
         pattern = re.compile(r"(?ms)^protected_gh_api_retry\(\) \{.*?^\}\n")

@@ -421,6 +421,54 @@ key, an owner operation) or change one of the key files; to stop, remove `seeds`
 A kit release older than the one that added `seeds` refuses a config that has it: remove `seeds`
 before a pin rollback below that release.
 
+### The batch App (optional, unreleased: KQ8-2)
+
+A mod that batches ordinary pull requests through the kit names a `batch` block in
+`scripts/ci/mod-base-build.json` (`allowed_paths`, `operators`, optionally `max_members`) in the
+`shared-build-and-e2e` mode; `template sync` then adds the managed `mod-base-batch.yml`, and
+`template check` requires it while the block exists and refuses it once the block is gone. Removing
+the block and the caller in one pull request is the rollback of shared batching: ordinary pull
+requests keep their complete gates. The caller's `prepare` and `close` jobs mint a token of a
+**separate App**, never the gate status App, which stays statuses-only (design risk 11: a
+statuses-only App is never broadened into a token that writes code or closes pull requests).
+**Creating it is an owner operation**; no workflow and no kit command does it, and until it exists a
+batch request fails in `prepare` and a merged batch is never settled (its members stay open).
+
+| What | Name | Value |
+|---|---|---|
+| App | e.g. `plum-mod-base-batch` | repository permissions "Contents: Read and write" (to push `batch/*` branches) and "Pull requests: Read and write" (to open the batch pull request, comment on and close members); nothing else: no commit statuses, no checks, no workflows, no administration. Installed only on the mods that batch |
+| environment | `mod-base-batch` | deployment branches: the default branch alone (a dispatch from another branch runs that branch's copy of the caller and must never reach the key); required reviewers optional: with one, every batch request and every settlement waits for that reviewer |
+| variable of that environment | `MOD_BASE_BATCH_APP_CLIENT_ID` | the client ID of the batch App |
+| secret of that environment | `MOD_BASE_BATCH_APP_PRIVATE_KEY` | a private key of the batch App (the PEM file) |
+
+The token is minted per job with only what that job needs (`contents` and `pull-requests` write to
+prepare, `pull-requests` write to close) and is scoped to the mod's repository. A batch pull request
+opened by the App starts the mod's gates like any other pull request; its gates and its merge stay
+the ruleset's (the batch App cannot merge: the ruleset decides who may). Two consequences to decide
+before enabling it:
+
+- A ruleset that requires a review "by someone other than the last pusher" counts the App as the
+  last pusher of a batch branch, so an operator could approve a batch that holds their own
+  unreviewed members. List as `operators` only people who may land those members anyway, or keep
+  required reviews on the members themselves.
+- The App must not be a bypass actor of any ruleset.
+
+Request a batch and, when its push did not settle it, settle it by hand:
+
+```bash
+gh workflow run mod-base-batch.yml --repo "$R" --ref "$BRANCH" -f operation=prepare -f name=<name> -f pull-requests="<N1> <N2> ..."
+gh workflow run mod-base-batch.yml --repo "$R" --ref "$BRANCH" -f operation=settle -f pr-number=<batch N>
+```
+
+The `prepare` job reads the allowed-path list, the cap and the operators from the protected config
+of the default branch and refuses a run whose actor or triggering actor is not an operator. The push
+of a batch merge settles it: the kit's `batch.yml` derives the plan of that commit, locates the
+batch pull request's gates as post-merge reuse does and proves the stack, the merged commit and both
+tested records; the `close` job then comments on and closes each member still open at its batched
+head. A settlement that fails (the default branch moved before the job started, a gate of another
+kit pin or plan, expired evidence) closes nothing; settle by hand, or close the members by hand
+after checking the batch.
+
 ### Protected admission
 
 `admission` of `scripts/ci/mod-base-build.json` ([BUILD-ADAPTER.md](BUILD-ADAPTER.md#protected-admission))

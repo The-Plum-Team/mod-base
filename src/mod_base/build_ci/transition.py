@@ -77,7 +77,7 @@ def admit_transition(protected: bytes | None, candidate: bytes | None, *, protec
 
 
 def verify_candidate_callers(files: Mapping[str, bytes], *, candidate: bytes | None, pin: Pin,
-                             kit_root: Path, branch: str | None = None) -> tuple[str, ...]:
+                             kit_root: Path, branch: str | None = None, batching: bool = False) -> tuple[str, ...]:
     """Require the candidate's Build/E2E caller ``files`` (``{path: bytes}`` of those that exist)
     to be exactly what its activation manifest ``candidate``, ``pin`` and canonical ``branch`` call
     for; return the managed paths.
@@ -87,11 +87,13 @@ def verify_candidate_callers(files: Mapping[str, bytes], *, candidate: bytes | N
     side read it; without one, a managed caller whose template names the branch is an error.
     Every problem is reported in one :class:`MbError`: a managed caller that is missing or differs
     from its rendered template, a caller present outside its mode, or a path that is no caller.
+    ``batching`` says whether the candidate's Build configuration names a ``batch`` block, without
+    which the batch caller is outside every mode.
     """
 
     _pin(pin, "candidate")
     document = None if candidate is None else parse_activation(candidate, label="the candidate activation manifest")
-    expected = expected_callers(kit_root, pin, document, branch)
+    expected = expected_callers(kit_root, pin, document, branch, batching)
     problems = [f"{single_line(path, limit=120)} is not a mod-base Build/E2E caller" for path in sorted(files)
                 if path not in expected]
     for path, wanted in expected.items():

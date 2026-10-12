@@ -386,6 +386,14 @@ MAX_CI_BATCH_PREPARE_REQUESTS = 16 + 4 * MAX_CI_BATCH_MEMBERS
 #: original gates and at most 5 per member (281 for 50). The rest is for retries and for the further
 #: pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_BATCH_SETTLE_REQUESTS = 48 + 6 * MAX_CI_BATCH_MEMBERS
+#: ``ci batch-settle`` without an operator's plan and seals sends what an operator's sends and 13
+#: requests more: it derives the gates as post-merge reuse admission does (the listing, run, jobs and
+#: artifacts of each original run and the Build record) and observes them again before its effect
+#: (44 before the first write); the rest is for retries and for the further pages of a run that lists
+#: more than 100 jobs or artifacts.
+MAX_CI_BATCH_SETTLE_DERIVED_REQUESTS = MAX_CI_BATCH_SETTLE_REQUESTS + 48
+#: The GitHub logins a Build config lets request a batch through the managed batch caller.
+MAX_CI_BATCH_OPERATORS = 8
 #: The archive of one ``mb-ci-*`` artifact of any kind and profile: Quick Skin's bundle admission
 #: cap, which is tighter than the 2 GiB Block Pops' evaluator admits (``tests/test_ci_limits.py``).
 MAX_CI_BUNDLE_COMPRESSED_BYTES = 512 * MIB

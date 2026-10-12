@@ -51,6 +51,14 @@ PACKAGED_CALLER = ".github/workflows/mod-base-packaged-e2e.yml"
 STATUS_CALLER = ".github/workflows/mod-base-gate-status.yml"
 #: Every caller workflow the activation mode can make a managed file of a mod.
 CALLERS = (GUARD_CALLER, BUILD_CALLER, PACKAGED_CALLER, STATUS_CALLER)
+#: The managed batch caller (KQ8-2). It is no gate and no control file of the gates: a mod has it
+#: exactly while its Build config names a ``batch`` block and its mode manages both gates
+#: (:data:`BATCH_MODES`). Removing the block is the rollback of shared batching.
+BATCH_CALLER = ".github/workflows/mod-base-batch.yml"
+#: The :func:`managed_mode` values in which a ``batch`` block makes :data:`BATCH_CALLER` managed. A
+#: batch pull request must pass both gates of the shared pipeline, so only the mode in which both are
+#: the mod's gates batches; a reviewed rollback of that mode keeps the caller until the block goes.
+BATCH_MODES = frozenset({"shared-build-and-e2e"})
 
 #: Mode -> the callers the kit manages in it. ``reviewed-rollback`` has no row of its own: it
 #: manages the row of the mode it leaves (:func:`managed_mode`).

@@ -1,0 +1,384 @@
+# mod-base managed: batch caller, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-batch.yml
+name: mod-base batch
+
+# Batches of ordinary pull requests through one batch pull request (docs/BUILD-E2E-DESIGN.md,
+# "Drafts and batches"). A mod has this file only while its Build config names a batch block. The
+# workflow of the default branch runs it, never a pull request's copy. On request an operator the
+# Build config names prepares a batch: the protected kit squashes the listed open pull requests
+# onto the default branch, refuses a member that changes a path outside the protected allowed-path
+# list, pushes batch/<name> and opens one ready pull request whose complete gates run once for all
+# of them. The batch is never updated: a moved base or member means a new batch. When a push to
+# the default branch is the merge of a batch pull request (or on request for one), the kit's
+# read-only workflow proves that the merged commit is the stack its gates tested and returns which
+# members may be closed; a last job closes exactly those that are still open at their batched
+# head. Only the prepare and close jobs name the protected environment and the key of the batch
+# App, which is not the gate status App: it may push batch branches and write pull requests, never
+# commit statuses. The kit workflow receives no secret.
+on:
+  push:
+    branches: ["{{BRANCH}}"]
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: prepare a new batch pull request, or settle a merged one
+        required: true
+        type: choice
+        options: [prepare, settle]
+      pull-requests:
+        description: "prepare: the open pull requests to batch, in order, separated by single spaces"
+        required: false
+        type: string
+        default: ""
+      name:
+        description: "prepare: the batch branch is batch/<name>; it must not exist"
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: "settle: the merged batch pull request whose members are closed"
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  locate:
+    name: Locate the batch request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      operation: ${{ steps.locate.outputs.operation }}
+      pr-number: ${{ steps.locate.outputs.pr-number }}
+      pull-requests: ${{ steps.locate.outputs.pull-requests }}
+      name: ${{ steps.locate.outputs.name }}
+    steps:
+      - name: Find what this event asks of the batch caller
+        id: locate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation }}
+          PULL_REQUESTS: ${{ inputs.pull-requests }}
+          BATCH_NAME: ${{ inputs.name }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Locate batch request: %s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit"
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "this run is not on a branch"
+          base="${GITHUB_REF#refs/heads/}"
+          [[ "$base" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || fail "malformed branch"
+          operation=none
+          number=""
+          pulls=""
+          name=""
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch)
+              case "$OPERATION" in
+                prepare)
+                  # At most 50 distinct pull request numbers, in order; the Build config may cap lower.
+                  [[ "$PULL_REQUESTS" =~ ^[1-9][0-9]{0,17}( [1-9][0-9]{0,17}){0,49}$ ]] ||
+                    fail "list the pull requests as at most 50 numbers separated by single spaces"
+                  [[ "$(tr ' ' '\n' <<< "$PULL_REQUESTS" | sort | uniq -d)" == "" ]] || fail "a pull request is listed twice"
+                  [[ "$BATCH_NAME" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || fail "malformed batch name"
+                  operation=prepare
+                  pulls="$PULL_REQUESTS"
+                  name="$BATCH_NAME"
+                  ;;
+                settle)
+                  [[ "$DISPATCH_PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed batch pull request number"
+                  operation=settle
+                  number="$DISPATCH_PR_NUMBER"
+                  ;;
+                *) fail "the operation is prepare or settle" ;;
+              esac
+              ;;
+            push)
+              # The push settles a batch when it is the merge of exactly one batch pull request of
+              # this repository into this branch; any other push asks nothing of this workflow.
+              listed="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=100")" ||
+                fail "cannot list the pull requests of the pushed commit"
+              number="$(jq -r --arg repository "$GITHUB_REPOSITORY" --arg base "$base" --arg sha "$GITHUB_SHA" '
+                  if type != "array" then error("no list") else . end |
+                  [.[] | select(.merged_at != null and .merge_commit_sha == $sha and .base.ref == $base and
+                    .base.repo.full_name == $repository and .head.repo.full_name == $repository and
+                    (.head.ref | type == "string" and startswith("batch/"))) | .number] |
+                  if all(.[]; type == "number") then . else error("no number") end |
+                  if length == 0 then "" elif length == 1 then .[0] else error("several") end' <<< "$listed")" ||
+                fail "the pushed commit does not merge at most one batch pull request"
+              [[ -z "$number" || "$number" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed batch pull request number"
+              [[ -z "$number" ]] || operation=settle
+              ;;
+            *) fail "the batch caller runs only on push or workflow_dispatch" ;;
+          esac
+          case "$operation" in
+            prepare) printf 'This run prepares batch/%s from pull requests %s\n' "$name" "$pulls" ;;
+            settle) printf 'This run settles batch pull request #%s\n' "$number" ;;
+            *) printf 'This push merges no batch pull request: nothing is prepared or settled\n' ;;
+          esac
+          {
+            printf 'operation=%s\n' "$operation"
+            printf 'pr-number=%s\n' "$number"
+            printf 'pull-requests=%s\n' "$pulls"
+            printf 'name=%s\n' "$name"
+          } >> "$GITHUB_OUTPUT"
+
+  guard:
+    name: Verify pinned mod-base
+    needs: locate
+    if: needs.locate.outputs.operation != 'none'
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/mod-base-guard.yml
+    with:
+      callees: batch
+
+  prepare:
+    name: Prepare the batch pull request
+    needs: [locate, guard]
+    if: needs.locate.outputs.operation == 'prepare'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: mod-base-batch
+    permissions:
+      contents: read
+    steps:
+      - name: Fetch the protected mod head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { printf 'Prepare batch: %s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+          # The commit by id, as the guard fetches it: the read-only job token reaches the one fetch
+          # through its environment and is never written to the checkout; no hook, template, system
+          # or global Git configuration takes part.
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          credential="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 --wrap=0)"
+          printf '::add-mask::%s\n' "$credential"
+          git init --quiet --template= mod
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.$GITHUB_SERVER_URL/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" \
+            git -C mod -c core.hooksPath=/dev/null -c protocol.version=2 fetch --quiet --depth=1 --no-tags \
+            --no-recurse-submodules "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA" ||
+            fail "cannot fetch the protected mod at github.sha"
+          [[ "$(git -C mod rev-parse --verify --quiet 'FETCH_HEAD^{commit}')" == "$GITHUB_SHA" ]] ||
+            fail "the fetched commit is not github.sha"
+          git -C mod -c core.hooksPath=/dev/null -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD ||
+            fail "cannot check out the protected mod"
+      - name: Resolve the pinned kit
+        shell: bash
+        env:
+          KIT_SHA: ${{ needs.guard.outputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Prepare batch: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed kit commit"
+          # The mod's own bootstrap fetches the pin the guard verified and checks its tree, without
+          # a token; the next step runs that verified kit from its cache.
+          MOD_BASE_KIT_SHA="$KIT_SHA" python3 -I -B mod/scripts/ci/mod_base_kit.py path --repo mod > /dev/null ||
+            fail "cannot resolve the pinned kit"
+      - name: Mint the batch App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MOD_BASE_BATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MOD_BASE_BATCH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Push the batch branch and open its pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          KIT_SHA: ${{ needs.guard.outputs.kit-sha }}
+          PULL_REQUESTS: ${{ needs.locate.outputs.pull-requests }}
+          BATCH_NAME: ${{ needs.locate.outputs.name }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Prepare batch: %s\n' "$1" >&2; exit 1; }
+          [[ -n "$GH_TOKEN" && "$GH_TOKEN" != *[[:space:]]* ]] || fail "no App token was minted"
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed kit commit"
+          [[ "$PULL_REQUESTS" =~ ^[1-9][0-9]{0,17}( [1-9][0-9]{0,17}){0,49}$ ]] || fail "malformed pull request list"
+          [[ "$BATCH_NAME" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || fail "malformed batch name"
+          read -r -a numbers <<< "$PULL_REQUESTS"
+          mkdir -m 700 "$RUNNER_TEMP/mb-state"
+          # The kit reads the allowed-path list, the member cap and the operators from the
+          # protected Build config at github.sha, and requires this run's actor and triggering
+          # actor to be operators, before it reads any pull request.
+          MOD_BASE_KIT_SHA="$KIT_SHA" python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- \
+            ci batch-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --name "$BATCH_NAME" "${numbers[@]}"
+
+  evaluate:
+    name: Verify merged batch
+    needs: [locate, guard]
+    if: needs.locate.outputs.operation == 'settle'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: The-Plum-Team/mod-base/.github/workflows/batch.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.guard.outputs.kit-sha }}
+      pr-number: ${{ needs.locate.outputs.pr-number }}
+
+  close:
+    name: Close the settled batch members
+    needs: [locate, evaluate]
+    if: needs.evaluate.outputs.intents != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: mod-base-batch
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Mint the batch App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MOD_BASE_BATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MOD_BASE_BATCH_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+      - name: Close each member still at its batched head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOSE_TOKEN: ${{ steps.app.outputs.token }}
+          EVALUATION: ${{ needs.evaluate.result }}
+          INTENTS: ${{ needs.evaluate.outputs.intents }}
+          PR_NUMBER: ${{ needs.locate.outputs.pr-number }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Close batch members: %s\n' "$1" >&2; exit 1; }
+          # Without an evaluation that succeeded, a document or the App token, nothing is closed.
+          [[ "$EVALUATION" == success ]] || fail "the evaluation did not succeed"
+          [[ -n "$CLOSE_TOKEN" && "$CLOSE_TOKEN" != *[[:space:]]* ]] || fail "no App token was minted"
+          [[ -n "$GH_TOKEN" && "$GH_TOKEN" != "$CLOSE_TOKEN" ]] || fail "the job token and the App token must be two tokens"
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+          [[ "$GITHUB_REF" == refs/heads/* ]] || fail "this run is not on a branch"
+          base="${GITHUB_REF#refs/heads/}"
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed batch pull request number"
+          (( ${#INTENTS} >= 2 && ${#INTENTS} <= 16384 )) || fail "the evaluation returned no bounded intents document"
+          # The document is admitted as a whole or not at all: this repository, this batch pull
+          # request and branch, its merge commit, and 1 to 50 distinct members other than the batch.
+          admitted="$(jq -ce --arg repository "$GITHUB_REPOSITORY" --argjson number "$PR_NUMBER" --arg base "$base" '
+                def sha: type == "string" and length == 40 and
+                  (explode | all(.[]; (. >= 48 and . <= 57) or (. >= 97 and . <= 102)));
+                def number: type == "number" and . >= 1 and . <= 999999999999999999 and . == floor;
+                def member: type == "object" and keys == ["head_sha", "pr_number", "squash_sha"] and
+                  (.head_sha | sha) and (.pr_number | number) and (.squash_sha | sha);
+                if type == "object" and keys == ["base_branch", "members", "merged_sha", "pr_number", "repository"] and
+                  .repository == $repository and .pr_number == $number and .base_branch == $base and
+                  (.merged_sha | sha) and (.members | type == "array" and length >= 1 and length <= 50 and
+                    all(.[]; member) and ([.[].pr_number] | unique | length) == length and
+                    all(.[]; .pr_number != $number))
+                then . else error("malformed") end' <<< "$INTENTS" 2> /dev/null)" ||
+            fail "the intents document is malformed"
+          merged_sha="$(jq -r .merged_sha <<< "$admitted")"
+          # The batch pull request, read with the read-only job token: still merged, by the commit
+          # the evaluation proved, from a batch branch of this repository into this branch.
+          pull="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")" ||
+            fail "cannot read the batch pull request"
+          jq -e --arg repository "$GITHUB_REPOSITORY" --argjson number "$PR_NUMBER" --arg base "$base" \
+              --arg merged "$merged_sha" '
+                type == "object" and .number == $number and .merged == true and .merge_commit_sha == $merged and
+                .base.ref == $base and .base.repo.full_name == $repository and
+                .head.repo.full_name == $repository and (.head.ref | type == "string" and startswith("batch/"))' \
+              <<< "$pull" > /dev/null || fail "the batch pull request is not the merged batch the evaluation proved"
+          closed=0
+          kept=0
+          while IFS= read -r member; do
+            number="$(jq -r .pr_number <<< "$member")"
+            batched="$(jq -r .head_sha <<< "$member")"
+            squash="$(jq -r .squash_sha <<< "$member")"
+            # Each member is read again immediately before it is closed. One that is no longer
+            # open, received commits or left this repository or branch stays as it is: its new
+            # commits never reached the default branch.
+            live="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/pulls/$number")" ||
+              fail "cannot read pull request #$number"
+            state="$(jq -r --arg repository "$GITHUB_REPOSITORY" --argjson number "$number" --arg base "$base" \
+                --arg batched "$batched" '
+                  if type != "object" or .number != $number then "malformed"
+                  elif .state != "open" then "not-open"
+                  elif .head.sha != $batched or .head.repo.full_name != $repository or .base.ref != $base or
+                    .base.repo.full_name != $repository then "changed"
+                  else "batched" end' <<< "$live")" || fail "cannot read pull request #$number"
+            case "$state" in
+              batched) ;;
+              malformed) fail "pull request #$number is malformed" ;;
+              *)
+                printf 'Pull request #%s is left as it is (%s)\n' "$number" "$state"
+                kept=$(( kept + 1 ))
+                continue
+                ;;
+            esac
+            request="$RUNNER_TEMP/mod-base-batch-member.json"
+            jq -n --arg body "Merged through batch #$PR_NUMBER (batch commit \`${squash:0:12}\`)." '{body: $body}' > "$request"
+            GH_TOKEN="$CLOSE_TOKEN" protected_gh_api_retry --method POST "repos/$GITHUB_REPOSITORY/issues/$number/comments" \
+              --input "$request" < /dev/null > /dev/null || fail "GitHub refused the comment on #$number"
+            printf '{"state":"closed"}\n' > "$request"
+            answer="$(GH_TOKEN="$CLOSE_TOKEN" protected_gh_api_retry --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" \
+              --input "$request" < /dev/null)" || fail "GitHub refused to close #$number"
+            if ! jq -e --arg batched "$batched" '.head.sha == $batched' <<< "$answer" > /dev/null; then
+              # A push raced the close: those commits did not land, so the pull request is reopened.
+              printf '{"state":"open"}\n' > "$request"
+              GH_TOKEN="$CLOSE_TOKEN" protected_gh_api_retry --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" \
+                --input "$request" < /dev/null > /dev/null || fail "GitHub refused to reopen #$number after a race"
+              printf 'Pull request #%s received a push while it was closed and was reopened\n' "$number"
+              kept=$(( kept + 1 ))
+              continue
+            fi
+            closed=$(( closed + 1 ))
+          done < <(jq -c '.members[]' <<< "$admitted")
+          printf 'Closed %s member(s) of batch #%s; %s left as they are\n' "$closed" "$PR_NUMBER" "$kept" |
+            tee -a "$GITHUB_STEP_SUMMARY"

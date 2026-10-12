@@ -207,6 +207,7 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_BATCH_PUSH_RECEIPT_BYTES": (4 * KIB, "the porcelain answer of one batch push"),
     "MAX_CI_BATCH_ALLOWED_PATHS": (4096, "entries of the allowed-path list a batch is built with"),
     "MAX_CI_BATCH_REPORTED_PATHS": (20, "paths one batch refusal names"),
+    "MAX_CI_BATCH_OPERATORS": (8, "GitHub logins a Build config's batch block lets request a batch"),
     "CI_BATCH_GIT_TIMEOUT_SECONDS": (120, "one Git plumbing call of the batch store"),
     "CI_BATCH_GIT_TRANSFER_TIMEOUT_SECONDS": (600, "one fetch or push of the batch store"),
     "MAX_CI_TARGET_DOWNLOAD_BYTES": (4 * GIB, "all target partition archives of one fan-in; the assembled "
@@ -258,6 +259,11 @@ DERIVED: dict[str, tuple[Any, str, Callable[[], Any]]] = {
         348, "the 3 requests of `ci batch-settle`, the 28 of the merged gate pair and at most 5 per member, with 17 "
              "and 1 per member more for retries and further listing pages",
         lambda: (3 + 28 + 17) + (5 + 1) * limits.MAX_CI_BATCH_MEMBERS),
+    "MAX_CI_BATCH_SETTLE_DERIVED_REQUESTS": (
+        396, "`ci batch-settle` without an operator's plan and seals: what MAX_CI_BATCH_SETTLE_REQUESTS counts and the "
+             "13 requests that locate both original gates as post-merge reuse does and observe them again before the "
+             "effect, with 35 more for retries and further listing pages",
+        lambda: limits.MAX_CI_BATCH_SETTLE_REQUESTS + (13 + 35)),
     "MAX_CI_TARGET_INPUT_ENTRIES": (
         174_353, "every export file and target directory with all its parent directories, and the root",
         lambda: (limits.MAX_CI_EXPORT_FILES + limits.MAX_CI_TARGETS) * (limits.MAX_BUNDLE_PATH_DEPTH + 1) + 1),

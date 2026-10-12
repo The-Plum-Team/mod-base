@@ -27,15 +27,19 @@ push ``batch/*`` branches, open pull requests and, for settlement, close them.
 from __future__ import annotations
 
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from mod_base import SCHEMA_VERSIONS
+from mod_base.build_ci import reuse
 from mod_base.build_ci.batch_git import BatchStack, BatchStore, StackMember, allowed_path_roots, patch_sha256
 from mod_base.build_ci.batch_schema import validate_batch_manifest
-from mod_base.build_ci.protocol import validate_plan
-from mod_base.build_ci.transport import download_merged_gate_pair
+from mod_base.build_ci.protocol import PRODUCERS, validate_plan
+from mod_base.build_ci.reads import CommandReads, Watch
+from mod_base.build_ci.records import original_plan
+from mod_base.build_ci.transport import OriginalUnavailable, download_merged_gate_pair
+from mod_base.errors import Unavailable
 from mod_base.github.api import ApiNotFound, GitHubApi
 from mod_base.github.contents import branch_head, default_branch
 from mod_base.model import grammar, limits
@@ -308,46 +312,143 @@ def rebuild_batch(store: BatchStore, manifest: dict[str, Any]) -> None:
           "$.batch.manifest", "the batch manifest differs from the stack rebuilt from its base and member heads")
 
 
-def settle_batch(api: GitHubApi, store: BatchStore, *, pr_number: int, plan: dict[str, Any],
-                 build_seal: dict[str, Any], packaged_seal: dict[str, Any], temporary_root: Path,
-                 delete_branches: bool = False) -> dict[str, list[int]]:
-    """Close the members of the merged batch pull request ``pr_number`` once its provenance holds.
+class BatchUnsettled(Unavailable):
+    """The gates of a merged batch cannot prove it now (exit 3).
 
-    ``plan`` is the plan the batch pull request's gates ran with, and the two seals are the
-    descriptors of its Build and packaged tested records; each seal names the run that sealed it.
-    Before any write:
+    Its newest Build or packaged run under the batch head is missing, failed, a draft deferral or a
+    reuse run, ran another kit pin, was sealed for another plan than the protected policy derives
+    now, or an artifact it names has expired. Nothing is wrong and nothing was written: the members
+    stay open, for an operator to settle them with the gates' own plan and seals or close them by
+    hand."""
 
-    * the pull request is a merged ``batch/*`` pull request of this repository whose body carries
-      one marker, and the plan's identity names that pull request, its head, the marker's base
-      (the gates tested the stack on the commit it was built on) and the marker's final tree;
-    * the stack rebuilt from the marker equals the marker (``rebuild_batch``), so the head the
-      gates tested is that stack;
-    * ``transport.download_merged_gate_pair`` authenticates both original gates, whose runs
-      GitHub records under that head, and that the merged commit has the tested tree and lies
-      in the default branch.
+    default_reason = "ci-batch-unsettled"
 
-    Then each member that is still open at its batched head (and still of this repository, to the
-    same base) gets a comment and is closed; one that received commits stays open, because those
-    never reached the default branch. If a head moved between the last read and the close, the
-    pull request is reopened. With ``delete_branches`` a closed member's branch is deleted while
-    it still points at the batched head. Returns ``{"closed", "changed", "already_closed",
-    "deleted"}`` as lists of pull request numbers; running it again closes nothing twice.
+
+#: The identity fields the Build record of a batch's gates must share with the default-branch
+#: commit the settlement runs at: the same repository, protected caller, graph and kit. The tested
+#: tree, the policy, the inventory, the scenario contract and the runtime selection are the gates'
+#: own; the original plan hash covers what they mean.
+_SAME_CALLER = ("repository", "source_repository", "base_branch", "controller_workflow", "controller_ref",
+                "graph_version", "kit")
+
+
+@dataclass(frozen=True)
+class BatchGates:
+    """The gates of a merged batch pull request, derived and authenticated (:func:`derive_batch_gates`).
+
+    ``plan`` is the plan they ran with, ``build_seal`` and ``packaged_seal`` the descriptors of
+    their tested records, and ``watch`` everything mutable the derivation read: whoever acts on
+    the gates calls ``watch.recheck()`` immediately before its effect."""
+
+    plan: dict[str, Any]
+    build_seal: dict[str, Any]
+    packaged_seal: dict[str, Any]
+    watch: Watch = field(repr=False, compare=False)
+
+
+def derive_batch_gates(api: GitHubApi | CommandReads, *, pr_number: int, head_sha: str, head_branch: str,
+                       plan: dict[str, Any], temporary_root: Path) -> BatchGates:
+    """Locate the gates of the merged batch pull request ``pr_number`` (last head ``head_sha`` on
+    ``head_branch``) from ``plan``, the protected plan of the default-branch commit the job runs
+    at (KQ8-1): ``ci batch-settle`` without an operator's plan and seals.
+
+    The gates are found as post-merge reuse finds those of a merged pull request
+    (``reuse._original_run``): the newest Build run and the newest packaged run GitHub lists under
+    the batch head, chosen before any result is read, as their latest attempts, completed and
+    successful under the executing kit pin, neither a draft deferral nor a reuse run. The Build
+    record says which identity it was sealed for. That is a claim: it must name this pull request
+    and its head and the same repository, caller, graph and kit as ``plan``, and the original plan
+    is ``plan`` under that identity (``records.original_plan``), whose hash the record must carry,
+    so the gates were sealed for exactly the work the protected policy derives now. Each run must
+    show exactly the full graph of its caller for that plan and every artifact both records name
+    must still be listed. The tested tree is not compared here: the settlement binds it to the
+    batch marker and to the merged commit.
+
+    A newest run that is missing, failed, deferred or a reuse run, another kit pin, another plan and
+    evidence that is gone raise :class:`BatchUnsettled` (exit 3); a run still in progress raises
+    ``reuse.OriginalPending``; malformed or contradictory metadata is a rejection. Nothing is
+    written.
     """
 
     Int(1, limits.MAX_RUN_ID)(pr_number, "$.batch.pull")
-    check(type(delete_branches) is bool, "$.batch.delete_branches", "must be a boolean")
-    check(api.writable, "$.batch.api", "settling a batch needs a writable GitHub client")
-    identity = validate_plan(plan)["identity"]
-    repository = api.repository
-    check(identity["pr_number"] == pr_number and identity["repository"] == identity["source_repository"] == repository,
-          "$.batch.plan", f"the plan is not the plan of pull request #{pr_number} of {repository}")
+    plan = validate_plan(plan)
+    now = plan["identity"]
+    reads, watch = CommandReads.of(api), Watch()
+    check(now["repository"] == now["source_repository"] == reads.repository and now["pr_number"] == 0
+          and now["head_branch"] == now["base_branch"] and now["tested_sha"] == now["controller_sha"],
+          "$.batch.plan", "the gates of a batch are derived from the protected plan of a default-branch commit")
+    check(grammar.is_batch_branch(head_branch) and grammar.is_match(grammar.SHA1, head_sha), "$.batch.pull",
+          f"#{pr_number} has no batch head")
+    pull = reuse._Pull(pr_number, head_sha, head_branch)
+    try:
+        build, packaged = (reuse._original_run(reads, watch, producer, pull, plan) for producer in PRODUCERS)
+        claim = reuse._claimed_receipt(reads, build.artifact("tested", "build"), temporary_root)
+        then = claim["identity"]
+        if then["pr_number"] != pr_number:
+            raise reuse._FullRun("original-run-of-another-pull-request", f"#{then['pr_number']}, not #{pr_number}")
+        if then["kit"] != now["kit"]:
+            raise reuse._FullRun("kit-pin-differs", f"pull request #{pr_number}")
+        for key in _SAME_CALLER:
+            check(then[key] == now[key], f"$.record.identity.{key}",
+                  "the batch's Build record is not of this repository's protected caller")
+        check((then["head_sha"], then["head_branch"]) == (head_sha, head_branch), "$.record.identity",
+              "the batch's Build record names another head than the merged batch pull request")
+        original = original_plan(plan, then)
+        if claim["plan_sha256"] != original["plan_sha256"]:
+            raise reuse._FullRun("plan-differs", f"pull request #{pr_number}")
+        # Everything both records will name, by name: what is gone is known before anything is required.
+        packaged.artifact("tested", "packaged")
+        build.artifact("build")
+        for lane in original["lanes"]:
+            packaged.artifact("runtime", lane["id"])
+        packaged.artifact("results")
+        build_seal = reuse._seal_descriptor(original, build)
+        packaged_seal = reuse._seal_descriptor(original, packaged)
+    except reuse._FullRun as unsettled:
+        raise BatchUnsettled(f"batch #{pr_number} cannot be settled from its gates: {unsettled.outcome.detail}",
+                             reason=f"ci-batch-{unsettled.outcome.reason}") from None
+    except OriginalUnavailable as gone:
+        raise BatchUnsettled(f"batch #{pr_number} cannot be settled from its gates: {gone}",
+                             reason="ci-batch-evidence-unavailable") from None
+    return BatchGates(original, build_seal, packaged_seal, watch)
+
+
+@dataclass(frozen=True)
+class _Settlement:
+    """A merged batch whose provenance holds (:func:`_verify_settlement`)."""
+
+    pr_number: int
+    repository: str
+    base_branch: str
+    merged_sha: str
+    manifest: dict[str, Any]
+
+
+def _merged_batch(api: GitHubApi, pr_number: int) -> tuple[dict[str, Any], str, str, str]:
+    """``(record, head branch, head sha, base branch)`` of the merged ``batch/*`` pull request ``pr_number``."""
+
     record = _pull(api, pr_number)
     check(record["state"] == "closed" and record.get("merged") is True, "$.batch.pull",
           f"batch #{pr_number} has not merged")
     head_repository, branch, head_sha = _side(record, "head")
     base_repository, base_branch, _ = _side(record, "base")
-    check(head_repository == base_repository == repository and grammar.is_batch_branch(branch), "$.batch.pull",
-          f"#{pr_number} is not a batch pull request of {repository}")
+    check(head_repository == base_repository == api.repository and grammar.is_batch_branch(branch)
+          and grammar.is_match(grammar.SHA1, head_sha), "$.batch.pull",
+          f"#{pr_number} is not a batch pull request of {api.repository}")
+    return record, branch, head_sha, base_branch
+
+
+def _verify_settlement(api: GitHubApi, store: BatchStore, *, pr_number: int, plan: dict[str, Any],
+                       build_seal: dict[str, Any], packaged_seal: dict[str, Any],
+                       temporary_root: Path) -> _Settlement:
+    """Everything :func:`settle_batch` proves before its first write; see there."""
+
+    Int(1, limits.MAX_RUN_ID)(pr_number, "$.batch.pull")
+    identity = validate_plan(plan)["identity"]
+    repository = api.repository
+    check(identity["pr_number"] == pr_number and identity["repository"] == identity["source_repository"] == repository,
+          "$.batch.plan", f"the plan is not the plan of pull request #{pr_number} of {repository}")
+    record, branch, head_sha, base_branch = _merged_batch(api, pr_number)
     merged_sha = grammar.require_sha1(record.get("merge_commit_sha"), "merged batch commit")
     manifest = read_batch_marker(record.get("body"))
     members = manifest["members"]
@@ -364,8 +465,15 @@ def settle_batch(api: GitHubApi, store: BatchStore, *, pr_number: int, plan: dic
     controller_sha, _ = branch_head(api, base_branch)
     download_merged_gate_pair(api, build_descriptor=build_seal, packaged_descriptor=packaged_seal, plan=plan,
                               controller_sha=controller_sha, merged_sha=merged_sha, temporary_root=temporary_root)
+    return _Settlement(pr_number, repository, base_branch, merged_sha, manifest)
+
+
+def _close_members(api: GitHubApi, settled: _Settlement, *, delete_branches: bool) -> dict[str, list[int]]:
+    """Close the members of a verified settlement; see :func:`settle_batch`."""
+
+    repository, base_branch, pr_number = settled.repository, settled.base_branch, settled.pr_number
     report: dict[str, list[int]] = {"closed": [], "changed": [], "already_closed": [], "deleted": []}
-    for member in members:
+    for member in settled.manifest["members"]:
         number, batched = member["pr_number"], member["head_sha"]
         endpoint = f"/repos/{repository}/pulls/{number}"
         live = _pull(api, number)
@@ -401,3 +509,82 @@ def settle_batch(api: GitHubApi, store: BatchStore, *, pr_number: int, plan: dic
                 api.delete(f"/repos/{repository}/git/refs/heads/{quoted}")
                 report["deleted"].append(number)
     return report
+
+
+def _settlement_intents(settled: _Settlement) -> dict[str, Any]:
+    """The closing intents of a verified settlement: everything the closing job of the managed
+    batch caller may do with the batch App, and nothing else.
+
+    ``{"repository", "pr_number", "base_branch", "merged_sha", "members": [{"pr_number",
+    "head_sha", "squash_sha"}]}``, members in batch order. That job closes a member only while it
+    is still open, of this repository, against ``base_branch`` and at ``head_sha``, as
+    :func:`settle_batch` would, and deletes no branch."""
+
+    return {"repository": settled.repository, "pr_number": settled.pr_number, "base_branch": settled.base_branch,
+            "merged_sha": settled.merged_sha,
+            "members": [{"pr_number": member["pr_number"], "head_sha": member["head_sha"],
+                         "squash_sha": member["squash_sha"]} for member in settled.manifest["members"]]}
+
+
+def settle_batch(api: GitHubApi, store: BatchStore, *, pr_number: int, plan: dict[str, Any],
+                 build_seal: dict[str, Any], packaged_seal: dict[str, Any], temporary_root: Path,
+                 delete_branches: bool = False) -> dict[str, list[int]]:
+    """Close the members of the merged batch pull request ``pr_number`` once its provenance holds.
+
+    ``plan`` is the plan the batch pull request's gates ran with, and the two seals are the
+    descriptors of its Build and packaged tested records; each seal names the run that sealed it.
+    Before any write:
+
+    * the pull request is a merged ``batch/*`` pull request of this repository whose body carries
+      one marker, and the plan's identity names that pull request, its head, the marker's base
+      (the gates tested the stack on the commit it was built on) and the marker's final tree;
+    * the stack rebuilt from the marker equals the marker (``rebuild_batch``), so the head the
+      gates tested is that stack;
+    * ``transport.download_merged_gate_pair`` authenticates both original gates, whose runs
+      GitHub records under that head, and that the merged commit has the tested tree and lies
+      in the default branch.
+
+    Then each member that is still open at its batched head (and still of this repository, to the
+    same base) gets a comment and is closed; one that received commits stays open, because those
+    never reached the default branch. If a head moved between the last read and the close, the
+    pull request is reopened. With ``delete_branches`` a closed member's branch is deleted while
+    it still points at the batched head. Returns ``{"closed", "changed", "already_closed",
+    "deleted"}`` as lists of pull request numbers; running it again closes nothing twice.
+    """
+
+    check(type(delete_branches) is bool, "$.batch.delete_branches", "must be a boolean")
+    check(api.writable, "$.batch.api", "settling a batch needs a writable GitHub client")
+    settled = _verify_settlement(api, store, pr_number=pr_number, plan=plan, build_seal=build_seal,
+                                 packaged_seal=packaged_seal, temporary_root=temporary_root)
+    return _close_members(api, settled, delete_branches=delete_branches)
+
+
+def settle_derived_batch(api: GitHubApi, store: BatchStore, *, pr_number: int, plan: dict[str, Any],
+                         temporary_root: Path, intents: bool = False,
+                         delete_branches: bool = False) -> dict[str, Any]:
+    """Settle the merged batch pull request ``pr_number`` with gates derived from ``plan``, the
+    protected plan of the default-branch commit the job runs at.
+
+    :func:`derive_batch_gates` locates and authenticates the gates, the settlement is proven as
+    :func:`settle_batch` proves it, and the gates are observed again immediately before the effect
+    (design risk 11: a fresh live-evidence check before anything is closed). With ``intents`` the
+    effect is the return of :func:`_settlement_intents` and nothing is written, so a read-only job
+    decides and a job of the caller that holds the batch App closes; otherwise ``api`` must be
+    writable and the members are closed as :func:`settle_batch` closes them, returning its report.
+    """
+
+    Int(1, limits.MAX_RUN_ID)(pr_number, "$.batch.pull")
+    check(type(intents) is bool and type(delete_branches) is bool, "$.batch.options", "must be booleans")
+    check(not (intents and delete_branches), "$.batch.options", "closing intents never delete a branch")
+    check(intents or api.writable, "$.batch.api", "settling a batch needs a writable GitHub client")
+    # One command's reads: a commit, a tree or the job list of a completed attempt is read once.
+    reads = CommandReads.of(api)
+    _, branch, head_sha, _ = _merged_batch(reads, pr_number)
+    gates = derive_batch_gates(reads, pr_number=pr_number, head_sha=head_sha, head_branch=branch, plan=plan,
+                               temporary_root=temporary_root)
+    settled = _verify_settlement(reads, store, pr_number=pr_number, plan=gates.plan, build_seal=gates.build_seal,
+                                 packaged_seal=gates.packaged_seal, temporary_root=temporary_root)
+    gates.watch.recheck()
+    if intents:
+        return _settlement_intents(settled)
+    return _close_members(api, settled, delete_branches=delete_branches)

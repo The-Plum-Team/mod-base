@@ -81,6 +81,10 @@ Detailed rules (``docs/OPERATIONS.md`` and ``docs/ONBOARDING.md`` describe the p
   missing, changed or current like any managed file, and one its mode does not manage must not
   exist (``forbidden``): a kit caller is either drift-checked or absent. ``sync`` and ``init``
   write the callers the mode manages and never delete one.
+* The managed batch caller (``mod-base-batch.yml``) is enrolled the same way and is managed in the
+  ``shared-build-and-e2e`` mode only while ``scripts/ci/mod-base-build.json`` names a ``batch``
+  block (:data:`mod_base.build_ci.activation.BATCH_MODES`); without the block it must not exist, so
+  removing the block and the caller together is the rollback of shared batching.
 * While a mode manages callers, ``.github/dependabot.yml`` must also ignore every third-party
   action those callers pin, for the reason it ignores the Pages caller's.
 """
@@ -99,8 +103,8 @@ from pathlib import Path
 from typing import Any
 
 import mod_base
-from mod_base.build_ci.activation import (ACTIVATION_PATH, CALLERS, MANAGED_CALLERS, managed_mode, managing_modes,
-                                          parse_activation)
+from mod_base.build_ci.activation import (ACTIVATION_PATH, BATCH_CALLER, BATCH_MODES, CALLERS, MANAGED_CALLERS,
+                                          managed_mode, managing_modes, parse_activation)
 from mod_base.build_ci.config import BUILD_CONFIG_PATH, validate_build_config
 from mod_base.config import DEFAULT_CONFIG_PATH, Config, load_config, parse_config
 from mod_base.errors import MbError, single_line
@@ -124,12 +128,14 @@ class RenderedCaller:
     """One workflow the kit renders with the mod's pin: ``path`` in the mod, the template ``source``
     below ``template/``, the ``renderer`` (a :data:`RENDERERS` name) and the activation ``modes``
     that manage it (:func:`mod_base.build_ci.activation.managed_mode` values). ``modes`` is ``None``
-    for a caller that is a manifest entry and managed whatever the activation."""
+    for a caller that is a manifest entry and managed whatever the activation. A ``batch`` caller is
+    managed in its modes only while the mod's Build config names a ``batch`` block."""
 
     path: str
     source: str
     renderer: str
     modes: frozenset[str] | None
+    batch: bool = False
 
 
 #: The closed registry of rendered callers. It is code: neither the manifest nor the activation
@@ -138,6 +144,7 @@ class RenderedCaller:
 RENDERED_CALLERS: tuple[RenderedCaller, ...] = (
     RenderedCaller(CALLER_PATH, f"managed/{CALLER_PATH}", "pages-extension", None),
     *(RenderedCaller(path, f"managed/{path}", "pinned", managing_modes(path)) for path in CALLERS),
+    RenderedCaller(BATCH_CALLER, f"managed/{BATCH_CALLER}", "pinned", BATCH_MODES, batch=True),
 )
 
 AGENTS_PATH = "AGENTS.md"
@@ -377,9 +384,10 @@ def _pin_scanned(path: str) -> bool:
         folded.startswith(".github/actions/") and folded.rsplit("/", 1)[1] in ACTION_FILES)
 
 
-def _read_activation(repo: Path) -> tuple[bytes, dict[str, Any]] | None:
-    """``(bytes, validated document)`` of the mod's activation manifest, bound to its Build
-    configuration, or ``None`` for a mod that has neither file."""
+def _read_activation(repo: Path) -> tuple[bytes, dict[str, Any], bool] | None:
+    """``(bytes, validated document, whether the Build configuration names a batch block)`` of the
+    mod's activation manifest, bound to its Build configuration, or ``None`` for a mod that has
+    neither file."""
 
     state = _state(repo, ACTIVATION_PATH)
     configured = _state(repo, BUILD_CONFIG_PATH)
@@ -400,7 +408,7 @@ def _read_activation(repo: Path) -> tuple[bytes, dict[str, Any]] | None:
     if (document["repository"], document["profile"]) != (config["repository"], config["profile"]):
         raise MbError(f"{ACTIVATION_PATH} names another repository or profile than {BUILD_CONFIG_PATH}",
                       reason="template")
-    return data, document
+    return data, document, "batch" in config
 
 
 def load_template_activation(repo: Path) -> dict[str, Any] | None:
@@ -416,6 +424,15 @@ def load_template_activation(repo: Path) -> dict[str, Any] | None:
 
     found = _read_activation(_real_directory(Path(os.path.abspath(repo)), "repository"))
     return None if found is None else found[1]
+
+
+def load_template_batching(repo: Path) -> bool:
+    """Whether the mod's Build configuration names a ``batch`` block, read as
+    :func:`load_template_activation` reads it (``False`` for a mod without one): what decides,
+    beside the mode, whether the managed batch caller is a file of the mod."""
+
+    found = _read_activation(_real_directory(Path(os.path.abspath(repo)), "repository"))
+    return found is not None and found[2]
 
 
 def activation_bytes(repo: Path) -> bytes | None:
@@ -917,25 +934,29 @@ def _renderer(record: RenderedCaller) -> _Renderer:
     return renderer
 
 
-def _activation_callers(activation: dict[str, Any] | None) -> list[tuple[RenderedCaller, bool]]:
+def _activation_callers(activation: dict[str, Any] | None,
+                        batching: bool = False) -> list[tuple[RenderedCaller, bool]]:
     """``(record, whether the mod's activation manages it)`` for every caller enrolled with
-    activation modes, in registry order."""
+    activation modes, in registry order. ``batching`` says whether the mod's Build configuration
+    names a ``batch`` block, without which no batch caller is managed."""
 
     mode = managed_mode(activation)
-    return [(record, mode in record.modes) for record in RENDERED_CALLERS if record.modes is not None]
+    return [(record, mode in record.modes and (batching or not record.batch))
+            for record in RENDERED_CALLERS if record.modes is not None]
 
 
 def expected_callers(kit_root: Path, pin: Pin, activation: dict[str, Any] | None,
-                     branch: str | None = None) -> dict[str, bytes | None]:
+                     branch: str | None = None, batching: bool = False) -> dict[str, bytes | None]:
     """What every Build/E2E caller path must hold in a mod whose validated activation manifest is
     ``activation`` (``None``: it has none), whose pin is ``pin`` and whose canonical branch is
     ``branch`` (:func:`canonical_branch`): the kit template of ``kit_root`` rendered with that pin
     and branch where the mode manages the caller, ``None`` where the file must not exist.
     ``kit_root`` must be the kit that ``pin`` names. A managed caller whose template names the
-    branch cannot be rendered without one, and a ``branch`` that is no branch name is refused."""
+    branch cannot be rendered without one, and a ``branch`` that is no branch name is refused.
+    ``batching`` says whether the mod's Build configuration names a ``batch`` block."""
 
     return {record.path: _renderer(record).render(Path(kit_root), record, pin, None, branch) if managed else None
-            for record, managed in _activation_callers(activation)}
+            for record, managed in _activation_callers(activation, batching)}
 
 
 def canonical_branch(repo: Path) -> str | None:
@@ -1035,12 +1056,12 @@ def _collect_actions(found: dict[str, str], workflow: str, text: str) -> None:
 
 
 def _ignored_actions(kit_root: Path, manifest: dict[str, Any], entry: dict[str, Any],
-                     activation: dict[str, Any] | None) -> tuple[tuple[str, str], ...]:
+                     activation: dict[str, Any] | None, batching: bool = False) -> tuple[tuple[str, str], ...]:
     """What the Dependabot fragment ``entry`` must ignore in this mod: :func:`pinned_actions` and the
     third-party actions of every Build/E2E caller the mod's activation manages."""
 
     found = dict(pinned_actions(kit_root, manifest, entry))
-    for record, managed in _activation_callers(activation):
+    for record, managed in _activation_callers(activation, batching):
         if managed:
             _collect_actions(found, record.path, _renderer(record).text(kit_root, record.source))
     return tuple(sorted(found.items()))
@@ -1231,6 +1252,7 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
 
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
     activation = load_template_activation(repo)
+    batching = load_template_batching(repo)
     manifest = load_manifest(kit_root)
     config = load_config(repo, check_repository_facts=False)
     deferred = set(config.template["deferred"])
@@ -1262,12 +1284,13 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
                 drifts.extend(Drift(path, "links", problem)
                               for problem in link_violations(path, actual.decode("utf-8", errors="replace"), documents))
         else:
-            actions = _ignored_actions(kit_root, manifest, entry, activation) if path == DEPENDABOT_PATH else ()
+            actions = (_ignored_actions(kit_root, manifest, entry, activation, batching)
+                       if path == DEPENDABOT_PATH else ())
             missing, other = _check_fragment(repo, entry, actual, config, actions)
             (pending if path in staged else drifts).extend(missing)
             drifts.extend(other)
     if activation is not None:
-        drifts.extend(_activation_drifts(repo, Path(kit_root), activation, config.canonical_branch))
+        drifts.extend(_activation_drifts(repo, Path(kit_root), activation, config.canonical_branch, batching))
     for path in FORBIDDEN_PATHS:
         if _state(repo, path) != "absent":
             drifts.append(Drift(path, "forbidden", f"{path} must not exist: Claude Code reads AGENTS.md only while "
@@ -1275,16 +1298,23 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
     return drifts, pending
 
 
-def _activation_drifts(repo: Path, kit_root: Path, activation: dict[str, Any], branch: str) -> list[Drift]:
+def _activation_drifts(repo: Path, kit_root: Path, activation: dict[str, Any], branch: str,
+                       batching: bool = False) -> list[Drift]:
     """The drifts of the Build/E2E callers of a mod with an activation manifest and the canonical
     ``branch``: a caller its mode manages is checked like a managed file, and any other must not
-    exist. No deferral applies."""
+    exist. No deferral applies. ``batching`` says whether the Build configuration names a ``batch``
+    block."""
 
     drifts: list[Drift] = []
-    for record, managed in _activation_callers(activation):
+    for record, managed in _activation_callers(activation, batching):
         path = record.path
         state = _state(repo, path)
-        if not managed:
+        if not managed and record.batch:
+            if state != "absent":
+                drifts.append(Drift(path, "forbidden", f"{path} exists only while {BUILD_CONFIG_PATH} names a batch "
+                                                       f"block in the {', '.join(sorted(record.modes))} activation "
+                                                       "mode: it is either managed and checked or absent; remove it"))
+        elif not managed:
             if state != "absent":
                 drifts.append(Drift(path, "forbidden", f"{path} must not exist in the {activation['mode']} activation "
                                                        "mode, which does not manage it: a mod-base Build/E2E caller "
@@ -1343,13 +1373,14 @@ def pending(repo: Path, *, kit_root: Path) -> list[Drift]:
 def sync(repo: Path, *, kit_root: Path, write: bool) -> list[Drift]:
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
     activation = load_template_activation(repo)
+    batching = load_template_batching(repo)
     manifest = load_manifest(kit_root)
     config = load_config(repo, check_repository_facts=False)
     staged = set(config.template["deferred"]) & DEFERRABLE
     managed: list[tuple[str, str, RenderedCaller | None]] = [
         (entry["path"], entry["source"], _caller_record(entry)) for entry in _entries(manifest, "managed")]
     managed.extend((record.path, record.source, record)
-                   for record, active in _activation_callers(activation) if active)
+                   for record, active in _activation_callers(activation, batching) if active)
     planned: list[tuple[Drift, str, bytes]] = []
     for path, source, record in managed:
         state = _state(repo, path)
@@ -1440,6 +1471,7 @@ def init(repo: Path, *, kit_root: Path, seed: bool, from_config: Path | None) ->
 
     repo = _real_directory(Path(os.path.abspath(repo)), "repository")
     activation = load_template_activation(repo)
+    batching = load_template_batching(repo)
     manifest = load_manifest(kit_root)
     config, config_bytes = _load_seed_config(repo, from_config)
     values = seed_values(config)
@@ -1465,7 +1497,7 @@ def init(repo: Path, *, kit_root: Path, seed: bool, from_config: Path | None) ->
         else:
             data = _render_seed(_template_bytes(kit_root, source).decode("utf-8"), values).encode("utf-8")
         planned.append((path, data))
-    for record, active in _activation_callers(activation):
+    for record, active in _activation_callers(activation, batching):
         if active and _state(repo, record.path) == "absent":
             planned.append((record.path, _renderer(record).render(Path(kit_root), record, _initial_pin(repo, kit_root),
                                                                   None, branch)))

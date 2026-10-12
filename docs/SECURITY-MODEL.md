@@ -130,6 +130,18 @@ sandbox against a malicious adapter:
 - Wakes need only `actions: write` (a `workflow_dispatch`), never `contents: write`, and carry no
   authority: admission re-authenticates the named run and artifact and exits cleanly on a stale or
   foreign wake.
+- The managed batch caller (only with a `batch` block, unreleased) is the one place a kit-managed
+  workflow holds a token that writes code or pull requests: the batch App's, minted in its own
+  environment `mod-base-batch` (default branch only) by two jobs. `prepare` runs the pinned kit's
+  `ci batch-prepare`, which runs no mod code (the stack is built with Git plumbing, no hooks,
+  filters or drivers), reads its allowed-path list, cap and operators from the protected config at
+  `github.sha`, refuses a list that reaches `config.never_batched` and refuses a run whose actor or
+  triggering actor is not an operator; the token can push a new `batch/*` branch (an existing one is
+  never moved) and open a pull request, whose gates then run as for any other. `close` runs shell
+  alone: it acts only on the closing intents the read-only kit job `batch.yml` proved for a merged
+  batch, re-reads the batch pull request and each member with the read-only job token immediately
+  before it writes, and closes only a member still open at its batched head. The gate status App
+  is never given more than commit statuses.
 
 ### Concurrency and races
 
@@ -225,6 +237,12 @@ text is validated and HTML-escaped at build time.
   the site can be framed.
 - **Pre-merge verification in Quick Skin** runs as pull-request code; the runtime `verify-kit` is
   the defense that does not depend on it.
+- **Batches move review to the batch pull request.** A batch pull request is opened by the batch
+  App, so a ruleset rule "approval by someone other than the last pusher" no longer stops an
+  operator from approving members they wrote; the `operators` list and the members' own reviews
+  are the control. A settlement closes members only after their batch merged with authenticated
+  gates; a member pushed to after it was batched stays open, and a race between the last read and
+  the close reopens it.
 - **Protected admission trusts the approvers' comments.** With `admission` in the Build config, a
   pull request that changes a protected path gets no gate `success` without the latest decision
   of a listed approver on its exact head. Anybody with write access can edit or delete a comment:

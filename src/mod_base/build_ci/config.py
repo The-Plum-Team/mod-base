@@ -5,8 +5,9 @@ the candidate files a plan is derived from (the inventory, the scenario contract
 ``limits.MAX_CI_PLAN_INPUTS`` extra ``plan_inputs``), where a lane's checkout expects the staged
 Build, the two required status contexts, the native timeouts and, optionally, the kit system profile
 a lane installs before its accounts exist (:func:`system_profile`), the seeds its jobs restore
-(:func:`seed_key_files`) and the paths a pull request may change only with an approver's decision on
-its exact head (:func:`admission`). :func:`validate_build_config` is the
+(:func:`seed_key_files`), the paths a pull request may change only with an approver's decision on
+its exact head (:func:`admission`) and whether the managed batch caller prepares and settles batches
+(:func:`batch`). :func:`validate_build_config` is the
 pure schema; :func:`load_build_config` reads the file from the protected checkout the prologue
 verified and requires every listed source there to have its configured hash, so its result is the
 complete protected adapter that planning hashes into the policy digest. It also records the mod's
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from mod_base import readable_schema_versions
-from mod_base.build_ci.activation import ACTIVATION_PATH, CALLERS
+from mod_base.build_ci.activation import ACTIVATION_PATH, BATCH_CALLER, CALLERS
 from mod_base.build_ci.adapter import plan_input_name, plan_sources
 from mod_base.build_ci.protocol import BUILD_ADAPTER_API, PROFILES, SYSTEM_PROFILES, check_output_paths, repo_path
 from mod_base.errors import MbError
@@ -75,6 +76,15 @@ _ADMISSION = Obj({
     "approvers": List(_APPROVER, min_items=1, max_items=lim.MAX_CI_ADMISSION_APPROVERS,
                       unique_by=lambda item: item["login"].casefold()),
 })
+#: The batches of the managed batch caller (KQ8-2): the protected allowed-path list a batch member may
+#: change, the GitHub logins that may request a batch, and at most how many members one batch holds.
+_BATCH = Obj({
+    "allowed_paths": repo_path,
+    "operators": List(Str(_LOGIN, max_len=39), min_items=1, max_items=lim.MAX_CI_BATCH_OPERATORS,
+                      unique_by=lambda login: login.casefold()),
+}, {
+    "max_members": Int(1, lim.MAX_CI_BATCH_MEMBERS),
+})
 _CONFIG = Obj({
     "kind": Const("mod-base.build.config"),
     "schema_version": Int(min(readable_schema_versions("mod-base.build.config")),
@@ -102,6 +112,9 @@ _CONFIG = Obj({
     # Optional within schema 1: the paths a pull request may change only with an approver's
     # decision on its exact head (:func:`admission`). Absent means no such paths.
     "admission": _ADMISSION,
+    # Optional within schema 1: batches through the managed batch caller (:func:`batch`). Absent
+    # means none, and removing it is the rollback of shared batching.
+    "batch": _BATCH,
 })
 
 
@@ -124,7 +137,8 @@ def validate_build_config(document: Any, *, path: str = "$") -> dict[str, Any]:
     # derived from and the directory the Build is staged into. None may alias, contain or replace
     # another.
     check_output_paths([BUILD_CONFIG_PATH, *inventory, *plan_sources(document).values(),
-                        document["bundle"]["path"]], path)
+                        document["bundle"]["path"],
+                        *([document["batch"]["allowed_paths"]] if "batch" in document else [])], path)
     contexts = document["contexts"]
     check(contexts["build"].casefold() != contexts["packaged"].casefold(), f"{path}.contexts",
           "Build and packaged contexts must be distinct")
@@ -134,7 +148,11 @@ def validate_build_config(document: Any, *, path: str = "$") -> dict[str, Any]:
             listed = [item["path"] for item in seed["key_files"]]
             check(listed == sorted(listed), f"{path}.seeds.{kind}.key_files", "must be sorted by path")
     if "admission" in document:
-        _check_admission(document["admission"], [BUILD_CONFIG_PATH, *CONTROL_PATHS, *inventory], f"{path}.admission")
+        # A batch's allowed-path list and its caller decide what reaches the default branch through
+        # the batch App: an admission must protect them as it protects the gates' own files.
+        batching = [document["batch"]["allowed_paths"], BATCH_CALLER] if "batch" in document else []
+        _check_admission(document["admission"], [BUILD_CONFIG_PATH, *CONTROL_PATHS, *inventory, *batching],
+                         f"{path}.admission")
     return document
 
 
@@ -173,6 +191,48 @@ def admission(document: dict[str, Any]) -> dict[str, Any] | None:
     ``approvers``), or ``None`` when it names none."""
 
     return document.get("admission")
+
+
+def batch(document: dict[str, Any]) -> dict[str, Any] | None:
+    """The batch settings of a validated config (``allowed_paths``, ``operators`` and, when set,
+    ``max_members``), or ``None`` when it names none: the mod then has no managed batch caller."""
+
+    return document.get("batch")
+
+
+def never_batched(config: BuildConfig, kit_paths: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """The repository paths no batch member may change, whatever a mod's allowed-path list says.
+
+    Everything that decides how the gates execute or what the batch caller may do: ``.github`` as a
+    whole (every workflow, so every pin and every caller), the Build config, the activation
+    manifest, every source of the adapter closure, every candidate file a plan is derived from (the
+    inventory, the scenario contract, the plan inputs), the batch allowed-path list itself, every
+    path the config's admission protects and ``kit_paths``, the kit-owned files of the mod (its
+    managed files and its kit config, which the caller names). A controller upgrade, a kit bump, a
+    restricted transition or a matrix change never hides inside a batch (docs/BUILD-E2E-DESIGN.md,
+    "Drafts and batches"). Sorted, and without a path that lies below another one of them."""
+
+    document = config.data
+    paths = {".github", BUILD_CONFIG_PATH, *CONTROL_PATHS, BATCH_CALLER, *(file.path for file in config.files),
+             *plan_sources(document).values(), *kit_paths}
+    if "batch" in document:
+        paths.add(document["batch"]["allowed_paths"])
+    if "admission" in document:
+        paths.update(document["admission"]["protected_paths"])
+    return tuple(sorted(path for path in paths if not protects([other for other in paths if other != path], path)))
+
+
+def check_batch_paths(config: BuildConfig, allowed_paths: list[str] | tuple[str, ...],
+                      kit_paths: tuple[str, ...] = ()) -> None:
+    """Refuse an allowed-path list that admits a path of :func:`never_batched` (with ``kit_paths``):
+    an entry that is such a path, lies below one or holds one below it."""
+
+    never = never_batched(config, kit_paths)
+    for index, root in enumerate(allowed_paths):
+        clash = next((path for path in never if protects([root], path) or protects([path], root)), None)
+        if clash is not None:
+            raise BuildConfigError(f"the batch allowed-path list admits {clash}, which no batch may change "
+                                   f"(entry {index}: {root})")
 
 
 def system_profile(document: dict[str, Any]) -> str | None:
