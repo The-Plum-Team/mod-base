@@ -5,6 +5,32 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- Find each family handoff by its exact name across a whole wave of producer runs. `select
+  --family` (`pages.select.FamilyGenerations`) and `admit` (ready family handoffs and the
+  `current` check) looked a key's `mb-family-handoff--<f>--<key>--a<attempt>` up only in the
+  newest `limits.MAX_CANDIDATES` (8) successful producer runs at the leg coverage. A producer that
+  hands off one key per run (Quick Skin's mod compatibility review: one run per target, 17 targets,
+  15 runs in one observed wave) left the earliest keys of a wave outside that window, so a
+  publication that coalesced a wave silently fell back to an older family cache (or the
+  carry-forward walk), and recovery could call a site `current` while a newer handoff waited. Both
+  now search the newest `limits.MAX_FAMILY_PRODUCER_RUNS` (32, new) producer runs of the one
+  `head_sha` listing, newest first, for the exact name of each run's latest attempt; inventories
+  are read only until the name is found and are shared by every key, and `admit` reads a run's job
+  graph only when its inventory holds a pending key's handoff. Every authentication and fail-closed
+  rule is unchanged: inadmissible runs (another repository, event, branch or conclusion) are never
+  producers, an earlier attempt's name in a rerun is not the exact name, two uploads of the name in
+  one run or one naming another head fail the leg, a selected handoff is still bound to its
+  envelope's exact producer attempt and kit (`kit-binding`), and a key with no handoff in the
+  window falls back to the superseding or admitted family cache, then the walk, exactly as before.
+  The bound only ever hides an older run. The carry-forward walk's earlier-commit producers keep
+  `limits.MAX_CANDIDATES`. Worst-case reads: at most 24 more inventories at the coverage for one
+  `select` (still within the Pages client's 160 with a full walk); for the QS wave above, `admit`
+  reads 17 inventories and only the job graphs of the runs holding a ready key. No document,
+  schema, CLI flag, job or step name changes; `src/` is digested, so the `MB_KIT_TREE_DIGEST`
+  literals move.
+
 ## v1.4.1
 
 Patch release: the gallery's **Compare versions** grid gets a cell only for a lane a release

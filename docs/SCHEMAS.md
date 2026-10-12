@@ -495,8 +495,11 @@ its new `--input` directory: the compact bundle for a key, the `source/` directo
 **The family generation chain.** A family leg is `(family, key)` at the leg coverage `C`
 (`admit`'s `families[].coverage_sha`, the key's subject commit):
 
-1. `select --family` takes an `mb-family-handoff--<f>--<key>--a<attempt>` upload of a successful
-   `producer.workflow` run on the default branch at `C`, unless an `mb-family-cache--<f>--<key>--<C>`
+1. `select --family` takes the `mb-family-handoff--<f>--<key>--a<attempt>` upload of the newest
+   successful `producer.workflow` run on the default branch at `C` that holds one under exactly that
+   name for its latest attempt (searched in the newest `limits.MAX_FAMILY_PRODUCER_RUNS` such runs,
+   enough for a wave of one-key runs; `admit` finds ready family handoffs the same way), unless an
+   `mb-family-cache--<f>--<key>--<C>`
    owned by a successful Pages run **supersedes** it (that owner run was created after the handoff
    was uploaded, so that publication consumed the handoff and its rotation may retire it), else the
    newest such family cache. When neither exists and the family sets `carry_forward`, the same

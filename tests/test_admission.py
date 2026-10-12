@@ -400,6 +400,46 @@ class QuickSkinAdmissionTest(AdmissionTest):
         self.qs.publish(1001, at=4000, legs=tuple(self.qs.keys), select_at=3900)
         self.assertEqual(self.qs.admit().reason, "current", "the replacement publication is current again")
 
+    def wave(self, size: int = 17) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """A wave of one-key producer runs at the head (Quick Skin: one run per target): ``mc1.20.1``
+        handed off by the oldest run (2000, at 3000), ``mc26.3`` by each of the ``size - 1`` later ones."""
+
+        earliest = self.qs.family("mc1.20.1", 2000, at=3000)
+        return earliest, [self.qs.family("mc26.3", 2001 + index, at=3010 + 10 * index) for index in range(size - 1)]
+
+    def test_a_family_key_handed_off_early_in_a_wave_is_ready_and_nominated(self) -> None:
+        # A coalesced publication must still see the key of the wave's oldest run, which lies beyond
+        # the newest MAX_CANDIDATES producer runs.
+        self.qs.publish()
+        earliest, later = self.wave()
+        result = self.qs.admit(now=3500)
+        self.assertEqual((result.eligible, result.reason), (True, "final-complete"))
+        self.assertEqual({leg: result.nominations[leg] for leg in (f"{FAMILY}/mc1.20.1", f"{FAMILY}/mc26.3")},
+                         {f"{FAMILY}/mc1.20.1": earliest["id"], f"{FAMILY}/mc26.3": later[-1]["id"]})
+        producers = set(range(2000, 2017))
+        graphs = {int(path.split("/runs/")[1].split("/")[0]) for path, _ in self.qs.api.requests("/attempts/")}
+        self.assertEqual(graphs & producers, {2000, 2016},
+                         "only a run holding a pending key's exact handoff has its job graph read")
+        self.assertLessEqual(self.qs.api.request_count, admission.MAX_REQUESTS)
+        self.setUp()
+        self.qs.publish()
+        self.wave()
+        with mock.patch.object(lim, "MAX_FAMILY_PRODUCER_RUNS", lim.MAX_CANDIDATES):
+            result = self.qs.admit(now=3500)
+        self.assertNotEqual(result.reason, "final-complete", "the newest MAX_CANDIDATES runs alone lost the key")
+        self.assertNotIn(f"{FAMILY}/mc1.20.1", result.nominations)
+
+    def test_recovery_sees_a_family_handoff_early_in_a_wave(self) -> None:
+        # Publication 1001 (created at 3850) supersedes every mc26.3 handoff of the wave, but
+        # mc1.20.1's newest family cache is publication 1000's (created at 1850), older than its
+        # handoff at 3000 in the wave's oldest run: the site is not current.
+        self.qs.publish(legs=tuple(self.qs.keys))
+        self.wave()
+        self.qs.publish(1001, at=4000, legs=("mc26.3",))
+        self.assertNotEqual(self.qs.admit(now=4500).reason, "current")
+        with mock.patch.object(lim, "MAX_FAMILY_PRODUCER_RUNS", lim.MAX_CANDIDATES):
+            self.assertEqual(self.qs.admit(now=4500).reason, "current", "the previous window missed the handoff")
+
     def test_upload_window_and_attempt_bind_every_readiness(self) -> None:
         self.qs.publish()
         artifact = self.qs.family("mc1.20.1", 2000, at=3000)
