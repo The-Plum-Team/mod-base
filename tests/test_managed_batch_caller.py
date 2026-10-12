@@ -25,7 +25,7 @@ from typing import Any
 
 from mod_base import workflow
 from mod_base.build_ci.activation import BATCH_CALLER, BATCH_MODES
-from mod_base.pin import Pin
+from mod_base.pin import Pin, parse_pin_files
 from mod_base.template import tool
 from tests.helpers import ci_activation
 from tests.test_managed_ci_callers import (BRANCH, HEAD, KIT_SHA, LOCAL_GUARD, OTHER, REPOSITORY, TOKEN, VERSION,
@@ -37,7 +37,8 @@ ENVIRONMENT = "mod-base-batch"
 CLIENT_ID = "MOD_BASE_BATCH_APP_CLIENT_ID"
 PRIVATE_KEY = "MOD_BASE_BATCH_APP_PRIVATE_KEY"
 LOCATE_STEP = "Find what this event asks of the batch caller"
-FETCH_STEP = "Fetch the protected mod head and the pinned kit"
+FETCH_STEP = "Fetch the protected mod head"
+RESOLVE_STEP = "Resolve the pinned kit"
 MINT_STEP = "Mint the batch App token"
 PREPARE_STEP = "Push the batch branch and open its pull request"
 CLOSE_STEP = "Close each member still at its batched head"
@@ -207,6 +208,17 @@ class BatchCallerStructureTests(unittest.TestCase):
             with self.subTest(case=label):
                 self.assertEqual(simulate(self.document, github, job_outputs=job_outputs, outcomes=outcomes), expected)
 
+    def test_the_rendered_callers_carry_the_one_pin_the_bootstrap_reads(self) -> None:
+        # The pin parser of the mod's bootstrap reads every workflow: the kit appears only on the
+        # pinned reference, never as a bare repository name the parser would refuse.
+        files = tool.expected_callers(ROOT, Pin(KIT_SHA, VERSION, ()), ci_activation("shared-build-and-e2e"), BRANCH,
+                                      batching=True)
+        found = parse_pin_files({path: data for path, data in files.items() if data is not None})
+        self.assertEqual((found.sha, found.version), (KIT_SHA, VERSION))
+        self.assertIn(BATCH_CALLER, {reference.split("@")[0] for reference in found.references})
+        code = "\n".join(line for line in self.text.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotRegex(code, r"(?i)the-plum-team/mod-base(?:\.git)?(?![A-Za-z0-9_./-])")
+
     def test_the_caller_is_rendered_only_with_a_batch_block_in_its_mode(self) -> None:
         pin = Pin(KIT_SHA, VERSION, ())
         for mode in ("disabled", "shadow", "shared-build", "shared-build-and-e2e"):
@@ -333,30 +345,44 @@ class LocateTests(ScriptCase):
 class PrepareTests(ScriptCase):
     JOB, STEP = "prepare", PREPARE_STEP
     STUBS = ("python3",)
+    RECORDED = ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN", "MOD_BASE_KIT_SHA")
 
-    def prepare(self, **environment: str | None):
-        values: dict[str, str | None] = {**self.base(), "GH_TOKEN": APP_TOKEN_VALUE, "PULL_REQUESTS": "12 7",
-                                         "BATCH_NAME": "night-1", "GITHUB_TOKEN": "leaked", "ACTIONS_RUNTIME_TOKEN": "x"}
+    def prepare(self, step_name: str = PREPARE_STEP, **environment: str | None):
+        values: dict[str, str | None] = {**self.base(), "GH_TOKEN": APP_TOKEN_VALUE, "KIT_SHA": KIT_SHA,
+                                         "PULL_REQUESTS": "12 7", "BATCH_NAME": "night-1", "GITHUB_TOKEN": "leaked",
+                                         "ACTIONS_RUNTIME_TOKEN": "x"}
         values.update(environment)
-        return self.harness.run(self.script, {name: value for name, value in values.items() if value is not None},
-                                cwd=self.root, record_env=("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN",
-                                                           "PYTHONPATH"))
+        return self.harness.run(script(self.JOB, step_name),
+                                {name: value for name, value in values.items() if value is not None},
+                                cwd=self.root, record_env=self.RECORDED)
+
+    def test_the_mod_s_bootstrap_resolves_the_guard_s_pin_without_a_token(self) -> None:
+        result = self.prepare(RESOLVE_STEP)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (call,) = self.calls("python3")
+        self.assertEqual(call["argv"], ["-I", "-B", "mod/scripts/ci/mod_base_kit.py", "path", "--repo", "mod"])
+        self.assertEqual(call["env"], {"GH_TOKEN": None, "GITHUB_TOKEN": None, "ACTIONS_RUNTIME_TOKEN": None,
+                                       "MOD_BASE_KIT_SHA": KIT_SHA})
+        for kit_sha in ("", "B" * 40, KIT_SHA + "0"):
+            with self.subTest(kit_sha=kit_sha):
+                self.assertNotEqual(self.prepare(RESOLVE_STEP, KIT_SHA=kit_sha).returncode, 0)
+                self.assertEqual(self.calls("python3"), [])
 
     def test_the_kit_prepares_with_the_app_token_and_the_validated_request(self) -> None:
         result = self.prepare()
         self.assertEqual(result.returncode, 0, result.stderr)
         (call,) = self.calls("python3")
-        self.assertEqual(call["argv"], ["-P", "-m", "mod_base", "ci", "batch-prepare", "--repo", "mod", "--config",
-                                        "mod/site/mod-base.json", "--state", f"{self.runner_temp}/mb-state",
-                                        "--name", "night-1", "12", "7"])
+        self.assertEqual(call["argv"], ["-I", "-B", "mod/scripts/ci/mod_base_kit.py", "run", "--repo", "mod", "--",
+                                        "ci", "batch-prepare", "--repo", "mod", "--config", "mod/site/mod-base.json",
+                                        "--state", f"{self.runner_temp}/mb-state", "--name", "night-1", "12", "7"])
         self.assertEqual(call["env"], {"GH_TOKEN": APP_TOKEN_VALUE, "GITHUB_TOKEN": None, "ACTIONS_RUNTIME_TOKEN": None,
-                                       "PYTHONPATH": f"{self.root}/kit/src"})
+                                       "MOD_BASE_KIT_SHA": KIT_SHA})
         self.assertTrue((self.runner_temp / "mb-state").is_dir())
         self.assertNotIn("--allowed-paths", call["argv"], "the list is the protected config's")
 
     def test_nothing_runs_without_a_token_or_with_a_request_the_locate_job_would_refuse(self) -> None:
         for environment in ({"GH_TOKEN": ""}, {"GH_TOKEN": "two words"}, {"PULL_REQUESTS": "12 --dry-run"},
-                            {"PULL_REQUESTS": ""}, {"BATCH_NAME": "../x"}, {"BATCH_NAME": ""}):
+                            {"PULL_REQUESTS": ""}, {"BATCH_NAME": "../x"}, {"BATCH_NAME": ""}, {"KIT_SHA": ""}):
             with self.subTest(environment=environment):
                 result = self.prepare(**environment)
                 self.assertNotEqual(result.returncode, 0)

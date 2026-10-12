@@ -169,19 +169,18 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Fetch the protected mod head and the pinned kit
+      - name: Fetch the protected mod head
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          KIT_SHA: ${{ needs.guard.outputs.kit-sha }}
         run: |
           set -euo pipefail
           fail() { printf 'Prepare batch: %s\n' "$1" >&2; exit 1; }
-          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
           [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
-          # Both commits by id, as the guard fetches the mod: the read-only job token reaches the
-          # mod's one fetch through its environment and is never written to a checkout, the kit is
-          # fetched without it, and no hook, template, system or global Git configuration takes part.
+          # The commit by id, as the guard fetches it: the read-only job token reaches the one fetch
+          # through its environment and is never written to the checkout; no hook, template, system
+          # or global Git configuration takes part.
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
           credential="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 --wrap=0)"
           printf '::add-mask::%s\n' "$credential"
@@ -195,14 +194,19 @@ jobs:
             fail "the fetched commit is not github.sha"
           git -C mod -c core.hooksPath=/dev/null -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD ||
             fail "cannot check out the protected mod"
-          git init --quiet --template= kit
-          git -C kit -c core.hooksPath=/dev/null -c protocol.version=2 fetch --quiet --depth=1 --no-tags \
-            --no-recurse-submodules "$GITHUB_SERVER_URL/The-Plum-Team/mod-base.git" "$KIT_SHA" ||
-            fail "cannot fetch the pinned kit"
-          [[ "$(git -C kit rev-parse --verify --quiet 'FETCH_HEAD^{commit}')" == "$KIT_SHA" ]] ||
-            fail "the fetched kit is not the verified pin"
-          git -C kit -c core.hooksPath=/dev/null -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD ||
-            fail "cannot check out the pinned kit"
+      - name: Resolve the pinned kit
+        shell: bash
+        env:
+          KIT_SHA: ${{ needs.guard.outputs.kit-sha }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Prepare batch: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed kit commit"
+          # The mod's own bootstrap fetches the pin the guard verified and checks its tree, without
+          # a token; the next step runs that verified kit from its cache.
+          MOD_BASE_KIT_SHA="$KIT_SHA" python3 -I -B mod/scripts/ci/mod_base_kit.py path --repo mod > /dev/null ||
+            fail "cannot resolve the pinned kit"
       - name: Mint the batch App token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -215,6 +219,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          KIT_SHA: ${{ needs.guard.outputs.kit-sha }}
           PULL_REQUESTS: ${{ needs.locate.outputs.pull-requests }}
           BATCH_NAME: ${{ needs.locate.outputs.name }}
         run: |
@@ -222,6 +227,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           fail() { printf 'Prepare batch: %s\n' "$1" >&2; exit 1; }
           [[ -n "$GH_TOKEN" && "$GH_TOKEN" != *[[:space:]]* ]] || fail "no App token was minted"
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed kit commit"
           [[ "$PULL_REQUESTS" =~ ^[1-9][0-9]{0,17}( [1-9][0-9]{0,17}){0,49}$ ]] || fail "malformed pull request list"
           [[ "$BATCH_NAME" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] || fail "malformed batch name"
           read -r -a numbers <<< "$PULL_REQUESTS"
@@ -229,8 +235,8 @@ jobs:
           # The kit reads the allowed-path list, the member cap and the operators from the
           # protected Build config at github.sha, and requires this run's actor and triggering
           # actor to be operators, before it reads any pull request.
-          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
-            python3 -P -m mod_base ci batch-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+          MOD_BASE_KIT_SHA="$KIT_SHA" python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- \
+            ci batch-prepare --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --name "$BATCH_NAME" "${numbers[@]}"
 
   evaluate:
