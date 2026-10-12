@@ -438,12 +438,33 @@ def download_reuse_reference(api: GitHubApi | CommandReads, *, descriptor: dict[
     one of its caller for the commit is the consumer's own selection, as for every tested record."""
 
     plan, descriptor = _plan(plan), _descriptor(descriptor)
+    reads, watch, originals = CommandReads.of(api), Watch(), Watch()
+    document, verifier = _read_reference(reads, watch, descriptor, plan, temporary_root)
+    source, covered = document["source"], plan["identity"]
+    original = original_plan(plan, source["identity"])
+    receipts = _merged_pair(reads, originals, build_descriptor=source["build_seal"],
+                            packaged_descriptor=source["packaged_seal"], plan=original,
+                            merged=_merged(original, covered["controller_sha"], covered["tested_sha"]),
+                            temporary_root=temporary_root)
+    _originals_finished(reads, source, verifier)
+    watch.recheck()
+    originals.recheck()
+    return document, *receipts
+
+
+def _read_reference(reads: CommandReads, watch: Watch, descriptor: dict[str, Any], plan: dict[str, Any],
+                   temporary_root: Path) -> tuple[dict[str, Any], str]:
+    """The reuse reference ``descriptor`` selects and the time its gate started sealing, everything
+    :func:`download_reuse_reference` proves about the covering run, its graph, its own artifacts
+    and the reference, but nothing about the original pair it names. ``plan`` and ``descriptor``
+    are validated private copies; the caller authenticates the pair (``transport._merged_pair``),
+    calls :func:`_originals_finished` and rechecks ``watch`` before its effect."""
+
     _bound(descriptor, plan, "reuse", None)
     producer, covered = descriptor["producer"], plan["identity"]
     caller = ci_producer(producer["workflow_path"])
     check(producer["event"] == "push" and producer["graph_sha256"] == run_graph(caller, "reuse").sha256(plan),
           "$.producer", "is not a reuse run of a push for this plan")
-    reads, watch, originals = CommandReads.of(api), Watch(), Watch()
     _admit_source(reads, watch, covered)
     _authenticate_run(reads, watch, producer, plan, mode="reuse", complete=True)
     jobs = _complete_jobs(reads, producer, plan, mode="reuse")
@@ -460,22 +481,20 @@ def download_reuse_reference(api: GitHubApi | CommandReads, *, descriptor: dict[
     document = _read_record(_download(reads, descriptor), grammar.CI_REUSE_NAME, "mod-base.ci.reuse",
                             temporary_root, plan=plan)
     bind_reuse_reference(document, descriptor=descriptor, plan=plan)
-    source = document["source"]
-    original = original_plan(plan, source["identity"])
     gate_name = upload_job_name(caller, "reuse", None)
     verifier = _step_window(find_job(jobs, gate_name, run_attempt=attempt), CI_SEAL_STEP)[0]
     for name in run_graph(caller, "reuse").prerequisites(plan, gate_name):
         check(_job_window(find_job(jobs, name, run_attempt=attempt))[1] <= verifier, "$.jobs",
               "the reuse gate started before its prerequisites completed")
+    return document, verifier
 
-    receipts = _merged_pair(reads, originals, build_descriptor=source["build_seal"],
-                            packaged_descriptor=source["packaged_seal"], plan=original,
-                            merged=_merged(original, covered["controller_sha"], covered["tested_sha"]),
-                            temporary_root=temporary_root)
+
+def _originals_finished(reads: CommandReads, source: dict[str, Any], verifier: str) -> None:
+    """Require every job of both original runs of ``source`` to have finished before ``verifier``,
+    the time a reuse gate started sealing (:func:`_read_reference`): a reference covers only what
+    had happened when it was sealed."""
+
     for seal in (source["build_seal"], source["packaged_seal"]):
         for job in reads.attempt_jobs(seal["producer"]["run_id"], seal["producer"]["run_attempt"]):
             check(job["conclusion"] == "skipped" or _job_window(job)[1] <= verifier, "$.source.jobs",
                   "an original job completed after the reuse gate started")
-    watch.recheck()
-    originals.recheck()
-    return document, *receipts

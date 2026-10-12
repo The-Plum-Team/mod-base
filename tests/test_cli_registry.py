@@ -154,6 +154,11 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                                 {"hook": "verify_runtime", "unit": "fabric-1.20.1"}),
     "ci reuse-admit": (["ci", "reuse-admit", *REPO, "--state", "state", "--github-output", "out"],
                        {"ci_command": "reuse-admit", "state": Path("state"), "github_output": Path("out")}),
+    "ci select-generation": (["ci", "select-generation", *REPO, "--state", "state", "--output", "generation",
+                              "--with-build", "--lane", "lane-b", "--lane", "lane-a", "--github-output", "out"],
+                             {"ci_command": "select-generation", "state": Path("state"), "output": Path("generation"),
+                              "with_build": True, "lane": ["lane-b", "lane-a"], "all_lanes": False,
+                              "github_output": Path("out")}),
     "ci batch-prepare": (["ci", "batch-prepare", *REPO, "--state", "state", "--name", "run-1", "--allowed-paths",
                           "allowed.json", "--dry-run", "--github-output", "out", "12", "7"],
                          {"ci_command": "batch-prepare", "state": Path("state"), "name": "run-1",
@@ -325,6 +330,12 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "reuse-admit", *REPO, "--github-output", "o"],
             ["ci", "reuse-admit", *REPO, "--state", "s", "--github-output", "o", "--mode", "reuse"],
             ["ci", "reuse-admit", *REPO, "--state", "s", "--github-output", "o", "--pr", "7"],
+            ["ci", "select-generation", *REPO, "--state", "s", "--github-output", "o"],
+            ["ci", "select-generation", *REPO, "--state", "s", "--output", "g"],
+            ["ci", "select-generation", *REPO, "--output", "g", "--github-output", "o"],
+            ["ci", "select-generation", *REPO, "--state", "s", "--output", "g", "--github-output", "o", "--pr", "7"],
+            ["ci", "select-generation", *REPO, "--state", "s", "--output", "g", "--github-output", "o", "--lane", "a",
+             "--all-lanes"],
             ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "run-1", "--allowed-paths", "a.json"],
             ["ci", "batch-prepare", *REPO, "--state", "s", "--name", "Run/1", "--allowed-paths", "a.json", "7"],
             ["ci", "batch-prepare", *REPO, "--name", "run-1", "--allowed-paths", "a.json", "7"],
@@ -405,7 +416,8 @@ class CiVerbsTest(unittest.TestCase):
         verbs = self.verbs()
         self.assertLessEqual({"subject", "system-profile", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
                               "worker-validate", "worker-finish", "batch-prepare", "batch-settle", "select-build",
-                              "fetch-build", "gate-status", "reuse-admit", "seed-key", "seed-export"}, set(verbs))
+                              "fetch-build", "gate-status", "reuse-admit", "select-generation", "seed-key",
+                              "seed-export"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

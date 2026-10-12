@@ -5,6 +5,47 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- Add `ci select-generation` (Q9 groundwork, KQ9-1): the read-only step of a consumer of a
+  default-branch commit selects and authenticates the tested generation that covers it, whether
+  the commit's own runs tested it or post-merge reuse covers it with the merged pull request's
+  gates, and publishes it privately and atomically as `generation.json` (and, with
+  `--with-build`, the complete Build bundle the packaged gate tested). Before this, `ci
+  reuse-admit` could admit a reuse but no command consumed a reuse reference, so no consumer of a
+  push could follow one. The newest run of each managed caller is selected before any result is
+  read; the packaged run decides the mode and the Build run must agree, or the generation is
+  mixed and rejected (`ci-generation-mixed`, exit 2). Both reuse references must name the same
+  original pair, which is authenticated once as `reuse.download_reuse_reference` authenticates
+  it (references never chain). A run in progress, a failed newest run, no packaged run and
+  evidence that has expired or is gone select nothing (exit 3, `ci-generation-pending`,
+  `-failed`, `-absent`, `-evidence-unavailable`): the consumer requests a full generation instead,
+  and nothing partial is published. Outputs `generation` (`full`, `reuse`, `none`) and `reason`.
+  With `--lane ID` (repeatable) or `--all-lanes` it also keeps each chosen lane's export (reports,
+  logs, screenshots, as the adapter wrote them) under `lanes/<id>/` (KQ9-2): the results index must
+  list exactly the packaged gate's lanes, Build and reports, and each lane is verified as `ci
+  aggregate` verifies it and must be what the index sealed. A reused bundle or lane keeps the
+  identity it was built or run under. New module `build_ci.generation`, new limit
+  `MAX_CI_SELECT_GENERATION_REQUESTS` (96 + 3 x `MAX_CI_LANES` = 864: 27 requests for a full
+  generation, 52 for a reused one, 2 for the bundle, 2 for the index and 2 per lane kept, 124 for
+  every lane of a reused Quick Skin generation). `transport._read_sealed_lane` can keep the
+  verified export (`keep`).
+- Add the consumer subject `ci subject --producer generation --pr ""`: a job of the mod's own
+  workflow on the default branch (any workflow of the mod, on a push, `workflow_run`,
+  `workflow_dispatch` or `schedule`) authenticates the live default-branch head exactly like a
+  push and derives the identity, and so the plan, of that commit's own gates; it never has a pull
+  request, runs no candidate hook and seals nothing. With it a consumer job runs the steps of the
+  status callee's evaluate job and then `ci select-generation` (BUILD-PROTOCOL.md, "The subject
+  of a job"). New `identity.GENERATION_PRODUCER`, `GENERATION_EVENTS` and `admits_workflow`.
+- New document kind `mod-base.ci.generation` v1 (`records.validate_generation`,
+  `records.generation_record`), written only by `ci select-generation`, never by a gate; a v1.3.1
+  reader refuses it as unknown. Every other kind, `ADAPTER_API`, `BUILD_ADAPTER_API`,
+  `pixel_metrics_version`, the managed files and the workflows are unchanged. The compatibility
+  baseline moves to the archived v1.3.1 reader (`tests/fixtures/previous_release/v1.3.1`).
+- `reuse.download_reuse_reference` is split into the reference read and the original pair read
+  (`reuse._read_reference`, `reuse._originals_finished`) so that `ci select-generation` reads two
+  references and the pair once; its behaviour and request count are unchanged.
+
 ## v1.3.1
 
 Patch release: one kit process remembers its successful pixel checks by content (#26), which

@@ -1,17 +1,19 @@
 # Schemas (v1)
 
-The thirteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
-`mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1 since v1.1.0) are
-listed in [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the
-validator that defines it. This page has the field tables of four of them, in its last four
-sections: the Build config, the batch manifest, the results index and the activation manifest.
+The fourteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
+`mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1: thirteen since v1.1.0,
+`mod-base.ci.generation` since the unreleased version after v1.3.1) are listed in
+[BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the validator that
+defines it. This page has the field tables of five of them, in its last five sections: the Build
+config, the batch manifest, the results index, the tested generation and the activation manifest.
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.3.0, which
-already reads every kind of this release, so every kind is `unchanged`. The optional `seeds` of
-the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config that
-sets it. So does the optional `admission` (v1.3.0); a v1.2.1 reader refuses a config that
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.3.1, which
+reads every kind of this release but one: `mod-base.ci.generation` is a `new-kind`, written at 1
+and refused by the v1.3.1 reader as unknown. Every other kind is `unchanged`. The optional `seeds`
+of the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config
+that sets it. So does the optional `admission` (v1.3.0); a v1.2.1 reader refuses a config that
 sets it.
 
 The v1 Build plan (since v1.1.0) optionally carries `candidate_kit: {sha, version}` when
@@ -779,6 +781,37 @@ id, verifies its export against the plan and its validation record against that 
 envelope hash of the Build the job selected, and never reads the Build bundle. The gate requires
 the index to list exactly the lane artifacts its attempt uploaded and authenticates the owning
 Build (`build_ci.gate`).
+
+## Tested generation data v1
+
+`mod-base.ci.generation` writes and reads 1. The kind is new after v1.3.1 (`new-kind` in the
+ledger). It is what `ci select-generation` publishes for a consumer of a default-branch commit:
+the one Build bundle and the one set of runtime results that were tested together, whether the
+commit's own runs tested them (`full`) or the merged pull request's gates cover it (`reuse`). The
+file is `generation.json` in the command's private output, canonical JSON of at most 4 MiB,
+beside the Build bundle (`build/`) and the lane exports (`lanes/<id>/`) the consumer asked for. No
+gate writes or reads it, and it is never uploaded by the kit.
+
+The closed top level has kind, schema_version, identity, plan_sha256, profile, mode, references,
+source, build, results and lanes.
+
+| Field | Meaning |
+| --- | --- |
+| `identity`, `plan_sha256`, `profile` | The covered commit: a subject of the default branch (`pr_number` 0, head branch = base branch), bound to the consumer's own protected plan. |
+| `mode` | `full` or `reuse`. |
+| `references` | `null` in a full generation. In a reuse generation `{build, packaged}`: the descriptors of the `mb-ci-reuse` artifacts of the commit's Build run and packaged run, each a push run of its own caller, both bound to the covered binding. |
+| `source` | The tested generation: `identity`, `plan_sha256`, `profile` and the descriptors `build_seal` and `packaged_seal` of both tested records. In a full generation its binding is the covered one; in a reuse generation it is the merged pull request's, which agrees with the covered identity in every field post-merge reuse compares (`records._REUSE_SEMANTICS`) and in the profile, and its plan hash is that of the covered plan under the original identity (`records.original_plan`). |
+| `build` | The descriptor of the complete Build bundle the packaged gate consumed (its `owning_build`), of the source binding. A reused bundle keeps its original identity. |
+| `results` | The descriptor of the packaged attempt's `mb-ci-results` index. |
+| `lanes` | 1..256 entries, exactly the planned lanes in plan order: `id`, `native_contract_sha256` and the `descriptor` of the lane's `mb-ci-runtime` artifact of the packaged gate's attempt. |
+
+Artifact ids are distinct across both seals, the bundle, the index, the lanes and the references.
+The record is evidence only together with what its writer authenticated
+(`generation.select_generation`): the two newest runs, their exact graphs and latest attempts, both
+tested records, every artifact's metadata, owner and availability and, for a reuse, both
+references and the original pair as `reuse.download_reuse_reference` proves them. A consumer
+reads a lane from `lanes/<id>/`, kept and verified against the results index by `ci
+select-generation --lane` or `--all-lanes`, rather than downloading it by the numeric id named here.
 
 ## Profile activation data v1
 

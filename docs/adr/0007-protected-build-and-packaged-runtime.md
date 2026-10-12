@@ -69,6 +69,7 @@ each as an unknown kind (`tests/test_schema_evolution.py`).
 | `mod-base.ci.gate` | The tested record of a Build or packaged gate: its artifacts, owning Build and native receipts. |
 | `mod-base.ci.results` | The complete packaged results of one attempt as an index: every lane's sealed artifact with the hashes of its envelope, validation record and report, and the owning Build. |
 | `mod-base.ci.reuse` | A direct reference from a merged commit to both original pull-request gate records. |
+| `mod-base.ci.generation` | The tested generation a consumer reads for a default-branch commit: full or reused, both seals, the Build bundle, the results index and every lane's artifact, never written by a gate. |
 | `mod-base.ci.execution` | A private runner-to-root record of one hook execution: bounded log, nonce and context. |
 | `mod-base.ci.root-request` | A private request for one operation of `grammar.CI_ROOT_OPERATIONS`: host fencing, staging, grants, source proof, export sealing or validation sealing. The nonce and closed arguments bind it to the runner and job. |
 | `mod-base.ci.activation` | The profile activation mode of a mod, `site/mod-base-build-activation.json`. |

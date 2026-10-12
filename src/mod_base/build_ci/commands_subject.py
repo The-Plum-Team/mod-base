@@ -3,7 +3,9 @@
 The first step of every Build and packaged job. ``--pr`` is the pull request number of a
 ``pull_request_target`` run and empty for a protected push, dispatch or schedule; ``--producer``
 says which gate the job belongs to. ``--producer status`` is the status callee's job, which names
-the pull request it evaluates on every event that starts it. The command creates ``--state`` and
+the pull request it evaluates on every event that starts it. ``--producer generation`` is a
+consumer's job in the mod's own workflow, which reads the tested generation of the live
+default-branch commit (``ci select-generation``); its ``--pr`` is always empty. The command creates ``--state`` and
 writes ``identity.json`` there (:mod:`mod_base.build_ci.identity`), then outputs ``tested_sha`` (the
 commit to check out as the candidate) and ``pr_number`` (empty for a protected subject).
 

@@ -3672,6 +3672,18 @@
     {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-runtime-envelope",
      "name":"runtime-cannot-approve-native-result", "set":[["/approval",true]]},
     {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-root-request-runtime",
-     "name":"runtime-root-request-cannot-select-program", "set":[["/arguments/program","unsafe"]]}
+     "name":"runtime-root-request-cannot-select-program", "set":[["/arguments/program","unsafe"]]},
+    {"error":"has unknown keys", "expect":"invalid", "fixture":"ci-generation",
+     "name":"ci-generation-unknown-authority", "set":[["/authority","success"]]},
+    {"error":"a full generation has no reuse reference", "expect":"invalid", "fixture":"ci-generation",
+     "name":"ci-generation-full-with-references", "set":[["/mode","full"]]},
+    {"error":"a reuse generation names both reuse references", "expect":"invalid", "fixture":"ci-generation",
+     "name":"ci-generation-reuse-without-references", "set":[["/references",null]]},
+    {"error":"reuse semantics differ", "expect":"invalid", "fixture":"ci-generation",
+     "name":"ci-generation-other-tree", "set":[["/source/identity/tested_tree","7777777777777777777777777777777777777777"]]},
+    {"error":"repeats an artifact id", "expect":"invalid", "fixture":"ci-generation",
+     "name":"ci-generation-repeated-artifact", "set":[["/build/artifact/id",100]]},
+    {"error":"must be the reuse reference of this caller's push run", "expect":"invalid", "fixture":"ci-generation",
+     "name":"ci-generation-dispatched-reference", "set":[["/references/build/producer/event","workflow_dispatch"]]}
   ]
 }
