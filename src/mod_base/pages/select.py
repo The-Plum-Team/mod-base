@@ -568,7 +568,8 @@ class FamilyGenerations:
     selection; ``family collect`` (the adapter's carry-forward decision plus R5) accepts or refuses
     it. The walk's producer runs come from one listing of the newest ``limits.MAX_SUBJECT_RUNS``
     successful producer runs of the default branch, of which only the newest
-    ``limits.MAX_CANDIDATES`` at an earlier commit are inventoried, and the walk reads at most
+    ``limits.MAX_FAMILY_PRODUCER_RUNS`` at an earlier commit are inventoried (a wave of one-key runs
+    at the previous commit, as at ``c``), and the walk reads at most
     ``limits.GENERATION_PROBES`` distinct cache owners. Both bounds count per walk (a memoized
     read counts too), so ``select`` and ``build`` see the same generation for the same API state.
     Nominations never walk (:func:`select_evidence`)."""
@@ -604,8 +605,9 @@ class FamilyGenerations:
         return valid[:lim.MAX_FAMILY_PRODUCER_RUNS]
 
     def _walk_producers(self, family: Mapping[str, Any], earlier: list[str]) -> dict[str, list[dict[str, Any]]]:
-        """Earlier commit -> its producer runs, newest first: the newest ``limits.MAX_CANDIDATES``
-        successful default-branch producer runs at any of ``earlier``."""
+        """Earlier commit -> its producer runs, newest first: the newest
+        ``limits.MAX_FAMILY_PRODUCER_RUNS`` successful default-branch producer runs at any of
+        ``earlier`` (a whole wave of one-key runs at the previous commit, as at the expected one)."""
 
         workflow = family["producer"]["workflow"]
         if workflow not in self._listed:
@@ -614,7 +616,8 @@ class FamilyGenerations:
                                                         status="success", max_items=lim.MAX_SUBJECT_RUNS)
         commits = set(earlier)
         chosen = [run for run in self._listed[workflow]
-                  if run.get("head_sha") in commits and self._valid(run, family, run["head_sha"])][:lim.MAX_CANDIDATES]
+                  if run.get("head_sha") in commits and self._valid(run, family, run["head_sha"])]
+        chosen = chosen[:lim.MAX_FAMILY_PRODUCER_RUNS]
         grouped: dict[str, list[dict[str, Any]]] = {}
         for run in chosen:
             grouped.setdefault(run["head_sha"], []).append(run)

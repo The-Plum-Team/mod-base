@@ -24,10 +24,13 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   one run or one naming another head fail the leg, a selected handoff is still bound to its
   envelope's exact producer attempt and kit (`kit-binding`), and a key with no handoff in the
   window falls back to the superseding or admitted family cache, then the walk, exactly as before.
-  The bound only ever hides an older run. The carry-forward walk's earlier-commit producers keep
-  `limits.MAX_CANDIDATES`. Worst-case reads: at most 24 more inventories at the coverage for one
-  `select` (still within the Pages client's 160 with a full walk); for the QS wave above, `admit`
-  reads 17 inventories and only the job graphs of the runs holding a ready key. No document,
+  The bound only ever hides an older run. The carry-forward walk inventories the same bound of
+  producer runs at its earlier commits (also `limits.MAX_CANDIDATES` before), so a wave that a new
+  head overtook before it was published is carried by its exact names instead of being walked past
+  to an older generation. Worst-case reads: one `select` reads at most 48 more inventories (140 of
+  the Pages client's 160 with a full window at the coverage and a full walk, pinned by a test); for
+  the QS wave above, `admit` reads 17 inventories and only the job graphs of the runs holding a
+  ready key, and a full window at Quick Skin's 17 targets stays within its 160 (pinned by a test). No document,
   schema, CLI flag, job or step name changes; `src/` is digested, so the `MB_KIT_TREE_DIGEST`
   literals move.
 - Compatibility: the baseline moves to the archived v1.4.1 reader

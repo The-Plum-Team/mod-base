@@ -19,6 +19,7 @@ import math
 import shutil
 import tempfile
 import unittest
+from collections.abc import Callable
 from contextlib import redirect_stderr
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,16 @@ from tests.test_select import (
 LEGS = {f"{FAMILY}/mc1.{index}" for index in range(16)}
 RELEASE = "release/1.21.1"
 NOW = 10_000
+
+
+def seventeen_targets(root: Path) -> None:
+    """Quick Skin's size: 17 release targets (bundle keys), each with a family leg."""
+
+    path = root / "release/release-matrix.json"
+    data = json.loads(path.read_text())
+    data["targets"] = [data["targets"][0], *({"java": 21, "loaders": ["fabric"], "minecraft": f"1.21.{minor}"}
+                                             for minor in range(16))]
+    path.write_text(json.dumps(data))
 
 
 class PublicationPolicyTest(unittest.TestCase):
@@ -134,12 +145,15 @@ class PublicationPolicyTest(unittest.TestCase):
 class QuickSkinWorld:
     """A materialized qs-like repository (progress admission, one family) and its fake GitHub."""
 
-    def __init__(self, test: unittest.TestCase, *, max_requests: int | None = None) -> None:
+    def __init__(self, test: unittest.TestCase, *, max_requests: int | None = None,
+                 mutate: Callable[[Path], None] | None = None) -> None:
         self.directory = Path(tempfile.mkdtemp(prefix="mb-admission-")).resolve()
         test.addCleanup(shutil.rmtree, self.directory, True)
-        self.mod = support.materialize("qs_like", self.directory / "repo")
+        self.mod = support.materialize("qs_like", self.directory / "repo", mutate=mutate)
         self.head = self.mod.commit
-        self.keys = list(support.QS_KEYS)
+        self.keys = list(support.QS_KEYS) if mutate is None else sorted(
+            f"mc{target['minecraft']}"
+            for target in json.loads((self.mod.root / "release/release-matrix.json").read_text())["targets"])
         self.world = World(self.mod.repository, max_requests=max_requests)
         self.api = self.world.api
         self.api.set_branch("master", self.mod.commit, self.mod.tree)
@@ -428,6 +442,35 @@ class QuickSkinAdmissionTest(AdmissionTest):
             result = self.qs.admit(now=3500)
         self.assertNotEqual(result.reason, "final-complete", "the newest MAX_CANDIDATES runs alone lost the key")
         self.assertNotIn(f"{FAMILY}/mc1.20.1", result.nominations)
+
+    def test_a_full_wave_window_at_quick_skin_scale_stays_within_the_read_budget(self) -> None:
+        # 17 targets, ordinary runs after the publication that each cover one key, and the head's
+        # newest MAX_FAMILY_PRODUCER_RUNS producer runs: 16 one-key runs, then newer re-dispatches
+        # of the 17th key whose uploads fall outside their step (never ready), so admit reads every
+        # inventory and every job graph of the window.
+        qs = QuickSkinWorld(self, max_requests=admission.MAX_REQUESTS, mutate=seventeen_targets)
+        self.assertEqual(len(qs.keys), 17)
+        qs.e2e()
+        qs.publish(legs=tuple(qs.keys))
+        for index in range(lim.MAX_CANDIDATES):
+            qs.e2e(950 + index, at=2500 + index, keys=[qs.keys[index]])
+        for index, key in enumerate(qs.keys[:16]):
+            qs.family(key, 2000 + index, at=3000 + 10 * index)
+        late = lim.MAX_FAMILY_PRODUCER_RUNS - 16
+        for index in range(late):
+            created = 5000 + 10 * index
+            record = qs.world.run(2100 + index, path=FAMILY_WORKFLOW, event="repository_dispatch", head_sha=qs.head,
+                                  created=created - 50, updated=created + 10)
+            qs.world.jobs(record, [qs.world.job(FAMILY_JOB, steps=((FAMILY_STEP, 100, 110),))])
+            qs.world.artifact(grammar.family_handoff_name(FAMILY, qs.keys[16], record["run_attempt"]), record,
+                              created=created)
+        result = qs.admit(now=9000)
+        self.assertEqual({leg for leg in result.nominations if leg.startswith(f"{FAMILY}/")},
+                         {f"{FAMILY}/{key}" for key in qs.keys[:16]})
+        window = set(range(2000, 2016)) | set(range(2100, 2100 + late))
+        graphs = {int(path.split("/runs/")[1].split("/")[0]) for path, _ in qs.api.requests("/attempts/")}
+        self.assertEqual(graphs & (window | {2016}), window, "every job graph of the window, none past it")
+        self.assertLessEqual(qs.api.request_count, admission.MAX_REQUESTS)
 
     def test_recovery_sees_a_family_handoff_early_in_a_wave(self) -> None:
         # Publication 1001 (created at 3850) supersedes every mc26.3 handoff of the wave, but

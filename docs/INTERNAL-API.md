@@ -309,7 +309,9 @@ Integration-round amendments:
   (`admit`: until every pending key is; a run's job graph is read only when its inventory holds a
   pending key's handoff). Every authentication and fail-closed rule is unchanged; a key whose
   handoff is in no run within the bound falls back exactly as a missing handoff does. The
-  carry-forward walk's earlier-commit producers keep `limits.MAX_CANDIDATES`.
+  carry-forward walk inventories the newest `limits.MAX_FAMILY_PRODUCER_RUNS` producer runs at its
+  earlier commits under the same bound (also `limits.MAX_CANDIDATES` before), so a wave the head
+  overtook before it was published is carried by its exact names, not walked past.
 * **Checked document.** `tests/test_internal_api.py` also checks every class's documented dataclass
   `fields` (names, order and each default's `repr`, `<factory>` for a default factory) and
   properties, every name of a described name list, and every documented constant value written in

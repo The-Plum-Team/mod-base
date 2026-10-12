@@ -910,13 +910,12 @@ class FamilyCarryForwardTest(unittest.TestCase):
 
     def test_walk_reads_stay_within_the_pages_client_budget(self) -> None:
         # A full-depth walk over hostile history: every earlier commit has a cache whose owner is
-        # not a successful Pages run and a dozen producer runs handed off another key only.
+        # not a successful Pages run, and more producer runs than the bound handed off another key only.
         self.world = World(QS_REPOSITORY, max_requests=MAX_PAGES_API_READS)
         earlier = [f"{index:040x}" for index in range(1, limits.GENERATION_PROBES + 1)]
         for index, commit in enumerate(earlier):
             self.cache(1000 + index, commit, created=900 + index, conclusion="failure")
-        for index, commit in enumerate(earlier[:12]):
-            self.producer(200 + index, commit, key="mc26.3", created=100 + index)
+        self.hostile_walk_producers(earlier)
         with mock.patch.object(targets, "first_parent_history", return_value=[self.head, *earlier]), \
                 self.assertRaises(Unavailable):
             self.select()
@@ -924,30 +923,73 @@ class FamilyCarryForwardTest(unittest.TestCase):
                                               for commit in (self.head, *earlier)])
         self.assertEqual(self.owner_reads(), [1000 + index for index in range(len(earlier))])
         inventories = [path for path, _ in self.world.api.requests("/artifacts") if "/runs/" in path]
-        self.assertEqual(len(inventories), limits.MAX_CANDIDATES, "the newest producer runs only")
+        self.assertEqual(len(inventories), limits.MAX_FAMILY_PRODUCER_RUNS, "the newest producer runs only")
         self.assertLess(self.world.api.request_count, MAX_PAGES_API_READS)
 
+    def hostile_walk_producers(self, earlier: list[str]) -> None:
+        """Two successful producer runs at each of the newest 20 ``earlier`` commits (40, more than
+        ``limits.MAX_FAMILY_PRODUCER_RUNS``), each handing off another key only."""
+
+        for index, commit in enumerate(earlier[:20]):
+            for copy in range(2):
+                self.producer(200 + 2 * index + copy, commit, key="mc26.3", created=100 - 2 * index + copy)
+        self.assertGreater(40, limits.MAX_FAMILY_PRODUCER_RUNS)
+
     def test_a_full_wave_window_and_a_full_walk_stay_within_the_pages_client_budget(self) -> None:
-        # The worst case of the wave window: more producer runs at the expected commit than its
-        # bound, none of them holding this key, then the hostile full-depth walk above.
+        # The worst case of select: more producer runs at the expected commit than its bound, none
+        # of them holding this key, a family cache there for every head owner the budget reads (none
+        # a successful Pages run), then the hostile full-depth walk above.
         self.world = World(QS_REPOSITORY, max_requests=MAX_PAGES_API_READS)
         earlier = [f"{index:040x}" for index in range(1, limits.GENERATION_PROBES + 1)]
         for index, commit in enumerate(earlier):
             self.cache(1000 + index, commit, created=900 + index, conclusion="failure")
-        for index, commit in enumerate(earlier[:12]):
-            self.producer(200 + index, commit, key="mc26.3", created=100 + index)
+        for index in range(limits.MAX_CANDIDATES + 1):
+            self.cache(1100 + index, self.head, created=950 + index, conclusion="failure")
+        self.hostile_walk_producers(earlier)
         for index in range(limits.MAX_FAMILY_PRODUCER_RUNS + 1):
             self.producer(400 + index, self.head, key="mc26.3", created=100 + index)
         with mock.patch.object(targets, "first_parent_history", return_value=[self.head, *earlier]), \
                 self.assertRaises(Unavailable):
             self.select()
         inventories = [path for path, _ in self.world.api.requests("/artifacts") if "/runs/" in path]
-        self.assertEqual(len(inventories), limits.MAX_FAMILY_PRODUCER_RUNS + limits.MAX_CANDIDATES)
+        self.assertEqual(len(inventories), 2 * limits.MAX_FAMILY_PRODUCER_RUNS)
         self.assertEqual(self.world.api.request_count,
-                         4 + limits.MAX_FAMILY_PRODUCER_RUNS + limits.MAX_CANDIDATES + 2 * limits.GENERATION_PROBES,
-                         "the workflow id, two producer listings, the head's cache name, the inventories, then "
-                         "per earlier commit its cache name and owner")
+                         4 + 2 * limits.MAX_FAMILY_PRODUCER_RUNS + limits.MAX_CANDIDATES + 2 * limits.GENERATION_PROBES,
+                         "the workflow id, two producer listings, the head's cache name and its owners, the "
+                         "inventories at the head and on the walk, then per earlier commit its cache name and owner")
+        self.assertEqual(self.world.api.request_count, 140)
         self.assertLess(self.world.api.request_count, MAX_PAGES_API_READS)
+
+    def test_a_wave_at_an_earlier_commit_is_carried_by_its_exact_name(self) -> None:
+        # The previous commit's wave of one-key runs was never published (a coalesced publication
+        # the head overtook). Its earliest key is carried from that wave, not from the older
+        # generation below it that a walk over only the newest MAX_CANDIDATES runs reached.
+        older = self.cache(70, self.m2)
+
+        def wave() -> dict[str, Any]:
+            runs = [self.world.run(300 + index, path=FAMILY_WORKFLOW, event="repository_dispatch", head_sha=self.c3,
+                                   created=1000 + 100 * index) for index in range(17)]
+            for index, run in enumerate(runs):
+                created = 1000 + 100 * index
+                self.world.jobs(run, [self.world.job(FAMILY_JOB,
+                                                     steps=((FAMILY_STEP, created + 190, created + 210),))])
+                handoff = self.world.family_handoff(run, QS_KEY if index == 0 else f"mc1.{index}",
+                                                    created=created + 200)
+                if index == 0:
+                    earliest = handoff
+            return earliest
+
+        earliest = wave()
+        selected = self.select()
+        self.assertEqual((selected.kind, selected.artifact_id, selected.run_id),
+                         ("family-handoff", earliest["id"], 300))
+        self.setUp()
+        older = self.cache(70, self.m2)
+        wave()
+        with mock.patch.object(limits, "MAX_FAMILY_PRODUCER_RUNS", limits.MAX_CANDIDATES):
+            selected = self.select()
+        self.assertEqual((selected.kind, selected.artifact_id), ("family-cache", older["id"]),
+                         "the previous window walked past the wave to an older generation")
 
     def test_one_instance_shares_every_leg_independent_read(self) -> None:
         # build's use at Quick Skin scale: one instance re-identifies 17 carried legs. Per leg only

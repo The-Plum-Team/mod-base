@@ -504,8 +504,9 @@ its new `--input` directory: the compact bundle for a key, the `source/` directo
    was uploaded, so that publication consumed the handoff and its rotation may retire it), else the
    newest such family cache. When neither exists and the family sets `carry_forward`, the same
    probes walk a bounded first-parent history below `C`, newest first (at most
-   `limits.GENERATION_PROBES` commits and cache owners), and the first earlier generation found is
-   selected; a nomination is re-authenticated exactly and never walks. A selected family handoff is
+   `limits.GENERATION_PROBES` commits and cache owners, and the newest
+   `limits.MAX_FAMILY_PRODUCER_RUNS` producer runs at those commits), and the first earlier
+   generation found is selected; a nomination is re-authenticated exactly and never walks. A selected family handoff is
    then bound to its kit (SPEC §1.8): downloaded by id and digest, its envelope must name exactly the
    producer attempt that uploaded it and `envelope.kit` must be the pin of `producer.workflow` at that
    run's head, or the leg fails (reason `kit-binding`, never a fallback to another generation).
