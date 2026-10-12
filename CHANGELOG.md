@@ -5,7 +5,16 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased
+## v1.4.0
+
+Minor release: `ci select-generation` (#25, Q9 groundwork KQ9-1 and KQ9-2). A consumer job of a
+mod's default branch (status pages, visual review, feature coverage, mod compatibility, Pages)
+can now read the one Build bundle and the one set of runtime results that were tested together
+for a commit, whether the commit's own gates tested them or post-merge reuse covers it with the
+merged pull request's gates. Before this, the gates could seal a reuse reference but no command
+followed one, so a consumer of a push had to keep reading native push runs. Nothing changes for a
+mod that does not add a consumer job: the managed callers, the gates and their request counts are
+those of v1.3.1. v1.4.0 is tagged first and becomes a GitHub Release once the canary passes it.
 
 - Add `ci select-generation` (Q9 groundwork, KQ9-1): the read-only step of a consumer of a
   default-branch commit selects and authenticates the tested generation that covers it, whether
@@ -39,12 +48,38 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   of a job"). New `identity.GENERATION_PRODUCER`, `GENERATION_EVENTS` and `admits_workflow`.
 - New document kind `mod-base.ci.generation` v1 (`records.validate_generation`,
   `records.generation_record`), written only by `ci select-generation`, never by a gate; a v1.3.1
-  reader refuses it as unknown. Every other kind, `ADAPTER_API`, `BUILD_ADAPTER_API`,
-  `pixel_metrics_version`, the managed files and the workflows are unchanged. The compatibility
-  baseline moves to the archived v1.3.1 reader (`tests/fixtures/previous_release/v1.3.1`).
+  reader refuses it as unknown.
 - `reuse.download_reuse_reference` is split into the reference read and the original pair read
   (`reuse._read_reference`, `reuse._originals_finished`) so that `ci select-generation` reads two
   references and the pair once; its behaviour and request count are unchanged.
+- Compatibility: `ADAPTER_API`, `BUILD_ADAPTER_API` 1, `pixel_metrics_version` 1, the managed
+  files and the workflows' jobs, steps and permissions are those of v1.3.1 (only the
+  `MB_KIT_TREE_DIGEST` literals move, as at every release). The one new kind is
+  `mod-base.ci.generation` v1, which no gate writes or reads; a v1.3.1 reader refuses it as
+  unknown. Every other kind is `unchanged` against the archived v1.3.1 reader
+  (`tests/fixtures/previous_release/v1.3.1`), the immediate predecessor in this changelog.
+- Upgrade: bump the pin to v1.4.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.4.0`, then `verify --network` and `template check`). `template sync` rewrites no managed
+  file beyond the pin. A mod with `admission` lands the bump through its protected route like any
+  change to its callers.
+- Consumer adoption (optional, after the bump): one job per consumer family, on `workflow_run` of
+  "mod-base Build" and "mod-base packaged E2E" for the default branch, with only `actions: read`
+  and `contents: read`. Its steps are those of the kit's `gate-status.yml` evaluate job: check
+  out the mod at `github.sha` and the pinned kit; `ci subject --producer generation --pr ""`;
+  check out the same commit as `candidate`; `ci worker-prepare --roles validator`; `ci plan
+  --pin-candidate candidate`; `ci select-generation --output "$RUNNER_TEMP/generation"
+  [--with-build] [--lane ID ... | --all-lanes]`; and always `ci worker-finish`. The family then
+  reads `generation.json`, the bundle under `build/` and the lane exports under `lanes/<id>/`.
+  Exit 3 publishes nothing: `pending` resolves itself when the other caller's `workflow_run`
+  fires; after `failed`, `absent` or `evidence-unavailable` the consumer asks for a full
+  generation (D-Q9-b), never a native fallback. Exit 2 (`ci-generation-mixed`, corrupt evidence, API
+  failures) is a rejection. Before porting a family, check that the lane export carries every
+  file its native consumer reads; a missing file is an adapter change in the mod. Remove a
+  native push duplicate only after every family that read it consumes the selected generation.
+- Rollback: first remove or disable the consumer jobs that call `ci select-generation` or `ci
+  subject --producer generation` (v1.3.1 has neither and refuses both), then an ordinary pin bump
+  back to v1.3.1. Nothing the gates store changes: `generation.json` stays in the consumer job's
+  private output and the kit never uploads it, so v1.3.1 never meets the new kind.
 
 ## v1.3.1
 
