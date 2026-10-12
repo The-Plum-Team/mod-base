@@ -421,6 +421,29 @@ key, an owner operation) or change one of the key files; to stop, remove `seeds`
 A kit release older than the one that added `seeds` refuses a config that has it: remove `seeds`
 before a pin rollback below that release.
 
+### Late consumers of a default-branch commit (unreleased: KQ9-4)
+
+A consumer job of the mod's own workflow reads the tested generation of the live default-branch
+commit with `ci select-generation`. Shared Build and runtime artifacts are kept 7 days, records 90.
+When it selects nothing, its exit 3 names why (`reason`):
+
+| `reason` | What the consumer does |
+| --- | --- |
+| `ci-generation-pending` | nothing: the other caller's completion starts it again |
+| `ci-generation-absent`, `ci-generation-failed`, `ci-generation-evidence-unavailable` | a second job of the same workflow, with `actions: write` and no hook, runs `ci subject --producer generation --pr ""` and `ci request-generation --reason <reason>`: a full shared generation of the commit, on request (D-Q9-b). The consumer's own `workflow_run` trigger brings it back when that generation completes |
+| `ci-generation-mixed` or a rejection (exit 2) | an operator reads it; nothing is requested |
+
+`ci request-generation` requests only while the default branch is still at the commit and no run
+of either caller for it is in progress, at most once per commit until a requested generation
+succeeds (`already-requested`), so a commit that fails is not tested in a loop. It never falls back
+to a native run. Give the request jobs of every consumer workflow one concurrency group
+(`mod-base-request-generation`, `cancel-in-progress: false`): two consumers that miss at once then
+request once, because the second finds the first one's Build run (`running`). The reason must agree
+with the newest runs of the commit or nothing is requested. The protected controller only tests the live head of the default branch, so a
+consumer of an **older** commit whose evidence has expired (`superseded`) fails closed: a release
+recovery or a review drain later than 7 days reports the expired evidence and is redone for the
+live head, or goes through the release route's own explicit full runs (D-Q9-a).
+
 ### Protected admission
 
 `admission` of `scripts/ci/mod-base-build.json` ([BUILD-ADAPTER.md](BUILD-ADAPTER.md#protected-admission))

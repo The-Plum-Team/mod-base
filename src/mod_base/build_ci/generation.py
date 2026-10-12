@@ -54,7 +54,8 @@ import contextlib
 import functools
 import os
 import tempfile
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,7 @@ from mod_base.build_ci.transport import (ArtifactUnavailable, OriginalUnavailabl
                                          _plan, _read_gate, _read_results, _read_sealed_lane, _run, artifact_gone)
 from mod_base.errors import MbError, Unavailable
 from mod_base.github.api import ApiError, GitHubApi
+from mod_base.github.contents import branch_head, default_branch
 from mod_base.github.jobs import job_graph
 from mod_base.io.atomic_directory import atomic_directory
 from mod_base.model import grammar, limits
@@ -407,3 +409,123 @@ def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], ou
         return atomic_directory(output, writer)
     except OSError as error:
         raise MbError("cannot publish the private generation", reason="ci-transport") from error
+
+
+# -- A full generation on request (KQ9-4, D-Q9-b) --------------------------------------------------------
+
+#: The reasons ``ci select-generation`` gives for no generation after which a consumer of the live
+#: default-branch commit may request a full generation of it. ``ci-generation-pending`` resolves
+#: itself when the other caller's run completes; a mixed or corrupt generation is a rejection that
+#: an operator must read, never a reason to test again.
+REQUESTABLE_REASONS = ("ci-generation-absent", "ci-generation-failed", "ci-generation-evidence-unavailable")
+#: What :func:`request_generation` did, by the token ``ci request-generation`` outputs as ``outcome``.
+REQUEST_OUTCOMES = {
+    "requested": "a full generation of the commit was requested: the Build caller, then the packaged caller",
+    "superseded": "the default branch has moved past the commit: only its live head is ever tested again, and "
+                  "a newer commit gets a generation of its own",
+    "running": "a run of a managed caller for the commit has not finished",
+    "already-requested": "a requested full generation of the commit did not succeed: it is requested once",
+}
+
+
+class GenerationRequestError(MbError):
+    """A full generation could not be requested as a whole (exit 2): the Build caller was dispatched
+    but its run did not appear within the bound, so the packaged caller was not dispatched."""
+
+    default_reason = "ci-generation-request"
+
+
+def _requested_commit(subject: dict[str, Any]) -> tuple[str, str, str]:
+    """``(repository, branch, commit)`` of a consumer's subject: a default-branch commit that is its
+    own controller, never a pull request."""
+
+    check(type(subject) is dict and subject.get("pr_number") in (None, 0)
+          and subject.get("tested_sha") == subject.get("controller_sha")
+          and subject.get("head_branch") == subject.get("base_branch"), "$.subject",
+          "a full generation is requested for a commit of the default branch, never for a pull request")
+    return (grammar.require(grammar.REPOSITORY, subject.get("repository"), "repository"),
+            grammar.require(grammar.BRANCH, subject.get("base_branch"), "default branch"),
+            grammar.require_sha1(subject.get("tested_sha"), "requested commit"))
+
+
+def request_generation(api: GitHubApi, *, subject: dict[str, Any], reason: str,
+                       sleep: Callable[[float], None] | None = None) -> str:
+    """Request a full shared generation of the consumer's commit after ``ci select-generation``
+    found none for ``reason`` (one of :data:`REQUESTABLE_REASONS`); return a key of
+    :data:`REQUEST_OUTCOMES` (KQ9-4: a late consumer gets a full shared run on request, never a
+    native fallback).
+
+    ``subject`` is the consumer job's authenticated subject (``ci subject --producer generation``):
+    a default-branch commit. A request needs a writable client whose token may start workflows
+    (``actions: write``); the job that holds it runs no adapter hook. In order:
+
+    * the default branch must still be at the commit, read live: a newer head is ``superseded``.
+      The protected controller only ever tests the live head of the default branch, so evidence of
+      an older commit that has expired is never rebuilt; its late consumer fails closed;
+    * the newest run of each managed caller for the commit, chosen before any result is read: one
+      that has not completed is ``running`` (its own completion wakes the consumer again), and a
+      newest ``workflow_dispatch`` run that did not succeed is ``already-requested``. A commit is
+      requested at most once until a requested generation succeeds, so a commit that fails is not
+      tested in a loop. The reason must agree with those runs (no packaged run for
+      ``ci-generation-absent``, a newest run that failed for ``ci-generation-failed``, two successful
+      ones whose evidence is gone for ``ci-generation-evidence-unavailable``), or nothing is
+      requested and the call is a rejection;
+    * the default branch is read once more, then the Build caller is dispatched on it and, once its
+      new run is listed (at most ``CI_REQUEST_GENERATION_POLLS`` listings
+      ``CI_REQUEST_GENERATION_POLL_SECONDS`` apart), the packaged caller: a dispatch never reuses,
+      and the packaged run selects that Build, waiting while it runs. A Build run that does not
+      appear raises :class:`GenerationRequestError` with the packaged caller not dispatched.
+
+    A dispatch runs at the head of the branch when it starts: if the branch moves in between, the
+    newer commit is tested in full instead, which is a generation of its own and never a mixed one.
+    ``sleep`` waits between listings (``time.sleep`` unless a test gives one).
+    """
+
+    sleep = time.sleep if sleep is None else sleep
+
+    check(type(reason) is str and reason in REQUESTABLE_REASONS, "$.reason",
+          "only an absent, failed or expired generation is requested again: a pending one completes by itself "
+          "and a mixed or corrupt one needs an operator")
+    check(api.writable, "$.api", "requesting a generation needs a client that may start workflows")
+    repository, branch, commit = _requested_commit(subject)
+    check(api.repository == repository, "$.subject", "the subject is of another repository")
+
+    def live() -> bool:
+        return default_branch(api) == branch and branch_head(api, branch)[0] == commit
+
+    def newest(producer: str) -> dict[str, Any] | None:
+        return newest_run(api, producer, head_sha=commit, head_branch=branch, head_repository=repository,
+                          events=_EVENTS)
+
+    if not live():
+        return "superseded"
+    runs = {producer: newest(producer) for producer in PRODUCERS}
+    if any(run is not None and run["status"] != "completed" for run in runs.values()):
+        return "running"
+    if any(run is not None and run["event"] == "workflow_dispatch" and run["conclusion"] != "success"
+           for run in runs.values()):
+        return "already-requested"
+    # The reason must be what the runs show: a consumer that misreads its selection starts nothing.
+    failed = any(run is not None and run["conclusion"] != "success" for run in runs.values())
+    check({"ci-generation-absent": runs["packaged"] is None,
+           "ci-generation-failed": failed,
+           "ci-generation-evidence-unavailable": runs["packaged"] is not None and not failed}[reason],
+          "$.reason", f"the newest runs of the commit do not show {reason}: nothing is requested")
+    if not live():
+        return "superseded"
+    before = runs["build"]
+    api.post_json(f"/repos/{repository}/actions/workflows/{Path(CI_CALLER_WORKFLOWS['build']).name}/dispatches",
+                  {"ref": branch})
+    for _ in range(limits.CI_REQUEST_GENERATION_POLLS):
+        sleep(limits.CI_REQUEST_GENERATION_POLL_SECONDS)
+        run = newest("build")
+        if run is not None and run["event"] == "workflow_dispatch" and (
+                before is None or (run["created_at"], run["id"]) > (before["created_at"], before["id"])):
+            break
+    else:
+        raise GenerationRequestError(
+            "the requested Build run did not appear in time; once it runs, dispatch the packaged caller on "
+            f"{branch} by hand, or run this request again when it has finished")
+    api.post_json(f"/repos/{repository}/actions/workflows/{Path(CI_CALLER_WORKFLOWS['packaged']).name}/dispatches",
+                  {"ref": branch})
+    return "requested"
