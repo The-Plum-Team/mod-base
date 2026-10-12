@@ -5,6 +5,37 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.3.1
+
+Patch release: one kit process remembers its successful pixel checks by content (#26), which
+cuts the protected policy's conformance run of a mod with public evidence to a third. Nothing else
+changes; a mod moves from v1.3.0 (or v1.2.1) to v1.3.1 with an ordinary pin bump.
+
+- Remember successful pixel checks by content within one process (#26). A public-evidence
+  conformance run measured the same PNG bytes thousands of times (`inspect_png` about 8,940 calls
+  in Block Pops' run, through the handoff, raw-bind, prepare, anchor and compact checks) and
+  compared the same pairs again at every validation pass. `inspect_png`, `inspect_webp` and
+  `compare` now keep successful results in a bounded, process-local LRU
+  (`limits.MAX_PIXEL_MEMO_ENTRIES`, 8,192 entries). The key is the SHA-256 the imaging module
+  computes itself from the exact bytes it has just read and admitted, plus every argument that
+  shapes the result: the format and the size policy (only the kit's own `SizePolicy`; a subclass is
+  measured every time), and for `compare` both payload hashes and the exact type and value of
+  `minimum_changed_fraction` and `region`, which the result echoes (`0`, `0.0` and `-0.0` are
+  different keys; other types are never remembered). A caller's claimed hash is never a key,
+  nothing is kept on disk or shared between processes, a rejection is never remembered, results
+  are handed out as copies, and the reading, byte-bound and signature checks still run on every
+  call. Measured on the conformance child (5 concurrent, Python 3.13), reports byte-identical:
+  Block Pops master 707 s -> 308 s, Quick Skin master 3,897 s -> 1,272 s.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1 (every metric is computed exactly as before), the managed files, the
+  workflows' jobs, steps and permissions and the request counts are those of v1.3.0. The
+  compatibility baseline moves to the archived v1.3.0 reader (`tests/fixtures/previous_release/v1.3.0`,
+  built from the release commit like v1.2.1's), the immediate predecessor in this changelog.
+- Upgrade: bump the pin to v1.3.1 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.3.1`, then `verify --network` and `template check`). A mod with `admission` lands the bump
+  through its protected route like any change to its callers.
+- Rollback: an ordinary pin bump back to v1.3.0; nothing is stored that v1.3.0 would read.
+
 ## v1.3.0
 
 Minor release: an optional protected admission in the kit's gate status (#18), which Block Pops
