@@ -64,6 +64,11 @@ MAX_COMPACT_FILES = MAX_FRAMES + 3  # images/** + expectation.json + selection.j
 MAX_ANCHOR_FILES = MAX_FRAMES + 1  # images/** + expectation.json
 MAX_IMAGE_PIXELS = 20_000_000
 MAX_IMAGE_DIMENSION = 16_384
+#: Successful pixel checks (inspections plus comparisons) one kit process remembers by the SHA-256 of
+#: the exact bytes it measured (``imaging.metrics``); the oldest is forgotten first. Each entry is a
+#: few hundred bytes, and a full public-evidence bundle has at most ``MAX_FRAMES`` sources and
+#: ``MAX_COMPARISONS`` comparisons per stage.
+MAX_PIXEL_MEMO_ENTRIES = 8192
 MAX_SITE_BYTES = 1 * GIB
 MAX_SITE_FILES = 8192
 #: Characters and components of one bundle path. A sealed CI export path keeps both bounds and

@@ -16,16 +16,22 @@ compared as PNG, derivatives re-measured as WebP) within the byte, pixel and dim
 both formats and byte bounds checked from the signatures before either image is decoded,
 ``minimum_changed_fraction`` is a finite number in ``[0, 1]`` and ``region`` satisfies the
 ``CompareMetrics`` region rule ``0 <= l < r <= 1``, ``0 <= t < b <= 1``.
+
+A successful comparison is remembered for the process like an inspection
+(``imaging.metrics._MEMO``), under the SHA-256 of both admitted payloads and the exact type and
+value of every argument, since the result echoes them: ``0`` and ``0.0``, or ``0.0`` and ``-0.0``,
+are different keys. An argument of any other type than ``int`` or ``float`` is never remembered.
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from pathlib import Path
 from typing import Any
 
-from mod_base.imaging.metrics import ImageError, _admit, _decode_rgb, _label, _read_source
+from mod_base.imaging.metrics import _MEMO, ImageError, _admit, _decode_rgb, _label, _read_source
 
 OWNER = "MB2"
 CHANGED_LUMA_THRESHOLD = 8
@@ -45,6 +51,10 @@ def compare(first: Path | bytes, second: Path | bytes, *, minimum_changed_fracti
     second_payload, second_format, second_label = _admitted(second)
     if first_format != second_format:
         raise ImageError(f"cannot compare a {first_format} image with a {second_format} image")
+    key = _memo_key(first_payload, second_payload, minimum_changed_fraction, region)
+    remembered = _MEMO.get(key) if key is not None else None
+    if remembered is not None:
+        return remembered
     first_rgb = _decode_rgb(first_payload, formats=(first_format,), label=first_label)[1]
     second_rgb = _decode_rgb(second_payload, formats=(second_format,), label=second_label)[1]
 
@@ -86,7 +96,20 @@ def compare(first: Path | bytes, second: Path | bytes, *, minimum_changed_fracti
     }
     if region is not None:
         comparison["region"] = list(region)
-    return comparison
+    return _MEMO.put(key, comparison) if key is not None else comparison
+
+
+def _memo_key(first: bytes, second: bytes, minimum_changed_fraction: Any,
+              region: Sequence[Any] | None) -> Hashable | None:
+    """The memo key of one comparison, or ``None`` when an argument is not a plain ``int`` or
+    ``float`` (whose type and exact value the key could not name)."""
+
+    arguments = [minimum_changed_fraction, *(region if region is not None else ())]
+    if not all(type(value) in (int, float) for value in arguments):
+        return None
+    exact = tuple((type(value).__name__, value.hex() if isinstance(value, float) else value) for value in arguments)
+    return ("compare", hashlib.sha256(first).hexdigest(), hashlib.sha256(second).hexdigest(),
+            region is not None, exact)
 
 
 def _admitted(source: Path | bytes) -> tuple[bytes, str, str]:
