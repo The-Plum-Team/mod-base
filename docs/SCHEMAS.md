@@ -9,7 +9,7 @@ config, the batch manifest, the results index, the tested generation and the act
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.4.0, which
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.4.1, which
 already reads every kind of this release, `mod-base.ci.generation` included, so every kind is
 `unchanged`. The optional `seeds`
 of the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config
@@ -495,14 +495,18 @@ its new `--input` directory: the compact bundle for a key, the `source/` directo
 **The family generation chain.** A family leg is `(family, key)` at the leg coverage `C`
 (`admit`'s `families[].coverage_sha`, the key's subject commit):
 
-1. `select --family` takes an `mb-family-handoff--<f>--<key>--a<attempt>` upload of a successful
-   `producer.workflow` run on the default branch at `C`, unless an `mb-family-cache--<f>--<key>--<C>`
+1. `select --family` takes the `mb-family-handoff--<f>--<key>--a<attempt>` upload of the newest
+   successful `producer.workflow` run on the default branch at `C` that holds one under exactly that
+   name for its latest attempt (searched in the newest `limits.MAX_FAMILY_PRODUCER_RUNS` such runs,
+   enough for a wave of one-key runs; `admit` finds ready family handoffs the same way), unless an
+   `mb-family-cache--<f>--<key>--<C>`
    owned by a successful Pages run **supersedes** it (that owner run was created after the handoff
    was uploaded, so that publication consumed the handoff and its rotation may retire it), else the
    newest such family cache. When neither exists and the family sets `carry_forward`, the same
    probes walk a bounded first-parent history below `C`, newest first (at most
-   `limits.GENERATION_PROBES` commits and cache owners), and the first earlier generation found is
-   selected; a nomination is re-authenticated exactly and never walks. A selected family handoff is
+   `limits.GENERATION_PROBES` commits and cache owners, and the newest
+   `limits.MAX_FAMILY_PRODUCER_RUNS` producer runs at those commits), and the first earlier
+   generation found is selected; a nomination is re-authenticated exactly and never walks. A selected family handoff is
    then bound to its kit (SPEC §1.8): downloaded by id and digest, its envelope must name exactly the
    producer attempt that uploaded it and `envelope.kit` must be the pin of `producer.workflow` at that
    run's head, or the leg fails (reason `kit-binding`, never a fallback to another generation).
@@ -785,7 +789,7 @@ Build (`build_ci.gate`).
 ## Tested generation data v1
 
 `mod-base.ci.generation` writes and reads 1. The kind is new in v1.4.0 (a v1.3.1 reader refuses
-it as unknown) and `unchanged` against the v1.4.0 baseline. It is what `ci select-generation`
+it as unknown) and `unchanged` against the v1.4.1 baseline. It is what `ci select-generation`
 publishes for a consumer of a default-branch commit: the one Build bundle and the one set of runtime results that were tested together, whether the
 commit's own runs tested them (`full`) or the merged pull request's gates cover it (`reuse`). The
 file is `generation.json` in the command's private output, canonical JSON of at most 4 MiB,

@@ -33,11 +33,13 @@ the protected head) through the branch listing and, if needed, the adapter's ``t
 A handoff is only ever the upload of its run's latest attempt (``mb-handoff--<key>--a<run_attempt>``).
 With ``source.require_newest_run`` only the newest such run may supply evidence: when it is not
 ``completed/success`` the selection is refused rather than falling back to an older run (Block
-Pops). Families select ``mb-family-handoff--<f>--<key>--a*`` uploads of a successful
-``families[].producer.workflow`` run on the default branch at the expected commit, unless an
-``mb-family-cache--<f>--<key>--<commit>`` supersedes it, else the newest such family cache; when
-neither exists and the family's ``carry_forward`` is set, the same probes walk a bounded
-first-parent history below the expected commit, newest first, and the first earlier generation
+Pops). Families select the ``mb-family-handoff--<f>--<key>--a<run_attempt>`` upload of a successful
+``families[].producer.workflow`` run on the default branch at the expected commit, looked up by that
+exact name in each of the newest ``limits.MAX_FAMILY_PRODUCER_RUNS`` such runs, newest first (a
+producer may hand off one key per run, so a whole wave of runs is searched, not only the newest
+few), unless an ``mb-family-cache--<f>--<key>--<commit>`` supersedes it, else the newest such
+family cache; when neither exists and the family's ``carry_forward`` is set, the same probes walk a
+bounded first-parent history below the expected commit, newest first, and the first earlier generation
 found is selected for ``family collect`` (the adapter's carry-forward decision plus R5) to accept
 or refuse (:class:`FamilyGenerations`). ``family collect --selected-json`` records the selection in
 the collected artifact, and ``build`` re-authenticates that record by id, reusing only
@@ -548,10 +550,15 @@ class FamilyGenerations:
     :meth:`history`; one instance memoizes the reads of every leg of an invocation).
 
     At the expected commit ``c``: the ``mb-family-handoff--<f>--<key>--a<attempt>`` of the newest
-    successful producer run at ``c`` (:func:`producer_run_valid`; one ``head_sha`` listing, at most
-    ``limits.MAX_CANDIDATES`` run inventories), unless an ``mb-family-cache--<f>--<key>--<c>`` owned by
-    a successful Pages run :func:`supersedes` it, else the newest such family cache (at most
-    ``limits.MAX_CANDIDATES`` owners). When neither exists and the family's ``carry_forward`` is set,
+    successful producer run at ``c`` (:func:`producer_run_valid`) that uploaded one under exactly that
+    name for its latest attempt, unless an ``mb-family-cache--<f>--<key>--<c>`` owned by a successful
+    Pages run :func:`supersedes` it, else the newest such family cache (at most
+    ``limits.MAX_CANDIDATES`` owners). The handoff is looked up by its exact name in the inventories
+    of the newest ``limits.MAX_FAMILY_PRODUCER_RUNS`` valid runs of one ``head_sha`` listing, newest
+    first, read only until the name is found and memoized for every key: a producer that hands off
+    one key per run (Quick Skin's) leaves the earliest key of a wave in the oldest run of that wave.
+    Two uploads of that name in one run, or one naming another head than its run, fail closed (never
+    a fallback). When neither exists and the family's ``carry_forward`` is set,
     the **carry-forward walk** visits the first-parent commits below ``c``, newest first: at most
     ``limits.GENERATION_PROBES`` of them, read as inert objects from the protected checkout
     (:func:`targets.first_parent_history`; the family and build jobs check out the full history).
@@ -561,7 +568,8 @@ class FamilyGenerations:
     selection; ``family collect`` (the adapter's carry-forward decision plus R5) accepts or refuses
     it. The walk's producer runs come from one listing of the newest ``limits.MAX_SUBJECT_RUNS``
     successful producer runs of the default branch, of which only the newest
-    ``limits.MAX_CANDIDATES`` at an earlier commit are inventoried, and the walk reads at most
+    ``limits.MAX_FAMILY_PRODUCER_RUNS`` at an earlier commit are inventoried (a wave of one-key runs
+    at the previous commit, as at ``c``), and the walk reads at most
     ``limits.GENERATION_PROBES`` distinct cache owners. Both bounds count per walk (a memoized
     read counts too), so ``select`` and ``build`` see the same generation for the same API state.
     Nominations never walk (:func:`select_evidence`)."""
@@ -593,11 +601,13 @@ class FamilyGenerations:
         if (workflow, commit) not in self._at:
             self._at[workflow, commit] = runs.workflow_runs(self.api, workflow, head_sha=commit, status="success",
                                                             max_items=lim.MAX_SUBJECT_RUNS)
-        return [run for run in self._at[workflow, commit] if self._valid(run, family, commit)][:lim.MAX_CANDIDATES]
+        valid = [run for run in self._at[workflow, commit] if self._valid(run, family, commit)]
+        return valid[:lim.MAX_FAMILY_PRODUCER_RUNS]
 
     def _walk_producers(self, family: Mapping[str, Any], earlier: list[str]) -> dict[str, list[dict[str, Any]]]:
-        """Earlier commit -> its producer runs, newest first: the newest ``limits.MAX_CANDIDATES``
-        successful default-branch producer runs at any of ``earlier``."""
+        """Earlier commit -> its producer runs, newest first: the newest
+        ``limits.MAX_FAMILY_PRODUCER_RUNS`` successful default-branch producer runs at any of
+        ``earlier`` (a whole wave of one-key runs at the previous commit, as at the expected one)."""
 
         workflow = family["producer"]["workflow"]
         if workflow not in self._listed:
@@ -606,7 +616,8 @@ class FamilyGenerations:
                                                         status="success", max_items=lim.MAX_SUBJECT_RUNS)
         commits = set(earlier)
         chosen = [run for run in self._listed[workflow]
-                  if run.get("head_sha") in commits and self._valid(run, family, run["head_sha"])][:lim.MAX_CANDIDATES]
+                  if run.get("head_sha") in commits and self._valid(run, family, run["head_sha"])]
+        chosen = chosen[:lim.MAX_FAMILY_PRODUCER_RUNS]
         grouped: dict[str, list[dict[str, Any]]] = {}
         for run in chosen:
             grouped.setdefault(run["head_sha"], []).append(run)

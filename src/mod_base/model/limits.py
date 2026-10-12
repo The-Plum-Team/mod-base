@@ -148,6 +148,18 @@ MAX_FILTERED_RUNS_LISTED = 1000
 MAX_CANDIDATES = 8
 #: Rows of one ``head_sha``-filtered source-run listing (one page; a full one is confirmed by a second).
 MAX_SUBJECT_RUNS = 100
+#: Successful ``families[].producer.workflow`` runs at the expected commit whose exact family handoff
+#: names ``select`` and ``admit`` look up, and at the earlier commits of ``select``'s carry-forward
+#: walk (one bound for all of them), newest first (one inventory each, read only until a key's
+#: ``mb-family-handoff--<f>--<key>--a<attempt>`` is found, and shared by every key of one invocation).
+#: A producer may hand off one key per run: Quick Skin runs one per target, so one wave of its 17
+#: targets is 17 runs (15 were observed), more when a target is dispatched again. The bound holds a
+#: full wave with room for 15 such repeats, stays within ``MAX_SUBJECT_RUNS`` (the one page the
+#: producer listing reads) and keeps a select with a full carry-forward walk within
+#: ``MAX_PAGES_API_READS`` (at most 140 of its 160 reads). Newest first, it can only hide an older
+#: run: a key handed off only there is treated as having no handoff at that commit (the superseding
+#: or admitted family cache, or the walk), never as an older run passing as newer.
+MAX_FAMILY_PRODUCER_RUNS = 32
 #: Rows of the canonical-branch listing searched for display-titled source runs (newest first, so
 #: the bound can only hide an older run: no evidence, never an older run passing as the newest).
 MAX_CANONICAL_RUNS = 300

@@ -300,6 +300,18 @@ Integration-round amendments:
   (`imaging_user_site`, `IMAGING_PACKAGE`), which `kit_environment` applies to the kit process,
   whose disabled user site would otherwise hide Pillow from the host before it could pass it on;
   `tests/test_pin.py` runs both copies over the same process states (`tests/user_site.py`).
+* **Family handoffs by exact name across a wave.** `select --family` and `admit` look a key's family
+  handoff up by its exact name (`mb-family-handoff--<f>--<key>--a<attempt>` of a producer run's
+  latest attempt) in the newest `limits.MAX_FAMILY_PRODUCER_RUNS` (32) successful producer runs at
+  the leg coverage, newest first, instead of only the newest `limits.MAX_CANDIDATES` (8): a producer
+  that hands off one key per run (Quick Skin: one run per target, 17 targets) leaves the earliest
+  key of a wave in its oldest run. Inventories are read newest first only until the name is found
+  (`admit`: until every pending key is; a run's job graph is read only when its inventory holds a
+  pending key's handoff). Every authentication and fail-closed rule is unchanged; a key whose
+  handoff is in no run within the bound falls back exactly as a missing handoff does. The
+  carry-forward walk inventories the newest `limits.MAX_FAMILY_PRODUCER_RUNS` producer runs at its
+  earlier commits under the same bound (also `limits.MAX_CANDIDATES` before), so a wave the head
+  overtook before it was published is carried by its exact names, not walked past.
 * **Checked document.** `tests/test_internal_api.py` also checks every class's documented dataclass
   `fields` (names, order and each default's `repr`, `<factory>` for a default factory) and
   properties, every name of a described name list, and every documented constant value written in
@@ -699,6 +711,7 @@ their units in the integration round; `DELETION_BUDGET` is 64, see the rotation-
 * `RUN_POLL_ATTEMPTS`, `RUN_POLL_INTERVAL_SECONDS`
 * `LISTING_READ_ATTEMPTS`, `LISTING_RETRY_DELAY_SECONDS`, `MAX_LISTING_RETRY_DELAY_SECONDS`, `MAX_FILTERED_RUNS_LISTED`: the consistent-listing retry and the 1,000 newest runs GitHub lists for a filtered workflow-run search (see the consistent-listing amendment)
 * `MAX_CANDIDATES`, `MAX_SUBJECT_RUNS`, `MAX_CANONICAL_RUNS`, `MAX_FAMILY_LEGS`
+* `MAX_FAMILY_PRODUCER_RUNS`: the producer runs at one commit whose exact family handoff names `select` and `admit` look up (see the family-handoffs amendment)
 * `MAX_WORKFLOW_FILE_BYTES`, `GENERATION_PROBES`, `ANCHOR_PROBES`
 
 ZIP extraction (see the collected-family amendment):
