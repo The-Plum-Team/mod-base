@@ -927,6 +927,28 @@ class FamilyCarryForwardTest(unittest.TestCase):
         self.assertEqual(len(inventories), limits.MAX_CANDIDATES, "the newest producer runs only")
         self.assertLess(self.world.api.request_count, MAX_PAGES_API_READS)
 
+    def test_a_full_wave_window_and_a_full_walk_stay_within_the_pages_client_budget(self) -> None:
+        # The worst case of the wave window: more producer runs at the expected commit than its
+        # bound, none of them holding this key, then the hostile full-depth walk above.
+        self.world = World(QS_REPOSITORY, max_requests=MAX_PAGES_API_READS)
+        earlier = [f"{index:040x}" for index in range(1, limits.GENERATION_PROBES + 1)]
+        for index, commit in enumerate(earlier):
+            self.cache(1000 + index, commit, created=900 + index, conclusion="failure")
+        for index, commit in enumerate(earlier[:12]):
+            self.producer(200 + index, commit, key="mc26.3", created=100 + index)
+        for index in range(limits.MAX_FAMILY_PRODUCER_RUNS + 1):
+            self.producer(400 + index, self.head, key="mc26.3", created=100 + index)
+        with mock.patch.object(targets, "first_parent_history", return_value=[self.head, *earlier]), \
+                self.assertRaises(Unavailable):
+            self.select()
+        inventories = [path for path, _ in self.world.api.requests("/artifacts") if "/runs/" in path]
+        self.assertEqual(len(inventories), limits.MAX_FAMILY_PRODUCER_RUNS + limits.MAX_CANDIDATES)
+        self.assertEqual(self.world.api.request_count,
+                         4 + limits.MAX_FAMILY_PRODUCER_RUNS + limits.MAX_CANDIDATES + 2 * limits.GENERATION_PROBES,
+                         "the workflow id, two producer listings, the head's cache name, the inventories, then "
+                         "per earlier commit its cache name and owner")
+        self.assertLess(self.world.api.request_count, MAX_PAGES_API_READS)
+
     def test_one_instance_shares_every_leg_independent_read(self) -> None:
         # build's use at Quick Skin scale: one instance re-identifies 17 carried legs. Per leg only
         # the exact cache names are listed; the workflow id, both producer listings, the producer
