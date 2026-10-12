@@ -426,6 +426,17 @@ class ReusedGenerationTests(GenerationCase):
         add_reuse_run(world, "packaged")
         self.rejected(world, "canonical JSON")
 
+    def test_a_narrowed_original_never_covers_the_push(self) -> None:
+        # No admission of this kit seals a reference to one (D5); a consumer refuses it anyway, as
+        # reuse.download_reuse_reference does, instead of handing out lanes that ran a subset.
+        world = self.reused()
+        document = copy.deepcopy(world.documents["packaged"])
+        document["scope_sha256"] = "a" * 64
+        world.seal("packaged", document)
+        add_reuse_run(world, "build")
+        add_reuse_run(world, "packaged")
+        self.rejected(world, "never covers a push with a narrowed pull request run")
+
     def test_a_reuse_run_in_progress_waits(self) -> None:
         world = self.reused()
         world.api.add_run(ci_api_run(world.covered, "packaged", status="in_progress", conclusion=None))
