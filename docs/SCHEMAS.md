@@ -2,7 +2,7 @@
 
 The fourteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
 `mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1: thirteen since v1.1.0,
-`mod-base.ci.generation` since the unreleased version after v1.3.1) are listed in
+`mod-base.ci.generation` since v1.4.0) are listed in
 [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the validator that
 defines it. This page has the field tables of five of them, in its last five sections: the Build
 config, the batch manifest, the results index, the tested generation and the activation manifest.
@@ -784,7 +784,7 @@ Build (`build_ci.gate`).
 
 ## Tested generation data v1
 
-`mod-base.ci.generation` writes and reads 1. The kind is new after v1.3.1 (`new-kind` in the
+`mod-base.ci.generation` writes and reads 1. The kind is new in v1.4.0 (`new-kind` in the
 ledger). It is what `ci select-generation` publishes for a consumer of a default-branch commit:
 the one Build bundle and the one set of runtime results that were tested together, whether the
 commit's own runs tested them (`full`) or the merged pull request's gates cover it (`reuse`). The
