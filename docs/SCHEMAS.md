@@ -14,6 +14,7 @@ already reads every kind of this release, `mod-base.ci.generation` included, so 
 `unchanged`. The optional `seeds`
 of the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config
 that sets it. So does the optional `admission` (v1.3.0); a v1.2.1 reader refuses a config that
+sets it. And so does the optional `batch` (unreleased, KQ8-3): a v1.4.1 reader refuses a config that
 sets it.
 
 The v1 Build plan (since v1.1.0) optionally carries `candidate_kit: {sha, version}` when
@@ -697,10 +698,11 @@ source in the protected checkout to have its configured hash.
 | `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
 | `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.protocol.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
 | `seeds` | optional (added within schema 1): at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..16 `{path}` objects (canonical repository paths, unique, sorted by path) of the protected checkout whose bytes key the seed; absent means no seed |
-| `admission` | optional (added within schema 1, v1.3.0): exactly `{protected_paths, command, approvers}`. `protected_paths`: 1..64 canonical repository paths (files or directories), strictly ascending, none inside another, held by at most 16 directories counting the root, that together protect this config, every `adapter.files` path, `site/mod-base-build-activation.json` and the four `.github/workflows/mod-base-*.yml` callers. `command`: `/` and a lower-case word of `a-z 0-9 -` starting with a letter, at most 63 characters. `approvers`: 1..8 `{login, association}` objects, logins (GitHub login grammar) unique ignoring case, each `association` one of `OWNER`, `MEMBER`, `COLLABORATOR`; absent means no admission |
+| `admission` | optional (added within schema 1, v1.3.0): exactly `{protected_paths, command, approvers}`. `protected_paths`: 1..64 canonical repository paths (files or directories), strictly ascending, none inside another, held by at most 16 directories counting the root, that together protect this config, every `adapter.files` path, `site/mod-base-build-activation.json` and the four `.github/workflows/mod-base-*.yml` callers. `command`: `/` and a lower-case word of `a-z 0-9 -` starting with a letter, at most 63 characters. `approvers`: 1..8 `{login, association}` objects, logins (GitHub login grammar) unique ignoring case, each `association` one of `OWNER`, `MEMBER`, `COLLABORATOR`; absent means no admission. With a `batch` block it must also protect `batch.allowed_paths` and `.github/workflows/mod-base-batch.yml` |
+| `batch` | optional (added within schema 1, unreleased, KQ8-3): exactly `{allowed_paths, operators}` and optionally `max_members`. `allowed_paths`: the canonical repository path of the protected allowed-path list (a JSON array of canonical repository paths in strictly ascending order, each admitting itself and everything below it) that `ci batch-prepare` reads from the protected checkout; it is checked with the other named paths below. `operators`: 1..8 GitHub logins, unique ignoring case, the only actors (and triggering actors) that may request a batch. `max_members`: 1..50, the most members one batch holds (50 when absent). Absent means no batches: the managed batch caller must not exist, and removing the block (with the caller) is the rollback of shared batching. Whatever the list says, a batch never changes `.github`, this config, the activation manifest, an adapter source, an inventory, scenario contract or plan input, the list itself or an admission's protected path (`config.never_batched`) |
 
 The config path, every adapter source, every candidate file (the inventory, the scenario contract
-and each `plan_inputs` path) and the bundle directory are
+and each `plan_inputs` path), the bundle directory and the batch allowed-path list are
 checked as one tree: none may equal another (ignoring case), differ from one only by the case of a
 component, or lie inside another. No other key is accepted: no command, runner, permission, secret,
 matrix or scenario catalog, and no package list. [BUILD-ADAPTER.md](BUILD-ADAPTER.md) describes what each field is used for.

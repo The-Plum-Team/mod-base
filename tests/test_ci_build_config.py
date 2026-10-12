@@ -10,7 +10,8 @@ import unittest
 from pathlib import Path
 
 from mod_base.build_ci.config import (BUILD_CONFIG_PATH, AdapterFile, BuildConfig, admission, admission_directories,
-                                      load_build_config, protects, validate_build_config)
+                                      batch, check_batch_paths, load_build_config, never_batched, protects,
+                                      validate_build_config)
 from mod_base.build_ci.protocol import PROFILES
 from mod_base.errors import MbError
 from mod_base.model import limits
@@ -371,6 +372,112 @@ class LoadTests(unittest.TestCase):
         with self.assertRaises(MbError) as caught:
             load_build_config(root, repository="example/mod")
         self.assertIn("whole-byte cap", str(caught.exception))
+
+
+#: A batch block of a mod: the protected allowed-path list, who may request a batch and its cap.
+BATCH = {"allowed_paths": "scripts/ci/mod-base-batch-paths.json", "operators": ["AkaNebur"], "max_members": 20}
+
+
+class BatchSchemaTests(unittest.TestCase):
+    """The optional ``batch`` (within schema 1, KQ8-3): batches through the managed batch caller."""
+
+    def document(self, **changes: object) -> dict:
+        return {**ci_config(), "batch": {**copy.deepcopy(BATCH), **changes}}
+
+    def test_it_is_optional_and_closed(self) -> None:
+        self.assertIsNone(batch(validate_build_config(ci_config())))
+        self.assertEqual(batch(validate_build_config(self.document())), BATCH)
+        without_cap = self.document()
+        del without_cap["batch"]["max_members"]
+        self.assertEqual(batch(validate_build_config(without_cap)), {key: BATCH[key] for key in ("allowed_paths",
+                                                                                                  "operators")})
+        for key in ("allowed_paths", "operators"):
+            changed = self.document()
+            del changed["batch"][key]
+            with self.subTest(missing=key), self.assertRaises(MbError):
+                validate_build_config(changed)
+        for extra in ({"delete_branches": True}, {"app": "plum-batch"}, {"protected_paths": ["src"]}):
+            with self.subTest(extra=extra), self.assertRaises(MbError):
+                validate_build_config(self.document(**extra))
+        for value in (None, {}, [], "scripts/ci/mod-base-batch-paths.json", True):
+            with self.subTest(batch=value), self.assertRaises(MbError):
+                validate_build_config({**ci_config(), "batch": value})
+
+    def test_the_cap_and_the_operators_are_bounded(self) -> None:
+        for count in (1, limits.MAX_CI_BATCH_MEMBERS):
+            validate_build_config(self.document(max_members=count))
+        for count in (0, -1, limits.MAX_CI_BATCH_MEMBERS + 1, "20", True, 2.0):
+            with self.subTest(max_members=count), self.assertRaises(MbError):
+                validate_build_config(self.document(max_members=count))
+        most = [f"operator-{index}" for index in range(limits.MAX_CI_BATCH_OPERATORS)]
+        validate_build_config(self.document(operators=most))
+        for operators in ([], [*most, "one-more"], ["AkaNebur", "akanebur"], ["AkaNebur[bot]"], ["-x"], ["a" * 40],
+                          [""], [7], "AkaNebur"):
+            with self.subTest(operators=operators), self.assertRaises(MbError):
+                validate_build_config(self.document(operators=operators))
+
+    def test_the_allowed_path_list_is_a_repository_path_that_aliases_nothing_the_config_names(self) -> None:
+        for path in ("", "/scripts/x.json", "scripts/../x.json", "scripts\\x.json", BUILD_CONFIG_PATH,
+                     "scripts/ci/pr_gate.py", "release/release-matrix.json", "build/release/paths.json",
+                     "gradle.properties", "build"):
+            with self.subTest(path=path), self.assertRaises(MbError):
+                validate_build_config(self.document(allowed_paths=path))
+
+    def test_an_admission_protects_the_list_and_the_batch_caller(self) -> None:
+        protected = {**ci_config(), "batch": copy.deepcopy(BATCH), "admission": copy.deepcopy(ADMISSION)}
+        validate_build_config(protected)
+        for paths, missing in ((["scripts/ci/mod_base_build_adapter.py", "scripts/ci/mod_base_build_dispatch.py",
+                                 "scripts/ci/pr_gate.py", BUILD_CONFIG_PATH, ".github/workflows", "site"],
+                                BATCH["allowed_paths"]),
+                               (sorted([*REQUIRED, BATCH["allowed_paths"]]), ".github/workflows/mod-base-batch.yml")):
+            changed = copy.deepcopy(protected)
+            changed["admission"]["protected_paths"] = sorted(paths)
+            with self.subTest(missing=missing), self.assertRaises(MbError) as caught:
+                validate_build_config(changed)
+            self.assertIn(missing, str(caught.exception))
+        # Without a batch block neither is required: an admission stays as it was.
+        validate_build_config({**ci_config(), "admission": {**copy.deepcopy(ADMISSION),
+                                                            "protected_paths": REQUIRED}})
+
+
+class NeverBatchedTests(unittest.TestCase):
+    """What no batch member may change, whatever the mod's allowed-path list says."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name) / "mod"
+        self.root.mkdir()
+
+    def loaded(self, **extra: object) -> BuildConfig:
+        document = {**config_for(SOURCES), **extra}
+        checkout(self.root, document, SOURCES)
+        return load_build_config(self.root, repository="example/mod")
+
+    def test_the_gates_files_the_batch_caller_and_its_list_are_never_batched(self) -> None:
+        self.assertEqual(never_batched(self.loaded()), (
+            ".github", "e2e/scenario-contract.json", "gradle.properties", "release/release-matrix.json",
+            BUILD_CONFIG_PATH, "scripts/ci/mod_base_build_adapter.py", "scripts/ci/mod_base_build_dispatch.py",
+            "scripts/ci/pr_gate.py", "site/mod-base-build-activation.json"))
+        with_batch = never_batched(self.loaded(batch=copy.deepcopy(BATCH)))
+        self.assertEqual(set(with_batch) - set(never_batched(self.loaded())), {BATCH["allowed_paths"]})
+        # An admission's paths join them, and a path below another is not listed twice.
+        admitted = never_batched(self.loaded(batch=copy.deepcopy(BATCH), admission=copy.deepcopy(ADMISSION)))
+        self.assertEqual(admitted, (".github", "e2e/scenario-contract.json", "gradle.properties",
+                                    "release/release-matrix.json", "scripts/ci", "site"))
+
+    def test_an_allowed_path_list_that_reaches_one_of_them_is_refused(self) -> None:
+        config = self.loaded(batch=copy.deepcopy(BATCH))
+        check_batch_paths(config, ("docs", "src/main", "scripts/release/notes.md"))
+        for allowed in ((".github",), (".github/workflows/ci.yml",), ("docs", ".github/ISSUE_TEMPLATE"),
+                        ("scripts",), ("scripts/ci",), (BATCH["allowed_paths"],), ("site",),
+                        ("site/mod-base-build-activation.json",), ("release",), ("gradle.properties",),
+                        ("e2e",), ("scripts/ci/pr_gate.py",)):
+            with self.subTest(allowed=allowed), self.assertRaises(MbError) as caught:
+                check_batch_paths(config, allowed)
+            self.assertIn("which no batch may change", str(caught.exception))
+        # A sibling that only shares a prefix is no clash.
+        check_batch_paths(config, (".githubx", "scripts/cia", "sites"))
 
 
 if __name__ == "__main__":

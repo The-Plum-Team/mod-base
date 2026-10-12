@@ -32,6 +32,7 @@ CI_CALLER_WORKFLOWS = {
     "build": ".github/workflows/mod-base-build.yml",
     "packaged": ".github/workflows/mod-base-packaged-e2e.yml",
     "status": ".github/workflows/mod-base-gate-status.yml",
+    "batch": ".github/workflows/mod-base-batch.yml",
 }
 #: Build/E2E callee workflow id -> its path inside the kit repository (never ``CALLEE_WORKFLOWS``).
 CI_CALLEE_WORKFLOWS = {
@@ -39,12 +40,14 @@ CI_CALLEE_WORKFLOWS = {
     "select-build": ".github/workflows/select-build.yml",
     "packaged-e2e": ".github/workflows/packaged-e2e.yml",
     "gate-status": ".github/workflows/gate-status.yml",
+    "batch": ".github/workflows/batch.yml",
 }
 CI_GUARD_CALL = "Verify pinned mod-base"
 CI_BUILD_CALL = "Shared Build"
 CI_SELECT_CALL = "Select exact Build"
 CI_PACKAGED_CALL = "Shared Packaged E2E"
 CI_STATUS_CALL = "Evaluate protected gates"
+CI_BATCH_CALL = "Verify merged batch"
 #: Managed caller id -> job key -> the bare display name of that caller-owned job.
 CI_CALLER_JOBS = {
     "build": {"guard": CI_GUARD_CALL, "deferred": "Build deferred for draft", "shared": CI_BUILD_CALL},
@@ -52,6 +55,9 @@ CI_CALLER_JOBS = {
                  "select": CI_SELECT_CALL, "rebuild": CI_BUILD_CALL, "shared": CI_PACKAGED_CALL},
     "status": {"guard": CI_GUARD_CALL, "locate": "Locate the pull request", "evaluate": CI_STATUS_CALL,
                "publish": "Publish protected gate statuses"},
+    "batch": {"locate": "Locate the batch request", "guard": CI_GUARD_CALL,
+              "prepare": "Prepare the batch pull request", "evaluate": CI_BATCH_CALL,
+              "close": "Close the settled batch members"},
 }
 #: Producer id -> calling job key -> the workflow it calls: ``guard`` is the mod's own
 #: ``CI_GUARD_WORKFLOW_PATH``, every other value a ``CI_CALLEE_WORKFLOWS`` id.
@@ -62,16 +68,22 @@ CI_CALLS = {
 #: The calls of the status caller, in the same form. It is tabled apart because it is no producer:
 #: its run seals nothing and is nobody's evidence, so :func:`ci_producer` never answers with it.
 CI_STATUS_CALLS = {"guard": "guard", "evaluate": "gate-status"}
+#: The calls of the batch caller (KQ8-2), in the same form. It is no producer either: its
+#: evaluation reads the gates of a merged batch pull request and its own jobs prepare a batch and
+#: close settled members with the batch App; nothing it does is anybody's evidence.
+CI_BATCH_CALLS = {"guard": "guard", "evaluate": "batch"}
 #: Managed caller id -> its calls: what the job-name functions below resolve a calling job with.
-_CI_CALLER_CALLS = {**CI_CALLS, "status": CI_STATUS_CALLS}
+_CI_CALLER_CALLS = {**CI_CALLS, "status": CI_STATUS_CALLS, "batch": CI_BATCH_CALLS}
 #: Build/E2E callee id -> the managed callers whose jobs may call it: what the binding step of its
 #: prologue admits in ``GITHUB_WORKFLOW_REF``. The three callees of the producers admit both
-#: producers (the packaged caller also builds); the status evaluation admits its own caller alone.
+#: producers (the packaged caller also builds); the status evaluation and the batch settlement each
+#: admit their own caller alone.
 CI_CALLEE_CALLERS = {
     "build": ("build", "packaged"),
     "select-build": ("build", "packaged"),
     "packaged-e2e": ("build", "packaged"),
     "gate-status": ("status",),
+    "batch": ("batch",),
 }
 CI_GUARD_JOBS = {"verify": "Authenticate the pinned kit"}
 CI_BUILD_JOBS = {"plan": "Plan protected Build", "policy": "Verify protected policy",
@@ -81,9 +93,11 @@ CI_SELECT_JOBS = {"select": "Select exact Build source"}
 CI_PACKAGED_JOBS = {"input": "Authenticate exact Build", "lane": "Run packaged lane {id}",
                     "aggregate": "Seal complete packaged results", "gate": "Verify complete packaged E2E"}
 CI_STATUS_JOBS = {"evaluate": "Evaluate gate states"}
-#: Called workflow id (a ``CI_CALLS`` or ``CI_STATUS_CALLS`` value) -> job key -> its ``name:`` template.
+CI_BATCH_JOBS = {"settle": "Verify merged batch provenance"}
+#: Called workflow id (a ``CI_CALLS``, ``CI_STATUS_CALLS`` or ``CI_BATCH_CALLS`` value) -> job key ->
+#: its ``name:`` template.
 CI_CALLEE_JOBS = {"guard": CI_GUARD_JOBS, "build": CI_BUILD_JOBS, "select-build": CI_SELECT_JOBS,
-                  "packaged-e2e": CI_PACKAGED_JOBS, "gate-status": CI_STATUS_JOBS}
+                  "packaged-e2e": CI_PACKAGED_JOBS, "gate-status": CI_STATUS_JOBS, "batch": CI_BATCH_JOBS}
 CI_SEAL_STEP = "Validate frozen native exports"
 CI_UPLOAD_STEP = "Upload sealed outputs"
 #: Build/E2E callee id -> job key -> the ``ci`` verbs its steps issue after the Build controller
@@ -94,7 +108,9 @@ CI_UPLOAD_STEP = "Upload sealed outputs"
 #: is given. The ``aggregate`` job's sealing step is ``ci aggregate`` itself. The
 #: status job issues ``gate-status`` twice: first with ``--settle``, before any subject, and
 #: again with the plan when that first call could not settle (the four steps between and the
-#: second call are skipped when it could). Only the ``lane`` job runs a client and installs the
+#: second call are skipped when it could). The batch settlement authenticates the default-branch
+#: commit it runs at as a consumer of a generation (``ci subject --producer generation``), derives
+#: its plan and then issues ``batch-settle --intents``. Only the ``lane`` job runs a client and installs the
 #: protected config's system profile, between its subject and its accounts. The ``target`` and
 #: ``lane`` jobs key their protected seed before staging and, in a protected job whose restore
 #: missed, export the next one after their upload (``build_ci.seeds``).
@@ -120,6 +136,9 @@ CI_JOB_VERBS = {
     },
     "gate-status": {
         "evaluate": ("gate-status", "subject", "worker-prepare", "plan", "gate-status", "worker-finish"),
+    },
+    "batch": {
+        "settle": ("subject", "worker-prepare", "plan", "batch-settle", "worker-finish"),
     },
 }
 #: Build/E2E callee id -> sealing job key -> callee mode -> the kind (``grammar.ci_artifact_name``)

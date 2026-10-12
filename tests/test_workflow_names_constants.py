@@ -90,12 +90,14 @@ class BuildE2eNameTableTest(unittest.TestCase):
             "build": ".github/workflows/mod-base-build.yml",
             "packaged": ".github/workflows/mod-base-packaged-e2e.yml",
             "status": ".github/workflows/mod-base-gate-status.yml",
+            "batch": ".github/workflows/mod-base-batch.yml",
         })
         self.assertEqual(workflow.CI_CALLEE_WORKFLOWS, {
             "build": ".github/workflows/build.yml",
             "select-build": ".github/workflows/select-build.yml",
             "packaged-e2e": ".github/workflows/packaged-e2e.yml",
             "gate-status": ".github/workflows/gate-status.yml",
+            "batch": ".github/workflows/batch.yml",
         })
         # The Build/E2E callees are their own registry: the Pages table and its tests stay as they are.
         self.assertEqual(set(workflow.CI_CALLEE_WORKFLOWS.values()) & set(workflow.CALLEE_WORKFLOWS.values()), set())
@@ -109,6 +111,9 @@ class BuildE2eNameTableTest(unittest.TestCase):
                          "shared": "Shared Packaged E2E"},
             "status": {"guard": "Verify pinned mod-base", "locate": "Locate the pull request",
                        "evaluate": "Evaluate protected gates", "publish": "Publish protected gate statuses"},
+            "batch": {"locate": "Locate the batch request", "guard": "Verify pinned mod-base",
+                      "prepare": "Prepare the batch pull request", "evaluate": "Verify merged batch",
+                      "close": "Close the settled batch members"},
         })
         self.assertEqual(workflow.CI_CALLS, {
             "build": {"guard": "guard", "shared": "build"},
@@ -122,11 +127,18 @@ class BuildE2eNameTableTest(unittest.TestCase):
             workflow.ci_producer(workflow.CI_CALLER_WORKFLOWS["status"])
         self.assertEqual(workflow.CI_CALLEE_CALLERS, {
             "build": ("build", "packaged"), "select-build": ("build", "packaged"),
-            "packaged-e2e": ("build", "packaged"), "gate-status": ("status",)})
+            "packaged-e2e": ("build", "packaged"), "gate-status": ("status",), "batch": ("batch",)})
+        # The batch caller is no producer either.
+        self.assertEqual(workflow.CI_BATCH_CALLS, {"guard": "guard", "evaluate": "batch"})
+        self.assertLessEqual(set(workflow.CI_BATCH_CALLS), set(workflow.CI_CALLER_JOBS["batch"]))
+        self.assertNotIn("batch", workflow.CI_CALLS)
+        with self.assertRaises(MbError):
+            workflow.ci_producer(workflow.CI_CALLER_WORKFLOWS["batch"])
         self.assertEqual(list(workflow.CI_CALLEE_CALLERS), list(workflow.CI_CALLEE_WORKFLOWS))
         for callee, callers in workflow.CI_CALLEE_CALLERS.items():
             self.assertLessEqual(set(callers), set(workflow.CI_CALLER_WORKFLOWS), callee)
-            called = {caller for caller, calls in {**workflow.CI_CALLS, "status": workflow.CI_STATUS_CALLS}.items()
+            called = {caller for caller, calls in {**workflow.CI_CALLS, "status": workflow.CI_STATUS_CALLS,
+                                                   "batch": workflow.CI_BATCH_CALLS}.items()
                       if callee in calls.values()}
             self.assertLessEqual(called, set(callers), f"{callee}: a caller that calls it is admitted by it")
         self.assertEqual(workflow.CI_CALLEE_JOBS, {
@@ -139,7 +151,9 @@ class BuildE2eNameTableTest(unittest.TestCase):
                              "aggregate": "Seal complete packaged results",
                              "gate": "Verify complete packaged E2E"},
             "gate-status": {"evaluate": "Evaluate gate states"},
+            "batch": {"settle": "Verify merged batch provenance"},
         })
+        self.assertIs(workflow.CI_CALLEE_JOBS["batch"], workflow.CI_BATCH_JOBS)
         self.assertIs(workflow.CI_CALLEE_JOBS["build"], workflow.CI_BUILD_JOBS)
         self.assertIs(workflow.CI_CALLEE_JOBS["packaged-e2e"], workflow.CI_PACKAGED_JOBS)
         self.assertIs(workflow.CI_CALLEE_JOBS["gate-status"], workflow.CI_STATUS_JOBS)

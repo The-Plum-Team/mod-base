@@ -22,7 +22,7 @@ from typing import Any
 from unittest import mock
 
 from mod_base import cli, workflow
-from mod_base.build_ci.activation import ACTIVATION_PATH, CALLERS
+from mod_base.build_ci.activation import ACTIVATION_PATH, BATCH_CALLER, BATCH_MODES, CALLERS
 from mod_base.build_ci.config import BUILD_CONFIG_PATH
 from mod_base.errors import MbError
 from mod_base.model.canonical import canonical_json
@@ -577,7 +577,8 @@ class CanonicalBranchTest(CallerCase):
         self.assertEqual(tool.expected_callers(self.kit, pin, shared, "main")[BUILD], render(BRANCHED, branch="main"))
         with self.assertRaisesRegex(MbError, "its template names the mod's canonical branch"):
             tool.expected_callers(self.kit, pin, shared)
-        self.assertEqual(tool.expected_callers(self.kit, pin, ci_activation("disabled")), dict.fromkeys(CALLERS),
+        self.assertEqual(tool.expected_callers(self.kit, pin, ci_activation("disabled")),
+                         dict.fromkeys((*CALLERS, BATCH_CALLER)),
                          "a caller no mode manages is not rendered, so it needs no branch")
         hostile = ("", "a b", "x\ny", "/x", "a..b", "a//b", '"]\n  pull_request: {}', "{{BRANCH}}", "{{PIN}}", "*",
                    "!master", "b" * 201)
@@ -699,12 +700,18 @@ def real_mod(repo: Path, sha: str = SHA, version: str = VERSION, kit_root: Path 
 class KitCallerTemplatesTest(unittest.TestCase):
     def test_the_registry_enrols_the_pages_caller_and_the_four_callers_by_mode(self) -> None:
         records = {record.path: record for record in tool.RENDERED_CALLERS}
-        self.assertEqual(list(records), [PAGES, *CALLERS])
+        self.assertEqual(list(records), [PAGES, *CALLERS, BATCH_CALLER])
         self.assertEqual((records[PAGES].renderer, records[PAGES].modes), ("pages-extension", None))
         for path in CALLERS:
             with self.subTest(path=path):
                 self.assertEqual((records[path].source, records[path].renderer), (f"managed/{path}", "pinned"))
                 self.assertEqual(records[path].modes, {state for state in MANAGED if path in MANAGED[state]})
+                self.assertFalse(records[path].batch)
+        # The batch caller: managed in the mode with both gates, and only with a batch block.
+        batch = records[BATCH_CALLER]
+        self.assertEqual((batch.source, batch.renderer, batch.modes, batch.batch),
+                         (f"managed/{BATCH_CALLER}", "pinned", BATCH_MODES, True))
+        self.assertEqual(BATCH_MODES, {"shared-build-and-e2e"})
         self.assertEqual(tool.RENDERERS, ("pages-extension", "pinned"))
         manifest = tool.load_manifest(KIT_ROOT)
         self.assertFalse({entry["path"] for entry in manifest["files"]} & set(CALLERS),
@@ -713,6 +720,7 @@ class KitCallerTemplatesTest(unittest.TestCase):
 
     def test_every_template_renders_to_the_single_pin_with_no_placeholder_left(self) -> None:
         expected = tool.expected_callers(KIT_ROOT, Pin(SHA, VERSION, ()), ci_activation("shadow"), BRANCH)
+        self.assertIsNone(expected.pop(BATCH_CALLER), "without a batch block no mode manages the batch caller")
         self.assertEqual(expected, real_callers())
         for path, data in expected.items():
             with self.subTest(path=path):
@@ -738,11 +746,20 @@ class KitCallerTemplatesTest(unittest.TestCase):
             mode, _, left = state.partition(":")
             document = None if state == "absent" else ci_activation(mode, left or None)
             expected = tool.expected_callers(KIT_ROOT, pin, document, BRANCH)
+            batching = tool.expected_callers(KIT_ROOT, pin, document, BRANCH, batching=True)
             with self.subTest(state=state):
-                self.assertEqual(list(expected), list(CALLERS))
+                self.assertEqual(list(expected), [*CALLERS, BATCH_CALLER])
                 self.assertEqual({path for path, data in expected.items() if data is not None}, MANAGED[row(state)])
                 for path, data in expected.items():
-                    self.assertIn(data, (None, real_callers()[path]))
+                    self.assertIn(data, (None, real_callers()[path] if path != BATCH_CALLER else None))
+                # A batch block adds the batch caller in the mode with both gates (and in a reviewed
+                # rollback of it, until the block goes) and changes nothing else.
+                self.assertEqual({path: data for path, data in batching.items() if path != BATCH_CALLER},
+                                 {path: data for path, data in expected.items() if path != BATCH_CALLER})
+                self.assertEqual(batching[BATCH_CALLER] is not None, row(state) in BATCH_MODES)
+                if batching[BATCH_CALLER] is not None:
+                    self.assertEqual(batching[BATCH_CALLER], render(
+                        (TEMPLATE_ROOT / "managed" / BATCH_CALLER).read_text(encoding="utf-8")))
 
     def test_the_callers_have_the_jobs_and_references_of_the_architecture(self) -> None:
         """The shape the other cases of this module rely on. ``test_managed_ci_callers`` holds the

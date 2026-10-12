@@ -8,6 +8,7 @@ The registration, the handlers, the constructor, the settlement and the Git writ
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import shutil
@@ -18,10 +19,12 @@ from unittest.mock import patch
 
 from mod_base import cli
 from mod_base.build_ci import commands, commands_batch
+from mod_base.build_ci.config import BUILD_CONFIG_PATH
 from mod_base.errors import MbError
 from mod_base.model import limits
 from mod_base.model.canonical import canonical_json
 from tests.fixtures.ci_batch.support import ALLOWED, BASE_FILES, POSIX_ONLY, REPOSITORY, World
+from tests.helpers import ci_config
 from tests.test_ci_batch_settle import GATE_PAIR_REQUESTS
 
 CONFIG = Path(__file__).resolve().parent / "fixtures" / "mods" / "qs_like" / "site" / "mod-base.json"
@@ -52,9 +55,7 @@ class SurfaceTests(unittest.TestCase):
         for argv in (["batch-prepare", *self.REPO, "--name", "n1", "--allowed-paths", "a.json"],
                      ["batch-prepare", *self.REPO, "--name", "../x", "--allowed-paths", "a.json", "1"],
                      ["batch-prepare", *self.REPO, "--name", "n1", "--allowed-paths", "a.json", "0"],
-                     ["batch-prepare", *self.REPO, "--name", "n1", "1"],
                      ["batch-prepare", "--repo", "mod", "--name", "n1", "--allowed-paths", "a.json", "1"],
-                     ["batch-settle", *self.REPO, "--pr", "9"],
                      ["batch-settle", *self.REPO, "--pr", "0", *settle[-6:]],
                      # A seal names the run that sealed it: no workflow is a command-line argument.
                      [*settle, "--build-workflow", ".github/workflows/mod-base-build.yml"],
@@ -78,9 +79,9 @@ class CommandTests(unittest.TestCase):
         self.remotes: list[tuple] = []
         return world
 
-    def run_verb(self, world: World, *argv: str) -> dict:
+    def run_verb(self, world: World, *argv: str, env: dict | None = None) -> dict:
         environ = {"GITHUB_REPOSITORY": REPOSITORY, "GH_TOKEN": "t0ken", "GITHUB_OUTPUT": str(self.output),
-                   "GIT_DIR": "/nonexistent"}
+                   "GIT_DIR": "/nonexistent", **(env or {})}
 
         def client(environment, *, writable=False, max_requests=None):
             self.clients.append((environment.get("GITHUB_REPOSITORY"), writable, max_requests))
@@ -176,6 +177,80 @@ class CommandTests(unittest.TestCase):
                                                   "deleted": str(count if delete else 0)})
                 self.assertEqual(len(world.hub.writes()), (3 if delete else 2) * count)
                 self.assertEqual(world.remote.rev("refs/heads/fix/n1") is None, delete)
+
+    def configure(self, *, operators=("AkaNebur",), max_members=None, allowed=ALLOWED) -> None:
+        """Give the protected checkout a Build config with a batch block and its allowed-path list."""
+
+        sources = {"scripts/ci/mod_base_build_adapter.py": b"A = 1\n", "scripts/ci/mod_base_build_dispatch.py": b"",
+                   "scripts/ci/pr_gate.py": b"B = 2\n"}
+        document = ci_config()
+        document["adapter"]["files"] = [{"path": path, "sha256": hashlib.sha256(data).hexdigest()}
+                                        for path, data in sorted(sources.items())]
+        document["batch"] = {"allowed_paths": "scripts/batch/allowed.json", "operators": list(operators)}
+        if max_members is not None:
+            document["batch"]["max_members"] = max_members
+        for path, data in {BUILD_CONFIG_PATH: canonical_json(document), **sources,
+                           "scripts/batch/allowed.json": canonical_json(list(allowed))}.items():
+            (self.mod / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.mod / path).write_bytes(data)
+
+    def test_without_a_list_the_protected_config_s_batch_block_decides_and_names_the_operators(self):
+        operator = {"GITHUB_ACTOR": "AkaNebur", "GITHUB_TRIGGERING_ACTOR": "akanebur"}
+        world = self.world(limits.MAX_CI_BATCH_PREPARE_REQUESTS)
+        numbers = self.members(world, 2)
+        # No Build config, or one without a batch block: batching is not enabled.
+        with self.assertRaisesRegex(MbError, "batching is not enabled"):
+            self.run_verb(world, "batch-prepare", "--name", "n", *numbers, env=operator)
+        self.assertEqual(world.hub.request_count, 0)
+        self.configure()
+        result = self.run_verb(world, "batch-prepare", "--name", "n", "--dry-run", *numbers, env=operator)
+        self.assertEqual([member["pr_number"] for member in result["manifest"]["members"]], [1, 2])
+        # Someone who is no operator, or a re-run by someone who is none, requests nothing.
+        for env in ({"GITHUB_ACTOR": "mallory", "GITHUB_TRIGGERING_ACTOR": "AkaNebur"},
+                    {"GITHUB_ACTOR": "AkaNebur", "GITHUB_TRIGGERING_ACTOR": "mallory"},
+                    {"GITHUB_ACTOR": "AkaNebur"}, {}):
+            start = world.hub.request_count
+            with self.subTest(env=env), self.assertRaisesRegex(MbError, "is not an operator"):
+                self.run_verb(world, "batch-prepare", "--name", "n", "--dry-run", *numbers, env=env)
+            self.assertEqual(world.hub.request_count, start)
+
+    def test_the_configured_cap_and_the_never_batched_paths_hold(self):
+        operator = {"GITHUB_ACTOR": "AkaNebur", "GITHUB_TRIGGERING_ACTOR": "AkaNebur"}
+        world = self.world(limits.MAX_CI_BATCH_PREPARE_REQUESTS)
+        numbers = self.members(world, 3)
+        self.configure(max_members=2)
+        with self.assertRaisesRegex(MbError, "at most 2 pull requests"):
+            self.run_verb(world, "batch-prepare", "--name", "n", "--dry-run", *numbers, env=operator)
+        self.configure(allowed=(".github/workflows", "src"))
+        with self.assertRaisesRegex(MbError, "which no batch may change"):
+            self.run_verb(world, "batch-prepare", "--name", "n", "--dry-run", *numbers, env=operator)
+        # The kit's own files of a mod (its bootstrap, its config, its shared documents) are never batched.
+        for kit_path in ("scripts/ci/mod_base_kit.py", "site/mod-base.json", "docs/ai/shared", ".gitattributes"):
+            self.configure(allowed=tuple(sorted((kit_path, "src"))))
+            with self.subTest(kit_path=kit_path), self.assertRaisesRegex(MbError, "which no batch may change"):
+                self.run_verb(world, "batch-prepare", "--name", "n", "--dry-run", *numbers, env=operator)
+        # An operator's own list is held to the same paths whenever the checkout has a Build config.
+        self.allowed.write_bytes(canonical_json(["scripts", "src"]))
+        with self.assertRaisesRegex(MbError, "which no batch may change"):
+            self.run_verb(world, "batch-prepare", "--name", "n", "--allowed-paths", str(self.allowed), "--dry-run",
+                          *numbers)
+        self.assertEqual(world.hub.request_count, 0)
+
+    def test_a_derived_settlement_needs_the_job_s_state_and_seals_go_together(self):
+        world = self.world(limits.MAX_CI_BATCH_SETTLE_DERIVED_REQUESTS)
+        seal = str(self.allowed)
+        for argv in (["--plan", seal], ["--plan", seal, "--build-seal", seal], ["--packaged-seal", seal]):
+            with self.subTest(argv=argv), self.assertRaisesRegex(MbError, "go together"):
+                self.run_verb(world, "batch-settle", "--pr", "9", *argv)
+        with self.assertRaisesRegex(MbError, "--intents derives"):
+            self.run_verb(world, "batch-settle", "--pr", "9", "--plan", seal, "--build-seal", seal, "--packaged-seal",
+                          seal, "--intents")
+        with self.assertRaisesRegex(MbError, "deletes no branch"):
+            self.run_verb(world, "batch-settle", "--pr", "9", "--intents", "--delete-branches")
+        # Without seals the plan comes from the state `ci subject` and `ci plan` left; there is none.
+        with self.assertRaises(MbError):
+            self.run_verb(world, "batch-settle", "--pr", "9", "--intents")
+        self.assertEqual(world.hub.request_count, 0)
 
     def test_unreadable_inputs_stop_before_any_request(self):
         world = self.world(limits.MAX_CI_BATCH_PREPARE_REQUESTS)

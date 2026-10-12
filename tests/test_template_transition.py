@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from mod_base import cli
-from mod_base.build_ci.activation import ACTIVATION_PATH, CALLERS, TRANSITIONS
+from mod_base.build_ci.activation import ACTIVATION_PATH, BATCH_CALLER, CALLERS, TRANSITIONS
 from mod_base.build_ci.config import BUILD_CONFIG_PATH
 from mod_base.build_ci.transition import Transition, admit_transition, verify_candidate_callers
 from mod_base.errors import MbError
@@ -420,7 +420,7 @@ class TransitionCommandTest(CallerCase):
 
     def test_the_synthetic_templates_are_what_this_kit_renders(self) -> None:
         self.assertEqual(tool.expected_callers(self.kit, PIN, ci_activation("shadow")),
-                         {path: render(SYNTHETIC_CALLERS[path]) for path in CALLERS})
+                         {**{path: render(SYNTHETIC_CALLERS[path]) for path in CALLERS}, BATCH_CALLER: None})
 
 
 if __name__ == "__main__":

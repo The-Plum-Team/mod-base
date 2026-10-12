@@ -10,7 +10,9 @@ import copy
 import unittest
 
 from mod_base.build_ci import batch, transport
+from mod_base.build_ci.protocol import plan_sha256
 from mod_base.errors import MbError
+from mod_base.model import limits
 from tests.fixtures.ci_batch.support import BASE_FILES, POSIX_ONLY, REPOSITORY, World, batch_plan
 from tests.helpers import ci_api_artifact, ci_api_run
 from tests.test_ci_batch import squash_by_hand
@@ -20,6 +22,9 @@ ISSUES = f"/repos/{REPOSITORY}/issues"
 #: What ``transport.download_merged_gate_pair`` spends on the two gates of one pull request
 #: (``tests/test_ci_merged_gate_pair.py`` says on what). The budget of ``ci batch-settle`` counts it.
 GATE_PAIR_REQUESTS = 28
+#: What a derived settlement sends before its first write (``batch.settle_derived_batch``): 3 + the
+#: gate pair's 28 as an operator's, 13 to locate both original gates and observe them again.
+DERIVED_REQUESTS = 44
 
 
 def gate_cost(world: World, arguments: dict) -> int:
@@ -252,6 +257,140 @@ class SettleTests(unittest.TestCase):
         with reader.store() as store, self.assertRaisesRegex(MbError, "needs a writable GitHub client"):
             batch.settle_batch(reader.hub, store, **arguments)
         self.assertEqual(reader.hub.request_count, 0)
+
+
+def push_plan(world: World, arguments: dict, **identity) -> dict:
+    """The protected plan a job at the merged default-branch commit derives (``ci subject
+    --producer generation`` and ``ci plan``): the batch's plan under that commit's own identity."""
+
+    merged = world.remote.rev("refs/heads/master")
+    batched = arguments["plan"]["identity"]
+    return batch_plan(**{"pr_number": 0, "head_sha": merged, "head_branch": "master", "base_sha": merged,
+                         "controller_sha": merged, "tested_sha": merged, "tested_tree": batched["tested_tree"],
+                         "tested_parents": [batched["base_sha"]], **identity})
+
+
+@POSIX_ONLY
+class DerivedSettleTests(unittest.TestCase):
+    """``ci batch-settle`` without an operator's plan and seals (KQ8-1): the gates are located from
+    the protected plan of the merged default-branch commit as post-merge reuse locates them."""
+
+    def merged(self, numbers=(1, 2), **options) -> tuple[World, dict, dict]:
+        world = World(self)
+        world.standard()
+        result = world.prepare(numbers)
+        arguments = world.merge(result, **options)
+        world.hub.calls.clear()
+        return world, arguments, result
+
+    def derived(self, world: World, arguments: dict, plan: dict | None = None, **options) -> dict:
+        with world.store() as store:
+            return batch.settle_derived_batch(world.hub, store, pr_number=arguments["pr_number"],
+                                              plan=plan or push_plan(world, arguments),
+                                              temporary_root=world.state, **options)
+
+    def test_the_derived_gates_are_the_gates_an_operator_would_name(self):
+        world, arguments, _ = self.merged()
+        with world.store():
+            gates = batch.derive_batch_gates(world.hub, pr_number=arguments["pr_number"],
+                                             head_sha=arguments["plan"]["identity"]["head_sha"],
+                                             head_branch=arguments["plan"]["identity"]["head_branch"],
+                                             plan=push_plan(world, arguments), temporary_root=world.state)
+        self.assertEqual(gates.plan, arguments["plan"])
+        self.assertEqual((gates.build_seal, gates.packaged_seal), (arguments["build_seal"], arguments["packaged_seal"]))
+        self.assertEqual(world.hub.writes(), [])
+        gates.watch.recheck()
+
+    def test_a_derived_settlement_closes_what_an_operator_s_would(self):
+        for parents in ("squash", "merge"):
+            world, arguments, _ = self.merged(parents=parents)
+            start = world.hub.request_count
+            report = self.derived(world, arguments)
+            with self.subTest(parents=parents):
+                self.assertEqual(report, {"closed": [1, 2], "changed": [], "already_closed": [], "deleted": []})
+                self.assertEqual(world.hub.writes(), [("POST", f"{ISSUES}/1/comments"), ("PATCH", f"{PULLS}/1"),
+                                                      ("POST", f"{ISSUES}/2/comments"), ("PATCH", f"{PULLS}/2")])
+                # The 31 of an operator's settlement before its writes, 13 to locate the gates and to
+                # observe them again, then 3 for each member closed.
+                spent = world.hub.request_count - start
+                self.assertEqual(spent, DERIVED_REQUESTS + 3 * 2)
+                self.assertLessEqual(spent, limits.MAX_CI_BATCH_SETTLE_DERIVED_REQUESTS)
+                self.assertEqual(list(world.state.iterdir()), [])
+
+    def test_intents_write_nothing_and_name_every_member_in_batch_order(self):
+        world, arguments, result = self.merged()
+        start = world.hub.request_count
+        intents = self.derived(world, arguments, intents=True)
+        self.assertEqual(world.hub.request_count - start, DERIVED_REQUESTS, "no request for a member")
+        self.assertEqual(world.hub.writes(), [])
+        manifest = result["manifest"]
+        self.assertEqual(intents, {
+            "repository": REPOSITORY, "pr_number": result["pr_number"], "base_branch": "master",
+            "merged_sha": world.remote.rev("refs/heads/master"),
+            "members": [{"pr_number": member["pr_number"], "head_sha": member["head_sha"],
+                         "squash_sha": member["squash_sha"]} for member in manifest["members"]]})
+        self.assertEqual([world.hub.get_json(f"{PULLS}/{number}")["state"] for number in (1, 2)], ["open", "open"])
+        # Intents need no writable client, and they never delete a branch.
+        reader = World(self, writable=False)
+        with reader.store() as store, self.assertRaisesRegex(MbError, "writable"):
+            batch.settle_derived_batch(reader.hub, store, pr_number=1, plan=push_plan(world, arguments),
+                                       temporary_root=reader.state)
+        with self.assertRaisesRegex(MbError, "never delete"):
+            self.derived(world, arguments, intents=True, delete_branches=True)
+        self.assertEqual(reader.hub.request_count, 0)
+
+    def test_gates_that_cannot_prove_the_batch_now_leave_everyone_open(self):
+        cases = {
+            "failed Build": (lambda world, plan: world.hub.add_run(ci_api_run(plan, "build", conclusion="failure")),
+                             "ci-batch-original-run-failed"),
+            "failed packaged run": (lambda world, plan: world.hub.add_run(
+                ci_api_run(plan, "packaged", conclusion="cancelled")), "ci-batch-original-run-failed"),
+            "another kit": (None, "ci-batch-kit-pin-differs"),
+            "another plan": (None, "ci-batch-plan-differs"),
+            "expired record": (lambda world, plan: world.hub.add_artifact(
+                ci_api_artifact(world.arguments["packaged_seal"], expired=True), b"x"),
+                "ci-batch-evidence-unavailable"),
+        }
+        for label, (change, reason) in cases.items():
+            world, arguments, _ = self.merged()
+            world.arguments = arguments
+            plan = push_plan(world, arguments)
+            if label == "another kit":
+                kit = {**plan["identity"]["kit"], "sha": "9" * 40}
+                plan = push_plan(world, arguments, kit=kit)
+            elif label == "another plan":
+                plan = copy.deepcopy(plan)
+                plan["plan_inputs"] = [{"name": "gradle-properties", "sha256": "0" * 64}]
+                plan["plan_sha256"] = plan_sha256(plan)
+            else:
+                change(world, arguments["plan"])
+            with self.subTest(case=label), self.assertRaises(batch.BatchUnsettled) as caught:
+                self.derived(world, arguments, plan)
+            self.assertEqual((caught.exception.reason, caught.exception.exit_code), (reason, 3), label)
+            self.assertEqual(world.hub.writes(), [])
+            self.assertEqual([world.hub.get_json(f"{PULLS}/{number}")["state"] for number in (1, 2)],
+                             ["open", "open"])
+
+    def test_the_plan_must_be_a_default_branch_commit_s_and_the_batch_merged(self):
+        world, arguments, result = self.merged()
+        # The batch's own plan is a pull request's, never the plan of a default-branch commit.
+        with self.assertRaisesRegex(MbError, "protected plan of a default-branch commit"):
+            self.derived(world, arguments, arguments["plan"])
+        pull = world.hub.get_json(f"{PULLS}/{result['pr_number']}")
+        pull.update(merged=False)
+        world.hub.add_pull(pull)
+        with self.assertRaisesRegex(MbError, "has not merged"):
+            self.derived(world, arguments)
+        self.assertEqual(world.hub.writes(), [])
+
+    def test_a_marker_edited_after_the_merge_closes_nobody(self):
+        world, arguments, result = self.merged()
+        pull = world.hub.get_json(f"{PULLS}/{result['pr_number']}")
+        pull["body"] = pull["body"].replace('"pr_number":1', '"pr_number":3')
+        world.hub.add_pull(pull)
+        with self.assertRaisesRegex(MbError, "differs from the stack rebuilt|did not test"):
+            self.derived(world, arguments)
+        self.assertEqual(world.hub.writes(), [])
 
 
 if __name__ == "__main__":

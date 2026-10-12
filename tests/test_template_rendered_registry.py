@@ -266,7 +266,7 @@ class RegistryCoherenceTest(RegistryCase):
 class RegistryShapeTest(unittest.TestCase):
     def test_a_record_names_its_path_source_renderer_and_modes(self) -> None:
         self.assertEqual([field.name for field in dataclasses.fields(tool.RenderedCaller)],
-                         ["path", "source", "renderer", "modes"])
+                         ["path", "source", "renderer", "modes", "batch"])
         for record in tool.RENDERED_CALLERS:
             with self.subTest(path=record.path):
                 self.assertEqual(record.source, f"managed/{record.path}")

@@ -313,8 +313,8 @@ class KitTemplateTest(unittest.TestCase):
         self.assertEqual(tool.pinned_actions(KIT_ROOT, manifest, entry),
                          tuple((name, ".github/workflows/pages.yml") for name in pinned))
         # The Build/E2E callers a mod manages once it activates the shared gates pin an action
-        # too (the App token of the gate status caller): the seed ignores it from the start, so a
-        # seeded mod is clean in every activation mode.
+        # too (the App token of the gate status caller and of the batch caller): the seed ignores it
+        # from the start, so a seeded mod is clean in every activation mode.
         activated = sorted({name for record in tool.RENDERED_CALLERS if record.modes is not None
                             for name in uses.findall((TEMPLATE_ROOT / record.source).read_text(encoding="utf-8"))}
                            - {"The-Plum-Team/mod-base"})

@@ -341,7 +341,6 @@ class SurfaceTest(unittest.TestCase):
             ["ci", "batch-prepare", *REPO, "--name", "run-1", "--allowed-paths", "a.json", "7"],
             ["ci", "batch-settle", *REPO, "--state", "s", "--pr", "0", "--plan", "p", "--build-seal", "b",
              "--packaged-seal", "e"],
-            ["ci", "batch-settle", *REPO, "--state", "s", "--pr", "9", "--plan", "p", "--build-seal", "b"],
             ["ci", "select-build", *REPO, "--state", "s", "--output", "o"],
             ["ci", "select-build", *REPO, "--state", "s", "--github-output", "o"],
             ["ci", "select-build", *REPO, "--output", "o", "--github-output", "o"],

@@ -10,11 +10,11 @@ its file exists: a workflow file without rows in those tables fails, and so do r
 the command of that step writes, and a job output must be declared where it is read.
 
 The module also holds what the per-workflow modules (``tests/test_workflow_build.py``,
-``tests/test_workflow_select_build.py``, ``tests/test_workflow_packaged_e2e.py`` and
-``tests/test_workflow_gate_status.py``) import (functions and tables only, so no test runs
-twice): the loader, the closed tables below and
-:class:`CiStepRunner`, which executes a step's ``run:`` body under the Pages tests' ``ShellHarness``
-and returns the ``ci`` command lines it issued.
+``tests/test_workflow_select_build.py``, ``tests/test_workflow_packaged_e2e.py``,
+``tests/test_workflow_gate_status.py`` and ``tests/test_workflow_batch.py``) import (functions and
+tables only, so no test runs twice): the loader, the closed tables below and :class:`CiStepRunner`,
+which executes a step's ``run:`` body under the Pages tests' ``ShellHarness`` and returns the ``ci``
+command lines it issued.
 """
 
 from __future__ import annotations
@@ -60,13 +60,18 @@ CI_CALLEES = tuple(workflow.CI_JOB_VERBS)
 #: The inputs of each callee, in order; ``kit-sha`` is the only required one.
 CI_INPUTS = {"build": ("kit-sha", "pr-number"), "select-build": ("kit-sha",),
              "packaged-e2e": ("kit-sha", "pr-number", "mode", "build-run-id"),
-             "gate-status": ("kit-sha", "pr-number")}
+             "gate-status": ("kit-sha", "pr-number"), "batch": ("kit-sha", "pr-number")}
 #: What each callee returns to its caller, in order: output -> the job that has an output of that name.
 CI_OUTPUTS = {"build": {}, "select-build": {"mode": "select", "found": "select", "build-run-id": "select"},
-              "packaged-e2e": {}, "gate-status": {"intents": "evaluate"}}
+              "packaged-e2e": {}, "gate-status": {"intents": "evaluate"}, "batch": {"intents": "settle"}}
 #: The producer each callee's jobs authenticate as (``ci subject --producer``, ``ci seal-gate --gate``):
-#: one of the managed callers its binding step admits (``workflow.CI_CALLEE_CALLERS``).
-CI_PRODUCER = {"build": "build", "select-build": "packaged", "packaged-e2e": "packaged", "gate-status": "status"}
+#: one of the managed callers its binding step admits (``workflow.CI_CALLEE_CALLERS``), except where
+#: ``CONSUMER_CALLEES`` says the callee reads a default-branch commit as a consumer of its generation.
+CI_PRODUCER = {"build": "build", "select-build": "packaged", "packaged-e2e": "packaged", "gate-status": "status",
+               "batch": "generation"}
+#: The callees whose job authenticates the default-branch commit it runs at as a consumer does
+#: (``ci subject --producer generation --pr ""``), by the managed caller that alone reaches each.
+CONSUMER_CALLEES = {"batch": "batch"}
 #: Where a callee reads its mode and the tested commit from (the callee's own spelling): the callees
 #: whose gate seals one of two records, and the callees with a job that stages candidate code.
 MODE_EXPRESSION = {"build": "needs.plan.outputs.mode", "packaged-e2e": "inputs.mode"}
@@ -76,10 +81,12 @@ CANDIDATE_REF = {"build": "${{ needs.plan.outputs.tested-sha }}",
 #: managed caller that reaches the callee and, for the one no pull request reaches, the event.
 PACKAGED_CALLER_REF = "example/mod/" + workflow.CI_CALLER_WORKFLOWS["packaged"] + "@refs/heads/master"
 STATUS_CALLER_REF = "example/mod/" + workflow.CI_CALLER_WORKFLOWS["status"] + "@refs/heads/master"
+BATCH_CALLER_REF = "example/mod/" + workflow.CI_CALLER_WORKFLOWS["batch"] + "@refs/heads/master"
 CI_ENVIRONMENT = {"build": {},
                   "select-build": {"GITHUB_EVENT_NAME": "push", "GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF},
                   "packaged-e2e": {"GITHUB_WORKFLOW_REF": PACKAGED_CALLER_REF},
-                  "gate-status": {"GITHUB_WORKFLOW_REF": STATUS_CALLER_REF}}
+                  "gate-status": {"GITHUB_WORKFLOW_REF": STATUS_CALLER_REF},
+                  "batch": {"GITHUB_EVENT_NAME": "push", "GITHUB_WORKFLOW_REF": BATCH_CALLER_REF}}
 
 #: The third checkout, present exactly in the jobs that stage and run candidate code.
 CANDIDATE_CHECKOUT = "Check out the tested candidate"
@@ -102,7 +109,7 @@ EXPORT_CONDITION = ("steps.seed.outputs.key != '' && steps.restore.outputs.cache
 CANDIDATE_VERBS = frozenset({"worker-stage", "worker-run"})
 #: The verbs that call the API: exactly the steps that run one hold the step-scoped token.
 API_VERBS = frozenset({"subject", "plan", "reuse-admit", "assemble", "seal-gate", "select-build", "fetch-build",
-                       "aggregate", "gate-status"})
+                       "aggregate", "gate-status", "batch-settle"})
 #: The verbs that must also run after a failure or a cancellation, and the step each depends on.
 #: A bare ``always()`` would run kit Python in a job whose prologue failed, that is from a kit tree
 #: nobody verified; a step that follows the prologue can only have succeeded when the prologue did.
@@ -187,6 +194,7 @@ CI_VERB_OUTPUTS = {
     "reuse-admit": frozenset({"mode", "reason"}),
     "select-build": frozenset({"found", "run_id", "selection"}),
     "gate-status": frozenset({"settled", "intents"}),
+    "batch-settle": frozenset({"intents", "closed", "changed", "already_closed", "deleted"}),
     "seed-key": frozenset({"key"}),
     "seed-export": frozenset({"saved"}),
 }
@@ -208,6 +216,7 @@ PAGES_GUARD = ('[[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/' + workflow.PA
 CI_GUARD_FAILURES = {
     ("build", "packaged"): "this job is not called by a managed Build or packaged E2E caller of the canonical branch",
     ("status",): "this job is not called by the managed gate status caller of the canonical branch",
+    ("batch",): "this job is not called by the managed batch caller of the canonical branch",
 }
 
 
@@ -448,6 +457,9 @@ class CiRegistryTests(unittest.TestCase):
             "gate-status": {
                 "evaluate": ("gate-status", "subject", "worker-prepare", "plan", "gate-status", "worker-finish"),
             },
+            "batch": {
+                "settle": ("subject", "worker-prepare", "plan", "batch-settle", "worker-finish"),
+            },
         })
         self.assertEqual(list(workflow.CI_JOB_VERBS),
                          [name for name in workflow.CI_CALLEE_WORKFLOWS if name in workflow.CI_JOB_VERBS],
@@ -462,7 +474,8 @@ class CiRegistryTests(unittest.TestCase):
             "build": {"plan": read, "policy": read, "target": read, "assemble": read, "gate": read},
             "select-build": {"select": read},
             "packaged-e2e": {"input": read, "lane": read, "aggregate": read, "gate": read},
-            "gate-status": {"evaluate": read}})
+            "gate-status": {"evaluate": read},
+            "batch": {"settle": read}})
 
     def test_every_table_describes_exactly_the_jobs_of_its_callee(self) -> None:
         self.assertEqual(set(workflow.CI_JOB_PERMISSIONS), set(CI_CALLEES))
@@ -493,7 +506,11 @@ class CiRegistryTests(unittest.TestCase):
             with self.subTest(callee=name):
                 self.assertEqual(list(workflow.CI_JOB_VERBS[name]), jobs)
                 self.assertEqual(list(workflow.CI_JOB_PERMISSIONS[name]), jobs)
-                self.assertIn(CI_PRODUCER[name], workflow.CI_CALLEE_CALLERS[name])
+                if name in CONSUMER_CALLEES:
+                    self.assertEqual((CI_PRODUCER[name], workflow.CI_CALLEE_CALLERS[name]),
+                                     ("generation", (CONSUMER_CALLEES[name],)))
+                else:
+                    self.assertIn(CI_PRODUCER[name], workflow.CI_CALLEE_CALLERS[name])
                 for job_id, verbs in workflow.CI_JOB_VERBS[name].items():
                     sealing = [verb for verb in verbs if verb in SEAL_VERBS]
                     self.assertEqual(len(sealing), int(job_id in workflow.CI_JOB_ARTIFACTS.get(name, {})), job_id)

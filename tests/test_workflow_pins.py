@@ -43,6 +43,7 @@ GUARD_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-guard.yml"
 BUILD_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-build.yml"
 PACKAGED_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-packaged-e2e.yml"
 STATUS_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-gate-status.yml"
+BATCH_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-batch.yml"
 #: The Build/E2E caller templates (``template.tool.RENDERED_CALLERS``, managed by activation mode)
 #: and the only kit entry points each may reference, always at the placeholder pin.
 ACTIVATION_CALLERS = {
@@ -51,24 +52,28 @@ ACTIVATION_CALLERS = {
     PACKAGED_TEMPLATE: (".github/workflows/select-build.yml", ".github/workflows/build.yml",
                         ".github/workflows/packaged-e2e.yml"),
     STATUS_TEMPLATE: (".github/workflows/gate-status.yml",),
+    BATCH_TEMPLATE: (".github/workflows/batch.yml",),
 }
-#: The mod's own managed guard workflow, which only the three callers that call the kit call.
+#: The mod's own managed guard workflow, which only the four callers that call the kit call.
 LOCAL_GUARD = "./.github/workflows/mod-base-guard.yml"
-GUARDED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE)
+GUARDED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE, BATCH_TEMPLATE)
 #: Every other ``uses:`` of a Build/E2E caller template, in order: the App token of the gate status
 #: caller's publishing job and nothing else. A mod that manages the caller must keep Dependabot
 #: off that action (``template.tool``: the ignore list of ``.github/dependabot.yml``).
 ACTIVATION_ACTIONS = {GUARD_TEMPLATE: (), BUILD_TEMPLATE: (), PACKAGED_TEMPLATE: (),
-                      STATUS_TEMPLATE: (f"{APP_TOKEN} # v3.2.0",)}
+                      STATUS_TEMPLATE: (f"{APP_TOKEN} # v3.2.0",),
+                      BATCH_TEMPLATE: (f"{APP_TOKEN} # v3.2.0", f"{APP_TOKEN} # v3.2.0")}
 #: How often ``{{PIN}}`` (and ``{{VERSION}}``) appears in each: once per kit reference, and once in
 #: the guard, which carries the pin as the literal it verifies.
-ACTIVATION_PLACEHOLDERS = {GUARD_TEMPLATE: 1, BUILD_TEMPLATE: 1, PACKAGED_TEMPLATE: 3, STATUS_TEMPLATE: 1}
+ACTIVATION_PLACEHOLDERS = {GUARD_TEMPLATE: 1, BUILD_TEMPLATE: 1, PACKAGED_TEMPLATE: 3, STATUS_TEMPLATE: 1,
+                           BATCH_TEMPLATE: 1}
 GUARD_LITERALS = ('  MB_KIT_SHA: "{{PIN}}"', '  MB_KIT_VERSION: "{{VERSION}}"')
-#: The canonical branch filters pull request bases in all three callers and pushes in the two
-#: producers. GitHub reads these as literals, so each filter carries this placeholder line.
+#: The canonical branch filters pull request bases in the three gate callers and pushes in the two
+#: producers and the batch caller. GitHub reads these as literals, so each filter carries this
+#: placeholder line.
 BRANCH_PLACEHOLDER = "{{BRANCH}}"
 BRANCH_LINE = '    branches: ["{{BRANCH}}"]'
-BRANCHED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE)
+BRANCHED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE, BATCH_TEMPLATE)
 #: Any ``{{...}}`` token that is no GitHub expression.
 TEMPLATE_TOKEN = re.compile(r"(?<!\$)\{\{[^{}]*\}\}")
 CANARY = ROOT / "canary"
@@ -83,7 +88,7 @@ PLACES = {
     UPLOAD: {"publish.yml", "finalize.yml", "prepare-evidence", "publish-family"},
     UPLOAD_PAGES: {"publish.yml"},
     DEPLOY_PAGES: {"pages.yml"},
-    APP_TOKEN: {"mod-base-gate-status.yml"},
+    APP_TOKEN: {"mod-base-gate-status.yml", "mod-base-batch.yml"},
 }
 
 
@@ -334,7 +339,8 @@ class PinTests(unittest.TestCase):
                 self.assertEqual([value for value in uses_values(path) if value != LOCAL_GUARD
                                   and not CANARY_KIT_PIN.match(value)], list(ACTIVATION_ACTIONS[path]),
                                  "no other action runs in a Build/E2E caller")
-                filters = 2 if path in (BUILD_TEMPLATE, PACKAGED_TEMPLATE) else 1 if path == STATUS_TEMPLATE else 0
+                filters = 2 if path in (BUILD_TEMPLATE, PACKAGED_TEMPLATE) else 1 if path in (
+                    STATUS_TEMPLATE, BATCH_TEMPLATE) else 0
                 self.assertEqual([line for line in lines if BRANCH_PLACEHOLDER in line], [BRANCH_LINE] * filters)
                 self.assertLessEqual(set(TEMPLATE_TOKEN.findall("\n".join(lines))), {*PLACEHOLDERS, BRANCH_PLACEHOLDER},
                                      "the three placeholders are a closed set")
@@ -342,7 +348,7 @@ class PinTests(unittest.TestCase):
 
     def test_the_branch_placeholder_is_confined_to_the_three_guarded_callers(self) -> None:
         self.assertEqual(set(BRANCHED_CALLERS), set(GUARDED_CALLERS),
-                         "all three callers filter pull request bases to the canonical branch")
+                         "every guarded caller filters its pull request bases or pushes to the canonical branch")
         files = {*kit_yaml_files(), *(item for item in (ROOT / "template").rglob("*") if item.is_file())}
         self.assertTrue(set(BRANCHED_CALLERS) <= files)
         for path in sorted(files - set(BRANCHED_CALLERS)):
