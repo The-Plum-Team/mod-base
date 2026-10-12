@@ -225,6 +225,16 @@ text is validated and HTML-escaped at build time.
   the site can be framed.
 - **Pre-merge verification in Quick Skin** runs as pull-request code; the runtime `verify-kit` is
   the defense that does not depend on it.
+- **Protected admission trusts the approvers' comments.** With `admission` in the Build config, a
+  pull request that changes a protected path gets no gate `success` without the latest decision
+  of a listed approver on its exact head. Anybody with write access can edit or delete a comment:
+  an edited decision refuses the admission, but a deleted revocation leaves the approval before it
+  in force, as it does for a mod's own evaluator. A comment does not start an evaluation, so a
+  success published before a revocation stays until the next run of the status caller; the owner
+  dispatches it after revoking and checks the live statuses before merging. The kit checks only
+  the generic rule: an upgrade's exact path list, a restricted transition's declaration or a
+  forbidden path that the mod's own evaluator refused even with approval are the approver's to
+  review.
 - **Build/E2E seeds trust the default branch's Actions cache.** A target or lane job restores the
   exact key protected code derived, and the cache action extracts the entry as the runner before
   the candidate is staged; only a protected push or dispatch of the kit's jobs saves one, from a

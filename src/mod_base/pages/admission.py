@@ -41,7 +41,9 @@ Pages owner at the head whose exact attempt succeeded in every ``Publish``/``Dep
 job and uploaded every ordinary cache inside its refresh step (published family legs keyed by
 their collector's selection boundary); a single bounded producer query that reopens a complete
 publication after a lost same-head family wake (always for a family wake); ready family handoffs
-inside their producer upload step (re-read by id); the newest complete ordinary attempt per subject
+inside their producer upload step (re-read by id), each found by its exact name in the newest
+``limits.MAX_FAMILY_PRODUCER_RUNS`` producer runs at the head, so a key handed off early in a wave of
+one-key runs is still ready when the publication coalesces; the newest complete ordinary attempt per subject
 settled after the published selection boundary; and, only when the policy would admit, the failed
 Pages publications since the newest readiness. Family legs are ``<family>/<key>``. A mod without
 families decides over one synthetic ordinary leg, so the same policy yields ``initial-ordinary``,
@@ -387,12 +389,17 @@ class _Admitter:
                 if producer_run_valid(run, self.invocation, family, default_branch=self.default, head_sha=self.head)]
 
     def family_handoffs(self, family: Mapping[str, Any]) -> dict[str, tuple[artifacts.Artifact, dict[str, Any]]]:
-        """Key -> the newest usable family handoff at the head and its producer run."""
+        """Key -> the newest usable family handoff at the head and its producer run: each key's exact
+        ``mb-family-handoff--<f>--<key>--a<attempt>`` in the newest ``limits.MAX_FAMILY_PRODUCER_RUNS``
+        producer runs (as ``select`` looks it up), whose inventories are read newest first only until
+        every target key is found."""
 
         family_id = family["id"]
         if family_id not in self._family_handoffs:
             found: dict[str, tuple[artifacts.Artifact, dict[str, Any]]] = {}
-            for run in self.producer_runs(family)[:lim.MAX_CANDIDATES]:
+            for run in self.producer_runs(family)[:lim.MAX_FAMILY_PRODUCER_RUNS]:
+                if len(found) == len(self.subjects):
+                    break
                 for name, artifact in self.uploads(run["id"]).items():
                     parsed = grammar.parse_artifact_name(name)
                     if (parsed is not None and parsed.kind == "family-handoff" and parsed.family == family_id
@@ -663,17 +670,22 @@ class _Admitter:
             keys = [key for leg_family, key in legs
                     if leg_family == family_id and self.subjects[key]["commit"] == self.head]
             found: set[str] = set()
-            for run in self.producer_runs(family)[:lim.MAX_CANDIDATES]:
+            for run in self.producer_runs(family)[:lim.MAX_FAMILY_PRODUCER_RUNS]:
                 pending = [key for key in keys if key not in found]
                 if not pending:
                     break
+                # The run's inventory first: only a run holding the exact handoff name of a pending
+                # key has its job graph read (a wave's producer often hands off one key per run).
+                exact = self.uploads(run["id"])
+                names = {key: grammar.family_handoff_name(family_id, key, run["run_attempt"]) for key in pending}
+                held = {key: exact[name] for key, name in names.items() if name in exact}
+                if not held:
+                    continue
                 attempt_jobs = jobs.attempt_jobs(self.api, run["id"], run["run_attempt"])
                 job = successful_job(attempt_jobs, producer["job"], run["run_attempt"])
-                exact = self.uploads(run["id"])
-                for key in pending:
-                    artifact = exact.get(grammar.family_handoff_name(family_id, key, run["run_attempt"]))
-                    if artifact is None or not self.window_valid(artifact, run, job, producer["step"],
-                                                                 max_size=family_archive_limit(family)):
+                for key, artifact in held.items():
+                    if not self.window_valid(artifact, run, job, producer["step"],
+                                             max_size=family_archive_limit(family)):
                         continue
                     # The inventory is immutable-id addressed; recheck the exact id after owner
                     # admission so a stale, rerun or deleted nomination cannot suppress work (QS).

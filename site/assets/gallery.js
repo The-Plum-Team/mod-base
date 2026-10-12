@@ -180,6 +180,7 @@ class Gallery {
     this.runPrefix = `${data.project.repository_url}/actions/runs/`;
     this.releaseByKey = new Map(data.releases.map((release) => [release.key, release]));
     this.laneById = new Map(data.lanes.map((lane) => [this.identity(lane.key, lane.lane_id), lane]));
+    this.laneCells = new Set(data.lanes.map((lane) => this.identity(lane.key, `${lane.minecraft}\u0000${lane.loader}`)));
     this.frameById = new Map(data.frames.map((frame) => [this.identity(frame.key, frame.frame_id), frame]));
     this.comparisonsByFrame = new Map();
     for (const comparison of data.comparisons) {
@@ -575,6 +576,9 @@ class Gallery {
       for (const minecraft of release.minecraft) {
         for (const loader of loaders) {
           const index = release.loaders.indexOf(loader);
+          // A release's Minecraft versions and loaders are flattened from its lanes; a pair that is
+          // no lane (Forge only on 1.20.1, NeoForge only on 1.21+) is no cell, not an empty slot.
+          if (index >= 0 && !this.laneCells.has(this.identity(release.key, `${minecraft}\u0000${loader}`))) continue;
           const loaderName = index >= 0 ? release.loader_names[index] : this.loaderLabel(loader);
           const scope = release.minecraft.length > 1 ? `${release.label} · ${minecraft}` : release.label;
           const label = `${scope} · ${loaderName}`;

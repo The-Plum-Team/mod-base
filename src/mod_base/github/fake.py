@@ -24,6 +24,8 @@ Served routes (GET unless noted; ``{R}`` is a seeded repository, ``{own}`` the f
   (the head must be a seeded ``heads/`` ref or branch, the base a seeded branch, and no open pull
   request may already join them), ``PATCH /repos/{own}/pulls/{number}`` (``state``, ``title``,
   ``body``; a merged one never reopens) and ``POST /repos/{own}/issues/{number}/comments``;
+* ``/repos/{own}/issues/{number}/comments`` (an array, the comments :meth:`FakeGitHub.set_comments`
+  seeded for that number, kept verbatim; a comment posted through the API is not listed);
 * ``DELETE /repos/{own}/git/refs/{ref}`` (a seeded ref; a ``heads/`` ref takes its branch along);
 * ``/repos/{own}/contents/{path}?ref=`` (files over 1 MiB answer ``encoding: none`` and are
   served through ``/git/blobs``, as GitHub does);
@@ -134,6 +136,7 @@ class FakeGitHub:
         self._tags: dict[tuple[str, str], tuple[str, str]] = {}
         self._responses: dict[tuple[str, frozenset[tuple[str, str]]], Any] = {}
         self._pulls: dict[int, dict[str, Any]] = {}
+        self._comments: dict[int, list[dict[str, Any]]] = {}
         self._job_ids = itertools.count(9_000_000_001)
 
     # -- seeding ---------------------------------------------------------------------------------
@@ -267,6 +270,16 @@ class FakeGitHub:
         _require(_positive(stored.get("number")), "a seeded pull request needs a positive number")
         canonical_json(stored)  # must be JSON
         self._pulls[stored["number"]] = stored
+
+    def set_comments(self, number: int, comments: Sequence[Mapping[str, Any]]) -> None:
+        """Seed (or replace) ``/repos/{own}/issues/{number}/comments``: the comments of an issue or a
+        pull request as the API lists them (``id``, ``body``, ``user``, ``author_association``,
+        ``created_at``, ``updated_at``, ...), oldest first and kept verbatim."""
+
+        _require(_positive(number), "comments need a positive issue number")
+        rows = [copy.deepcopy(dict(comment)) for comment in comments]
+        canonical_json(rows)  # must be JSON
+        self._comments[number] = rows
 
     def add_response(self, path: str, payload: Any, *, params: Mapping[str, str | int] | None = None) -> None:
         """Seed the exact JSON body of one GET ``path`` (with exactly ``params``) that no typed seeder
@@ -531,6 +544,9 @@ class FakeGitHub:
         if rest[0] == "pulls" and len(rest) == 2:
             self._accept(path, params, frozenset())
             return self._pulls.get(self._integer(rest[1]))
+        if rest[0] == "issues" and len(rest) == 3 and rest[2] == "comments" and self._integer(rest[1]) in self._comments:
+            self._accept(path, params, _LIST_PARAMS)
+            return self._page(path, self._comments[self._integer(rest[1])], params)
         if rest[0] == "contents" and len(rest) > 1:
             self._accept(path, params, frozenset({"ref"}))
             return self._contents(urllib.parse.unquote("/".join(rest[1:])), params.get("ref", self._default_branch))

@@ -491,7 +491,7 @@ def _read_sealed_build(reads: CommandReads, descriptor: dict[str, Any], plan: di
 
 def _read_sealed_lane(reads: CommandReads, descriptor: dict[str, Any], plan: dict[str, Any], *,
                       owning_build: dict[str, Any], build_envelope_sha256: str, source_config_sha256: str,
-                      temporary_root: Path) -> dict[str, str]:
+                      temporary_root: Path, keep: Path | None = None) -> dict[str, str]:
     """Download one lane's results of the reader's own attempt by id and verify them in a private
     temporary directory, one lane at a time: the SHA-256 of its canonical runtime envelope, of its
     canonical validation record and of the lane's verification report.
@@ -501,13 +501,19 @@ def _read_sealed_lane(reads: CommandReads, descriptor: dict[str, Any], plan: dic
     these bytes: the ``verify_runtime`` hook of that lane in the descriptor's attempt, under the
     protected Build config the reader itself loaded, over the digest of the plan, of the owning
     Build's envelope (``build_envelope_sha256``; the bundle itself is not read) and of this runtime
-    envelope. The caller authenticates the run, its jobs and the artifact."""
+    envelope. The caller authenticates the run, its jobs and the artifact.
+
+    With ``keep``, a new path inside the caller's own unpublished stage, the verified export (the
+    lane's files and its runtime envelope, without the validation record) stays there instead of
+    being removed with the temporary directory."""
 
     data = _download(reads, descriptor)
     producer = descriptor["producer"]
+    check(keep is None or (isinstance(keep, Path) and not os.path.lexists(keep)), "$.keep",
+          "invalid or preexisting lane output")
     try:
         with tempfile.TemporaryDirectory(prefix="mb-ci-sealed-", dir=temporary_root) as temporary:
-            root, receipt = Path(temporary) / "export", Path(temporary) / "validation"
+            root, receipt = keep or Path(temporary) / "export", Path(temporary) / "validation"
             extract_runtime(data, root, scope="lane")
             del data
             _detach_validation(root, receipt, plan)

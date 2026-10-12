@@ -1,7 +1,8 @@
 # Operations
 
 Owner activation, releases, the canary, rollout, publication admission, the kill switch and
-recovery. Every command is a `gh` or `git` invocation that the rollout operator, acting for the
+recovery. [NEW-MOD.md](NEW-MOD.md) orders these operations for a new mod, from the repository to
+the shared gates. Every command is a `gh` or `git` invocation that the rollout operator, acting for the
 maintainer, runs at the rollout stage named (the rulesets included); the kit's workflows never
 change repository settings themselves. [SECURITY-MODEL.md](SECURITY-MODEL.md) explains why each
 setting matters.
@@ -334,22 +335,30 @@ publishes nothing (it can never publish a success instead).
 | variable of that environment | `MOD_BASE_GATE_APP_CLIENT_ID` | the client ID of the gate status App |
 | secret of that environment | `MOD_BASE_GATE_APP_PRIVATE_KEY` | a private key of that App (the PEM file) |
 
-The App has the one repository permission "Commit statuses: Read and write" and is installed on
-the mod's repository alone; Block Pops keeps the App that writes its `Trusted PR / ...` contexts
-today, Quick Skin gets a dedicated one. The branch restriction is not optional: it is the only
+The App is `plum-mod-base-gate` (App id 5256389), with the one repository permission "Commit
+statuses: Read and write". By owner decision of 2026-10-11 it is installed on every repository of
+the organization, so that a new mod needs no installation step, and its key is kept instead: it
+lives only in each mod's `mod-base-gate` environment and in no canary or test repository. The
+branch restriction is not optional: it is the only
 thing that keeps the key from a workflow of another branch. Anyone who can push a branch can add
 a job there that names the environment and the secret; GitHub refuses such a job only because
 the environment admits the default branch alone. Keep the key in the environment, never as a
-repository or organization secret. With `R` the repository, `BRANCH` its default branch and
-`app.pem` the downloaded key:
+repository or organization secret. The owner's copy of the key lives in a password manager alone,
+never unencrypted in the home folder; a key that is not at hand is replaced, not recovered
+([NEW-MOD.md](NEW-MOD.md#5-the-mod-base-gate-environment-owner-once-per-mod) step 5: generate a
+new private key in the App settings). With `R` the repository, `BRANCH` its default branch and
+`<password-manager read ...>` the password manager's command that prints the key
+(`tools/new_mod_env.py` performs these steps, reads the branch restriction back before it stores
+anything and refuses a wider environment or a key file other users can read):
 
 ```bash
+CLIENT_ID="$(gh api apps/plum-mod-base-gate --jq .client_id)"   # public
 gh api -X PUT "repos/$R/environments/mod-base-gate" --input - <<'JSON'
 {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
 JSON
 gh api -X POST "repos/$R/environments/mod-base-gate/deployment-branch-policies" -f name="$BRANCH" -f type=branch
 gh variable set MOD_BASE_GATE_APP_CLIENT_ID --repo "$R" --env mod-base-gate --body "$CLIENT_ID"
-gh secret set MOD_BASE_GATE_APP_PRIVATE_KEY --repo "$R" --env mod-base-gate < app.pem
+<password-manager read ...> | gh secret set MOD_BASE_GATE_APP_PRIVATE_KEY --repo "$R" --env mod-base-gate
 gh api "repos/$R/environments/mod-base-gate/deployment-branch-policies" --jq '.branch_policies[].name'   # exactly $BRANCH
 ```
 
@@ -411,6 +420,47 @@ To start over, delete the repository's `mb-seed-v1-*` cache entries (`gh cache d
 key, an owner operation) or change one of the key files; to stop, remove `seeds` from the config.
 A kit release older than the one that added `seeds` refuses a config that has it: remove `seeds`
 before a pin rollback below that release.
+
+### Protected admission
+
+`admission` of `scripts/ci/mod-base-build.json` ([BUILD-ADAPTER.md](BUILD-ADAPTER.md#protected-admission))
+keeps the owner's approval of changes to protected paths once the kit's gate status writes the
+required contexts. **Every mod whose ruleset requires a context that the kit writes, and that
+protects its controllers by an owner's approval today, adds it before the activation that removes
+its own evaluator from pull requests**: for Block Pops before `shared-build-and-e2e` (B3), for
+Quick Skin before its required contexts move to the kit (Q5 to Q7). Without it the kit's gate
+status checks no protected path, and an ordinary pull request that changes the mod's evaluator, a
+workflow or the config itself gets both contexts once its gates pass.
+
+1. Add `admission` to the config in a pull request that goes through the mod's existing approval
+   route (for Block Pops a `controller-upgrade/*` pull request with the owner's exact-head
+   approval). The config of the default branch decides, so the admission applies from the merge
+   on. A kit release older than v1.3.0, which added `admission`, refuses a config that has it:
+   remove it before a pin rollback below v1.3.0.
+2. List as `protected_paths` what an ordinary pull request may not change. Block Pops lists the
+   `PROTECTED_PATHS` of `scripts/ci/gate_controller.py`, the `build.gradle` and `src/e2e` of every
+   loader, the exact base-owned files outside them (the release matrix and
+   `gradle/verification-metadata.xml`) and its forbidden paths (`.gradle`, `buildSrc`): 34 paths in
+   13 directories counting the root, where at most 16 are allowed. Use the command of the mod's existing route (`/controller-upgrade`) and list
+   the owner with the association GitHub shows on their comments (`MEMBER` in an organization).
+3. Approve each exact head after reviewing it, and revoke before a merge if anything changes:
+
+   ```bash
+   gh pr comment <N> --repo "$R" --body "/controller-upgrade approve <40-character head sha>"
+   gh workflow run mod-base-gate-status.yml --repo "$R" --ref "$BRANCH" -f pr-number=<N>   # when the gates already finished
+   ```
+
+   A comment does not start the status caller. Its next run publishes the decision: a gate run, a
+   change of the pull request, the hourly reconciliation or the dispatch above. A revocation needs
+   the dispatch too, and like every status a success already published stays until a newer one
+   replaces it, so check the live statuses before merging. Never edit a decision: an edited one
+   refuses the admission until it is deleted. The decisions are read from at most 300 comments: a
+   pull request with more that changes a protected path gets no status at all, so move it to a
+   new pull request.
+
+The kit checks the generic rule only. A mod's native evaluator may check more (an upgrade's exact
+path list, required files, the loader bootstrap, a restricted transition's declaration); while it
+no longer runs on pull requests, the approver checks those by review.
 
 ### Narrowed runtime scope
 

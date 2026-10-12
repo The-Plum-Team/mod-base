@@ -16,7 +16,7 @@ from mod_base.build_ci import identity
 from mod_base.build_ci.config import load_build_config
 from mod_base.build_ci.protocol import validate_subject
 from mod_base.errors import MbError
-from mod_base.model import limits
+from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256
 from mod_base.pin import kit_tree_digest
 from mod_base.workflow import CI_CALLER_WORKFLOWS
@@ -312,7 +312,7 @@ class StatusSubjectTests(unittest.TestCase):
 
     def test_the_tables_of_callers_and_events(self) -> None:
         status = CI_CALLER_WORKFLOWS["status"]
-        self.assertEqual(identity.SUBJECT_PRODUCERS, ("build", "packaged", "status"))
+        self.assertEqual(identity.SUBJECT_PRODUCERS, ("build", "packaged", "status", "generation"))
         self.assertEqual((identity.run_workflows("status", pull_request=True),
                           identity.run_workflows("status", pull_request=False)), ((status,), ()))
         self.assertEqual((identity.run_events("status", pull_request=True),
@@ -324,6 +324,71 @@ class StatusSubjectTests(unittest.TestCase):
             self.assertNotIn(status, identity.run_workflows(producer, pull_request=True))
             self.assertNotIn(status, identity.run_workflows(producer, pull_request=False))
         self.assertNotIn("workflow_run", identity.PROTECTED_EVENTS)
+
+
+CONSUMER = ".github/workflows/target-ci-status.yml"
+
+
+def consumer_environment(event: str = "workflow_run", workflow: str = CONSUMER) -> dict[str, str]:
+    """The environment of a consumer's job in the mod's own workflow on the default branch."""
+
+    return {**h.environment(event=event), "GITHUB_WORKFLOW_REF": grammar.workflow_ref(h.REPOSITORY, workflow, h.BRANCH)}
+
+
+class GenerationSubjectTests(unittest.TestCase):
+    """A consumer's job: the live default-branch commit, from the mod's own workflow."""
+
+    def test_every_event_of_a_consumer_yields_the_identity_of_the_push(self) -> None:
+        push = authenticate(h.github()[0], pr_number=None, environment=h.environment(event="push"))
+        self.assertEqual(identity.GENERATION_EVENTS, ("push", "workflow_run", "workflow_dispatch", "schedule"))
+        for event in identity.GENERATION_EVENTS:
+            for workflow in (CONSUMER, CI_CALLER_WORKFLOWS["build"], ".github/workflows/pages.yml"):
+                api, _ = h.github()
+                record = authenticate(api, producer="generation", pr_number=None,
+                                      environment=consumer_environment(event, workflow))
+                with self.subTest(event=event, workflow=workflow):
+                    # The subject of the push's own gates, so the plan of the generation it reads.
+                    self.assertEqual(record, {"producer": "generation", "event": event, "workflow_path": workflow,
+                                              "controller_tree": h.CONTROLLER_TREE, "subject": push["subject"]})
+                    self.assertIs(identity.validate_subject_record(record), record)
+                    self.assertEqual((api.request_count, api.mutations), (5, []))
+
+    def test_a_consumer_never_has_a_pull_request_and_follows_the_live_default_branch(self) -> None:
+        for event in (*identity.GENERATION_EVENTS, "pull_request_target"):
+            api, _ = h.github()
+            with self.subTest(event=event), self.assertRaises(MbError):
+                authenticate(api, producer="generation", pr_number=7, environment=consumer_environment(event))
+            self.assertEqual(api.request_count, 0)
+        cases = {"a pull request event": consumer_environment("pull_request_target"),
+                 "a comment": consumer_environment("issue_comment"),
+                 "another branch": {**consumer_environment(),
+                                    "GITHUB_WORKFLOW_REF": f"{h.REPOSITORY}/{CONSUMER}@refs/heads/release"},
+                 "another repository": {**consumer_environment(),
+                                        "GITHUB_WORKFLOW_REF": f"other/mod/{CONSUMER}@refs/heads/main"}}
+        for label, environment in cases.items():
+            api, _ = h.github()
+            with self.subTest(case=label), self.assertRaises(MbError):
+                authenticate(api, producer="generation", pr_number=None, environment=environment)
+        api, _ = h.github()
+        api.set_branch(h.BRANCH, "9" * 40, "8" * 40)
+        with self.assertRaises(identity.SubjectError) as caught:
+            authenticate(api, producer="generation", pr_number=None, environment=consumer_environment())
+        self.assertEqual(caught.exception.reason, "controller-moved")
+
+    def test_the_tables_of_a_consumer(self) -> None:
+        self.assertEqual((identity.run_workflows("generation", pull_request=False),
+                          identity.run_events("generation", pull_request=True),
+                          identity.run_events("generation", pull_request=False)),
+                         ((), (), identity.GENERATION_EVENTS))
+        self.assertTrue(identity.admits_workflow("generation", CONSUMER, pull_request=False))
+        self.assertFalse(identity.admits_workflow("generation", CONSUMER, pull_request=True))
+        self.assertFalse(identity.admits_workflow("build", CONSUMER, pull_request=False))
+        self.assertTrue(identity.admits_workflow("build", CI_CALLER_WORKFLOWS["packaged"], pull_request=False))
+        # A consumer's record cannot pass for a gate's or a status job's, nor a gate's for a consumer's.
+        record = authenticate(h.github()[0], producer="generation", pr_number=None, environment=consumer_environment())
+        for producer in ("build", "packaged", "status"):
+            with self.subTest(producer=producer), self.assertRaises(MbError):
+                identity.validate_subject_record({**record, "producer": producer})
 
 
 class RecordTests(unittest.TestCase):

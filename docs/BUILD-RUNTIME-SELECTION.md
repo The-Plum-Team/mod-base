@@ -98,11 +98,11 @@ The generation ledger is unchanged without the feature (198 / 398 / 300); with i
 generation is 409, or 413 behind a reference, within the test budget of 440.
 
 **D3: a new kind and optional fields within schema 1.** `mod-base.ci.scope` is a new kind at
-schema version 1; the compatibility ledger records it as `new-kind`, moves its baseline to v1.2.1
-(whose reader is archived in `tests/fixtures/previous_release/v1.2.1`) and the v1.2.1 reader
-rejects it as an unknown kind. `runtime_selection` of `mod-base.build.config`, `scope` of
+schema version 1; the compatibility ledger records it as `new-kind` against its baseline, the
+newest release (v1.4.1, whose reader is archived in `tests/fixtures/previous_release/v1.4.1`), and
+that reader rejects it as an unknown kind. `runtime_selection` of `mod-base.build.config`, `scope` of
 `mod-base.ci.results` and `scope_sha256` of `mod-base.ci.gate` are optional fields within schema 1,
-validated whenever present, as `candidate_kit` and `seeds` were: a v1.2.1 reader refuses a
+validated whenever present, as `candidate_kit` and `seeds` were: a v1.4.1 reader refuses a
 document that has one. Why: it is what the schema rules allow without a version change, and
 nothing a mod does today changes until its protected config names `runtime_selection`; a pin must
 not be rolled back below this release while it does.
@@ -242,7 +242,7 @@ every adapter source, every plan input and the control files. Every run that is 
 request of this repository runs full (`not-a-pull-request`, `foreign-pull-request`), release
 rehearsals and recovery dispatches included, and a pull request's packaged run takes no `mode`
 that could ask for less. The job
-graph, the job names and the contexts are those of v1.2.1 (`tests/test_workflow_packaged_e2e.py`).
+graph, the job names and the contexts are those of v1.4.1 (`tests/test_workflow_packaged_e2e.py`).
 A selected run is never full-baseline proof: no reader takes a record with `scope_sha256` as a
 full run (`reuse`, `scope`), and only the packaged gate of a pull request may carry one.
 

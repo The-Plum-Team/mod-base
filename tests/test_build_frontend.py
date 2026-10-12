@@ -649,6 +649,40 @@ class FrontEndTest(unittest.TestCase):
         self.assertEqual(result["notApplicable"],
                          ["Minecraft 26.3 · ForgeNot applicable — Forge is not part of this release."])
 
+    def test_the_compare_grid_has_no_slot_for_a_loader_a_version_does_not_ship(self) -> None:
+        # Block Pops' shape: one branch key whose lanes are Forge + Fabric on 1.20.1 and NeoForge +
+        # Fabric on 1.21.1. Its release lists both versions and all three loaders, but Forge 1.21.1
+        # and NeoForge 1.20.1 are no lanes, so they get no compare cell (not an empty slot).
+        gallery = json.loads((self.bp / "e2e" / "gallery-data.json").read_bytes())
+        release = gallery["releases"][0]
+        self.assertEqual((release["minecraft"], release["loaders"]), (["1.21.1"], ["fabric", "neoforge"]))
+        legacy = {"fabric": ("fabric", "Fabric"), "neoforge": ("forge", "Forge")}
+
+        def older(record: dict[str, Any]) -> dict[str, Any]:
+            loader, name = legacy[record["loader"]]
+            old_lane, new_lane = f"{record['loader']}-1.21.1", f"{loader}-1.20.1"
+            clone = {**record, "minecraft": "1.20.1", "loader": loader, "loader_name": name}
+            for field in ("lane_id", "frame_id", "artifact_node"):
+                if field in clone:
+                    clone[field] = clone[field].replace(old_lane, new_lane)
+            return clone
+
+        gallery["lanes"] += [older(lane) for lane in gallery["lanes"]]
+        gallery["frames"] += [older(frame) for frame in gallery["frames"]]
+        release.update(minecraft=["1.20.1", "1.21.1"], loaders=["fabric", "forge", "neoforge"],
+                       loader_names=["Fabric", "Forge", "NeoForge"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data.json"
+            path.write_text(json.dumps(gallery), encoding="utf-8")
+            result = run_page(self.bp, "gallery", data=path)
+        self.assertIsNone(result["error"], result["status"])
+        self.assertEqual(result["cells"], ["master · 1.20.1 · Fabric", "master · 1.20.1 · Forge",
+                                           "master · 1.21.1 · Fabric", "master · 1.21.1 · NeoForge"])
+        self.assertEqual(result["cellCards"], 4)
+        self.assertEqual(result["compareStatus"], "4 release/loader cells aligned by semantic checkpoint")
+        # The last loader filter (NeoForge) keeps only its one lane: no "no capture" slot for 1.20.1.
+        self.assertEqual(result["notApplicable"], [])
+
     def test_the_family_view_renders_verdict_badges_and_run_links(self) -> None:
         result = run_page(self.qs, "gallery")
         self.assertEqual(result["views"], [["gallery-view-button", "Gallery"],

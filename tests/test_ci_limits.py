@@ -140,6 +140,10 @@ KIT: dict[str, tuple[Any, str]] = {
     "MAX_CI_REUSE_ADMIT_REQUESTS": (96, "API requests one `ci reuse-admit` may spend: 38 for an admitted reuse, 1 "
                                         "for a direct push and 11 when the merged tree differs, whatever the plan's "
                                         "size, and room for retries and further listing pages"),
+    "MAX_CI_SELECT_GENERATION_REQUESTS": (96 + 3 * 256, "API requests one `ci select-generation` may spend: 27 for "
+                                                        "a full generation and 52 for a reused one, 2 more with the "
+                                                        "Build bundle, 2 for the results index and 2 per lane kept, "
+                                                        "and room for retries and further listing pages"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),
     "MAX_CI_WORKER_RECORD_BYTES": (256 * KIB, "the private worker record of one job"),
     "MAX_CI_PLAN_REQUESTS": (24, "API requests one plan derivation and initial changed-release admission may spend"),
@@ -190,6 +194,12 @@ KIT: dict[str, tuple[Any, str]] = {
     "CI_SYSTEM_PROFILE_FETCH_RETRIES": (3, "apt's retries of one failed download (`Acquire::Retries`)"),
     "MAX_CI_SEED_PATH_DEPTH": (64, "components of one path inside a Gradle seed, the tree walk's own depth"),
     "MAX_CI_SEED_KEY_FILES": (16, "protected files one seed key binds"),
+    "MAX_CI_ADMISSION_PATHS": (64, "protected paths of one admission of the Build config; Block Pops' evaluator "
+                                   "protects 24, two per loader and four more: 34 with three loaders"),
+    "MAX_CI_ADMISSION_DIRECTORIES": (16, "directories, the root included, that hold an admission's protected paths: "
+                                         "each is one tree read on either side of a pull request; Block Pops needs 13"),
+    "MAX_CI_ADMISSION_APPROVERS": (8, "approvers one admission lists"),
+    "MAX_CI_ADMISSION_COMMENTS": (300, "comments of one pull request an admission reads for decisions: three full pages"),
     "MAX_CI_SEED_KEY_FILE_BYTES": (8 * MIB, "the bytes read of each one; a strict verification metadata file of "
                                             "either mod is about 1.1 MB"),
     "MAX_CI_SOURCE_LIST_BYTES": (64 * MIB, "one Git tree listing"),

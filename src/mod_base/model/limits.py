@@ -64,6 +64,11 @@ MAX_COMPACT_FILES = MAX_FRAMES + 3  # images/** + expectation.json + selection.j
 MAX_ANCHOR_FILES = MAX_FRAMES + 1  # images/** + expectation.json
 MAX_IMAGE_PIXELS = 20_000_000
 MAX_IMAGE_DIMENSION = 16_384
+#: Successful pixel checks (inspections plus comparisons) one kit process remembers by the SHA-256 of
+#: the exact bytes it measured (``imaging.metrics``); the oldest is forgotten first. Each entry is a
+#: few hundred bytes, and a full public-evidence bundle has at most ``MAX_FRAMES`` sources and
+#: ``MAX_COMPARISONS`` comparisons per stage.
+MAX_PIXEL_MEMO_ENTRIES = 8192
 MAX_SITE_BYTES = 1 * GIB
 MAX_SITE_FILES = 8192
 #: Characters and components of one bundle path. A sealed CI export path keeps both bounds and
@@ -143,6 +148,18 @@ MAX_FILTERED_RUNS_LISTED = 1000
 MAX_CANDIDATES = 8
 #: Rows of one ``head_sha``-filtered source-run listing (one page; a full one is confirmed by a second).
 MAX_SUBJECT_RUNS = 100
+#: Successful ``families[].producer.workflow`` runs at the expected commit whose exact family handoff
+#: names ``select`` and ``admit`` look up, and at the earlier commits of ``select``'s carry-forward
+#: walk (one bound for all of them), newest first (one inventory each, read only until a key's
+#: ``mb-family-handoff--<f>--<key>--a<attempt>`` is found, and shared by every key of one invocation).
+#: A producer may hand off one key per run: Quick Skin runs one per target, so one wave of its 17
+#: targets is 17 runs (15 were observed), more when a target is dispatched again. The bound holds a
+#: full wave with room for 15 such repeats, stays within ``MAX_SUBJECT_RUNS`` (the one page the
+#: producer listing reads) and keeps a select with a full carry-forward walk within
+#: ``MAX_PAGES_API_READS`` (at most 140 of its 160 reads). Newest first, it can only hide an older
+#: run: a key handed off only there is treated as having no handoff at that commit (the superseding
+#: or admitted family cache, or the walk), never as an older run passing as newer.
+MAX_FAMILY_PRODUCER_RUNS = 32
 #: Rows of the canonical-branch listing searched for display-titled source runs (newest first, so
 #: the bound can only hide an older run: no evidence, never an older run passing as the newest).
 MAX_CANONICAL_RUNS = 300
@@ -329,9 +346,19 @@ MAX_CI_SCOPE_TREE_ENTRIES = 100_000
 #: credential-free artifact storage GETs and one final status evaluation, without waiting polls.
 #: Enforced by tests/test_ci_generation_budget.py, not a runtime plan-admission rule.
 MAX_CI_GENERATION_REQUESTS = 440
-#: API requests of one ``ci gate-status`` (36 with both runs complete); the rest is for retries and
-#: pages.
+#: API requests of one ``ci gate-status`` (36 with both runs complete; a protected admission adds 3
+#: when no protected directory changes and at most 1 + 2 * MAX_CI_ADMISSION_DIRECTORIES + 2 * 4
+#: otherwise, 41: the comments are read twice, three full pages and the empty one that ends the
+#: listing); the rest is for retries and pages.
 MAX_CI_GATE_STATUS_REQUESTS = 96
+#: A protected admission (``admission`` of the Build config): the paths it protects, the
+#: directories holding them (the root included: each one is a tree read on either side of the pull
+#: request), its approvers and the comments of one pull request it reads for their decisions
+#: (three full pages; one more comment fails the evaluation).
+MAX_CI_ADMISSION_PATHS = 64
+MAX_CI_ADMISSION_DIRECTORIES = 16
+MAX_CI_ADMISSION_APPROVERS = 8
+MAX_CI_ADMISSION_COMMENTS = 300
 #: The description of a status intent: GitHub's own bound for a commit status description.
 MAX_CI_STATUS_DESCRIPTION_CHARS = 140
 #: ``ci assemble`` sends 13 requests and 2 per target (archive REST redirect and storage GET;
@@ -352,6 +379,13 @@ MAX_CI_COMMIT_PULLS = 100
 #: merged tree differs, whatever the number of targets and lanes; the rest is for retries and for
 #: the further pages of a run that lists more than 100 jobs or artifacts.
 MAX_CI_REUSE_ADMIT_REQUESTS = 96
+#: ``ci select-generation`` sends 27 requests for a full generation and 52 for a reused one (each
+#: reference read as ``reuse.download_reuse_reference`` reads it, the original pair once), 2 more
+#: for the Build bundle and, when lanes are kept, 2 for the results index and 2 per lane (archive
+#: REST redirect and storage GET): 124 for every lane of Quick Skin's 34 in a reused generation;
+#: the rest is for retries and for the further pages of a run that lists more than 100 jobs or
+#: artifacts.
+MAX_CI_SELECT_GENERATION_REQUESTS = 96 + 3 * MAX_CI_LANES
 #: ``ci aggregate`` sends 13 requests and 2 per lane (archive REST redirect and storage GET;
 #: metadata is already authenticated from the listing), 81 for 34 lanes; the
 #: rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.

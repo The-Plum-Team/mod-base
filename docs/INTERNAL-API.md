@@ -300,6 +300,18 @@ Integration-round amendments:
   (`imaging_user_site`, `IMAGING_PACKAGE`), which `kit_environment` applies to the kit process,
   whose disabled user site would otherwise hide Pillow from the host before it could pass it on;
   `tests/test_pin.py` runs both copies over the same process states (`tests/user_site.py`).
+* **Family handoffs by exact name across a wave.** `select --family` and `admit` look a key's family
+  handoff up by its exact name (`mb-family-handoff--<f>--<key>--a<attempt>` of a producer run's
+  latest attempt) in the newest `limits.MAX_FAMILY_PRODUCER_RUNS` (32) successful producer runs at
+  the leg coverage, newest first, instead of only the newest `limits.MAX_CANDIDATES` (8): a producer
+  that hands off one key per run (Quick Skin: one run per target, 17 targets) leaves the earliest
+  key of a wave in its oldest run. Inventories are read newest first only until the name is found
+  (`admit`: until every pending key is; a run's job graph is read only when its inventory holds a
+  pending key's handoff). Every authentication and fail-closed rule is unchanged; a key whose
+  handoff is in no run within the bound falls back exactly as a missing handoff does. The
+  carry-forward walk inventories the newest `limits.MAX_FAMILY_PRODUCER_RUNS` producer runs at its
+  earlier commits under the same bound (also `limits.MAX_CANDIDATES` before), so a wave the head
+  overtook before it was published is carried by its exact names, not walked past.
 * **Checked document.** `tests/test_internal_api.py` also checks every class's documented dataclass
   `fields` (names, order and each default's `repr`, `<factory>` for a default factory) and
   properties, every name of a described name list, and every documented constant value written in
@@ -323,9 +335,9 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.adapter`, `mod_base.build_ci.identity`, `mod_base.build_ci.planning`, `mod_base.build_ci.commands`, `mod_base.build_ci.commands_subject`, `mod_base.build_ci.lifecycle`, `mod_base.build_ci.commands_worker` |
 | MB11 | `mod_base.build_ci.protocol`, `mod_base.build_ci.graph`, `mod_base.build_ci.authenticate`, `mod_base.build_ci.reads`, `mod_base.build_ci.records`, `mod_base.build_ci.config`, `mod_base.build_ci.activation`, `mod_base.build_ci.transition`, `mod_base.build_ci.controller`, `mod_base.build_ci.inputs`, `mod_base.build_ci.policy`, `mod_base.build_ci.validation`, `mod_base.build_ci.exports`, `mod_base.build_ci.worker`, `mod_base.build_ci.source`, `mod_base.build_ci.host`, `mod_base.build_ci.toolchain`, `mod_base.build_ci.transport`, `mod_base.build_ci.selection`, `mod_base.build_ci.archive`, `mod_base.build_ci.handoff`, `mod_base.build_ci.root_request_schema`, `mod_base.build_ci.root_request`, `mod_base.build_ci.root_request_operations`, `mod_base.build_ci.gradle_cache`, `mod_base.build_ci.worker_overlay`, `mod_base.build_ci.worker_source`, `mod_base.build_ci.worker_git`, `mod_base.build_ci.worker_preparation`, `mod_base.build_ci.batch`, `mod_base.build_ci.batch_schema`, `mod_base.build_ci.runtime_schema`, `mod_base.build_ci.runtime_exports`, `mod_base.build_ci.runtime_inputs`, `mod_base.build_ci.runtime_freeze`, `mod_base.build_ci.runtime_handoff` |
 | MB11 | `mod_base.build_ci.batch_git`, `mod_base.build_ci.commands_batch` |
-| MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
+| MB11 | `mod_base.build_ci.status`, `mod_base.build_ci.admission`, `mod_base.build_ci.commands_packaged`, `mod_base.build_ci.commands_status` |
 | MB11 | `mod_base.build_ci.describe`, `mod_base.build_ci.gate`, `mod_base.build_ci.commands_build` |
-| MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse` |
+| MB11 | `mod_base.build_ci.reuse`, `mod_base.build_ci.commands_reuse`, `mod_base.build_ci.generation` |
 | MB11 | `mod_base.build_ci.checkout`, `mod_base.build_ci.candidate_kit` |
 | MB11 | `mod_base.build_ci.system_profile`, `mod_base.build_ci.commands_system` |
 | MB11 | `mod_base.build_ci.seeds`, `mod_base.build_ci.commands_seed` |
@@ -677,6 +689,7 @@ Bundles and images:
 * `MAX_RAW_BUNDLE_BYTES`, `MAX_COMPACT_BUNDLE_BYTES`, `MAX_ANCHOR_BUNDLE_BYTES`, `MAX_HANDOFF_FILES`
 * `MAX_COMPACT_FILES`, `MAX_ANCHOR_FILES`, `MAX_IMAGE_PIXELS`, `MAX_IMAGE_DIMENSION`, `MAX_SITE_BYTES`
 * `MAX_SITE_FILES`, `MAX_BUNDLE_PATH_CHARS`, `MAX_BUNDLE_PATH_DEPTH`
+* `MAX_PIXEL_MEMO_ENTRIES`: successful pixel checks one process remembers by content (`imaging.metrics`)
 
 Families:
 
@@ -699,6 +712,7 @@ their units in the integration round; `DELETION_BUDGET` is 64, see the rotation-
 * `RUN_POLL_ATTEMPTS`, `RUN_POLL_INTERVAL_SECONDS`
 * `LISTING_READ_ATTEMPTS`, `LISTING_RETRY_DELAY_SECONDS`, `MAX_LISTING_RETRY_DELAY_SECONDS`, `MAX_FILTERED_RUNS_LISTED`: the consistent-listing retry and the 1,000 newest runs GitHub lists for a filtered workflow-run search (see the consistent-listing amendment)
 * `MAX_CANDIDATES`, `MAX_SUBJECT_RUNS`, `MAX_CANONICAL_RUNS`, `MAX_FAMILY_LEGS`
+* `MAX_FAMILY_PRODUCER_RUNS`: the producer runs at one commit whose exact family handoff names `select` and `admit` look up (see the family-handoffs amendment)
 * `MAX_WORKFLOW_FILE_BYTES`, `GENERATION_PROBES`, `ANCHOR_PROBES`
 
 ZIP extraction (see the collected-family amendment):
@@ -723,6 +737,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_GATE_REQUESTS`: the 96-request budget of one `ci seal-gate` (a Build gate costs 15, the packaged gate of a pull request 22 and the gate of a reuse run, which decides the reuse again, 47, whatever the number of targets and lanes).
 * `MAX_CI_COMMIT_PULLS`: 100, the pull requests GitHub associates with one pushed commit: the one page post-merge reuse reads to find the merge.
 * `MAX_CI_REUSE_ADMIT_REQUESTS`: 96, the request budget of `ci reuse-admit` (38 for an admitted reuse, 1 for a direct push, 11 when the merged tree differs, whatever the number of targets and lanes).
+* `MAX_CI_SELECT_GENERATION_REQUESTS`: 864, the request budget of `ci select-generation`, 96 + 3 * `MAX_CI_LANES` (27 for a full generation, 52 for a reused one, 2 more with the Build bundle, 2 for the results index and 2 per lane kept).
 * `CI_ARTIFACT_UPLOAD_SKEW_SECONDS`: Two seconds of tolerance for artifact creation versus upload-step bounds only; other chronology stays exact.
 * `CI_TEST_MERGE_WAIT_SECONDS`: Fifteen-second deadline for GitHub to compute a pending test merge.
 * `CI_TEST_MERGE_POLL_SECONDS`: Five-second interval between pending test-merge observations.
@@ -742,7 +757,8 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_SCOPE_BYTES`: 64 KiB, one canonical `mod-base.ci.scope` record, the output of `derive_scope`, the kit's `MB_SCOPE_INPUT` line and a lane's `MB_RUNTIME_SCOPE` line: each travels as one line of a job output or one environment value.
 * `MAX_CI_SCOPE_TREE_ENTRIES`: 100,000 entries of one recursive tree listing `ci scope` compares, GitHub's own listing limit; a larger or truncated listing runs the pull request in full.
 * `MAX_CI_GENERATION_REQUESTS`: 440, a regression budget enforced by `tests/test_ci_generation_budget.py` for the two enrolled native profiles, including one final status evaluation and no waiting polls; not runtime plan admission.
-* `MAX_CI_GATE_STATUS_REQUESTS`: 96, the request budget of `ci gate-status` (36 with both runs complete).
+* `MAX_CI_GATE_STATUS_REQUESTS`: 96, the request budget of `ci gate-status` (36 with both runs complete; a protected admission adds 3 when no protected directory changes and at most 1 + 2 * `MAX_CI_ADMISSION_DIRECTORIES` + 2 * 4 otherwise: the comments are read twice, three full pages and the empty one that ends the listing).
+* `MAX_CI_ADMISSION_PATHS`, `MAX_CI_ADMISSION_DIRECTORIES`, `MAX_CI_ADMISSION_APPROVERS`, `MAX_CI_ADMISSION_COMMENTS`: The 64 protected paths of one `admission` of the Build config, the 16 directories that may hold them (the root included: the trees read on either side of a pull request), its 8 approvers and the 300 comments of a pull request read for their decisions (one more fails the evaluation).
 * `MAX_CI_PRIVATE_RECORD_ENTRIES`: Exact entry budget of a fixed single-leaf private record directory. MB1 entry caps count the root, so the directory plus its one leaf; an empty stage stays 1.
 * `MAX_CI_POLICY_TESTS`, `MAX_CI_POLICY_WORKERS`: Policy discovery/count and worker ceilings.
 * `MAX_CI_ENVELOPE_BYTES`, `MAX_CI_RECORD_BYTES`, `MAX_CI_ARTIFACTS_PER_GATE`
@@ -1176,6 +1192,7 @@ An in-memory GitHub for tests and ``conformance`` (MB1).
   * `add_blob(self, data: bytes, *, oid: str | None = None, repository: str | None = None) -> str`: Seed ``/git/blobs/{oid}`` (``contents.blob``) and return its oid: the Git blob id of ``data`` unless ``oid`` forces another one (a corrupt object the reader must reject).
   * `add_ref(self, ref: str, sha: str, *, annotated_tag_sha: str | None = None, repository: str | None = None) -> None`: Seed ``/git/ref/{ref}`` (``ref`` like ``tags/v1.0.0`` or ``heads/main``). With ``annotated_tag_sha`` the ref points at that tag object, which peels to ``sha`` through ``/git/tags/{annotated_tag_sha}`` (``pin.verify``'s tag peel).
   * `add_pull(self, record: Mapping[str, Any]) -> None`: Seed (or replace) ``/repos/{own}/pulls/{number}``: one pull request as the API reports it, kept verbatim. ``POST /pulls`` creates the next number from a seeded head ref and base branch, ``PATCH /pulls/{number}`` changes ``state``, ``title`` or ``body``, ``POST /issues/{number}/comments`` answers for a seeded pull request and ``DELETE /git/refs/{ref}`` removes a seeded ref (with its branch); each needs a writable fake and is recorded in ``mutations``.
+  * `set_comments(self, number: int, comments: Sequence[Mapping[str, Any]]) -> None`: Seed (or replace) ``/repos/{own}/issues/{number}/comments``: the comments of an issue or a pull request as the API lists them, oldest first and kept verbatim. A comment posted through ``POST /issues/{number}/comments`` is not listed.
   * `add_response(self, path: str, payload: Any, *, params: Mapping[str, str | int] | None = None) -> None`: Seed the exact JSON body of one GET ``path`` (with exactly ``params``) that no typed seeder covers; a request for an unseeded path answers 404 like the API.
   * `skew_listing(self, path: str, *, responses: int, offset: int = 1) -> None`: Serve the next ``responses`` responses of the listing ``path`` (any parameters) with a ``total_count`` ``offset`` rows off the rows it lists, as GitHub's eventually consistent listing does while a sibling job uploads.
   * `during_listing(self, path: str, action: Callable[[], None], *, after_pages: int = 1) -> None`: Run ``action`` once, right after the listing ``path`` served its ``after_pages``-th response from now: an upload or deletion landing between two pages of one read.
@@ -1991,6 +2008,9 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 * `def original_plan(plan: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]`: `plan` under another subject's `identity`: the same profile, plan inputs, targets and lanes, bound by a hash of its own. The gates of a merged pull request were sealed for the work a push plans exactly when the plan hash of their records is the hash of the push's plan under the pull request's identity.
 * `def validate_reuse_reference(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.reuse` v1: the covered merge (a non-PR subject on the default branch), the reuse run that sealed the reference (always a push) and `source`, the original pull-request identity, plan hash and profile with the descriptors of both original tested records. Covered and original agree in repository, protected caller, kit pin, complete tested tree, policy digest, inventory, scenario contract, runtime selection, graph version and profile; a seal is always a direct tested record, never another reference; the two seals come from different runs. With the covered `plan` the original plan hash must be that of `original_plan`. Structure only.
 * `def reuse_reference(*, plan: dict[str, Any], producer: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]`: The reference the gate job of `producer` (a reuse run's identity, without an upload window) seals for the covered `plan`: a new `mod-base.ci.reuse` document, valid for the plan and independent of its arguments. `source` is what `reuse.admit_post_merge_reuse` authenticated. It renews no retention.
+* `GENERATION_MODES = ('full', 'reuse')`: the modes of a `mod-base.ci.generation`.
+* `def validate_generation(document: Any, *, plan: dict[str, Any] | None = None, path: str = '$') -> dict[str, Any]`: `mod-base.ci.generation` v1: the tested generation of one default-branch commit for a consumer. The covered binding; `mode`; `references` (`null` when full, else the reuse references of the commit's Build and packaged push runs); `source`, the tested binding with both tested records (the covered one when full; the merged pull request's when reused, agreeing in every reuse-compared field and the profile, and with the covered `plan` its plan hash is that of `original_plan`); `build`, `results` and `lanes` of the source binding and the packaged gate's attempt, lanes in plan order; distinct artifact ids. Structure only.
+* `def generation_record(*, plan: dict[str, Any], mode: str, references: dict[str, Any] | None, source: dict[str, Any], build: dict[str, Any], results: dict[str, Any], lanes: list[dict[str, Any]]) -> dict[str, Any]`: The `mod-base.ci.generation` document for the covered `plan`, valid for it; `lanes` are the planned lanes' runtime descriptors in plan order. Writing one proves nothing.
 * `def bind_reuse_reference(document: dict[str, Any], *, descriptor: dict[str, Any], plan: dict[str, Any] | None = None) -> dict[str, Any]`: Bind a reuse reference to the reuse artifact it was read from: the same run sealed both, no id is shared with an original seal and both seals were uploaded before the reference. That the original runs had finished before the reuse gate started, their graphs, the merged tree and every artifact's availability are proven by whoever reads the reference (`mod_base.build_ci.reuse`).
 
 ## `mod_base.build_ci.config`
@@ -2000,11 +2020,16 @@ authenticates the API, graph, native witnesses and actual frozen bytes.
 Owner: MB11. Closed data at scripts/ci/mod-base-build.json. Protected policy must authenticate
 every source hash/path before import and confirm native timeout parity before activation.
 
-* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `plan_inputs` (0..`MAX_CI_PLAN_INPUTS` extra candidate files `{name, path}` sorted by name, each name an `adapter.plan_input_name`), `bundle.path`, the two `contexts` and the timeouts, the optional `runtime: {system_profile}` (a key of `protocol.SYSTEM_PROFILES`; absent means none) and the optional `seeds` (at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..`MAX_CI_SEED_KEY_FILES` `{path}` rows sorted by path, unique; absent means no seed) and the optional `runtime_selection` (exactly `{input}`, one of `SCOPE_INPUTS`; absent means no narrowed scope); no named path may alias or contain another.
+* `def validate_build_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The pure schema (docs/SCHEMAS.md): entry points and their hashed closure, `inventory.path`, `scenario_contract.path`, `plan_inputs` (0..`MAX_CI_PLAN_INPUTS` extra candidate files `{name, path}` sorted by name, each name an `adapter.plan_input_name`), `bundle.path`, the two `contexts` and the timeouts, the optional `runtime: {system_profile}` (a key of `protocol.SYSTEM_PROFILES`; absent means none), the optional `seeds` (at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..`MAX_CI_SEED_KEY_FILES` `{path}` rows sorted by path, unique; absent means no seed), the optional `admission` (exactly `{protected_paths, command, approvers}`: 1..`MAX_CI_ADMISSION_PATHS` canonical repository paths, strictly ascending, none inside another, held by at most `MAX_CI_ADMISSION_DIRECTORIES` directories, that protect the config, `CONTROL_PATHS` and every adapter source; a command of `ADMISSION_COMMAND`; 1..`MAX_CI_ADMISSION_APPROVERS` `{login, association}` rows, logins unique ignoring case, each association one of `ADMISSION_ASSOCIATIONS`; absent means no admission) and the optional `runtime_selection` (exactly `{input}`, one of `SCOPE_INPUTS`; absent means no narrowed scope); no named path may alias or contain another.
 * `def system_profile(document: dict[str, Any]) -> str | None`: The system profile a validated config names (`runtime.system_profile`), or `None` when it has no `runtime`.
 * `SCOPE_INPUTS = ('changed-paths-v1',)`: The formats of the kit's input to `derive_scope` a config may name as `runtime_selection.input`.
 * `def runtime_selection(document: dict[str, Any]) -> str | None`: The `derive_scope` input format a validated config enables (`runtime_selection.input`), or `None` when its pull requests always run in full.
 * `SEED_KINDS = ('gradle', 'runtime')`: The seeds a protected config may enable: a target job's and a lane job's.
+* `ADMISSION_COMMAND`: The grammar of an admission command, a slash and a lowercase word of at most 63 characters (`/controller-upgrade`).
+* `ADMISSION_ASSOCIATIONS = ('COLLABORATOR', 'MEMBER', 'OWNER')`: The `author_association` values an approver may be listed with.
+* `def admission(document: dict[str, Any]) -> dict[str, Any] | None`: The protected admission of a validated config, or `None` when it names none.
+* `def protects(protected_paths: list[str] | tuple[str, ...], path: str) -> bool`: Whether `path` is one of `protected_paths` or lies below one of them.
+* `def admission_directories(protected_paths: list[str] | tuple[str, ...]) -> frozenset[str]`: The directories holding the protected paths, the root (`''`) included.
 * `def seed_key_files(document: dict[str, Any], kind: str) -> tuple[str, ...] | None`: The protected files that key the seed `kind` of a validated config, or `None` when it enables no such seed; another kind is a rejection.
 * `def protected_file_state(root: Path, relative: str, *, max_bytes: int) -> ControlFile`: The state of one file of the protected checkout `root`: the SHA-256 of its bytes, or `None` for a file the checkout does not have. What exists must be a regular file of at most `max_bytes`, reached without crossing a symlink. A control file is read with `MAX_WORKFLOW_FILE_BYTES`.
 * `class BuildConfigError(MbError)`: The protected Build configuration or a source it lists cannot be trusted (reason `ci-config`).
@@ -2101,14 +2126,17 @@ and proves it by reproducing the plan hash of the job of its run that authentica
 * `PROTECTED_EVENTS = ('push', 'workflow_dispatch', 'schedule')`
 * `STATUS_PRODUCER = 'status'`: the producer of the status caller's evaluation job; never a `protocol.PRODUCERS` gate.
 * `STATUS_EVENTS = ('workflow_run', 'pull_request_target', 'schedule', 'workflow_dispatch')`: the events that start a run of the status caller.
-* `SUBJECT_PRODUCERS = ('build', 'packaged', 'status')`: what `ci subject --producer` accepts.
+* `GENERATION_PRODUCER = 'generation'`: the producer of a consumer's job that reads the tested generation of the live default-branch commit (`ci select-generation`); never a gate, never a pull request.
+* `GENERATION_EVENTS = ('push', 'workflow_run', 'workflow_dispatch', 'schedule')`: the events a consumer's job runs on.
+* `SUBJECT_PRODUCERS = ('build', 'packaged', 'status', 'generation')`: what `ci subject --producer` accepts.
 * `POLICY_FORMAT = 'mod-base.build.policy-v1'`
 * `class SubjectError(MbError)`: The subject of this job cannot be authenticated (reason `ci-subject`; `draft`, `no-test-merge` and `controller-moved` for those three cases).
 * `class StateError(MbError)`: The job's private state directory or one of its records cannot be trusted (reason `ci-state`).
-* `def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The managed callers a job of `producer` may run from: its own, and for Build jobs of a protected subject also the packaged caller (its `rebuild` job). A `status` job runs from the status caller alone and only for a pull request (no caller otherwise).
-* `def run_events(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The events a job of `producer` may run on: `pull_request_target` for a gate's pull request and `PROTECTED_EVENTS` for its protected subject; `STATUS_EVENTS` for the pull request of a `status` job, which has no protected subject (no event).
-* `def validate_subject_record(document: Any, path: str = '$') -> dict[str, Any]`: The closed identity record `{producer, event, workflow_path, controller_tree, subject}`; `subject` is `protocol.validate_subject` and always names the Build caller as `controller_workflow`. The producer is one of `SUBJECT_PRODUCERS`, and its event and caller are those `run_events` and `run_workflows` admit for the subject.
-* `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None, wait_for_merge: bool = False) -> dict[str, Any]`: With `wait_for_merge` (the `ci subject` command), wait boundedly for a pending merge; drafts, conflicts and source changes still reject. Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. For the `status` producer `pr_number` is the pull request under evaluation on any of `STATUS_EVENTS`, authenticated like a gate's (the live default branch must be the executing commit and the pull request's base), never None. The environment's claims are checked before the first request; 4 requests for a pull request, 5 otherwise; nothing is written.
+* `def run_workflows(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The managed callers a job of `producer` may run from: its own, and for Build jobs of a protected subject also the packaged caller (its `rebuild` job). A `status` job runs from the status caller alone and only for a pull request (no caller otherwise). A `generation` job has no managed caller (`admits_workflow` admits the mod's own workflows).
+* `def run_events(producer: str, *, pull_request: bool) -> tuple[str, ...]`: The events a job of `producer` may run on: `pull_request_target` for a gate's pull request and `PROTECTED_EVENTS` for its protected subject; `STATUS_EVENTS` for the pull request of a `status` job, which has no protected subject (no event); `GENERATION_EVENTS` for the protected subject of a `generation` job, which has no pull request subject (no event).
+* `def admits_workflow(producer: str, workflow_path: str, *, pull_request: bool) -> bool`: Whether a job of `producer` may run from the repository's workflow `workflow_path`: one of `run_workflows` for a gate or status job; any workflow of the mod on the default branch for a `generation` job, never with a pull request subject.
+* `def validate_subject_record(document: Any, path: str = '$') -> dict[str, Any]`: The closed identity record `{producer, event, workflow_path, controller_tree, subject}`; `subject` is `protocol.validate_subject` and always names the Build caller as `controller_workflow`. The producer is one of `SUBJECT_PRODUCERS`, and its event and caller are those `run_events` and `admits_workflow` admit for the subject.
+* `def authenticate_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None, wait_for_merge: bool = False) -> dict[str, Any]`: With `wait_for_merge` (the `ci subject` command), wait boundedly for a pending merge; drafts, conflicts and source changes still reject. Authenticate a pull request (`authenticate.read_pr_generation`, not a draft, test merge with parents exactly `[base, head]`) or a protected push/dispatch/schedule (the live default-branch head is the executing commit) and return the identity record. For the `status` producer `pr_number` is the pull request under evaluation on any of `STATUS_EVENTS`, authenticated like a gate's (the live default branch must be the executing commit and the pull request's base), never None. For the `generation` producer `pr_number` is None and the subject is the live default-branch head on any of `GENERATION_EVENTS`, from any workflow of the mod on the default branch. The environment's claims are checked before the first request; 4 requests for a pull request, 5 otherwise; nothing is written.
 * `def derive_subject(invocation: Invocation, api: GitHubApi, *, producer: str, pr_number: int | None, candidate: Path, wait_for_merge: bool = False) -> dict[str, Any]`: With `wait_for_merge` (the command), repeat only pending pull observations within the same hard request cap. The same identity record, byte for byte, for a job that holds the candidate checkout `candidate`, from one request. The environment is admitted as in `authenticate_subject` and the base branch is the mod's canonical branch, which the run and its caller must name; the mod checkout's `HEAD` must be the executing controller commit and gives the controller tree; the candidate's `HEAD` gives the tested commit, its tree and its ordered parents (`checkout.head_commit` for both: the commit's own bytes, hashed to its name). All of that is settled before the one request, which is made last: the pull request (`authenticate.read_pr_on_base`: open, not a draft, same repository, based on that branch at the controller, its test merge the commit the candidate is at), or for a protected subject the head of the canonical branch, which must still be the executing commit both checkouts are at. Not observed: that the canonical branch is the default branch and, for a pull request, that the controller is still its head. A job therefore uses this only when it then requires the plan hash of a job of its run that authenticated in full (`ci plan --expect-sha256`; `tests/test_workflow_ci_policy.py` holds the callees to that). `producer` is `build` or `packaged`: a status job holds no candidate checkout. Nothing is written.
 * `def policy_sha256(config: BuildConfig, subject: dict[str, Any]) -> str`: The closed protected-policy digest: canonical SHA-256 of `{format: POLICY_FORMAT, build_adapter_api, graph_versions: {build, packaged}, kit: subject.kit, config_sha256, adapter_files: [{path, sha256}], control_files: [{path, sha256 | null}]}`. It changes with the protected Build config bytes, any source of the adapter closure, the bytes or the presence of a control file (`config.CONTROL_PATHS`: the activation manifest and the caller workflows), the kit pin or tree digest, the adapter API or a graph version, and with nothing else.
 * `def create_state(state: Path) -> None`: Create the job's private state directory (mode 0700); an existing path is never adopted.
@@ -2736,11 +2764,32 @@ plan job of a Build run and in the one job of `select-build.yml`, on a push to t
 It takes the job arguments and `--github-output FILE`, reads `identity.json` and `ci-plan.json`
 of the state and decides (`reuse.admit_post_merge_reuse`). Both managed callers run the same
 decision over the same evidence; neither takes the other's answer, and each gate decides once
-more before it seals.
+more before it seals. It also registers `ci select-generation`, the read-only step of a consumer
+of a default-branch commit (`generation.select_generation`).
 
 * `ADMISSION_NAME = 'ci-reuse-admission.json'`: the state record the command writes: `{"mode": "reuse", "reason", "pr_number", "identity", "plan_sha256", "profile", "source"}` (the covered binding and the source the gate's reference will name) or `{"mode": "full", "reason", "detail"}`.
-* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `reuse-admit --github-output FILE` on the `ci` verb group.
+* `def add_verbs(verbs: argparse._SubParsersAction) -> None`: Register `reuse-admit --github-output FILE` and `select-generation --output DIR [--with-build] [--lane ID ... | --all-lanes] --github-output FILE` on the `ci` verb group.
+* `def run_select_generation(args: argparse.Namespace) -> int`: The `select-generation` handler (`--output DIR [--with-build] [--lane ID ... | --all-lanes] --github-output FILE`): for the protected subject and plan of the state, publishes `generation.select_generation`'s output and prints one line. Outputs `generation` (`full`, `reuse` or `none`) and `reason` (`selected` or the error's reason) before it returns or raises, so a step that tolerates exit 3 can branch on them. Budget `MAX_CI_SELECT_GENERATION_REQUESTS`.
 * `def run_reuse_admit(args: argparse.Namespace) -> int`: The `reuse-admit` handler: outputs `mode` (`reuse` or `full`) and `reason` (`reuse.ADMITTED_REASON` or a key of `reuse.FULL_RUN_REASONS`), writes the state record and prints one line. A `reuse` is written only after the admission was rechecked; what must stop the job writes nothing and fails the step. The state must belong to the executing repository and controller commit. Budget `MAX_CI_REUSE_ADMIT_REQUESTS`.
+
+## `mod_base.build_ci.generation`
+
+Owner: MB11. The tested generation that covers a default-branch commit, for a consumer (Q9/B6,
+KQ9-1). The newest run of each managed caller for the commit is selected before any result is
+read; the packaged run decides the mode and the Build run must agree (both reuse runs naming the
+same original pair, a packaged run that selected the newest full Build, or a packaged run that
+rebuilt with no Build run). Both tested records, every source artifact and, for a reuse, both
+references and the original pair are authenticated as the gates and
+`reuse.download_reuse_reference` authenticate them. Evidence that is gone is unavailable, never
+corrupt; nothing partial is published.
+
+* `GENERATION_NAME = 'generation.json'`: the file of the output that holds the record.
+* `BUILD_DIRECTORY = 'build'`: the directory of the output that holds the complete Build bundle.
+* `LANES_DIRECTORY = 'lanes'`: the directory of the output that holds one verified lane export per kept lane id.
+* `ABSENT_REASONS`: reason token -> one line of words, for the four ways no generation is selected: `ci-generation-absent`, `ci-generation-pending`, `ci-generation-failed`, `ci-generation-evidence-unavailable`.
+* `class GenerationUnavailable(Unavailable)`: No tested generation can be selected (exit 3); `reason` is a key of `ABSENT_REASONS`.
+* `class MixedGeneration(MbError)`: The two callers' newest runs do not form one tested generation: reason `ci-generation-mixed`, exit 2.
+* `def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], output: Path, with_build: bool = False, lanes: tuple[str, ...] = (), source_config_sha256: str | None = None) -> dict[str, Any]`: Select, authenticate and privately publish the generation of the live default-branch commit of the consumer's own protected `plan`; return its `mod-base.ci.generation`. `output` must not exist; it receives `generation.json` and, with `with_build`, the complete bundle the packaged gate tested under `build/`, verified against its validation record (`source_config_sha256`: the digest of the protected Build config the caller loaded); `lanes` names distinct planned lanes whose verified exports are kept under `lanes/<id>/`, after the results index was found to list exactly the packaged gate's lanes, Build and reports, each lane equal to what the index sealed (needs `source_config_sha256`). A reused bundle or lane keeps its original identity. Everything mutable is observed again before the atomic publication.
 
 ## `mod_base.build_ci.handoff`
 
@@ -2911,8 +2960,9 @@ gate the newest run of its managed caller under the head is chosen before any re
 (`selection.newest_run`). `pending`: a draft, no run yet, a run in progress or a newest run that is
 a draft deferral. `success`: the newest run is complete, its exact graph for its mode
 authenticates, its tested record downloads and binds to the plan, the packaged gate's owning Build
-is the bundle the Build gate sealed, and the live pull request still has the plan's head, base and
-test merge and is no draft. `failure`: anything else, including a gate whose evidence is gone
+is the bundle the Build gate sealed, the live pull request still has the plan's head, base and
+test merge and is no draft, and the protected admission of the config admits it
+(`admission.admission_refusal`, which turns every such `success` into a `failure`). `failure`: anything else, including a gate whose evidence is gone
 (`transport.artifact_gone`). Any other API failure is never a state. The job asks
 twice: `settle_gates` first, without a plan, and `evaluate_gates` with the plan only when a newest
 run finished successfully.
@@ -2956,6 +3006,21 @@ most `MAX_CI_GATE_STATUS_REQUESTS`.
 * `UNSETTLED`: the line the `--settle` call prints when a finished run needs the plan.
 * `def add_verbs(verbs: argparse._SubParsersAction) -> None`
 * `def run_gate_status(args: argparse.Namespace) -> int`
+
+## `mod_base.build_ci.admission`
+
+Owner: MB11. The protected admission of a pull request (`admission` of the Build config, read
+from the protected checkout that executes): a pull request whose tested merge changes a protected
+path (a file or a directory, by its tree entry against the pull request's base) needs an
+approver's decision on its exact head before `status.evaluate_gates` lets any gate succeed. A
+decision is a comment whose whole text is `<command> approve <head sha>` or `<command> revoke
+<head sha>` by a `User` listed among the approvers with its association; the latest counts and
+must approve, and an edited one refuses until it is deleted. Read-only; trees are read once, the
+decisions through the evaluation's watch.
+
+* `def changed_protected_path(api: GitHubApi | CommandReads, *, base_sha: str, tested_tree: str, protected_paths: list[str] | tuple[str, ...]) -> str | None`: The first protected path whose tree entry (mode, type, object id; absence included) differs between the commit `base_sha` and the tree `tested_tree`, or `None`. One commit read, then non-recursive tree reads from the root down, never below a directory whose object is equal on both sides.
+* `def head_decisions(api: GitHubApi | CommandReads, *, pr_number: int, head_sha: str, command: str, approvers: list[dict[str, Any]]) -> list[dict[str, Any]]`: The approver decisions on `head_sha` among the comments of the pull request (at most `MAX_CI_ADMISSION_COMMENTS`), oldest first, each `{id, decision, created_at, edited}`; a malformed comment is a rejection.
+* `def admission_refusal(api: GitHubApi | CommandReads, watch: Watch, *, config: BuildConfig, plan: dict[str, Any]) -> str | None`: Why the gates of the verified generation `plan` may not succeed (one line), or `None`: no admission, no protected path changed, or the latest decision approves. The decisions are read through `watch`.
 
 ## `mod_base.build_ci.runtime_schema`
 

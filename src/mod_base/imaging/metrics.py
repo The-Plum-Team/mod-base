@@ -29,6 +29,14 @@ Containment is the caller's job: these functions take no root, so a ``Path`` mus
 contained, tree-validated file (``adapter.api.RuntimeTree.path``, ``io.tree``), or the caller
 passes ``bytes``. Only the final component is opened without following a symlink; a path with a
 ``..`` component is refused, and a symlinked ancestor directory cannot be judged without a root.
+
+A successful inspection or comparison is a pure function of the bytes and the arguments, so one
+process remembers it (``_MEMO``) under the SHA-256 this module computes itself from the exact bytes
+it has just read and admitted, plus every argument that shapes the result. A caller's claimed hash
+is never a key, nothing is kept on disk or shared between processes, a rejection is never
+remembered, and the reading, byte-bound and signature checks still run on every call: only the
+decoding and the measuring are skipped when the same bytes are measured again the same way. The
+memo holds at most ``limits.MAX_PIXEL_MEMO_ENTRIES`` results and hands out copies.
 """
 
 from __future__ import annotations
@@ -38,7 +46,9 @@ import io
 import os
 import stat
 import warnings
-from collections.abc import Collection
+from collections import OrderedDict
+from collections.abc import Collection, Hashable
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -132,12 +142,21 @@ def _inspect(source: Path | bytes, policy: SizePolicy, image_format: str) -> dic
         raise ImageError("an image size policy is required")
     label = _label(source, image_format)
     payload = _read_source(source, formats=(image_format,), label=label)
+    file_sha256 = hashlib.sha256(payload).hexdigest()
+    # Only the kit's own policy class is a key: a subclass may judge sizes differently.
+    key = (("inspect", image_format, file_sha256, policy.mode, policy.width, policy.height)
+           if type(policy) is SizePolicy else None)
+    remembered = _MEMO.get(key) if key is not None else None
+    if remembered is not None:
+        return remembered
     rgb = _decode_rgb(payload, formats=(image_format,), label=label, policy=policy)[1]
-    return _metrics(payload, rgb, label)
+    result = _metrics(payload, rgb, label, file_sha256)
+    return _MEMO.put(key, result) if key is not None else result
 
 
-def _metrics(payload: bytes, rgb: Any, label: str) -> dict[str, Any]:
-    """The PixelMetrics of the decoded RGB image of ``payload`` (the V11 algorithm, verbatim)."""
+def _metrics(payload: bytes, rgb: Any, label: str, file_sha256: str) -> dict[str, Any]:
+    """The PixelMetrics of the decoded RGB image of ``payload`` (the V11 algorithm, verbatim);
+    ``file_sha256`` is the caller's SHA-256 of ``payload``."""
 
     from PIL import Image, ImageStat
 
@@ -170,13 +189,51 @@ def _metrics(payload: bytes, rgb: Any, label: str) -> dict[str, Any]:
     return {
         "width": width,
         "height": height,
-        "file_sha256": hashlib.sha256(payload).hexdigest(),
+        "file_sha256": file_sha256,
         "pixel_sha256": pixel_sha256,
         "luma_entropy": round(entropy, 3),
         "meaningful_colors": meaningful_colors,
         "dark_fraction": round(dark_fraction, 4),
         "light_fraction": round(light_fraction, 4),
     }
+
+
+class _Memo:
+    """The process-local memo of successful pixel checks (see the module docstring).
+
+    A key must name the SHA-256 of every image measured, computed by the measuring function from
+    the bytes it holds, and every argument the result depends on. Results go in and come out as
+    deep copies, so no caller can change what another one receives; the least recently used entry
+    is dropped beyond ``limit`` entries."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._results: OrderedDict[Hashable, dict[str, Any]] = OrderedDict()
+
+    def get(self, key: Hashable) -> dict[str, Any] | None:
+        result = self._results.get(key)
+        if result is None:
+            return None
+        self._results.move_to_end(key)
+        return deepcopy(result)
+
+    def put(self, key: Hashable, result: dict[str, Any]) -> dict[str, Any]:
+        """Remember ``result`` under ``key`` and return it."""
+
+        self._results[key] = deepcopy(result)
+        self._results.move_to_end(key)
+        while len(self._results) > self._limit:
+            self._results.popitem(last=False)
+        return result
+
+    def clear(self) -> None:
+        self._results.clear()
+
+    def __len__(self) -> int:
+        return len(self._results)
+
+
+_MEMO = _Memo(limits.MAX_PIXEL_MEMO_ENTRIES)
 
 
 # -- Shared private helpers (also used by compare, png and webp) -------------------------------------

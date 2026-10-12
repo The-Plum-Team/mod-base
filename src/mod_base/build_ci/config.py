@@ -4,8 +4,9 @@
 the candidate files a plan is derived from (the inventory, the scenario contract and up to
 ``limits.MAX_CI_PLAN_INPUTS`` extra ``plan_inputs``), where a lane's checkout expects the staged
 Build, the two required status contexts, the native timeouts and, optionally, the kit system profile
-a lane installs before its accounts exist (:func:`system_profile`) and the seeds its jobs restore
-(:func:`seed_key_files`). :func:`validate_build_config` is the
+a lane installs before its accounts exist (:func:`system_profile`), the seeds its jobs restore
+(:func:`seed_key_files`) and the paths a pull request may change only with an approver's decision on
+its exact head (:func:`admission`). :func:`validate_build_config` is the
 pure schema; :func:`load_build_config` reads the file from the protected checkout the prologue
 verified and requires every listed source there to have its configured hash, so its result is the
 complete protected adapter that planning hashes into the policy digest. It also records the mod's
@@ -16,6 +17,7 @@ scope.
 
 from __future__ import annotations
 
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +66,21 @@ _SEED = Obj({"key_files": List(_PATH, min_items=1, max_items=lim.MAX_CI_SEED_KEY
 #: One more candidate file the plan is derived from: the name it is staged under for the protected
 #: hooks, next to the inventory and the scenario contract, and its path in the tested tree.
 _PLAN_INPUT = Obj({"name": plan_input_name, "path": repo_path})
+#: The comment command an approver posts as ``<command> approve <head sha>`` or ``<command> revoke
+#: <head sha>``: a slash and a lowercase word, such as ``/controller-upgrade``.
+ADMISSION_COMMAND = re.compile(r"^/[a-z][a-z0-9-]{0,62}$")
+#: A GitHub login, compared without regard to case as GitHub does.
+_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+#: The ``author_association`` an approver's comment must carry: the repository's owner, a member of
+#: the organization that owns it, or an invited collaborator. No other association can approve.
+ADMISSION_ASSOCIATIONS = ("COLLABORATOR", "MEMBER", "OWNER")
+_APPROVER = Obj({"login": Str(_LOGIN, max_len=39), "association": Str(choices=ADMISSION_ASSOCIATIONS)})
+_ADMISSION = Obj({
+    "protected_paths": List(repo_path, min_items=1, max_items=lim.MAX_CI_ADMISSION_PATHS, sorted_values=True),
+    "command": Str(ADMISSION_COMMAND, max_len=63),
+    "approvers": List(_APPROVER, min_items=1, max_items=lim.MAX_CI_ADMISSION_APPROVERS,
+                      unique_by=lambda item: item["login"].casefold()),
+})
 _CONFIG = Obj({
     "kind": Const("mod-base.build.config"),
     "schema_version": Int(min(readable_schema_versions("mod-base.build.config")),
@@ -88,6 +105,9 @@ _CONFIG = Obj({
     # Optional within schema 1: the seeds a job restores before its candidate runs and a protected
     # job saves after it, each keyed by protected files of the default branch. Absent means none.
     "seeds": Obj({}, {kind: _SEED for kind in SEED_KINDS}),
+    # Optional within schema 1: the paths a pull request may change only with an approver's
+    # decision on its exact head (:func:`admission`). Absent means no such paths.
+    "admission": _ADMISSION,
     # Optional within schema 1: a pull request's packaged lanes may run a narrowed scope that the
     # protected ``derive_scope`` hook selects from the kit's input of this format
     # (``build_ci.scope``). Absent means every lane runs every obligation.
@@ -123,7 +143,46 @@ def validate_build_config(document: Any, *, path: str = "$") -> dict[str, Any]:
         for kind, seed in document["seeds"].items():
             listed = [item["path"] for item in seed["key_files"]]
             check(listed == sorted(listed), f"{path}.seeds.{kind}.key_files", "must be sorted by path")
+    if "admission" in document:
+        _check_admission(document["admission"], [BUILD_CONFIG_PATH, *CONTROL_PATHS, *inventory], f"{path}.admission")
     return document
+
+
+def protects(protected_paths: list[str] | tuple[str, ...], path: str) -> bool:
+    """Whether ``path`` is one of ``protected_paths`` or lies below one of them."""
+
+    return any(path == root or path.startswith(root + "/") for root in protected_paths)
+
+
+def admission_directories(protected_paths: list[str] | tuple[str, ...]) -> frozenset[str]:
+    """The directories that hold a protected path, the root (``""``) included: the trees an
+    admission may read on each side of a pull request."""
+
+    return frozenset({""} | {"/".join(parts[:depth]) for parts in (root.split("/") for root in protected_paths)
+                             for depth in range(1, len(parts))})
+
+
+def _check_admission(admission: dict[str, Any], required: list[str], path: str) -> None:
+    """A protected-path list in its one canonical form that protects the files deciding how the
+    gates execute: the config itself, the activation manifest, the caller workflows the kit can
+    manage and every source of the adapter closure. Without them a pull request could remove its
+    own admission, which then decides from the default branch only once merged."""
+
+    roots = admission["protected_paths"]
+    for index, root in enumerate(roots):
+        check(not protects([other for other in roots if other != root], root), f"{path}.protected_paths[{index}]",
+              "lies inside another protected path")
+    check(len(admission_directories(roots)) <= lim.MAX_CI_ADMISSION_DIRECTORIES, f"{path}.protected_paths",
+          f"spread over more than {lim.MAX_CI_ADMISSION_DIRECTORIES} directories")
+    missing = sorted(file for file in set(required) if not protects(roots, file))
+    check(not missing, f"{path}.protected_paths", f"does not protect {missing[0] if missing else ''}")
+
+
+def admission(document: dict[str, Any]) -> dict[str, Any] | None:
+    """The protected admission of a validated config (``protected_paths``, ``command`` and
+    ``approvers``), or ``None`` when it names none."""
+
+    return document.get("admission")
 
 
 def system_profile(document: dict[str, Any]) -> str | None:

@@ -7,6 +7,32 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 
 ## Unreleased
 
+- Find each family handoff by its exact name across a whole wave of producer runs. `select
+  --family` (`pages.select.FamilyGenerations`) and `admit` (ready family handoffs and the
+  `current` check) looked a key's `mb-family-handoff--<f>--<key>--a<attempt>` up only in the
+  newest `limits.MAX_CANDIDATES` (8) successful producer runs at the leg coverage. A producer that
+  hands off one key per run (Quick Skin's mod compatibility review: one run per target, 17 targets,
+  15 runs in one observed wave) left the earliest keys of a wave outside that window, so a
+  publication that coalesced a wave silently fell back to an older family cache (or the
+  carry-forward walk), and recovery could call a site `current` while a newer handoff waited. Both
+  now search the newest `limits.MAX_FAMILY_PRODUCER_RUNS` (32, new) producer runs of the one
+  `head_sha` listing, newest first, for the exact name of each run's latest attempt; inventories
+  are read only until the name is found and are shared by every key, and `admit` reads a run's job
+  graph only when its inventory holds a pending key's handoff. Every authentication and fail-closed
+  rule is unchanged: inadmissible runs (another repository, event, branch or conclusion) are never
+  producers, an earlier attempt's name in a rerun is not the exact name, two uploads of the name in
+  one run or one naming another head fail the leg, a selected handoff is still bound to its
+  envelope's exact producer attempt and kit (`kit-binding`), and a key with no handoff in the
+  window falls back to the superseding or admitted family cache, then the walk, exactly as before.
+  The bound only ever hides an older run. The carry-forward walk inventories the same bound of
+  producer runs at its earlier commits (also `limits.MAX_CANDIDATES` before), so a wave that a new
+  head overtook before it was published is carried by its exact names instead of being walked past
+  to an older generation. Worst-case reads: one `select` reads at most 48 more inventories (140 of
+  the Pages client's 160 with a full window at the coverage and a full walk, pinned by a test); for
+  the QS wave above, `admit` reads 17 inventories and only the job graphs of the runs holding a
+  ready key, and a full window at Quick Skin's 17 targets stays within its 160 (pinned by a test). No document,
+  schema, CLI flag, job or step name changes; `src/` is digested, so the `MB_KIT_TREE_DIGEST`
+  literals move.
 - Let a pull request's packaged lanes run a narrowed scope (kit gap QS-G6 of the Quick Skin
   mapping), as the owner decided D1-D5 of docs/BUILD-RUNTIME-SELECTION.md on 11 October 2026. The
   plan still holds every obligation of every lane, so the Build, the packaged run and the status
@@ -34,18 +60,218 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   `runtime_selection`, so the generation ledger is unchanged (198 / 398 / 300); with it, 11
   requests behind a direct baseline and 15 behind a reuse reference, which puts Quick Skin's
   generation at 409 (or 413), within the test budget of 440.
-- Compatibility: a new document kind, `mod-base.ci.scope` at schema version 1, which v1.2.1
-  rejects as unknown; optional fields within schema 1: `runtime_selection` of
-  `mod-base.build.config`, `scope` of `mod-base.ci.results` and `scope_sha256` of
-  `mod-base.ci.gate`, which a v1.2.1 reader refuses. `BUILD_ADAPTER_API` stays 1: `derive_scope`
-  is an optional hook that runs only for a config with `runtime_selection`. The compatibility
-  ledger moves its baseline to v1.2.1, whose reader is archived. `ADAPTER_API`,
-  `pixel_metrics_version` 1 and the managed files are those of v1.2.1. The packaged E2E callee
-  gains the `input` job's step "Derive the narrowed runtime scope" and its output `scope`, which
-  the receiving step of the later jobs writes for `fetch-build`, `aggregate` and `seal-gate`
-  (`--scope`); the job graph, job names and permissions are unchanged. Opt-in: without
-  `runtime_selection` every run is that of v1.2.1. Remove `runtime_selection` before rolling a pin
-  back below this release.
+- Compatibility: the baseline moves to the archived v1.4.1 reader
+  (`tests/fixtures/previous_release/v1.4.1`, built from the release commit 9f9fddd like v1.4.0's,
+  whose archive it reproduces byte for byte), the newest release while this section is open. One
+  new document kind, `mod-base.ci.scope` at schema version 1 (`new-kind` in the ledger), which
+  v1.4.1 rejects as unknown; every other kind is `unchanged`. Optional fields within schema 1:
+  `runtime_selection` of `mod-base.build.config`, `scope` of `mod-base.ci.results` and
+  `scope_sha256` of `mod-base.ci.gate`, which a v1.4.1 reader refuses. `BUILD_ADAPTER_API` stays 1:
+  `derive_scope` is an optional hook that runs only for a config with `runtime_selection`.
+  `ADAPTER_API`, `pixel_metrics_version` 1 and the managed files are those of v1.4.1. The packaged
+  E2E callee gains the `input` job's step "Derive the narrowed runtime scope" and its output
+  `scope`, which the receiving step of the later jobs writes for `fetch-build`, `aggregate` and
+  `seal-gate` (`--scope`); the job graph, job names and permissions are unchanged. `ci
+  select-generation` refuses a reused generation whose original packaged run was narrowed, as
+  `reuse.download_reuse_reference` does. Opt-in: without `runtime_selection` every run is that of
+  v1.4.1. Remove `runtime_selection` before rolling a pin back below this release.
+
+## v1.4.1
+
+Patch release: the gallery's **Compare versions** grid gets a cell only for a lane a release
+publishes (#29). v1.4.0 was tagged but never became a GitHub Release, so v1.4.1 is the first
+Release that carries `ci select-generation` (#25, Q9 groundwork KQ9-1 and KQ9-2): everything in
+the v1.4.0 section below ships with it. A mod moves from v1.3.1 (or v1.4.0) to v1.4.1 with an
+ordinary pin bump.
+
+- Give the compare grid a cell only for a published lane (#29). `_gallery_release`
+  (`pages/build.py`) flattens a release's `minecraft` and `loaders` independently from its lanes,
+  and `renderComparison` (`site/assets/gallery.js`) crossed the two lists, recreating pairs that
+  are no lane. A key that spans several Minecraft versions with loaders on only some of them (Block
+  Pops' `master`: Forge only on 1.20.1, NeoForge only on 1.21+) showed an empty slot ("No validated
+  capture was published for this exact cell.") for each such pair: 30 cells for 20 lanes. The grid
+  now skips a pair that is not a lane of the release, from the gallery's own `lanes` records; a
+  loader absent from the whole release keeps its "Not applicable" cell. On the published data Block
+  Pops goes from 30 cells to 20 (one per capture) and Quick Skin, whose keys each hold one Minecraft
+  version, keeps its 34 identical cells. No schema, builder or document changes; `site/` is
+  digested, so the `MB_KIT_TREE_DIGEST` literals move.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files, the workflows' jobs, steps and permissions and the
+  request counts are those of v1.4.0. The compatibility baseline moves to the archived v1.4.0
+  reader (`tests/fixtures/previous_release/v1.4.0`, built from the release commit like v1.3.1's),
+  the immediate predecessor in this changelog, which already reads `mod-base.ci.generation`, so
+  every kind is `unchanged`. Against v1.3.1 the compatibility, upgrade, consumer adoption and
+  rollback notes of v1.4.0 apply as written.
+- Upgrade: bump the pin to v1.4.1 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.4.1`, then `verify --network` and `template check`). The next Pages run publishes the site
+  with the new `gallery.js`. A mod with `admission` lands the bump through its protected route like
+  any change to its callers.
+- Rollback: an ordinary pin bump back to v1.4.0, or to v1.3.1 after removing the consumer jobs as
+  the v1.4.0 rollback note says; nothing is stored that either release would not read.
+
+## v1.4.0
+
+Minor release: `ci select-generation` (#25, Q9 groundwork KQ9-1 and KQ9-2). A consumer job of a
+mod's default branch (status pages, visual review, feature coverage, mod compatibility, Pages)
+can now read the one Build bundle and the one set of runtime results that were tested together
+for a commit, whether the commit's own gates tested them or post-merge reuse covers it with the
+merged pull request's gates. Before this, the gates could seal a reuse reference but no command
+followed one, so a consumer of a push had to keep reading native push runs. Nothing changes for a
+mod that does not add a consumer job: the managed callers, the gates and their request counts are
+those of v1.3.1. v1.4.0 is tagged first and becomes a GitHub Release once the canary passes it.
+
+- Add `ci select-generation` (Q9 groundwork, KQ9-1): the read-only step of a consumer of a
+  default-branch commit selects and authenticates the tested generation that covers it, whether
+  the commit's own runs tested it or post-merge reuse covers it with the merged pull request's
+  gates, and publishes it privately and atomically as `generation.json` (and, with
+  `--with-build`, the complete Build bundle the packaged gate tested). Before this, `ci
+  reuse-admit` could admit a reuse but no command consumed a reuse reference, so no consumer of a
+  push could follow one. The newest run of each managed caller is selected before any result is
+  read; the packaged run decides the mode and the Build run must agree, or the generation is
+  mixed and rejected (`ci-generation-mixed`, exit 2). Both reuse references must name the same
+  original pair, which is authenticated once as `reuse.download_reuse_reference` authenticates
+  it (references never chain). A run in progress, a failed newest run, no packaged run and
+  evidence that has expired or is gone select nothing (exit 3, `ci-generation-pending`,
+  `-failed`, `-absent`, `-evidence-unavailable`): the consumer requests a full generation instead,
+  and nothing partial is published. Outputs `generation` (`full`, `reuse`, `none`) and `reason`.
+  With `--lane ID` (repeatable) or `--all-lanes` it also keeps each chosen lane's export (reports,
+  logs, screenshots, as the adapter wrote them) under `lanes/<id>/` (KQ9-2): the results index must
+  list exactly the packaged gate's lanes, Build and reports, and each lane is verified as `ci
+  aggregate` verifies it and must be what the index sealed. A reused bundle or lane keeps the
+  identity it was built or run under. New module `build_ci.generation`, new limit
+  `MAX_CI_SELECT_GENERATION_REQUESTS` (96 + 3 x `MAX_CI_LANES` = 864: 27 requests for a full
+  generation, 52 for a reused one, 2 for the bundle, 2 for the index and 2 per lane kept, 124 for
+  every lane of a reused Quick Skin generation). `transport._read_sealed_lane` can keep the
+  verified export (`keep`).
+- Add the consumer subject `ci subject --producer generation --pr ""`: a job of the mod's own
+  workflow on the default branch (any workflow of the mod, on a push, `workflow_run`,
+  `workflow_dispatch` or `schedule`) authenticates the live default-branch head exactly like a
+  push and derives the identity, and so the plan, of that commit's own gates; it never has a pull
+  request, runs no candidate hook and seals nothing. With it a consumer job runs the steps of the
+  status callee's evaluate job and then `ci select-generation` (BUILD-PROTOCOL.md, "The subject
+  of a job"). New `identity.GENERATION_PRODUCER`, `GENERATION_EVENTS` and `admits_workflow`.
+- New document kind `mod-base.ci.generation` v1 (`records.validate_generation`,
+  `records.generation_record`), written only by `ci select-generation`, never by a gate; a v1.3.1
+  reader refuses it as unknown.
+- `reuse.download_reuse_reference` is split into the reference read and the original pair read
+  (`reuse._read_reference`, `reuse._originals_finished`) so that `ci select-generation` reads two
+  references and the pair once; its behaviour and request count are unchanged.
+- Compatibility: `ADAPTER_API`, `BUILD_ADAPTER_API` 1, `pixel_metrics_version` 1, the managed
+  files and the workflows' jobs, steps and permissions are those of v1.3.1 (only the
+  `MB_KIT_TREE_DIGEST` literals move, as at every release). The one new kind is
+  `mod-base.ci.generation` v1, which no gate writes or reads; a v1.3.1 reader refuses it as
+  unknown. Every other kind is `unchanged` against the archived v1.3.1 reader
+  (`tests/fixtures/previous_release/v1.3.1`), the immediate predecessor in this changelog.
+- Upgrade: bump the pin to v1.4.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.4.0`, then `verify --network` and `template check`). `template sync` rewrites no managed
+  file beyond the pin. A mod with `admission` lands the bump through its protected route like any
+  change to its callers.
+- Consumer adoption (optional, after the bump): one job per consumer family, on `workflow_run` of
+  "mod-base Build" and "mod-base packaged E2E" for the default branch, with only `actions: read`
+  and `contents: read`. Its steps are those of the kit's `gate-status.yml` evaluate job: check
+  out the mod at `github.sha` and the pinned kit; `ci subject --producer generation --pr ""`;
+  check out the same commit as `candidate`; `ci worker-prepare --roles validator`; `ci plan
+  --pin-candidate candidate`; `ci select-generation --output "$RUNNER_TEMP/generation"
+  [--with-build] [--lane ID ... | --all-lanes]`; and always `ci worker-finish`. The family then
+  reads `generation.json`, the bundle under `build/` and the lane exports under `lanes/<id>/`.
+  Exit 3 publishes nothing: `pending` resolves itself when the other caller's `workflow_run`
+  fires; after `failed`, `absent` or `evidence-unavailable` the consumer asks for a full
+  generation (D-Q9-b), never a native fallback. Exit 2 (`ci-generation-mixed`, corrupt evidence, API
+  failures) is a rejection. Before porting a family, check that the lane export carries every
+  file its native consumer reads; a missing file is an adapter change in the mod. Remove a
+  native push duplicate only after every family that read it consumes the selected generation.
+- Rollback: first remove or disable the consumer jobs that call `ci select-generation` or `ci
+  subject --producer generation` (v1.3.1 has neither and refuses both), then an ordinary pin bump
+  back to v1.3.1. Nothing the gates store changes: `generation.json` stays in the consumer job's
+  private output and the kit never uploads it, so v1.3.1 never meets the new kind.
+
+## v1.3.1
+
+Patch release: one kit process remembers its successful pixel checks by content (#26), which
+cuts the protected policy's conformance run of a mod with public evidence to a third. Nothing else
+changes; a mod moves from v1.3.0 (or v1.2.1) to v1.3.1 with an ordinary pin bump.
+
+- Remember successful pixel checks by content within one process (#26). A public-evidence
+  conformance run measured the same PNG bytes thousands of times (`inspect_png` about 8,940 calls
+  in Block Pops' run, through the handoff, raw-bind, prepare, anchor and compact checks) and
+  compared the same pairs again at every validation pass. `inspect_png`, `inspect_webp` and
+  `compare` now keep successful results in a bounded, process-local LRU
+  (`limits.MAX_PIXEL_MEMO_ENTRIES`, 8,192 entries). The key is the SHA-256 the imaging module
+  computes itself from the exact bytes it has just read and admitted, plus every argument that
+  shapes the result: the format and the size policy (only the kit's own `SizePolicy`; a subclass is
+  measured every time), and for `compare` both payload hashes and the exact type and value of
+  `minimum_changed_fraction` and `region`, which the result echoes (`0`, `0.0` and `-0.0` are
+  different keys; other types are never remembered). A caller's claimed hash is never a key,
+  nothing is kept on disk or shared between processes, a rejection is never remembered, results
+  are handed out as copies, and the reading, byte-bound and signature checks still run on every
+  call. Measured on the conformance child (5 concurrent, Python 3.13), reports byte-identical:
+  Block Pops master 707 s -> 308 s, Quick Skin master 3,897 s -> 1,272 s.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1 (every metric is computed exactly as before), the managed files, the
+  workflows' jobs, steps and permissions and the request counts are those of v1.3.0. The
+  compatibility baseline moves to the archived v1.3.0 reader (`tests/fixtures/previous_release/v1.3.0`,
+  built from the release commit like v1.2.1's), the immediate predecessor in this changelog.
+- Upgrade: bump the pin to v1.3.1 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.3.1`, then `verify --network` and `template check`). A mod with `admission` lands the bump
+  through its protected route like any change to its callers.
+- Rollback: an ordinary pin bump back to v1.3.0; nothing is stored that v1.3.0 would read.
+
+## v1.3.0
+
+Minor release: an optional protected admission in the kit's gate status (#18), which Block Pops
+needs before B3 (`shared-build-and-e2e`) and Quick Skin before its required contexts move to the
+kit, and the new-mod guide with its gate environment tool (#19). Nothing changes for a mod that
+does not add `admission` to its protected config. v1.3.0 is tagged first and becomes a GitHub
+Release once the canary passes it.
+
+- Add an optional protected admission to the kit's gate status (#18, the B3 blocker of the Block
+  Pops activation: in `shared-build-and-e2e` no evaluator of the mod runs on a pull request, and
+  the gate status checked no protected path, no owner approval and no restricted transition). The
+  optional `admission` of `mod-base.build.config` (within schema 1: `protected_paths`, `command`,
+  `approvers`) is read from the protected default branch. When the tested merge of a pull request
+  changes a protected path (its tree entry against the base), `ci gate-status` turns every gate
+  that would have been `success` into `failure` unless the latest decision of a listed approver on
+  the exact head, a comment `<command> approve <head sha>`, approves it; a revocation, an edited
+  decision or none at all refuses. The list must protect the config, the adapter sources, the
+  activation manifest and the four callers. New module `build_ci.admission`, limits
+  `MAX_CI_ADMISSION_PATHS` (64), `MAX_CI_ADMISSION_DIRECTORIES` (16), `MAX_CI_ADMISSION_APPROVERS`
+  (8) and `MAX_CI_ADMISSION_COMMENTS` (300), and `FakeGitHub.set_comments`. Cost: none without
+  `admission`; 3 requests for a pull request that changes no protected directory, and at most
+  1 + 2 * 16 + 8 more otherwise, within the unchanged `MAX_CI_GATE_STATUS_REQUESTS` (96). Opt-in:
+  without `admission` every evaluation is that of v1.2.1. A comment does not start the status
+  caller: after a decision on a finished generation the owner dispatches it
+  (OPERATIONS.md, "Protected admission").
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files, the workflows' jobs, steps and permissions are
+  those of v1.2.1. A kit before v1.3.0 refuses a config that has `admission`. The compatibility
+  baseline moves to the archived v1.2.1 reader (`tests/fixtures/previous_release/v1.2.1`, built
+  from the release commit like v1.2.0's), the immediate predecessor in this changelog.
+- Add the new-mod guide and the gate environment tool (#19). `docs/NEW-MOD.md` orders the
+  steps from an empty repository to the shared gates: repository settings and ruleset, the kit
+  files, Pages and the evidence adapter, the Maven mirror, the `mod-base-gate` environment, the
+  Build adapter, `disabled -> shadow` and `shadow -> shared-build(-and-e2e)`, with what to check
+  before each move. `tools/new_mod_env.py` (stdlib, Python 3.11+) creates that environment,
+  limits it to the default branch and reads the restriction back before it stores the client id
+  variable and the key secret; it reads the key only from the path it is given (a file, a pipe or
+  `-`), refuses a key file other users can read, never prints the key and deletes nothing.
+  OPERATIONS.md records the gate App (`plum-mod-base-gate`, installed on every repository of the
+  organization, its key only in each mod's environment and the owner's copy only in a password
+  manager). No `src/` code and no managed template file change; the staged-file lock covers the
+  new tool.
+- Upgrade: bump the pin to v1.3.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.3.0`, then `verify --network` and `template check`; OPERATIONS.md, "Bumping the kit in a
+  mod"). Admission stays off until the mod enables it: add `admission` (`protected_paths`,
+  `command`, `approvers`) to `scripts/ci/mod-base-build.json` in a pull request that goes through
+  the mod's existing approval route; the config of the default branch decides, so it applies from
+  that merge on. The list must cover the config, every adapter source, the activation manifest and
+  the four `mod-base-*.yml` callers. From then on approve each exact head of a pull request that
+  changes a protected path with `<command> approve <head sha>` and dispatch
+  `mod-base-gate-status.yml` when its gates already finished (OPERATIONS.md, "Protected
+  admission").
+- Rollback: to switch admission off, remove `admission` from the config through the same
+  protected route; v1.3.0 without it evaluates as v1.2.1. To pin back to v1.2.1, remove
+  `admission` first: v1.2.1 refuses a config that has it. Without `admission` the rollback is an
+  ordinary pin bump to v1.2.1.
 
 ## v1.2.1
 

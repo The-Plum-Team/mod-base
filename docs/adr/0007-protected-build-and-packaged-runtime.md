@@ -71,6 +71,7 @@ new at schema version 1, and v1.2.1 rejects it as an unknown kind.
 | `mod-base.ci.gate` | The tested record of a Build or packaged gate: its artifacts, owning Build and native receipts. |
 | `mod-base.ci.results` | The complete packaged results of one attempt as an index: every lane's sealed artifact with the hashes of its envelope, validation record and report, and the owning Build. |
 | `mod-base.ci.reuse` | A direct reference from a merged commit to both original pull-request gate records. |
+| `mod-base.ci.generation` | The tested generation a consumer reads for a default-branch commit: full or reused, both seals, the Build bundle, the results index and every lane's artifact, never written by a gate. |
 | `mod-base.ci.scope` | The narrowed scope one packaged run attempt of a pull request runs: every lane with the obligations it runs, the changed paths and the base commit's full packaged evidence it rests on, bound to the plan and the requesting attempt. |
 | `mod-base.ci.execution` | A private runner-to-root record of one hook execution: bounded log, nonce and context. |
 | `mod-base.ci.root-request` | A private request for one operation of `grammar.CI_ROOT_OPERATIONS`: host fencing, staging, grants, source proof, export sealing or validation sealing. The nonce and closed arguments bind it to the runner and job. |

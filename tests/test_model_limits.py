@@ -198,6 +198,7 @@ class UnitBoundsTest(unittest.TestCase):
     EXPECTED = {
         "MAX_CANDIDATES": 8,
         "MAX_SUBJECT_RUNS": 100,
+        "MAX_FAMILY_PRODUCER_RUNS": 32,
         "MAX_CANONICAL_RUNS": 300,
         "MAX_FAMILY_LEGS": 256,
         "MAX_WORKFLOW_FILE_BYTES": 1024 * 1024,
@@ -211,6 +212,14 @@ class UnitBoundsTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(getattr(limits, name), value)
                 self.assertIs(type(getattr(limits, name)), int)
+
+    def test_the_family_producer_window_holds_a_quick_skin_wave(self) -> None:
+        # Quick Skin hands off one family key per producer run, 17 targets per wave: a window of the
+        # newest MAX_CANDIDATES runs lost the earliest keys of a wave. The window must hold a wave and
+        # stay inside the one page of the head's producer listing.
+        self.assertGreaterEqual(limits.MAX_FAMILY_PRODUCER_RUNS, 17)
+        self.assertGreater(limits.MAX_FAMILY_PRODUCER_RUNS, limits.MAX_CANDIDATES)
+        self.assertLessEqual(limits.MAX_FAMILY_PRODUCER_RUNS, limits.MAX_SUBJECT_RUNS)
 
     def test_every_same_named_module_constant_is_an_alias(self) -> None:
         # A module constant named like a bound (``select.MAX_CANDIDATES``, ``rotate.GENERATION_PROBES``,
