@@ -17,10 +17,11 @@ and Block Pops shadow runs, whose policy outlives their targets); v1.3.0, whose 
 refuses a success for an unapproved change to protected paths when a mod's protected config
 enables `admission` (the B3 blocker of Block Pops), with the new-mod guide and its gate
 environment tool; v1.3.1, which remembers successful pixel checks by content within one
-process (the policy's conformance run measured the same images thousands of times); and v1.4.0,
-whose `ci select-generation` lets a consumer job of the default branch read the tested
-generation of a commit, full or reused, with its Build bundle and verified lane exports (Q9
-groundwork, KQ9-1 and KQ9-2). No mod is active: none has an
+process (the policy's conformance run measured the same images thousands of times); v1.4.0, a
+tag only, never a Release, whose `ci select-generation` lets a consumer job of the default branch
+read the tested generation of a commit, full or reused, with its Build bundle and verified lane
+exports (Q9 groundwork, KQ9-1 and KQ9-2); and v1.4.1, which carries all of v1.4.0 and gives the
+gallery's compare grid a cell only for a lane a release publishes. No mod is active: none has an
 activation manifest, and managed Build/E2E callers have run on GitHub only in the K7 canary
 repository. The design awaits owner agreement; ADR 0007 is Proposed. **K7 is done: its rounds ran at v1.1.1 and the v1.1.3 fixes passed in a second canary (see its row
 below); the v1.1.3 Release is published. When K7 closed, Quick Skin and Block Pops pinned v1.1.1
@@ -32,7 +33,7 @@ without an activation manifest, and Q1–Q10, B1–B7 and the GitHub settings of
   Python 3.11 and 3.13 at the v1.1.1 release commit, 3,059 on Python 3.11 and 3.13 at the v1.1.2
   release commit, 3,060 on Python 3.11 and 3.13 at the v1.1.3 release commit, 3,080 tests on
   each Python 3.11–3.13 at the v1.2.0 release commit, 3,081 on each Python 3.11–3.13 at the v1.2.1
-  release commit, 3,124 on each Python 3.11–3.13 at the v1.3.0 release commit, 3,141 on each Python 3.11–3.13 at the v1.3.1 release commit, 3,169 on each Python 3.11–3.13 at the v1.4.0 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
+  release commit, 3,124 on each Python 3.11–3.13 at the v1.3.0 release commit, 3,141 on each Python 3.11–3.13 at the v1.3.1 release commit, 3,169 on each Python 3.11–3.13 at the v1.4.0 release commit, 3,170 on each Python 3.11–3.13 at the v1.4.1 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
   integration cases use real files, Git and processes, while older isolated tests also replace
   system/account operations.
 - **Hosted account proof:** `ci_linux_worker.py` (132 tests), `ci_linux_deferred.py` (2 tests) and

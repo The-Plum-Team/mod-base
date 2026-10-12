@@ -1,8 +1,8 @@
 {
   "baseline": {
-    "commit": "b4b3831c78b6dac6705db320d1e0ecfc8054371f",
-    "source_sha256": "a65a6be0ec447a04ab3d3569228bbd0a680b91ecec3ca85c2b521e04b488eb3c",
-    "tag": "v1.3.1"
+    "commit": "a153b214bbaf3ae0a0efa08bc83bfe93b5bd0a07",
+    "source_sha256": "ecdb7595e4988080e080b82f49d909111ad9a40bdcb459ab5d6a6c39b8021b01",
+    "tag": "v1.4.0"
   },
   "kinds": {
     "mod-base.build": {
@@ -47,8 +47,8 @@
     },
     "mod-base.ci.generation": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.results": {
       "current_version": 1,

@@ -5,6 +5,39 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.4.1
+
+Patch release: the gallery's **Compare versions** grid gets a cell only for a lane a release
+publishes (#29). v1.4.0 was tagged but never became a GitHub Release, so v1.4.1 is the first
+Release that carries `ci select-generation` (#25, Q9 groundwork KQ9-1 and KQ9-2): everything in
+the v1.4.0 section below ships with it. A mod moves from v1.3.1 (or v1.4.0) to v1.4.1 with an
+ordinary pin bump.
+
+- Give the compare grid a cell only for a published lane (#29). `_gallery_release`
+  (`pages/build.py`) flattens a release's `minecraft` and `loaders` independently from its lanes,
+  and `renderComparison` (`site/assets/gallery.js`) crossed the two lists, recreating pairs that
+  are no lane. A key that spans several Minecraft versions with loaders on only some of them (Block
+  Pops' `master`: Forge only on 1.20.1, NeoForge only on 1.21+) showed an empty slot ("No validated
+  capture was published for this exact cell.") for each such pair: 30 cells for 20 lanes. The grid
+  now skips a pair that is not a lane of the release, from the gallery's own `lanes` records; a
+  loader absent from the whole release keeps its "Not applicable" cell. On the published data Block
+  Pops goes from 30 cells to 20 (one per capture) and Quick Skin, whose keys each hold one Minecraft
+  version, keeps its 34 identical cells. No schema, builder or document changes; `site/` is
+  digested, so the `MB_KIT_TREE_DIGEST` literals move.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files, the workflows' jobs, steps and permissions and the
+  request counts are those of v1.4.0. The compatibility baseline moves to the archived v1.4.0
+  reader (`tests/fixtures/previous_release/v1.4.0`, built from the release commit like v1.3.1's),
+  the immediate predecessor in this changelog, which already reads `mod-base.ci.generation`, so
+  every kind is `unchanged`. Against v1.3.1 the compatibility, upgrade, consumer adoption and
+  rollback notes of v1.4.0 apply as written.
+- Upgrade: bump the pin to v1.4.1 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.4.1`, then `verify --network` and `template check`). The next Pages run publishes the site
+  with the new `gallery.js`. A mod with `admission` lands the bump through its protected route like
+  any change to its callers.
+- Rollback: an ordinary pin bump back to v1.4.0, or to v1.3.1 after removing the consumer jobs as
+  the v1.4.0 rollback note says; nothing is stored that either release would not read.
+
 ## v1.4.0
 
 Minor release: `ci select-generation` (#25, Q9 groundwork KQ9-1 and KQ9-2). A consumer job of a

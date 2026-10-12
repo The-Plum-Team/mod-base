@@ -9,9 +9,9 @@ config, the batch manifest, the results index, the tested generation and the act
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.3.1, which
-reads every kind of this release but one: `mod-base.ci.generation` is a `new-kind`, written at 1
-and refused by the v1.3.1 reader as unknown. Every other kind is `unchanged`. The optional `seeds`
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.4.0, which
+already reads every kind of this release, `mod-base.ci.generation` included, so every kind is
+`unchanged`. The optional `seeds`
 of the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config
 that sets it. So does the optional `admission` (v1.3.0); a v1.2.1 reader refuses a config that
 sets it.
@@ -784,9 +784,9 @@ Build (`build_ci.gate`).
 
 ## Tested generation data v1
 
-`mod-base.ci.generation` writes and reads 1. The kind is new in v1.4.0 (`new-kind` in the
-ledger). It is what `ci select-generation` publishes for a consumer of a default-branch commit:
-the one Build bundle and the one set of runtime results that were tested together, whether the
+`mod-base.ci.generation` writes and reads 1. The kind is new in v1.4.0 (a v1.3.1 reader refuses
+it as unknown) and `unchanged` against the v1.4.0 baseline. It is what `ci select-generation`
+publishes for a consumer of a default-branch commit: the one Build bundle and the one set of runtime results that were tested together, whether the
 commit's own runs tested them (`full`) or the merged pull request's gates cover it (`reuse`). The
 file is `generation.json` in the command's private output, canonical JSON of at most 4 MiB,
 beside the Build bundle (`build/`) and the lane exports (`lanes/<id>/`) the consumer asked for. No
