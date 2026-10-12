@@ -132,6 +132,11 @@ def run_batch_prepare(args: argparse.Namespace) -> int:
         maximum = settings.get("max_members", limits.MAX_CI_BATCH_MEMBERS)
         check(len(args.pulls) <= maximum, "$.batch.members",
               f"the Build config's batch block admits at most {maximum} pull requests")
+        # The list is a file of the protected checkout, reached without crossing a symlink.
+        listed = build_config.protected_file_state(invocation.repo_root, settings["allowed_paths"],
+                                                   max_bytes=limits.MAX_CI_CONFIG_BYTES)
+        check(listed.sha256 is not None, "$.batch.allowed_paths",
+              f"the protected checkout has no allowed-path list at {settings['allowed_paths']}")
         allowed = _document(invocation.repo_root / settings["allowed_paths"], "allowed-path list",
                             limits.MAX_CI_CONFIG_BYTES)
     else:

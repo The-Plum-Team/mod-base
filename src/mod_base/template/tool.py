@@ -1284,7 +1284,8 @@ def evaluate(repo: Path, *, kit_root: Path) -> tuple[list[Drift], list[Drift]]:
                 drifts.extend(Drift(path, "links", problem)
                               for problem in link_violations(path, actual.decode("utf-8", errors="replace"), documents))
         else:
-            actions = _ignored_actions(kit_root, manifest, entry, activation, batching) if path == DEPENDABOT_PATH else ()
+            actions = (_ignored_actions(kit_root, manifest, entry, activation, batching)
+                       if path == DEPENDABOT_PATH else ())
             missing, other = _check_fragment(repo, entry, actual, config, actions)
             (pending if path in staged else drifts).extend(missing)
             drifts.extend(other)

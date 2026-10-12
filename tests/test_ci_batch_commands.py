@@ -178,7 +178,8 @@ class CommandTests(unittest.TestCase):
                 self.assertEqual(len(world.hub.writes()), (3 if delete else 2) * count)
                 self.assertEqual(world.remote.rev("refs/heads/fix/n1") is None, delete)
 
-    def configure(self, *, operators=("AkaNebur",), max_members=None, allowed=ALLOWED) -> None:
+    def configure(self, *, operators=("AkaNebur",), max_members=None, allowed=ALLOWED,
+                  list_path="scripts/batch/allowed.json") -> None:
         """Give the protected checkout a Build config with a batch block and its allowed-path list."""
 
         sources = {"scripts/ci/mod_base_build_adapter.py": b"A = 1\n", "scripts/ci/mod_base_build_dispatch.py": b"",
@@ -186,7 +187,7 @@ class CommandTests(unittest.TestCase):
         document = ci_config()
         document["adapter"]["files"] = [{"path": path, "sha256": hashlib.sha256(data).hexdigest()}
                                         for path, data in sorted(sources.items())]
-        document["batch"] = {"allowed_paths": "scripts/batch/allowed.json", "operators": list(operators)}
+        document["batch"] = {"allowed_paths": list_path, "operators": list(operators)}
         if max_members is not None:
             document["batch"]["max_members"] = max_members
         for path, data in {BUILD_CONFIG_PATH: canonical_json(document), **sources,
@@ -229,6 +230,10 @@ class CommandTests(unittest.TestCase):
             self.configure(allowed=tuple(sorted((kit_path, "src"))))
             with self.subTest(kit_path=kit_path), self.assertRaisesRegex(MbError, "which no batch may change"):
                 self.run_verb(world, "batch-prepare", "--name", "n", "--dry-run", *numbers, env=operator)
+        # The configured list must be a file of the protected checkout.
+        self.configure(list_path="scripts/batch/missing.json")
+        with self.assertRaisesRegex(MbError, "has no allowed-path list"):
+            self.run_verb(world, "batch-prepare", "--name", "n", "--dry-run", *numbers, env=operator)
         # An operator's own list is held to the same paths whenever the checkout has a Build config.
         self.allowed.write_bytes(canonical_json(["scripts", "src"]))
         with self.assertRaisesRegex(MbError, "which no batch may change"):

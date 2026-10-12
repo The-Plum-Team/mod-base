@@ -312,8 +312,6 @@ def rebuild_batch(store: BatchStore, manifest: dict[str, Any]) -> None:
           "$.batch.manifest", "the batch manifest differs from the stack rebuilt from its base and member heads")
 
 
-
-
 class BatchUnsettled(Unavailable):
     """The gates of a merged batch cannot prove it now (exit 3).
 
