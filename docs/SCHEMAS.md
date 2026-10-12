@@ -9,7 +9,7 @@ config, the batch manifest, the results index, the tested generation and the act
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.4.0, which
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.4.1, which
 already reads every kind of this release, `mod-base.ci.generation` included, so every kind is
 `unchanged`. The optional `seeds`
 of the Build config (v1.2.0) stays within schema 1; a reader older than v1.2.0 refuses a config
@@ -788,7 +788,7 @@ Build (`build_ci.gate`).
 ## Tested generation data v1
 
 `mod-base.ci.generation` writes and reads 1. The kind is new in v1.4.0 (a v1.3.1 reader refuses
-it as unknown) and `unchanged` against the v1.4.0 baseline. It is what `ci select-generation`
+it as unknown) and `unchanged` against the v1.4.1 baseline. It is what `ci select-generation`
 publishes for a consumer of a default-branch commit: the one Build bundle and the one set of runtime results that were tested together, whether the
 commit's own runs tested them (`full`) or the merged pull request's gates cover it (`reuse`). The
 file is `generation.json` in the command's private output, canonical JSON of at most 4 MiB,

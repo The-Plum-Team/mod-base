@@ -30,6 +30,10 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   reads 17 inventories and only the job graphs of the runs holding a ready key. No document,
   schema, CLI flag, job or step name changes; `src/` is digested, so the `MB_KIT_TREE_DIGEST`
   literals move.
+- Compatibility: the baseline moves to the archived v1.4.1 reader
+  (`tests/fixtures/previous_release/v1.4.1`, built from the release commit 9f9fddd like v1.4.0's,
+  whose archive it reproduces byte for byte), the newest release while this section is open. It
+  reads every kind of this tree, so every kind stays `unchanged`.
 
 ## v1.4.1
 
