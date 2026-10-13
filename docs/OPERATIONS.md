@@ -430,22 +430,53 @@ When it selects nothing, its exit 3 names why (`reason`):
 | `reason` | What the consumer does |
 | --- | --- |
 | `ci-generation-pending` | nothing: the other caller's completion starts it again |
-| `ci-generation-absent`, `ci-generation-failed`, `ci-generation-evidence-unavailable` | a second job of the same workflow, with no hook, runs `ci subject --producer generation --pr ""` and `ci request-generation --reason <reason>` with a `GH_TOKEN` that may dispatch workflows: a full shared generation of the commit, on request (D-Q9-b). The consumer's own `workflow_run` trigger brings it back when that generation completes, provided that token is a GitHub App installation token with Actions: write: runs dispatched with the workflow's own `github.token` (`actions: write`) start, but their completion wakes no `workflow_run` workflow |
+| `ci-generation-absent`, `ci-generation-evidence-unavailable` | a second job of the same workflow, with no hook, runs `ci subject --producer generation --pr ""` and `ci request-generation --reason <reason>` with a `GH_TOKEN` that may dispatch workflows (the dispatch token below): a full shared generation of the commit, on request (D-Q9-b). The consumer's own `workflow_run` trigger brings it back when that generation completes |
+| `ci-generation-failed` | nothing is requested: a failed or cancelled generation is the commit's result, not a late consumer's gap. An operator reads it and re-runs all jobs of the failed run (or dispatches both callers) once its cause is gone; a request at once would repeat a rate limit or an operator's cancellation in the same hour and spend the commit's one request |
 | `ci-generation-mixed` or a rejection (exit 2) | an operator reads it; nothing is requested |
 
 D-Q9-b, as the owner accepted it on 2026-10-13: one request per commit, never a native fallback,
 and a superseded commit fails closed. `ci request-generation` requests only while the default
 branch is still at the commit and no run of either caller for it is in progress, at most once per
 commit until a requested generation succeeds (`already-requested`), so a commit that fails is not
-tested in a loop. Give the request jobs of every consumer workflow one concurrency group
-(`mod-base-request-generation`, `cancel-in-progress: false`): two consumers that miss at once then
-request once, because the second finds the first one's Build run (`running`). The reason must agree
-with the newest runs of the commit or nothing is requested. What it requests is always a full
-generation: a dispatch never reuses and never runs a narrowed scope. The protected controller only
-tests the live head of the default branch, so a consumer of an **older** commit whose evidence has
-expired (`superseded`) fails closed: a release recovery or a review drain later than 7 days reports
-the expired evidence and is redone for the live head, or goes through the release route's own
-explicit full runs (D-Q9-a).
+tested in a loop. Give the request job of every consumer workflow one concurrency group per
+commit, `mod-base-request-generation-${{ github.sha }}` with `cancel-in-progress: false` (the
+commit the job's subject names: `github.sha` is the default branch's head when the consumer's run
+started). Two consumers of one commit that miss at once then request once, because the second
+finds the first one's Build run (`running`). Never one group for every commit: GitHub keeps one
+pending job per group and cancels it when another queues, so a late wake of an older commit
+would cancel the live head's pending request, and nothing would start it again.
+
+The reason must agree with the newest runs of the commit or nothing is requested. When a newest
+run of the commit is a `workflow_dispatch` run (an earlier request, or an operator's dispatch),
+the commit is requested again only once one of its newest runs lists an expired artifact or none
+at all: a reason read before a requested generation completed (a re-run of a request job, a job
+that waited for a runner) starts nothing. What it requests is always a full generation: a dispatch
+never reuses and never runs a narrowed scope. Each dispatch is sent once: an answer that may hide
+an accepted dispatch (a transport error, a 5xx) is not retried, and the step fails instead of
+starting a second Build run. If the dispatched Build run is not listed in time
+(`GenerationRequestError`), dispatch only the packaged caller on the default branch once the Build
+run is listed; a new request is refused while that Build run's evidence lasts. If the default
+branch moves while the Build run is awaited, the packaged caller is not dispatched (`superseded`),
+because it would run at the newer head and leave that head's generation mixed.
+
+The protected controller only tests the live head of the default branch, so a consumer of an
+**older** commit whose evidence has expired (`superseded`) fails closed: a release recovery or a
+review drain later than 7 days reports the expired evidence and is redone for the live head.
+
+**The dispatch token** is an owner operation, like the gate status App, and needs its own App:
+never add a permission to `plum-mod-base-gate`, which is installed on every repository of the
+organization and whose key every mod's `mod-base-gate` environment holds. Use a dedicated App
+with the one repository permission "Actions: Read and write", installed on the mod's repository
+alone. The request job mints its token with `actions/create-github-app-token`, limited to that
+permission (`permission-actions: write`) and that repository (`repositories:` the mod's name), and
+names an environment of its own whose deployment branches are the default branch alone, holding
+the App's client ID as a variable and its private key as a secret, exactly as `mod-base-gate`
+holds the gate key: never a repository or organization secret, which a workflow of any branch can
+read. It must be an App installation token: runs dispatched with the workflow's own
+`github.token` (`actions: write`) start, but their completion wakes no `workflow_run` workflow, so
+the consumer would never come back. Such a token can dispatch, cancel and re-run the mod's runs
+and delete its artifacts, which is why it is held by the request job alone, a job that runs no
+hook and checks out nothing.
 
 ### Protected admission
 

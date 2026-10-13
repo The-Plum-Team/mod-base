@@ -417,10 +417,13 @@ def select_generation(api: GitHubApi | CommandReads, *, plan: dict[str, Any], ou
 # -- A full generation on request (KQ9-4, D-Q9-b) --------------------------------------------------------
 
 #: The reasons ``ci select-generation`` gives for no generation after which a consumer of the live
-#: default-branch commit may request a full generation of it. ``ci-generation-pending`` resolves
-#: itself when the other caller's run completes; a mixed or corrupt generation is a rejection that
-#: an operator must read, never a reason to test again.
-REQUESTABLE_REASONS = ("ci-generation-absent", "ci-generation-failed", "ci-generation-evidence-unavailable")
+#: default-branch commit may request a full generation of it: none ran, or its evidence is gone.
+#: ``ci-generation-pending`` resolves itself when the other caller's run completes. A failed or
+#: cancelled generation is the commit's result, not a late consumer's gap: requesting it at once
+#: would re-run a failure (a rate limit, an operator's cancellation) in the same hour and spend
+#: the commit's one request, so an operator re-runs it. A mixed or corrupt generation is a rejection
+#: that an operator must read, never a reason to test again.
+REQUESTABLE_REASONS = ("ci-generation-absent", "ci-generation-evidence-unavailable")
 #: What :func:`request_generation` did, by the token ``ci request-generation`` outputs as ``outcome``.
 REQUEST_OUTCOMES = {
     "requested": "a full generation of the commit was requested: the Build caller, then the packaged caller",
@@ -433,7 +436,9 @@ REQUEST_OUTCOMES = {
 
 class GenerationRequestError(MbError):
     """A full generation could not be requested as a whole (exit 2): the Build caller was dispatched
-    but its run did not appear within the bound, so the packaged caller was not dispatched."""
+    but its run did not appear within the bound, so the packaged caller was not dispatched. An
+    operator dispatches only the packaged caller once the Build run is listed; a new request is
+    refused while that Build run's evidence lasts, so it never dispatches a second Build."""
 
     default_reason = "ci-generation-request"
 
@@ -469,16 +474,25 @@ def request_generation(api: GitHubApi, *, subject: dict[str, Any], reason: str,
       that has not completed is ``running`` (its own completion wakes the consumer again), and a
       newest ``workflow_dispatch`` run that did not succeed is ``already-requested``. A commit is
       requested at most once until a requested generation succeeds, so a commit that fails is not
-      tested in a loop. The reason must agree with those runs (no packaged run for
-      ``ci-generation-absent``, a newest run that failed for ``ci-generation-failed``, two successful
-      ones whose evidence is gone for ``ci-generation-evidence-unavailable``), or nothing is
-      requested and the call is a rejection;
+      tested in a loop. The reason must agree with those runs (no failed run and no packaged run
+      for ``ci-generation-absent``, two successful ones for ``ci-generation-evidence-unavailable``),
+      or nothing is requested and the call is a rejection;
+    * a commit whose newest run of either caller is a ``workflow_dispatch`` run (a request, or an
+      operator's dispatch) is requested again only once that evidence is gone: one of its newest
+      runs lists an expired artifact or none at all. A reason read before a requested generation
+      completed (a re-run of a request job, a job queued behind a runner wait), or a request whose
+      Build run was listed too late, starts nothing; that is a rejection too;
     * the default branch is read once more, then the Build caller is dispatched on it and, once its
       new run is listed (at most ``CI_REQUEST_GENERATION_POLLS`` listings
-      ``CI_REQUEST_GENERATION_POLL_SECONDS`` apart), the packaged caller, and the packaged run
-      selects that Build, waiting while it runs. A Build run that does not appear, while the branch
-      is still at the commit, raises :class:`GenerationRequestError` with the packaged caller not
-      dispatched.
+      ``CI_REQUEST_GENERATION_POLL_SECONDS`` apart, a run newer than the commit's newest Build run
+      before the dispatch), the branch is read again and the packaged caller is dispatched; the
+      packaged run selects that Build, waiting while it runs. A Build run that does not appear,
+      while the branch is still at the commit, raises :class:`GenerationRequestError` with the
+      packaged caller not dispatched.
+
+    Each dispatch is sent once: a transport error or a 5xx answer may hide a dispatch GitHub
+    accepted, so it is not retried (``post_json(..., replay=False)``) and the step fails closed
+    rather than start a second Build run.
 
     What is requested is always a full generation, the same one ``ci select-generation`` then
     selects as ``full``: the managed callers take no dispatch inputs, ``ci reuse-admit`` reuses only
@@ -486,21 +500,24 @@ def request_generation(api: GitHubApi, *, subject: dict[str, Any], reason: str,
     results index that names a scope for any other run is refused). A reused generation whose
     original evidence expired is replaced the same way, by a full one, never by another reference.
 
-    A dispatch runs at the head of the branch when it starts. If the branch moves between the last
-    read and the dispatch, the Build run tests the newer commit and is never listed for this one:
-    once the listings are spent the branch is read again and the request is ``superseded``, with
-    the packaged caller not dispatched. The newer commit then has one Build run more than its push
-    started: its packaged gate seals only the newest Build of the live head, and a packaged run
-    sealed before that Build run was listed is refused by ``ci select-generation`` as mixed (an
-    operator's case). Nothing passes half-tested. ``sleep`` waits between listings
-    (``time.sleep`` unless a test gives one).
+    A dispatch runs at the head of the branch when it starts. If the branch moves while the Build
+    run is awaited, the packaged caller is not dispatched (``superseded``): it would run at the
+    newer head, rebuild beside that head's own Build run and leave the live head's generation
+    mixed. Only the moment between the last read and each dispatch is left. If the branch moves
+    there before the Build dispatch, the Build run tests the newer commit and is never listed for
+    this one: once the listings are spent the branch is read again and the request is
+    ``superseded``. The newer commit then has one Build run more than its push started: its
+    packaged gate seals only the newest Build of the live head, and a packaged run sealed before
+    that Build run was listed is refused by ``ci select-generation`` as mixed (an operator's case).
+    Nothing passes half-tested. ``sleep`` waits between listings (``time.sleep`` unless a test
+    gives one).
     """
 
     sleep = time.sleep if sleep is None else sleep
 
     check(type(reason) is str and reason in REQUESTABLE_REASONS, "$.reason",
-          "only an absent, failed or expired generation is requested again: a pending one completes by itself "
-          "and a mixed or corrupt one needs an operator")
+          "only an absent or expired generation is requested: a pending one completes by itself, a failed one "
+          "is re-run by an operator and a mixed or corrupt one needs an operator")
     check(api.writable, "$.api", "requesting a generation needs a client that may start workflows")
     repository, branch, commit = _requested_commit(subject)
     check(api.repository == repository, "$.subject", "the subject is of another repository")
@@ -512,6 +529,15 @@ def request_generation(api: GitHubApi, *, subject: dict[str, Any], reason: str,
         return newest_run(api, producer, head_sha=commit, head_branch=branch, head_repository=repository,
                           events=_EVENTS)
 
+    def evidence_gone(run: dict[str, Any]) -> bool:
+        rows = api.paginate(f"/repos/{repository}/actions/runs/{run['id']}/artifacts", field="artifacts",
+                            max_items=limits.MAX_CI_ARTIFACTS_PER_GATE)
+        return not rows or any(row.get("expired") is True for row in rows)
+
+    def dispatch(producer: str) -> None:
+        api.post_json(f"/repos/{repository}/actions/workflows/{Path(CI_CALLER_WORKFLOWS[producer]).name}/dispatches",
+                      {"ref": branch}, replay=False)
+
     if not live():
         return "superseded"
     runs = {producer: newest(producer) for producer in PRODUCERS}
@@ -522,15 +548,18 @@ def request_generation(api: GitHubApi, *, subject: dict[str, Any], reason: str,
         return "already-requested"
     # The reason must be what the runs show: a consumer that misreads its selection starts nothing.
     failed = any(run is not None and run["conclusion"] != "success" for run in runs.values())
-    check({"ci-generation-absent": runs["packaged"] is None,
-           "ci-generation-failed": failed,
+    check({"ci-generation-absent": runs["packaged"] is None and not failed,
            "ci-generation-evidence-unavailable": runs["packaged"] is not None and not failed}[reason],
           "$.reason", f"the newest runs of the commit do not show {reason}: nothing is requested")
+    present = [run for run in runs.values() if run is not None]
+    check(not any(run["event"] == "workflow_dispatch" for run in present)
+          or any(evidence_gone(run) for run in present), "$.reason",
+          f"a dispatched run of the commit still has its evidence, so it does not show {reason}: nothing is "
+          "requested (a stale reason, or a requested Build run whose packaged caller an operator dispatches)")
     if not live():
         return "superseded"
     before = runs["build"]
-    api.post_json(f"/repos/{repository}/actions/workflows/{Path(CI_CALLER_WORKFLOWS['build']).name}/dispatches",
-                  {"ref": branch})
+    dispatch("build")
     for _ in range(limits.CI_REQUEST_GENERATION_POLLS):
         sleep(limits.CI_REQUEST_GENERATION_POLL_SECONDS)
         run = newest("build")
@@ -541,8 +570,10 @@ def request_generation(api: GitHubApi, *, subject: dict[str, Any], reason: str,
         if not live():
             return "superseded"
         raise GenerationRequestError(
-            "the requested Build run did not appear in time; once it runs, dispatch the packaged caller on "
-            f"{branch} by hand, or run this request again when it has finished")
-    api.post_json(f"/repos/{repository}/actions/workflows/{Path(CI_CALLER_WORKFLOWS['packaged']).name}/dispatches",
-                  {"ref": branch})
+            "the requested Build run did not appear in time; once it is listed, dispatch only the packaged "
+            f"caller on {branch} by hand (a new request is refused while that Build run's evidence lasts)")
+    # The packaged dispatch also runs at the branch head: never at a head the Build run did not test.
+    if not live():
+        return "superseded"
+    dispatch("packaged")
     return "requested"

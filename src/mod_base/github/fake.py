@@ -367,7 +367,7 @@ class FakeGitHub:
     def read_listing(self, read: Callable[[], _T]) -> _T:
         return read_consistently(read, sleep=self._wait)
 
-    def post_json(self, path: str, payload: Mapping[str, Any]) -> Any:
+    def post_json(self, path: str, payload: Mapping[str, Any], *, replay: bool = True) -> Any:
         if not self._writable:
             raise ReadOnlyViolation(f"refusing POST {path!r} on a read-only GitHub client"[:200])
         _validate_path(path)

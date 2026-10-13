@@ -5,7 +5,10 @@ Block Pops ``select_artifact.GitHubApi`` (``ProxyHandler({})``, no redirects, de
 :data:`REQUEST_ATTEMPTS` attempts with exponential backoff and path-derived jitter capped at
 :data:`MAX_RETRY_DELAY_SECONDS`, retrying only transport errors, :data:`RETRYABLE_HTTP_STATUSES`
 and rate-limited 403s (``X-RateLimit-Remaining: 0``, ``Retry-After`` or a "rate limit" body),
-honouring ``Retry-After``. A client is read-only unless constructed ``writable=True``: any
+honouring ``Retry-After``. A POST sent with ``replay=False`` (a workflow dispatch, which GitHub
+does not deduplicate) is retried only after a rate-limit answer, on which GitHub acts not at all:
+a transport error or a 5xx may hide an accepted request, so it raises at once. A client is
+read-only unless constructed ``writable=True``: any
 non-GET request on a read-only client raises :class:`ReadOnlyViolation` before touching the
 network. ``max_requests`` bounds every request (retries included) of one client. The writes are
 ``post_json`` (workflow dispatches, a new pull request, an issue comment), ``patch_json`` (a pull
@@ -438,12 +441,13 @@ class GitHubApi:
                 delay = max(delay, reset - time.time() + 1.0)
         return delay if delay <= MAX_RETRY_DELAY_SECONDS else None
 
-    def _retrying(self, path: str, attempt_once: Callable[[], Any]) -> Any:
+    def _retrying(self, path: str, attempt_once: Callable[[], Any], *, replay: bool = True) -> Any:
         for attempt in range(REQUEST_ATTEMPTS):
             outcome = attempt_once()
             if not isinstance(outcome, _Failure):
                 return outcome
-            if not outcome.retryable or attempt + 1 == REQUEST_ATTEMPTS:
+            retryable = outcome.retryable and (replay or isinstance(outcome.error, ApiRateLimited))
+            if not retryable or attempt + 1 == REQUEST_ATTEMPTS:
                 raise outcome.error
             delay = self._retry_delay(path, attempt, outcome.headers)
             if delay is None:
@@ -452,7 +456,7 @@ class GitHubApi:
         raise AssertionError("unreachable: the retry loop returns or raises")  # pragma: no cover
 
     def _request(self, method: str, path: str, *, params: Mapping[str, str | int] | None = None,
-                 body: bytes | None = None, statuses: frozenset[int]) -> tuple[int, bytes]:
+                 body: bytes | None = None, statuses: frozenset[int], replay: bool = True) -> tuple[int, bytes]:
         if method != "GET" and not self._writable:
             raise ReadOnlyViolation(f"refusing {method} {path!r} on a read-only GitHub client"[:200])
         path = _validate_path(path)
@@ -478,7 +482,7 @@ class GitHubApi:
                                path=path)
             return status, data
 
-        return self._retrying(path, attempt_once)
+        return self._retrying(path, attempt_once, replay=replay)
 
     # -- public surface ---------------------------------------------------------------------------
 
@@ -508,15 +512,17 @@ class GitHubApi:
 
         return read_consistently(read, sleep=self._sleep)
 
-    def post_json(self, path: str, payload: Mapping[str, Any]) -> Any:
-        """POST canonical JSON; requires ``writable``. Returns decoded JSON or None for 204."""
+    def post_json(self, path: str, payload: Mapping[str, Any], *, replay: bool = True) -> Any:
+        """POST canonical JSON; requires ``writable``. Returns decoded JSON or None for 204. With
+        ``replay=False`` only a rate-limit answer is retried: a request that is not idempotent (a
+        workflow dispatch) is never sent again after an answer that may hide its acceptance."""
 
         if not self._writable:
             raise ReadOnlyViolation(f"refusing POST {path!r} on a read-only GitHub client"[:200])
         if not isinstance(payload, Mapping):
             raise MbError("POST payload must be a JSON object", reason="usage")
         status, data = self._request("POST", path, body=canonical_json(dict(payload)),
-                                     statuses=frozenset({200, 201, 202, 204}))
+                                     statuses=frozenset({200, 201, 202, 204}), replay=replay)
         if status == 204 or not data:
             return None
         try:

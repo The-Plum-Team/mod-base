@@ -71,27 +71,64 @@ class World:
     def dispatches(self) -> list[tuple[str, dict]]:
         return [(path, payload) for method, path, payload in self.hub.mutations if method == "POST"]
 
+    def artifact(self, artifact_id: int, run_id: int, *, expired: bool = False) -> None:
+        self.hub.add_artifact({"id": artifact_id, "name": f"mb-ci-{artifact_id}", "expired": expired,
+                               "created_at": "2026-10-05T10:00:00Z", "expires_at": "2026-10-12T10:00:00Z",
+                               "workflow_run": {"id": run_id, "head_sha": COMMIT, "head_branch": BRANCH}}, b"zip")
+
 
 class RequestTests(unittest.TestCase):
     def test_an_expired_or_absent_generation_of_the_live_head_is_requested_build_first(self) -> None:
         for reason, runs in (("ci-generation-evidence-unavailable", (run(10), run(11, "packaged"))),
-                             ("ci-generation-absent", ()),
-                             ("ci-generation-failed", (run(10, conclusion="failure"), run(11, "packaged")))):
+                             ("ci-generation-absent", ())):
             world = World(*runs)
-            with self.subTest(reason=reason):
+            with self.subTest(reason=reason), mock.patch.object(world.hub, "post_json",
+                                                                wraps=world.hub.post_json) as post:
                 self.assertEqual(world.request(reason), "requested")
                 # The Build caller, then (once its new run is listed) the packaged caller, on the branch.
                 self.assertEqual(world.dispatches(), [(BUILD_DISPATCH, {"ref": BRANCH}),
                                                       (PACKAGED_DISPATCH, {"ref": BRANCH})])
+                # Each dispatch is sent once: an answer that may hide an accepted dispatch is not retried.
+                self.assertEqual([call.kwargs for call in post.call_args_list], [{"replay": False}] * 2)
                 self.assertEqual(world.sleeps, [limits.CI_REQUEST_GENERATION_POLL_SECONDS] * 2)
                 self.assertLessEqual(world.hub.request_count, limits.MAX_CI_REQUEST_GENERATION_REQUESTS)
-                self.assertEqual(world.hub.request_count, 8 + 2)  # two listings until the run appeared
+                # Two listings until the run appeared, and the branch read again before the packaged dispatch.
+                self.assertEqual(world.hub.request_count, 10 + 2)
+
+    def test_a_failed_generation_is_never_requested(self) -> None:
+        # A failure is the commit's result (a rate limit, an operator's cancellation): an operator
+        # re-runs it, and the commit's one request is not spent on it within the same hour.
+        world = World(run(10, conclusion="failure"), run(11, "packaged"))
+        for reason in ("ci-generation-failed", "ci-generation-absent", "ci-generation-evidence-unavailable"):
+            with self.subTest(reason=reason), self.assertRaises(MbError):
+                world.request(reason)
+        self.assertNotIn("ci-generation-failed", generation.REQUESTABLE_REASONS)
+        cancelled = World(run(10, conclusion="cancelled"))
+        with self.assertRaisesRegex(MbError, "do not show"):
+            cancelled.request("ci-generation-absent")
+        self.assertEqual((world.dispatches(), cancelled.dispatches()), ([], []))
 
     def test_a_commit_the_default_branch_moved_past_is_never_requested(self) -> None:
         world = World(run(10), run(11, "packaged"))
         world.hub.set_branch(BRANCH, NEWER, TREE)
         self.assertEqual(world.request(), "superseded")
         self.assertEqual((world.dispatches(), world.sleeps), ([], []))
+
+    def test_a_branch_that_moves_once_the_build_run_is_listed_gets_no_packaged_dispatch(self) -> None:
+        # The packaged dispatch would run at the newer head, rebuild beside that head's own
+        # (reused) Build run and leave the live head's generation mixed: nothing more is dispatched.
+        world = World(run(10), run(11, "packaged"))
+        original = world.sleep
+
+        def sleep(seconds: float) -> None:
+            original(seconds)
+            if len(world.sleeps) == world.appear_after:
+                world.hub.set_branch(BRANCH, NEWER, TREE)
+
+        self.assertEqual(generation.request_generation(world.hub, subject=subject(), sleep=sleep,
+                                                       reason="ci-generation-evidence-unavailable"), "superseded")
+        self.assertEqual(world.dispatches(), [(BUILD_DISPATCH, {"ref": BRANCH})])
+        self.assertEqual(world.hub.request_count, 7 + 2 + 2)
 
     def test_a_run_in_progress_or_a_failed_request_is_not_requested_again(self) -> None:
         cases = {
@@ -106,16 +143,43 @@ class RequestTests(unittest.TestCase):
         for label, (runs, outcome) in cases.items():
             world = World(*runs)
             with self.subTest(case=label):
-                self.assertEqual(world.request("ci-generation-failed"), outcome)
+                self.assertEqual(world.request(), outcome)
                 self.assertEqual(world.dispatches(), [])
-        # A requested generation that succeeded and whose evidence expired since is requested again.
-        world = World(run(12, event="workflow_dispatch"), run(13, "packaged", event="workflow_dispatch"))
-        self.assertEqual(world.request(), "requested")
+
+    def test_a_requested_generation_is_requested_again_only_once_its_evidence_is_gone(self) -> None:
+        requested = (run(12, event="workflow_dispatch"), run(13, "packaged", event="workflow_dispatch"))
+        for label, artifacts in (("expired", ((1, 12, True), (2, 13, False))), ("none listed", ()),
+                                 ("packaged expired", ((1, 12, False), (2, 13, True)))):
+            world = World(*requested)
+            for artifact_id, run_id, expired in artifacts:
+                world.artifact(artifact_id, run_id, expired=expired)
+            with self.subTest(evidence=label):
+                self.assertEqual(world.request(), "requested")
+                # The new Build run must be newer than the requested one before the packaged
+                # dispatch: the old successful dispatch run is not it.
+                self.assertEqual(world.sleeps, [limits.CI_REQUEST_GENERATION_POLL_SECONDS] * 2)
+                self.assertEqual(world.dispatches(), [(BUILD_DISPATCH, {"ref": BRANCH}),
+                                                      (PACKAGED_DISPATCH, {"ref": BRANCH})])
+                self.assertLessEqual(world.hub.request_count, limits.MAX_CI_REQUEST_GENERATION_REQUESTS)
+        # A reason read before the requested generation completed (a re-run of a request job, a
+        # job queued behind a runner wait) finds its evidence still there: nothing is requested.
+        stale = World(*requested)
+        stale.artifact(1, 12)
+        stale.artifact(2, 13)
+        with self.assertRaisesRegex(MbError, "still has its evidence"):
+            stale.request()
+        # A requested Build run whose packaged caller was never dispatched (listed too late): a new
+        # request would dispatch a second Build; an operator dispatches only the packaged caller.
+        orphan = World(run(12, event="workflow_dispatch"))
+        orphan.artifact(1, 12)
+        with self.assertRaisesRegex(MbError, "still has its evidence"):
+            orphan.request("ci-generation-absent")
+        self.assertEqual((stale.dispatches(), orphan.dispatches(), stale.sleeps), ([], [], []))
 
     def test_a_build_run_that_never_appears_stops_before_the_packaged_dispatch(self) -> None:
         world = World(run(10), run(11, "packaged"))
         world.appear = None
-        with self.assertRaises(generation.GenerationRequestError):
+        with self.assertRaisesRegex(generation.GenerationRequestError, "dispatch only the packaged caller"):
             world.request()
         self.assertEqual(world.dispatches(), [(BUILD_DISPATCH, {"ref": BRANCH})])
         self.assertEqual(len(world.sleeps), limits.CI_REQUEST_GENERATION_POLLS)
@@ -171,12 +235,12 @@ class RequestTests(unittest.TestCase):
 
     def test_only_a_requestable_reason_and_a_default_branch_subject_are_admitted(self) -> None:
         world = World(run(10), run(11, "packaged"))
-        for reason in ("ci-generation-pending", "ci-generation-mixed", "rejected", "", None):
+        for reason in ("ci-generation-pending", "ci-generation-mixed", "ci-generation-failed", "rejected", "", None):
             with self.subTest(reason=reason), self.assertRaises(MbError):
                 world.request(reason)  # type: ignore[arg-type]
         # A reason the runs do not show starts nothing: a consumer that misread its selection.
         for reason, runs in (("ci-generation-absent", (run(10), run(11, "packaged"))),
-                             ("ci-generation-failed", (run(10), run(11, "packaged"))),
+                             ("ci-generation-absent", (run(10, conclusion="failure"),)),
                              ("ci-generation-evidence-unavailable", (run(10, conclusion="failure"),
                                                                      run(11, "packaged"))),
                              ("ci-generation-evidence-unavailable", (run(10),))):
@@ -226,7 +290,7 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()),
                              {"requested": "true", "outcome": "requested"})
             self.assertIn("request-generation: requested", stdout.getvalue())
-        for reason in ("ci-generation-pending", "ci-generation-mixed"):
+        for reason in ("ci-generation-pending", "ci-generation-mixed", "ci-generation-failed"):
             with self.subTest(reason=reason), self.assertRaises(MbError):
                 cli.build_parser("ci").parse_args(["ci", "request-generation", "--repo", "mod", "--state", "s",
                                                    "--reason", reason, "--github-output", "o"])

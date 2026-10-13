@@ -10,21 +10,30 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 - `ci request-generation --reason TOKEN --github-output F` (KQ9-4, D-Q9-b as the owner accepted it
   on 2026-10-13: one request per commit, never a native fallback, a superseded commit fails
   closed). The step of a consumer's own job after `ci subject --producer generation`, when `ci
-  select-generation` selected nothing for `ci-generation-absent`, `-failed` or
-  `-evidence-unavailable`: while the default branch is still at the commit and no run of either
-  managed caller for it is in progress, it dispatches the Build caller and, once that run is
-  listed, the packaged caller (`generation.request_generation`). Outputs `requested` and
-  `outcome`: `requested`, `superseded` (the branch moved on: an older commit's expired evidence is
-  never rebuilt, also when the branch moves before the dispatched Build run is listed), `running`
-  or `already-requested` (a newest dispatched run of the commit did not succeed). A pending, mixed
-  or corrupt generation is never requested, and the reason must agree with the newest runs. What
-  it requests is always a full generation: the managed callers take no dispatch inputs, `ci
-  reuse-admit` reuses only for a push and `ci scope` narrows only a pull request's packaged run, so
-  a reused generation whose originals expired is replaced by a full one. Its job runs no hook; its
-  `GH_TOKEN` must be a GitHub App installation token with Actions: write for the dispatched runs'
-  completion to wake the consumer's `workflow_run` (a `github.token` dispatch wakes none). New
-  bounds `MAX_CI_REQUEST_GENERATION_REQUESTS` (64; 9 for a request whose Build run is listed at
-  the first poll, at most 33 when it never appears), `CI_REQUEST_GENERATION_POLLS` (24) and
+  select-generation` selected nothing for `ci-generation-absent` or
+  `ci-generation-evidence-unavailable`: while the default branch is still at the commit and no run
+  of either managed caller for it is in progress, it dispatches the Build caller and, once that run
+  is listed and the branch is still at the commit, the packaged caller
+  (`generation.request_generation`). Outputs `requested` and `outcome`: `requested`, `superseded`
+  (the branch moved on: an older commit's expired evidence is never rebuilt, also when the branch
+  moves while the dispatched Build run is awaited, so the packaged run never lands on a newer
+  head), `running` or `already-requested` (a newest dispatched run of the commit did not succeed).
+  A pending, failed, mixed or corrupt generation is never requested (a failed one is an
+  operator's re-run: a request at once would repeat a rate limit or a cancellation and spend the
+  commit's one request), and the reason must agree with the newest runs. A commit whose newest
+  run is a dispatched one is requested again only once one of its newest runs lists an expired
+  artifact or none, so a stale reason (a re-run request job) starts nothing. Each dispatch is sent
+  once: `GitHubApi.post_json(..., replay=False)` retries only a rate-limit answer, never a
+  transport error or a 5xx that may hide an accepted dispatch. What it requests is always a full
+  generation: the managed callers take no dispatch inputs, `ci reuse-admit` reuses only for a push
+  and `ci scope` narrows only a pull request's packaged run, so a reused generation whose
+  originals expired is replaced by a full one. Its job runs no hook; its `GH_TOKEN` is an
+  installation token of a dedicated App with Actions: write on the mod's repository alone, kept in
+  an environment restricted to the default branch (never the org-wide gate App), for the
+  dispatched runs' completion to wake the consumer's `workflow_run` (a `github.token` dispatch
+  wakes none); its concurrency group is per commit (docs/OPERATIONS.md). New bounds
+  `MAX_CI_REQUEST_GENERATION_REQUESTS` (64; 11 for a request whose Build run is listed at the
+  first poll, at most 34, and 33 when it never appears), `CI_REQUEST_GENERATION_POLLS` (24) and
   `CI_REQUEST_GENERATION_POLL_SECONDS` (5). The message of `ci-generation-mixed` now says that an
   operator dispatches the full generation.
 - Pages consumption of a shared generation (KQ9-3): route A by owner decision of 2026-10-13. The
