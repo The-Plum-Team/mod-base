@@ -430,19 +430,22 @@ When it selects nothing, its exit 3 names why (`reason`):
 | `reason` | What the consumer does |
 | --- | --- |
 | `ci-generation-pending` | nothing: the other caller's completion starts it again |
-| `ci-generation-absent`, `ci-generation-failed`, `ci-generation-evidence-unavailable` | a second job of the same workflow, with `actions: write` and no hook, runs `ci subject --producer generation --pr ""` and `ci request-generation --reason <reason>`: a full shared generation of the commit, on request (D-Q9-b). The consumer's own `workflow_run` trigger brings it back when that generation completes |
+| `ci-generation-absent`, `ci-generation-failed`, `ci-generation-evidence-unavailable` | a second job of the same workflow, with no hook, runs `ci subject --producer generation --pr ""` and `ci request-generation --reason <reason>` with a `GH_TOKEN` that may dispatch workflows: a full shared generation of the commit, on request (D-Q9-b). The consumer's own `workflow_run` trigger brings it back when that generation completes, provided that token is a GitHub App installation token with Actions: write: runs dispatched with the workflow's own `github.token` (`actions: write`) start, but their completion wakes no `workflow_run` workflow |
 | `ci-generation-mixed` or a rejection (exit 2) | an operator reads it; nothing is requested |
 
-`ci request-generation` requests only while the default branch is still at the commit and no run
-of either caller for it is in progress, at most once per commit until a requested generation
-succeeds (`already-requested`), so a commit that fails is not tested in a loop. It never falls back
-to a native run. Give the request jobs of every consumer workflow one concurrency group
+D-Q9-b, as the owner accepted it on 2026-10-13: one request per commit, never a native fallback,
+and a superseded commit fails closed. `ci request-generation` requests only while the default
+branch is still at the commit and no run of either caller for it is in progress, at most once per
+commit until a requested generation succeeds (`already-requested`), so a commit that fails is not
+tested in a loop. Give the request jobs of every consumer workflow one concurrency group
 (`mod-base-request-generation`, `cancel-in-progress: false`): two consumers that miss at once then
 request once, because the second finds the first one's Build run (`running`). The reason must agree
-with the newest runs of the commit or nothing is requested. The protected controller only tests the live head of the default branch, so a
-consumer of an **older** commit whose evidence has expired (`superseded`) fails closed: a release
-recovery or a review drain later than 7 days reports the expired evidence and is redone for the
-live head, or goes through the release route's own explicit full runs (D-Q9-a).
+with the newest runs of the commit or nothing is requested. What it requests is always a full
+generation: a dispatch never reuses and never runs a narrowed scope. The protected controller only
+tests the live head of the default branch, so a consumer of an **older** commit whose evidence has
+expired (`superseded`) fails closed: a release recovery or a review drain later than 7 days reports
+the expired evidence and is redone for the live head, or goes through the release route's own
+explicit full runs (D-Q9-a).
 
 ### Protected admission
 

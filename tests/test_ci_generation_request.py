@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from mod_base import cli
-from mod_base.build_ci import commands, generation, identity
+from mod_base.build_ci import commands, generation, identity, reuse, scope
 from mod_base.errors import MbError
 from mod_base.github.fake import FakeGitHub
 from mod_base.model import limits
@@ -119,12 +119,55 @@ class RequestTests(unittest.TestCase):
             world.request()
         self.assertEqual(world.dispatches(), [(BUILD_DISPATCH, {"ref": BRANCH})])
         self.assertEqual(len(world.sleeps), limits.CI_REQUEST_GENERATION_POLLS)
+        # One dispatch, every listing, and the branch read once more before the error.
+        self.assertEqual(world.hub.request_count, 7 + limits.CI_REQUEST_GENERATION_POLLS + 2)
         self.assertLessEqual(world.hub.request_count, limits.MAX_CI_REQUEST_GENERATION_REQUESTS)
         # An older push run, or a run of another event, is not the dispatched one.
         world = World(run(10), run(11, "packaged"))
         world.appear = run(5, event="workflow_dispatch", created_at="2026-10-01T10:00:00Z")
         with self.assertRaises(generation.GenerationRequestError):
             world.request()
+
+    def test_a_branch_that_moves_before_the_build_run_is_listed_supersedes_the_request(self) -> None:
+        # The dispatch ran at the newer head, so no run of this commit appears: nothing more is
+        # dispatched, and the consumer of this commit fails closed.
+        world = World(run(10), run(11, "packaged"))
+        world.appear = None
+        original = world.sleep
+
+        def sleep(seconds: float) -> None:
+            original(seconds)
+            if len(world.sleeps) == 1:
+                world.hub.set_branch(BRANCH, NEWER, TREE)
+
+        self.assertEqual(generation.request_generation(world.hub, subject=subject(), sleep=sleep,
+                                                       reason="ci-generation-evidence-unavailable"), "superseded")
+        self.assertEqual(world.dispatches(), [(BUILD_DISPATCH, {"ref": BRANCH})])
+        self.assertEqual(world.hub.request_count, 7 + limits.CI_REQUEST_GENERATION_POLLS + 2)
+
+    def test_what_a_request_starts_is_always_a_full_generation(self) -> None:
+        # The managed callers take no dispatch inputs: a request cannot choose a mode, a scope or
+        # lanes. Their dispatched runs of a default-branch commit then neither reuse nor narrow,
+        # decided without a request.
+        managed = Path(__file__).resolve().parents[1] / "template" / "managed" / ".github" / "workflows"
+        for producer in ("build", "packaged"):
+            with self.subTest(producer=producer):
+                text = (managed / Path(CI_CALLER_WORKFLOWS[producer]).name).read_text(encoding="utf-8")
+                self.assertEqual(text.count("workflow_dispatch:"), 1)
+                self.assertIn("\n  workflow_dispatch: {}\n", text)
+        from tests import test_ci_scope
+
+        world = test_ci_scope.World()
+        with tempfile.TemporaryDirectory() as directory:
+            admitted = reuse.admit_post_merge_reuse(world.api, plan=world.base, event="workflow_dispatch",
+                                                    temporary_root=Path(directory))
+            scoped = scope.derive_scope(world.api, plan=world.base, config=world.config, event="workflow_dispatch",
+                                        run_id=test_ci_scope.RUN_ID, run_attempt=test_ci_scope.RUN_ATTEMPT,
+                                        workflow_path=test_ci_scope.PACKAGED, temporary_root=Path(directory),
+                                        derive=world.derive)
+        self.assertEqual(admitted.reason, "not-a-push")
+        self.assertIsInstance(scoped, scope.FullScope)
+        self.assertEqual((scoped.reason, world.inputs, world.api.request_count), ("not-a-pull-request", [], 0))
 
     def test_only_a_requestable_reason_and_a_default_branch_subject_are_admitted(self) -> None:
         world = World(run(10), run(11, "packaged"))

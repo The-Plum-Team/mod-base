@@ -145,8 +145,8 @@ KIT: dict[str, tuple[Any, str]] = {
                                                         "Build bundle, 2 for the results index and 2 per lane kept, "
                                                         "and room for retries and further listing pages"),
     "MAX_CI_REQUEST_GENERATION_REQUESTS": (64, "API requests one `ci request-generation` may spend: 8 and one per "
-                                               "listing of the Build caller's runs, at most 32, and room for retries "
-                                               "and further listing pages"),
+                                               "listing of the Build caller's runs, at most 33 with a run that never "
+                                               "appears, and room for retries and further listing pages"),
     "CI_REQUEST_GENERATION_POLLS": (24, "listings of the Build caller's runs until the dispatched run appears"),
     "CI_REQUEST_GENERATION_POLL_SECONDS": (5, "seconds before each of those listings: two minutes in all"),
     "MAX_CI_STATUS_CONTEXT_CHARS": (100, "one status context string of the protected Build configuration"),

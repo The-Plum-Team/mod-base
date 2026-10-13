@@ -5,6 +5,39 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- `ci request-generation --reason TOKEN --github-output F` (KQ9-4, D-Q9-b as the owner accepted it
+  on 2026-10-13: one request per commit, never a native fallback, a superseded commit fails
+  closed). The step of a consumer's own job after `ci subject --producer generation`, when `ci
+  select-generation` selected nothing for `ci-generation-absent`, `-failed` or
+  `-evidence-unavailable`: while the default branch is still at the commit and no run of either
+  managed caller for it is in progress, it dispatches the Build caller and, once that run is
+  listed, the packaged caller (`generation.request_generation`). Outputs `requested` and
+  `outcome`: `requested`, `superseded` (the branch moved on: an older commit's expired evidence is
+  never rebuilt, also when the branch moves before the dispatched Build run is listed), `running`
+  or `already-requested` (a newest dispatched run of the commit did not succeed). A pending, mixed
+  or corrupt generation is never requested, and the reason must agree with the newest runs. What
+  it requests is always a full generation: the managed callers take no dispatch inputs, `ci
+  reuse-admit` reuses only for a push and `ci scope` narrows only a pull request's packaged run, so
+  a reused generation whose originals expired is replaced by a full one. Its job runs no hook; its
+  `GH_TOKEN` must be a GitHub App installation token with Actions: write for the dispatched runs'
+  completion to wake the consumer's `workflow_run` (a `github.token` dispatch wakes none). New
+  bounds `MAX_CI_REQUEST_GENERATION_REQUESTS` (64; 9 for a request whose Build run is listed at
+  the first poll, at most 33 when it never appears), `CI_REQUEST_GENERATION_POLLS` (24) and
+  `CI_REQUEST_GENERATION_POLL_SECONDS` (5). The message of `ci-generation-mixed` now says that an
+  operator dispatches the full generation.
+- Pages consumption of a shared generation (KQ9-3): route A by owner decision of 2026-10-13. The
+  mod's consumer workflow is the producer Pages reads (`source.workflow` or
+  `families[].producer.workflow`); Pages, `publish.yml`, selection and schemas are unchanged, and
+  route B (a shared-generation source kind) is not planned (docs/BUILD-E2E-DESIGN.md).
+- Compatibility: no document kind, schema version, managed file, job or step changes; `src/` is
+  digested, so the `MB_KIT_TREE_DIGEST` literals move. The baseline moves to the archived v1.5.0
+  reader (`tests/fixtures/previous_release/v1.5.0`, built from the release commit 1273a53 like
+  v1.4.1's, whose archive the same build reproduces byte for byte), the newest release while this
+  section is open. It reads every kind of this tree, `mod-base.ci.scope` included, so every kind
+  is `unchanged`.
+
 ## v1.5.0
 
 Minor release: a pull request's packaged lanes can run a narrowed, sealed runtime scope (#22,

@@ -388,8 +388,9 @@ MAX_CI_REUSE_ADMIT_REQUESTS = 96
 MAX_CI_SELECT_GENERATION_REQUESTS = 96 + 3 * MAX_CI_LANES
 #: ``ci request-generation`` reads the default branch and its head twice, lists the newest run of
 #: each managed caller, dispatches the Build caller, lists its runs until the new one appears and
-#: dispatches the packaged caller: 8 requests and one for each listing of its runs (at most 32);
-#: the rest is for retries and for the further pages of a listing.
+#: dispatches the packaged caller: 8 requests and one for each listing of its runs (at most 32),
+#: and the default branch and its head once more when the run never appears (33, with one dispatch); the rest is for
+#: retries and for the further pages of a listing.
 MAX_CI_REQUEST_GENERATION_REQUESTS = 64
 #: How often ``ci request-generation`` lists the Build caller's runs for the run it dispatched, and
 #: the seconds before each listing: GitHub lists a dispatched run within seconds, so two minutes.

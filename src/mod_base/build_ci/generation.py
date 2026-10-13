@@ -114,7 +114,8 @@ class GenerationUnavailable(Unavailable):
 
 class MixedGeneration(MbError):
     """The two managed callers' newest runs for the commit do not form one tested generation
-    (exit 2): neither result may be consumed alone, and a full generation on request replaces it."""
+    (exit 2): neither result may be consumed alone. An operator reads it and replaces it with a
+    full generation dispatched by hand; ``ci request-generation`` never requests one for it."""
 
     default_reason = "ci-generation-mixed"
 
@@ -209,8 +210,8 @@ def _decide(build: _Newest, packaged: _Newest) -> str:
     expected = {"reuse": "reuse", "selected": "full", "rebuilt": "absent"}[packaged.state]
     if build.state != expected:
         raise MixedGeneration(f"the packaged run {packaged.run_id} is a {packaged.state} run, but the Build caller's "
-                              f"newest run for the commit is {build.state} ({build.where}); run a full generation "
-                              "on request")
+                              f"newest run for the commit is {build.state} ({build.where}); an operator dispatches "
+                              "a full generation")
     return packaged.state
 
 
@@ -474,13 +475,25 @@ def request_generation(api: GitHubApi, *, subject: dict[str, Any], reason: str,
       requested and the call is a rejection;
     * the default branch is read once more, then the Build caller is dispatched on it and, once its
       new run is listed (at most ``CI_REQUEST_GENERATION_POLLS`` listings
-      ``CI_REQUEST_GENERATION_POLL_SECONDS`` apart), the packaged caller: a dispatch never reuses,
-      and the packaged run selects that Build, waiting while it runs. A Build run that does not
-      appear raises :class:`GenerationRequestError` with the packaged caller not dispatched.
+      ``CI_REQUEST_GENERATION_POLL_SECONDS`` apart), the packaged caller, and the packaged run
+      selects that Build, waiting while it runs. A Build run that does not appear, while the branch
+      is still at the commit, raises :class:`GenerationRequestError` with the packaged caller not
+      dispatched.
 
-    A dispatch runs at the head of the branch when it starts: if the branch moves in between, the
-    newer commit is tested in full instead, which is a generation of its own and never a mixed one.
-    ``sleep`` waits between listings (``time.sleep`` unless a test gives one).
+    What is requested is always a full generation, the same one ``ci select-generation`` then
+    selects as ``full``: the managed callers take no dispatch inputs, ``ci reuse-admit`` reuses only
+    for a push and ``ci scope`` narrows only a pull request's packaged run (a gate receipt or a
+    results index that names a scope for any other run is refused). A reused generation whose
+    original evidence expired is replaced the same way, by a full one, never by another reference.
+
+    A dispatch runs at the head of the branch when it starts. If the branch moves between the last
+    read and the dispatch, the Build run tests the newer commit and is never listed for this one:
+    once the listings are spent the branch is read again and the request is ``superseded``, with
+    the packaged caller not dispatched. The newer commit then has one Build run more than its push
+    started: its packaged gate seals only the newest Build of the live head, and a packaged run
+    sealed before that Build run was listed is refused by ``ci select-generation`` as mixed (an
+    operator's case). Nothing passes half-tested. ``sleep`` waits between listings
+    (``time.sleep`` unless a test gives one).
     """
 
     sleep = time.sleep if sleep is None else sleep
@@ -525,6 +538,8 @@ def request_generation(api: GitHubApi, *, subject: dict[str, Any], reason: str,
                 before is None or (run["created_at"], run["id"]) > (before["created_at"], before["id"])):
             break
     else:
+        if not live():
+            return "superseded"
         raise GenerationRequestError(
             "the requested Build run did not appear in time; once it runs, dispatch the packaged caller on "
             f"{branch} by hand, or run this request again when it has finished")

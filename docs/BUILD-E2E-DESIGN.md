@@ -250,7 +250,9 @@ The source-owned `github_governance.py` expectations must change with Q3/Q6 so a
 
 #### Q9: Pages consumption of a shared generation (KQ9-3)
 
-Proposal for the owner, not implemented. Pages reads a mod's evidence from two kinds of handoff
+**Decision (owner, 2026-10-13): route A; B not planned.** The consumer workflow is the producer
+Pages reads, and Pages, `publish.yml`, selection and the schemas stay as they are. The table
+records the two routes as they were proposed. Pages reads a mod's evidence from two kinds of handoff
 today: the `mb-handoff--<key>` uploads of `source.workflow` runs and the
 `mb-family-handoff--<family>--<key>` uploads of `families[].producer.workflow` runs, each
 authenticated as a successful run of that workflow on the default branch at the key's commit.
@@ -260,17 +262,27 @@ select-generation` reads and verifies it, KQ9-1/KQ9-2). Two routes:
 
 | Route | What changes | Provenance Pages can prove | Cost and risk |
 | --- | --- | --- | --- |
-| A. Consumer as producer | Nothing in Pages. The mod's consumer workflow (on `workflow_run` of "mod-base packaged E2E" for the default branch) runs `ci subject --producer generation`, `ci plan` and `ci select-generation --all-lanes`, turns the verified lane exports into its native evidence and uploads the source handoff (the kit's `prepare-evidence`) or a family handoff (`family envelope`); `source.workflow` or `families[].producer.workflow` names that workflow. | That a successful run of the protected consumer workflow at the commit produced the handoff; that it read the shared generation is the consumer's own (reviewed, default-branch) code. | One more run per generation; no kit release beyond v1.4.x; independent of the in-flight family-handoff selection work. |
+| A. Consumer as producer | Nothing in Pages. The mod's consumer workflow (on `workflow_run` of "mod-base packaged E2E" for the default branch) runs `ci subject --producer generation`, `ci plan` and `ci select-generation --all-lanes`, turns the verified lane exports into its native evidence and uploads the source handoff (the kit's `prepare-evidence`) or a family handoff (`family envelope`); `source.workflow` or `families[].producer.workflow` names that workflow. | That a successful run of the protected consumer workflow at the commit produced the handoff; that it read the shared generation is the consumer's own (reviewed, default-branch) code. | One more run per generation; no Pages change: since v1.5.0 (#31) a family handoff is found by its exact name across the newest `limits.MAX_FAMILY_PRODUCER_RUNS` (32) producer runs at the commit. |
 | B. A shared-generation source kind | `publish.yml` collects from the generation itself: a historical generation reader (re-authenticating a recorded `mod-base.ci.generation` without the live-head requirement of `ci select-generation`) feeds the lane exports to the adapter's compose hook, and `mod-base.selection` records the generation. | The generation itself: both gates, every lane artifact, the reuse references. | A new reader, `publish.yml`, selection, authentication and schemas change together; a larger kit release and canary. |
 
-Recommendation: A for Q9 (the Pages step of the Quick Skin order), with one small kit addition to
-decide separately: an optional field of the source manifest and of the family envelope that
-records the `generation.json` digest and the run ids it names, displayed by Pages and checked
-cheaply (each id a successful run of a managed caller at the key's commit). B when the owner wants
-Pages to prove the shared provenance by itself. Either way the Pages caches (`mb-cache`,
-`mb-family-cache`) carry published evidence beyond the 7-day artifact retention; a consumer that
-runs later than that requests a full generation of the live head (KQ9-4, `ci request-generation`)
-or fails closed, never a native fallback.
+Route A is the Pages step of the Quick Skin order. Still a separate kit addition, not decided: an
+optional field of the source manifest and of the family envelope that records the `generation.json`
+digest and the run ids it names, displayed by Pages and checked cheaply (each id a successful run
+of a managed caller at the key's commit). Route B (a shared-generation source kind) is not planned;
+it would need a new owner decision. What route A requires of the consumer, with v1.5.0:
+
+* It hands off every key of the commit from the one run that selected the generation. Its runs
+  that hand off nothing (a wake that found the generation pending, a run that requested one) are
+  still successful producer runs at that commit, and Pages searches only the newest
+  `MAX_FAMILY_PRODUCER_RUNS` of them by exact name; a key outside that window reads as no handoff
+  at the commit (the family cache, then the carry-forward walk), never as an older run passing as
+  newer.
+* It consumes only full or reused generations of the default branch. A narrowed scope (#22) is
+  run only by a pull request's packaged run, which never reuses into a push and is never a
+  generation of a default-branch commit; `ci select-generation` refuses a reference to one.
+* The Pages caches (`mb-cache`, `mb-family-cache`) carry published evidence beyond the 7-day
+  artifact retention. A consumer that runs later than that requests a full generation of the live
+  head (KQ9-4, `ci request-generation`, D-Q9-b) or fails closed, never a native fallback.
 
 ### Block Pops third
 
