@@ -863,7 +863,7 @@ class AdmissionStatusTests(GateStatusTestCase):
     def world(self, *, protected_change: bool = False, **options: Any) -> StatusWorld:
         """A generation whose tested merge changes ``src`` and, when asked, ``scripts/ci`` too."""
 
-        world = super().world(**options)
+        world = GateStatusTestCase.world(self, **options)
         base = [{"path": name, "mode": "040000", "type": "tree", "sha": sha}
                 for name, sha in ((".github", "1" * 40), ("scripts", "2" * 40), ("site", "3" * 40), ("src", "4" * 40))]
         tested = [row if row["path"] != "src" else {**row, "sha": "5" * 40} for row in base]
@@ -879,7 +879,7 @@ class AdmissionStatusTests(GateStatusTestCase):
     def decide(self, world: StatusWorld, *decisions: tuple[str, str], login: str = "AkaNebur") -> None:
         world.api.set_comments(7, [
             {"id": index + 1, "body": f"/controller-upgrade {decision} {head}", "author_association": "MEMBER",
-             "user": {"login": login, "type": "User"}, "created_at": f"2026-10-11T1{index}:00:00Z",
+             "user": {"login": login, "id": 1, "type": "User"}, "created_at": f"2026-10-11T1{index}:00:00Z",
              "updated_at": f"2026-10-11T1{index}:00:00Z"} for index, (decision, head) in enumerate(decisions)])
 
     def test_a_pull_request_that_changes_no_protected_path_needs_no_decision(self) -> None:
@@ -939,7 +939,7 @@ class AdmissionStatusTests(GateStatusTestCase):
         count = limits.MAX_CI_ADMISSION_COMMENTS
         world.api.set_comments(7, [
             {"id": index + 1, "body": f"/controller-upgrade approve {h.HEAD_SHA if index == count - 1 else 'b' * 40}",
-             "author_association": "MEMBER", "user": {"login": "AkaNebur", "type": "User"},
+             "author_association": "MEMBER", "user": {"login": "AkaNebur", "id": 1, "type": "User"},
              "created_at": f"2026-10-11T{index // 60:02d}:{index % 60:02d}:00Z",
              "updated_at": f"2026-10-11T{index // 60:02d}:{index % 60:02d}:00Z"} for index in range(count)])
         self.assertEqual({gate: state for gate, (state, _, _) in self.states(self.intents(world, world.planned())).items()},
@@ -950,6 +950,143 @@ class AdmissionStatusTests(GateStatusTestCase):
         # The worst case: every directory of the admission read on both sides.
         worst = 36 + 1 + 2 * limits.MAX_CI_ADMISSION_DIRECTORIES + 2 * (limits.MAX_CI_ADMISSION_COMMENTS // 100 + 1)
         self.assertLessEqual(worst, limits.MAX_CI_GATE_STATUS_REQUESTS)
+
+
+#: The synthetic mod's admission with every member of its owner's organization as approvers.
+ORG_ADMISSION = {**ADMISSION, "approvers": [{"organization": h.REPOSITORY.split("/")[0], "role": "member"}]}
+#: Two members (one keeps the membership private) and an outside collaborator, by user id.
+CONCEALED, MEMBER, COLLABORATOR = 202, 505, 303
+LATE = "admission: a `/controller-upgrade` decision on this head was posted after its members were read; evaluate again"
+
+
+class OrganizationAdmissionStatusTests(GateStatusTestCase):
+    """``--org-members``: the members snapshot of the caller's ``members`` job decides which comment
+    authors are the organization's members; the evaluation reads nothing more for it."""
+
+    world = AdmissionStatusTests.world
+
+    def setUp(self) -> None:
+        GateStatusTestCase.setUp(self)
+        (self.mod / BUILD_CONFIG_PATH).write_bytes(h.pretty({**h.build_config(), "admission": ORG_ADMISSION}))
+
+    def comments(self, world: StatusWorld, *decisions: tuple[int, str, str]) -> None:
+        """Comments 1, 2, ... in order, each ``(author id, decision, head)``."""
+
+        world.api.set_comments(7, [
+            {"id": index + 1, "body": f"/controller-upgrade {decision} {head}", "author_association": "CONTRIBUTOR",
+             "user": {"login": f"user-{author}", "id": author, "type": "User"},
+             "created_at": f"2026-10-11T1{index}:00:00Z", "updated_at": f"2026-10-11T1{index}:00:00Z"}
+            for index, (author, decision, head) in enumerate(decisions)])
+
+    def snapshot(self, name: str = "members.json", **changes: Any) -> Path:
+        document = {"kind": "mod-base.ci.org-members", "schema_version": 1, "organization": "example",
+                    "pr_number": 7, "through_comment_id": 10, "checked": [CONCEALED, COLLABORATOR, MEMBER],
+                    "members": [CONCEALED, MEMBER], **changes}
+        path = self.directory / name
+        path.write_bytes(canonical_json(document))
+        return path
+
+    def run_with(self, world: StatusWorld, state: Path, *argv: str) -> tuple[int, str, bytes]:
+        if self.output.exists():
+            self.output.unlink()
+        return run_ci(self, world, state, "gate-status", "--pr", "7", *argv, "--github-output", str(self.output),
+                      mod=self.mod)
+
+    def states_with(self, world: StatusWorld, state: Path, *argv: str) -> dict[str, tuple[str, str, str | None]]:
+        code, stderr, stdout = self.run_with(world, state, *argv)
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(world.api.mutations, [])
+        self.assertEqual(world.budgets[-1], limits.MAX_CI_GATE_STATUS_REQUESTS)
+        return self.states(strict_loads(stdout, label="status intents", max_bytes=limits.MAX_CI_RECORD_BYTES))
+
+    def test_a_member_s_approval_admits_and_reads_nothing_more(self) -> None:
+        world = self.world(protected_change=True).gated()
+        self.comments(world, (CONCEALED, "approve", h.HEAD_SHA))
+        self.assertEqual(self.states_with(world, world.planned(), "--org-members", str(self.snapshot())),
+                         {"build": ("success", VERIFIED["build"], run_url(42)),
+                          "packaged": ("success", VERIFIED["packaged"], run_url(43))})
+        # The base commit, both roots, both `scripts` trees and the comments twice, as for a user.
+        self.assertEqual(world.api.request_count, 36 + 7)
+
+    def test_another_member_revokes_and_a_non_member_decides_nothing(self) -> None:
+        world = self.world(protected_change=True).gated()
+        self.comments(world, (CONCEALED, "approve", h.HEAD_SHA), (MEMBER, "revoke", h.HEAD_SHA))
+        revoked = "admission: the latest `/controller-upgrade` decision on this head revokes it"
+        self.assertEqual(self.states_with(world, world.planned(), "--org-members", str(self.snapshot())),
+                         {"build": ("failure", revoked, run_url(42)), "packaged": ("failure", revoked, run_url(43))})
+        world = self.world(protected_change=True).gated()
+        self.comments(world, (COLLABORATOR, "approve", h.HEAD_SHA))
+        self.assertEqual(self.states_with(world, world.planned(), "--org-members", str(self.snapshot())),
+                         {"build": ("failure", REFUSED, run_url(42)), "packaged": ("failure", REFUSED, run_url(43))})
+
+    def test_without_a_snapshot_no_member_s_approval_counts(self) -> None:
+        world = self.world(protected_change=True).gated()
+        self.comments(world, (CONCEALED, "approve", h.HEAD_SHA))
+        unread = ("admission: scripts/ci is protected; the organization's members were not read, so no member's "
+                  "approval counts")
+        self.assertEqual(self.states_with(world, world.planned()),
+                         {"build": ("failure", unread, run_url(42)), "packaged": ("failure", unread, run_url(43))})
+
+    def test_a_decision_posted_after_the_snapshot_is_a_published_refusal(self) -> None:
+        world = self.world(protected_change=True).gated()
+        self.comments(world, (CONCEALED, "approve", h.HEAD_SHA), (COLLABORATOR, "revoke", h.HEAD_SHA))
+        snapshot = self.snapshot(through_comment_id=1)
+        self.assertEqual(self.states_with(world, world.planned(), "--org-members", str(snapshot)),
+                         {"build": ("failure", LATE, run_url(42)), "packaged": ("failure", LATE, run_url(43))})
+
+    def test_a_decision_the_snapshot_did_not_check_publishes_nothing(self) -> None:
+        world = self.world(protected_change=True).gated()
+        self.comments(world, (999, "approve", h.HEAD_SHA))
+        code, stderr, stdout = self.run_with(world, world.planned(), "--org-members", str(self.snapshot()))
+        self.assertEqual((code, stdout), (2, b""))
+        self.assertIn("did not check the author of a decision", stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_a_snapshot_that_is_not_this_evaluation_s_is_refused_before_any_request(self) -> None:
+        world = self.world(protected_change=True).gated()
+        self.comments(world, (CONCEALED, "approve", h.HEAD_SHA))
+        state = world.planned()
+        noncanonical = self.directory / "pretty.json"
+        noncanonical.write_bytes(h.pretty(strict_loads(self.snapshot().read_bytes(), label="snapshot",
+                                                       max_bytes=limits.MAX_CI_ORG_MEMBERS_BYTES)))
+        oversized = self.directory / "oversized.json"
+        oversized.write_bytes(b" " * (limits.MAX_CI_ORG_MEMBERS_BYTES + 1))
+        cases = {
+            "another organization": (self.snapshot("other.json", organization="other"), "another organization"),
+            "another pull request": (self.snapshot("pull.json", pr_number=8), "another pull request"),
+            "a member it did not check": (self.snapshot("unchecked.json", members=[CONCEALED, 999]),
+                                          "names a user the snapshot did not check"),
+            "another kind": (self.snapshot("kind.json", kind="mod-base.ci.scope"), "$.kind"),
+            "its bytes are not canonical": (noncanonical, "canonical bytes"),
+            "it is too large": (oversized, "organization members snapshot"),
+            "it is missing": (self.directory / "absent.json", "organization members snapshot"),
+        }
+        for label, (path, message) in cases.items():
+            with self.subTest(case=label):
+                code, stderr, stdout = self.run_with(world, state, "--org-members", str(path))
+                self.assertEqual((code, stdout), (2, b""), stderr)
+                self.assertIn(message, stderr)
+                self.assertFalse(self.output.exists())
+        self.assertEqual((world.api.request_count, world.api.mutations), (0, []))
+
+    def test_a_snapshot_for_an_admission_without_the_organization_is_refused(self) -> None:
+        (self.mod / BUILD_CONFIG_PATH).write_bytes(h.pretty({**h.build_config(), "admission": ADMISSION}))
+        world = self.world(protected_change=True).gated()
+        code, stderr, stdout = self.run_with(world, world.planned(), "--org-members", str(self.snapshot()))
+        self.assertEqual((code, stdout), (2, b""))
+        self.assertIn("names no organization approver", stderr)
+        self.assertEqual(world.api.request_count, 0)
+
+    def test_the_settling_call_takes_no_snapshot(self) -> None:
+        world = self.world(protected_change=True).gated()
+        if self.output.exists():
+            self.output.unlink()
+        code, stderr, stdout = run_ci(self, world, self.directory / "unborn", "gate-status", "--pr", "7", "--settle",
+                                      "--org-members", str(self.snapshot()), "--github-output", str(self.output),
+                                      mod=self.mod)
+        self.assertEqual((code, stdout), (2, b""))
+        self.assertTrue(stderr.startswith("mod_base: usage: "), stderr)
+        self.assertEqual(world.api.request_count, 0)
 
 
 class GateContextTests(unittest.TestCase):

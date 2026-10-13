@@ -9,6 +9,7 @@ from typing import Any
 
 from mod_base.build_ci.admission import admission_refusal, changed_protected_path, head_decisions
 from mod_base.build_ci.config import BuildConfig
+from mod_base.build_ci.membership import MembershipError, OrgMembers
 from mod_base.build_ci.reads import CommandReads, Watch
 from mod_base.errors import MbError
 from mod_base.github.api import ApiError
@@ -36,9 +37,11 @@ def entry(name: str, kind: str, sha: str, mode: str | None = None) -> dict[str, 
 
 
 def comment(body: str, *, number: int = 1, login: str = "AkaNebur", association: str = "MEMBER",
-            user_type: str = "User", created: str = "2026-10-11T10:00:00Z", updated: str | None = None) -> dict[str, Any]:
-    return {"id": number, "body": body, "user": {"login": login, "type": user_type}, "author_association": association,
-            "created_at": created, "updated_at": created if updated is None else updated}
+            user_type: str = "User", user_id: int = 1, created: str = "2026-10-11T10:00:00Z",
+            updated: str | None = None, **extra: Any) -> dict[str, Any]:
+    return {"id": number, "body": body, "user": {"login": login, "id": user_id, "type": user_type},
+            "author_association": association, "created_at": created,
+            "updated_at": created if updated is None else updated, **extra}
 
 
 class Repository:
@@ -165,8 +168,8 @@ class DecisionTests(unittest.TestCase):
                    comment(f"{COMMAND} approve {HEAD}", number=13, user_type="Bot"),
                    {**comment(f"{COMMAND} approve {HEAD}", number=14), "user": None}]
         self.assertEqual(self.decisions(ignored + counted), [
-            {"id": 1, "decision": "approve", "created_at": "2026-10-11T10:00:00Z", "edited": False},
-            {"id": 2, "decision": "revoke", "created_at": "2026-10-11T11:00:00Z", "edited": False}])
+            {"id": 1, "decision": "approve", "created_at": "2026-10-11T10:00:00Z", "edited": False, "late": False},
+            {"id": 2, "decision": "revoke", "created_at": "2026-10-11T11:00:00Z", "edited": False, "late": False}])
         self.assertEqual(self.decisions([]), [])
 
     def test_decisions_are_ordered_by_time_then_id_and_edits_are_marked(self) -> None:
@@ -270,3 +273,196 @@ class RefusalTests(unittest.TestCase):
         self.assertIsNone(self.refusal([comment(f"{COMMAND} approve {OTHER_HEAD}")]))
         self.plan["identity"]["tested_tree"] = BASE_TREE
         self.assertIsNone(self.refusal([]))
+
+
+#: The organization that owns ``REPOSITORY``, as an approver: every active member of it.
+ORGANIZATION = [{"organization": "example", "role": "member"}]
+ORG_ADMISSION = {**ADMISSION, "approvers": ORGANIZATION}
+#: Comment authors by user id: a member who shows no association to the job token, a second member,
+#: an outside collaborator and an invitee who has not accepted yet.
+CONCEALED, MEMBER, COLLABORATOR, INVITEE = 202, 505, 303, 404
+
+
+def snapshot(*, checked: tuple[int, ...] = (CONCEALED, MEMBER, COLLABORATOR, INVITEE),
+             members: tuple[int, ...] = (CONCEALED, MEMBER), through: int = 100,
+             organization: str = "example") -> OrgMembers:
+    return OrgMembers(organization, 7, through, frozenset(checked), frozenset(members))
+
+
+def by(user_id: int, body: str, **changes: Any) -> dict[str, Any]:
+    """A comment by the author ``user_id`` of the snapshot, who is listed among no users."""
+
+    logins = {CONCEALED: "concealed", MEMBER: "member", COLLABORATOR: "collaborator", INVITEE: "invitee"}
+    associations = {CONCEALED: "CONTRIBUTOR", MEMBER: "MEMBER", COLLABORATOR: "COLLABORATOR", INVITEE: "NONE"}
+    changes.setdefault("association", associations.get(user_id, "NONE"))
+    return comment(body, login=logins.get(user_id, f"user-{user_id}"), user_id=user_id, **changes)
+
+
+class AppCommentTests(unittest.TestCase):
+    def test_a_comment_posted_through_a_github_app_never_decides(self) -> None:
+        api = FakeGitHub(repository=REPOSITORY)
+        approve = comment(f"{COMMAND} approve {HEAD}", number=1)
+        through_app = {**approve, "performed_via_github_app": {"id": 1, "slug": "some-app"}}
+        for row, expected in ((approve, 1), ({**approve, "performed_via_github_app": None}, 1), (through_app, 0),
+                              ({**approve, "performed_via_github_app": ""}, 0)):
+            api.set_comments(7, [row])
+            with self.subTest(app=row.get("performed_via_github_app", "absent")):
+                self.assertEqual(len(head_decisions(api, pr_number=7, head_sha=HEAD, command=COMMAND,
+                                                    approvers=APPROVERS)), expected)
+
+    def test_the_author_of_a_decision_needs_a_numeric_id(self) -> None:
+        api = FakeGitHub(repository=REPOSITORY)
+        for user in ({"login": "AkaNebur", "type": "User"}, {"login": "AkaNebur", "type": "User", "id": "1"},
+                     {"login": "AkaNebur", "type": "User", "id": 0}, {"id": 1, "type": "User"}):
+            api.set_comments(7, [{**comment(f"{COMMAND} approve {HEAD}"), "user": user}])
+            with self.subTest(user=user), self.assertRaises(MbError):
+                head_decisions(api, pr_number=7, head_sha=HEAD, command=COMMAND, approvers=APPROVERS)
+        # A comment that is no decision is not looked at further.
+        api.set_comments(7, [{**comment("thanks"), "user": {"login": "x", "type": "User"}}])
+        self.assertEqual(head_decisions(api, pr_number=7, head_sha=HEAD, command=COMMAND, approvers=APPROVERS), [])
+
+
+class OrganizationDecisionTests(unittest.TestCase):
+    """Approvers that name the organization: its members decide, proven by the snapshot by id."""
+
+    def decisions(self, comments: list[dict[str, Any]], members: OrgMembers | None = snapshot(),
+                  approvers: list[dict[str, Any]] = ORGANIZATION) -> list[tuple[int, str, bool]]:
+        api = FakeGitHub(repository=REPOSITORY)
+        api.set_comments(7, comments)
+        return [(item["id"], item["decision"], item["late"]) for item in
+                head_decisions(api, pr_number=7, head_sha=HEAD, command=COMMAND, approvers=approvers,
+                               members=members)]
+
+    def test_an_active_member_decides_whatever_association_github_shows(self) -> None:
+        approve = f"{COMMAND} approve {HEAD}"
+        self.assertEqual(self.decisions([by(CONCEALED, approve, number=1), by(MEMBER, approve, number=2)]),
+                         [(1, "approve", False), (2, "approve", False)])
+        for association in ("NONE", "CONTRIBUTOR", "COLLABORATOR", "OWNER", None):
+            with self.subTest(association=association):
+                self.assertEqual(self.decisions([by(CONCEALED, approve, association=association)]),
+                                 [(1, "approve", False)])
+
+    def test_a_checked_author_who_is_no_member_never_decides(self) -> None:
+        # The outside collaborator with write access and the invitee whose invitation is pending.
+        approve = f"{COMMAND} approve {HEAD}"
+        self.assertEqual(self.decisions([by(COLLABORATOR, approve, number=1), by(INVITEE, approve, number=2)]), [])
+        # Accepting the invitation needs no new comment: the next snapshot lists the invitee.
+        self.assertEqual(self.decisions([by(INVITEE, approve, number=2)],
+                                        snapshot(members=(CONCEALED, MEMBER, INVITEE))), [(2, "approve", False)])
+
+    def test_a_bot_or_an_app_comment_never_decides_even_with_a_member_s_id(self) -> None:
+        approve = f"{COMMAND} approve {HEAD}"
+        self.assertEqual(self.decisions([by(CONCEALED, approve, user_type="Bot", number=1),
+                                         by(MEMBER, approve, number=2,
+                                            performed_via_github_app={"id": 9, "slug": "an-app"})]), [])
+
+    def test_a_member_is_matched_by_id_after_a_rename(self) -> None:
+        renamed = {**by(CONCEALED, f"{COMMAND} approve {HEAD}"), "user": {"login": "renamed", "id": CONCEALED,
+                                                                          "type": "User"}}
+        self.assertEqual(self.decisions([renamed]), [(1, "approve", False)])
+        # A login that was a member's, now on another account, is not the member.
+        taken = {**by(COLLABORATOR, f"{COMMAND} approve {HEAD}"), "user": {"login": "concealed", "id": COLLABORATOR,
+                                                                           "type": "User"}}
+        self.assertEqual(self.decisions([taken]), [])
+
+    def test_the_text_is_matched_as_for_a_user_and_the_author_was_checked_whatever_it_says(self) -> None:
+        # Python strips more than ASCII white space; the snapshot checked every author anyway.
+        decisions = self.decisions([by(CONCEALED, f" {COMMAND} approve {HEAD} ", number=1),
+                                    by(MEMBER, f"\x1f{COMMAND} revoke {HEAD}　", number=2,
+                                       created="2026-10-11T11:00:00Z")])
+        self.assertEqual(decisions, [(1, "approve", False), (2, "revoke", False)])
+
+    def test_a_decision_after_the_snapshot_is_late_by_anybody(self) -> None:
+        approve = f"{COMMAND} approve {HEAD}"
+        for author in (CONCEALED, COLLABORATOR, 999):
+            with self.subTest(author=author):
+                self.assertEqual(self.decisions([by(author, approve, number=101)]), [(101, "approve", True)])
+        self.assertEqual(self.decisions([by(CONCEALED, approve, number=100)]), [(100, "approve", False)])
+        # A comment after the snapshot that is no decision is no concern of the admission.
+        self.assertEqual(self.decisions([by(999, "LGTM", number=150)]), [])
+
+    def test_a_decision_the_snapshot_should_have_checked_is_an_error(self) -> None:
+        with self.assertRaises(MembershipError):
+            self.decisions([by(999, f"{COMMAND} approve {HEAD}", number=100)])
+        # An author it never checked who wrote no decision changes nothing.
+        self.assertEqual(self.decisions([by(999, "hello", number=99)]), [])
+
+    def test_without_a_snapshot_no_member_decides(self) -> None:
+        self.assertEqual(self.decisions([by(CONCEALED, f"{COMMAND} approve {HEAD}")], members=None), [])
+
+    def test_listed_users_decide_beside_the_organization_by_their_association(self) -> None:
+        mixed = [*APPROVERS, *ORGANIZATION]
+        owner = comment(f"{COMMAND} approve {HEAD}", number=150, user_id=1)
+        # A listed user decides without the snapshot: never late, never checked.
+        self.assertEqual(self.decisions([owner], approvers=mixed), [(150, "approve", False)])
+        self.assertEqual(self.decisions([owner], members=None, approvers=mixed), [(150, "approve", False)])
+
+    def test_a_snapshot_of_another_admission_is_refused(self) -> None:
+        with self.assertRaises(MembershipError):
+            self.decisions([], approvers=APPROVERS)
+        with self.assertRaises(MembershipError):
+            self.decisions([], members=snapshot(organization="other"))
+
+
+class OrganizationRefusalTests(unittest.TestCase):
+    """``admission_refusal`` with approvers that name the organization."""
+
+    setUp = RefusalTests.setUp
+    config = RefusalTests.config
+    protect = RefusalTests.protect
+
+    def refusal(self, comments: list[dict[str, Any]], members: OrgMembers | None = snapshot()) -> str | None:
+        self.repository.api.set_comments(7, comments)
+        return admission_refusal(CommandReads.of(self.repository.api), Watch(), config=self.config(ORG_ADMISSION),
+                                 plan=self.plan, members=members)
+
+    def test_any_member_approves_and_any_member_revokes(self) -> None:
+        self.protect()
+        approve = by(CONCEALED, f"{COMMAND} approve {HEAD}", number=1)
+        revoke = by(MEMBER, f"{COMMAND} revoke {HEAD}", number=2, created="2026-10-11T11:00:00Z")
+        revoked = f"admission: the latest `{COMMAND}` decision on this head revokes it"
+        self.assertIsNone(self.refusal([approve]))
+        self.assertEqual(self.refusal([approve, revoke]), revoked)
+        # A non-member's later decision changes nothing, either way.
+        stranger = by(COLLABORATOR, f"{COMMAND} approve {HEAD}", number=3, created="2026-10-11T12:00:00Z")
+        self.assertEqual(self.refusal([approve, revoke, stranger]), revoked)
+        stranger = by(COLLABORATOR, f"{COMMAND} revoke {HEAD}", number=3, created="2026-10-11T12:00:00Z")
+        self.assertIsNone(self.refusal([approve, stranger]))
+
+    def test_a_removed_member_s_decisions_stop_counting(self) -> None:
+        self.protect()
+        approve = by(CONCEALED, f"{COMMAND} approve {HEAD}", number=1)
+        revoke = by(MEMBER, f"{COMMAND} revoke {HEAD}", number=2, created="2026-10-11T11:00:00Z")
+        # The revocation of a member who has been removed no longer counts: the approval decides again.
+        self.assertIsNone(self.refusal([approve, revoke], members=snapshot(members=(CONCEALED,))))
+        self.assertEqual(self.refusal([approve], members=snapshot(members=(MEMBER,))),
+                         f"admission: scripts/ci is protected; needs `{COMMAND} approve <head sha>` from an approver")
+
+    def test_without_a_snapshot_the_refusal_says_so(self) -> None:
+        self.protect()
+        unread = ("admission: scripts/ci is protected; the organization's members were not read, so no member's "
+                  "approval counts")
+        self.assertEqual(self.refusal([by(CONCEALED, f"{COMMAND} approve {HEAD}")], members=None), unread)
+        self.assertLessEqual(len(unread), limits.MAX_CI_STATUS_DESCRIPTION_CHARS)
+        self.assertEqual(self.refusal([], members=snapshot()),
+                         f"admission: scripts/ci is protected; needs `{COMMAND} approve <head sha>` from an approver")
+
+    def test_a_decision_after_the_snapshot_refuses_until_the_next_evaluation(self) -> None:
+        self.protect()
+        approve = by(CONCEALED, f"{COMMAND} approve {HEAD}", number=1)
+        late = f"admission: a `{COMMAND}` decision on this head was posted after its members were read; evaluate again"
+        self.assertLessEqual(len(late), limits.MAX_CI_STATUS_DESCRIPTION_CHARS)
+        for author in (CONCEALED, MEMBER, COLLABORATOR, 999):
+            for decision in ("approve", "revoke"):
+                later = by(author, f"{COMMAND} {decision} {HEAD}", number=101, created="2026-10-11T12:00:00Z")
+                with self.subTest(author=author, decision=decision):
+                    self.assertEqual(self.refusal([approve, later]), late)
+        # The next evaluation's snapshot reads the comment and decides it.
+        later = by(COLLABORATOR, f"{COMMAND} revoke {HEAD}", number=101, created="2026-10-11T12:00:00Z")
+        self.assertIsNone(self.refusal([approve, later], members=snapshot(through=101)))
+
+    def test_an_edited_member_decision_refuses(self) -> None:
+        self.protect()
+        approve = by(CONCEALED, f"{COMMAND} approve {HEAD}", number=1, updated="2026-10-11T10:30:00Z")
+        self.assertEqual(self.refusal([approve]),
+                         f"admission: a `{COMMAND}` decision on this head was edited; delete it and decide again")

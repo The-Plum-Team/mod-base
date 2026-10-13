@@ -1297,6 +1297,16 @@ def ci_runtime_envelope() -> dict[str, Any]:
                        'role': 'native-report', 'size': 128, 'sha256': h('runtime-report')}]}
 
 
+def ci_org_members(*, organization: str = "example", pr_number: int = 7, through_comment_id: int = 30,
+                   checked: list[int] | None = None, members: list[int] | None = None) -> dict[str, Any]:
+    """An organization members snapshot of the status caller's ``members`` job: three comment
+    authors checked, one of them an active member."""
+
+    return {"kind": "mod-base.ci.org-members", "schema_version": 1, "organization": organization,
+            "pr_number": pr_number, "through_comment_id": through_comment_id,
+            "checked": [101, 202, 303] if checked is None else checked, "members": [202] if members is None else members}
+
+
 def sample_documents() -> dict[str, dict[str, Any]]:
     """Fixture name -> a coherent, valid document (see ``VALID_FIXTURE_KINDS``)."""
 
@@ -1309,6 +1319,7 @@ def sample_documents() -> dict[str, dict[str, Any]]:
         "ci-envelope": ci_envelope(),
         "ci-selection": ci_selection(),
         "ci-scope": ci_scope(),
+        "ci-org-members": ci_org_members(),
         "ci-gate-build": ci_gate(),
         "ci-gate-packaged": ci_gate("packaged"),
         "ci-results": ci_results(),
@@ -1347,6 +1358,7 @@ VALID_FIXTURE_KINDS = {
     "ci-envelope": "mod-base.build.envelope",
     "ci-selection": "mod-base.ci.selection",
     "ci-scope": "mod-base.ci.scope",
+    "ci-org-members": "mod-base.ci.org-members",
     "ci-gate-build": "mod-base.ci.gate",
     "ci-gate-packaged": "mod-base.ci.gate",
     "ci-results": "mod-base.ci.results",

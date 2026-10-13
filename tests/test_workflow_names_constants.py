@@ -108,7 +108,8 @@ class BuildE2eNameTableTest(unittest.TestCase):
                          "select": "Select exact Build", "rebuild": "Shared Build",
                          "shared": "Shared Packaged E2E"},
             "status": {"guard": "Verify pinned mod-base", "locate": "Locate the pull request",
-                       "evaluate": "Evaluate protected gates", "publish": "Publish protected gate statuses"},
+                       "members": "Read the organization members", "evaluate": "Evaluate protected gates",
+                       "publish": "Publish protected gate statuses"},
         })
         self.assertEqual(workflow.CI_CALLS, {
             "build": {"guard": "guard", "shared": "build"},

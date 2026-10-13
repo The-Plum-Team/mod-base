@@ -40,12 +40,52 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   mod's consumer workflow is the producer Pages reads (`source.workflow` or
   `families[].producer.workflow`); Pages, `publish.yml`, selection and schemas are unchanged, and
   route B (a shared-generation source kind) is not planned (docs/BUILD-E2E-DESIGN.md).
-- Compatibility: no document kind, schema version, managed file, job or step changes; `src/` is
-  digested, so the `MB_KIT_TREE_DIGEST` literals move. The baseline moves to the archived v1.5.0
-  reader (`tests/fixtures/previous_release/v1.5.0`, built from the release commit 1273a53 like
-  v1.4.1's, whose archive the same build reproduces byte for byte), the newest release while this
-  section is open. It reads every kind of this tree, `mod-base.ci.scope` included, so every kind
-  is `unchanged`.
+- Compatibility of KQ9-3 and KQ9-4: no document kind, schema version, managed file, job or step
+  changes; `src/` is digested, so the `MB_KIT_TREE_DIGEST` literals move. The baseline moves to the
+  archived v1.5.0 reader (`tests/fixtures/previous_release/v1.5.0`, built from the release commit
+  1273a53 like v1.4.1's, whose archive the same build reproduces byte for byte), the newest release
+  while this section is open. It reads every kind of this tree that existed in v1.5.0 unchanged.
+- Organization approvers of the protected admission (owner decision of 2026-10-13: any current
+  member of the organization may decide a `/controller-upgrade`, future members included, with no
+  further change). An approver of `admission.approvers` in the Build config may now be
+  `{"organization": "<owner>", "role": "member"}` (`config.ADMISSION_ROLES`,
+  `config.admission_organization`): every active member of the organization that owns the
+  repository, its owners included, whatever the visibility of the membership. At most one such entry,
+  spelled exactly as the repository's owner; it may stand beside `{login, association}` entries.
+  `author_association` cannot prove a private membership, so the managed `mod-base-gate-status.yml`
+  gains a job `members` ("Read the organization members", `workflow.CI_CALLER_JOBS`) that runs only
+  when the protected config at the base names such an entry (`locate` reads it, with `contents:
+  read`, and outputs `organization`); otherwise nothing changes and no new permission is needed. In
+  the environment `mod-base-gate`, it reads the pull request's comments with the job token (more
+  than 300 fail, as the kit's admission does), checks every `User` author that did not post through
+  a GitHub App whatever they wrote, and, only when one of them wrote `approve` or `revoke`, mints a
+  token of the gate App limited to `permission-members: read` and reads the organization's member
+  list (at most 1000 members, by numeric id, never printed; a candidate missing from it is asked for
+  its own active membership, at most 20). Its output is the new document kind
+  `mod-base.ci.org-members` (schema 1, `build_ci.membership`, at most `MAX_CI_ORG_MEMBERS_BYTES`,
+  16 KiB): `checked`, `members` and `through_comment_id`. `gate-status.yml` takes it as the new
+  optional input `members` and passes it to the verifying call only, as `ci gate-status
+  --org-members FILE` (refused with `--settle`). The admission counts a decision of a member by
+  id; a decision posted after the snapshot is a published refusal ("evaluate again"); a decision
+  below it by an author the snapshot did not check fails without publishing; without the snapshot no
+  member's decision counts. Before minting the statuses token, `publish` reads the membership of
+  the same candidates again (never the comments) and publishes nothing if it changed. For every
+  approver, listed users included, a comment posted through a GitHub App
+  (`performed_via_github_app`) now never decides, and a decision's author must carry a numeric id.
+  No request is added to `ci gate-status` (`MAX_CI_GATE_STATUS_REQUESTS` unchanged).
+- Owner action before any mod names an organization entry: grant the gate App (`plum-mod-base-gate`,
+  and `plum-mod-base-canary` for the gate-status canary) the organization permission "Members:
+  Read-only" and accept the request on the installation (docs/OPERATIONS.md, "The gate status App").
+  The revoke procedure is now a revocation plus a new head or a draft, then a dispatch of the status
+  caller, because a collaborator with write access can delete a revocation (docs/OPERATIONS.md,
+  "Protected admission"; docs/SECURITY-MODEL.md).
+- Compatibility of the organization approvers: one new document kind, `mod-base.ci.org-members`,
+  a `new-kind` that the v1.5.0 reader rejects as unknown (ledger, ADR 0007, SCHEMAS.md). The
+  managed file `.github/workflows/mod-base-gate-status.yml` changes (the `members` job, `locate`'s
+  `contents: read`, three mint steps of the one pinned App-token action, the publish recheck), and
+  so does the callee `gate-status.yml` (input `members`). A Build config with an organization entry
+  is refused by kits older than v1.6.0: revert the entry before a pin rollback below v1.6.0. The
+  `MB_KIT_TREE_DIGEST` literals and the staged-file lock move.
 
 ## v1.5.0
 

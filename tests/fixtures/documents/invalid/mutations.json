@@ -3702,6 +3702,14 @@
     {"error":"repeats an artifact id", "expect":"invalid", "fixture":"ci-generation",
      "name":"ci-generation-repeated-artifact", "set":[["/build/artifact/id",100]]},
     {"error":"must be the reuse reference of this caller's push run", "expect":"invalid", "fixture":"ci-generation",
-     "name":"ci-generation-dispatched-reference", "set":[["/references/build/producer/event","workflow_dispatch"]]}
+     "name":"ci-generation-dispatched-reference", "set":[["/references/build/producer/event","workflow_dispatch"]]},
+    {"name":"ci-org-members-unknown-key", "fixture":"ci-org-members", "expect":"invalid", "error":"has unknown keys", "set":[["/logins", ["someone"]]]},
+    {"name":"ci-org-members-member-not-checked", "fixture":"ci-org-members", "expect":"invalid", "error":"$.members: names a user the snapshot did not check", "set":[["/members", [202, 404]]]},
+    {"name":"ci-org-members-unsorted", "fixture":"ci-org-members", "expect":"invalid", "error":"$.checked[1]: items must be strictly ascending", "set":[["/checked", [202, 101, 303]]]},
+    {"name":"ci-org-members-repeated", "fixture":"ci-org-members", "expect":"invalid", "error":"$.checked[2]: items must be strictly ascending", "set":[["/checked", [101, 202, 202]]]},
+    {"name":"ci-org-members-not-an-id", "fixture":"ci-org-members", "expect":"invalid", "error":"$.members[0]", "set":[["/members", [0]]]},
+    {"name":"ci-org-members-negative-through", "fixture":"ci-org-members", "expect":"invalid", "error":"$.through_comment_id", "set":[["/through_comment_id", -1]]},
+    {"name":"ci-org-members-no-organization", "fixture":"ci-org-members", "expect":"invalid", "error":"$.organization", "set":[["/organization", "-example"]]},
+    {"name":"ci-org-members-without-through", "fixture":"ci-org-members", "expect":"invalid", "error":"is missing required keys ['through_comment_id']", "delete":["/through_comment_id"]}
   ]
 }

@@ -753,8 +753,9 @@ class KitCallerTemplatesTest(unittest.TestCase):
         for path, document in documents.items():
             with self.subTest(path=path):
                 self.assertEqual(document["permissions"], {})
-                # One job of one caller names one secret: the status caller's publishing job.
-                self.assertEqual(json.dumps(document).count("secrets"), int(path == STATUS))
+                # Only the status caller names a secret: the App key in each of its three mint
+                # steps (the members job's and the two of the publishing job).
+                self.assertEqual(json.dumps(document).count("secrets"), 3 if path == STATUS else 0)
         events = ["pull_request_target", "push", "workflow_dispatch"]
         self.assertEqual({path: document["on"] if isinstance(document["on"], str) else list(document["on"])
                           for path, document in documents.items()},
@@ -784,6 +785,7 @@ class KitCallerTemplatesTest(unittest.TestCase):
         self.assertEqual({name: (job["name"], job.get("uses")) for name, job in status.items()},
                          {"guard": ("Verify pinned mod-base", local),
                           "locate": ("Locate the pull request", None),
+                          "members": ("Read the organization members", None),
                           "evaluate": ("Evaluate protected gates", f"{kit}gate-status.yml@{SHA}"),
                           "publish": ("Publish protected gate statuses", None)})
         self.assertEqual({name: job["name"] for name, job in status.items()}, workflow.CI_CALLER_JOBS["status"])
@@ -791,12 +793,12 @@ class KitCallerTemplatesTest(unittest.TestCase):
             for name, job in jobs.items():
                 if "uses" in job and name != "guard":
                     self.assertEqual(job["with"]["kit-sha"], "${{ needs.guard.outputs.kit-sha }}", name)
-        # The one action a caller runs: the App token of the status caller's publishing job.
+        # The one action a caller runs: the App token of the status caller's members and publishing jobs.
         token = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"
         self.assertEqual({(path, name): [step["uses"] for step in job.get("steps", []) if "uses" in step]
                           for path, document in documents.items() for name, job in document["jobs"].items()
                           if any("uses" in step for step in job.get("steps", []))},
-                         {(STATUS, "publish"): [token]})
+                         {(STATUS, "members"): [token], (STATUS, "publish"): [token, token]})
 
     def test_the_rendered_callers_pass_actionlint(self) -> None:
         require_tools("actionlint", "shellcheck")

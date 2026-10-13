@@ -11,9 +11,11 @@ name: mod-base gate-status
 # the run listings alone, and the job is done. Only when a newest run finished successfully does
 # the job authenticate the pull request, derive the protected plan and evaluate again, now
 # verifying the exact graph of each run and its sealed gate record against that plan; without a
-# plan no gate is ever a success. The job only reads, runs no candidate code, receives no
-# credential but its own read-only token and uploads nothing. It returns the intents document;
-# a job the caller owns publishes it with the App credentials of the mod.
+# plan no gate is ever a success. When the protected admission counts an organization's members,
+# the caller's `members` job passes their snapshot as `members`, which only the verifying call
+# reads. The job only reads, runs no candidate code, receives no credential but its own read-only
+# token and uploads nothing. It returns the intents document; a job the caller owns publishes it
+# with the App credentials of the mod.
 on:
   workflow_call:
     inputs:
@@ -26,6 +28,11 @@ on:
         required: false
         type: string
         default: ""
+      members:
+        description: The organization members snapshot of the caller's members job, one line, or empty
+        required: false
+        type: string
+        default: ""
     outputs:
       intents:
         description: The status intents for the current head of the pull request, one canonical JSON document
@@ -34,7 +41,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:ac409f5d8ee26f74b01687242703f522a2821039a3826b7e51667e49ca126c3f"
+  MB_KIT_TREE_DIGEST: "sha256:9b43eed43bea8097416968d49b85cdb1813cba63cc2b83fc6c6bb428814fead6"
 
 jobs:
   evaluate:
@@ -53,6 +60,7 @@ jobs:
         env:
           KIT_SHA: ${{ inputs.kit-sha }}
           PR_NUMBER: ${{ inputs.pr-number }}
+          MEMBERS: ${{ inputs.members }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
@@ -64,6 +72,10 @@ jobs:
             *) fail event ;;
           esac
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail pr-number
+          # Empty, or one bounded line in the characters of a members snapshot; the kit validates
+          # the document itself.
+          members_grammar='^[{][]["A-Za-z0-9_.:,{}-]*[}]$'
+          [[ -z "$MEMBERS" || ( "$MEMBERS" =~ $members_grammar && ${#MEMBERS} -le 16384 ) ]] || fail members
       - name: Check out the protected mod head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -207,12 +219,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr-number }}
+          MEMBERS: ${{ inputs.members }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          members=()
+          if [[ -n "$MEMBERS" ]]; then
+            printf '%s\n' "$MEMBERS" > "$RUNNER_TEMP/mb-org-members.json"
+            members=(--org-members "$RUNNER_TEMP/mb-org-members.json")
+          fi
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci gate-status --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --pr "$PR_NUMBER" --github-output "$GITHUB_OUTPUT"
+            --pr "$PR_NUMBER" "${members[@]}" --github-output "$GITHUB_OUTPUT"
       - name: Terminate and lock the worker accounts
         if: ${{ always() && steps.subject.outcome == 'success' }}
         shell: bash

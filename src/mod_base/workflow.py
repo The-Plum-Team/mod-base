@@ -50,7 +50,8 @@ CI_CALLER_JOBS = {
     "build": {"guard": CI_GUARD_CALL, "deferred": "Build deferred for draft", "shared": CI_BUILD_CALL},
     "packaged": {"guard": CI_GUARD_CALL, "deferred": "Packaged E2E deferred for draft",
                  "select": CI_SELECT_CALL, "rebuild": CI_BUILD_CALL, "shared": CI_PACKAGED_CALL},
-    "status": {"guard": CI_GUARD_CALL, "locate": "Locate the pull request", "evaluate": CI_STATUS_CALL,
+    "status": {"guard": CI_GUARD_CALL, "locate": "Locate the pull request",
+               "members": "Read the organization members", "evaluate": CI_STATUS_CALL,
                "publish": "Publish protected gate statuses"},
 }
 #: Producer id -> calling job key -> the workflow it calls: ``guard`` is the mod's own

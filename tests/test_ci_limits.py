@@ -206,6 +206,8 @@ KIT: dict[str, tuple[Any, str]] = {
                                          "each is one tree read on either side of a pull request; Block Pops needs 13"),
     "MAX_CI_ADMISSION_APPROVERS": (8, "approvers one admission lists"),
     "MAX_CI_ADMISSION_COMMENTS": (300, "comments of one pull request an admission reads for decisions: three full pages"),
+    "MAX_CI_ORG_MEMBERS_BYTES": (16 * KIB, "one organization members snapshot: 300 checked user ids and as many "
+                                           "members, 16 digits each, on one line"),
     "MAX_CI_SEED_KEY_FILE_BYTES": (8 * MIB, "the bytes read of each one; a strict verification metadata file of "
                                             "either mod is about 1.1 MB"),
     "MAX_CI_SOURCE_LIST_BYTES": (64 * MIB, "one Git tree listing"),

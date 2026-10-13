@@ -30,7 +30,7 @@ protected default branch, never from a pull request.
 | `runtime.system_profile` | optional: the kit system profile a lane job installs as root before its accounts exist, by name. `xvfb-mesa` is Xvfb, `xauth`, Mesa's software GL and EGL and the audio and X client libraries a Minecraft client loads: the union of both mods' native installs. The mod never lists packages; without `runtime` nothing is installed, and `runtime` without a profile, an unknown profile or another key is refused |
 | `runtime_selection` | optional: `{"input": "changed-paths-v1"}` lets a pull request's packaged lanes run a narrowed scope, which the protected `derive_scope` hook selects ("Narrowed runtime scope" below, [BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md)). Without it every lane runs every obligation and `derive_scope` never runs |
 | `seeds` | optional: the seeds whose jobs restore the candidate's Gradle home before it runs, `gradle` for a target job and `runtime` for a lane job, each `{"key_files": [{"path"}, ...]}`: 1 to 16 files of the protected default branch, sorted by path, whose bytes (or absence) key the seed together with the unit. Name what decides what the home holds, for example `gradle/wrapper/gradle-wrapper.properties`, `gradle/verification-metadata.xml` and the release inventory; a changed file starts a new seed. Without `seeds` no job restores or saves one ("Seeds" below) |
-| `admission` | optional: the paths a pull request may change only with an approver's decision on its exact head, `{"protected_paths": [...], "command": "/controller-upgrade", "approvers": [{"login", "association"}]}`. Without it the kit's gate status checks no protected path ("Protected admission" below) |
+| `admission` | optional: the paths a pull request may change only with an approver's decision on its exact head, `{"protected_paths": [...], "command": "/controller-upgrade", "approvers": [...]}`, each approver `{"login", "association"}` or, since v1.6.0, `{"organization": "<owner of the repository>", "role": "member"}` for every active member of that organization. Without it the kit's gate status checks no protected path ("Protected admission" below) |
 
 The config bytes, the listed files, the pinned kit, the graph versions and the mod's own control
 files (`site/mod-base-build-activation.json` and the four `mod-base-*.yml` caller workflows, each by
@@ -163,11 +163,17 @@ every gate that would otherwise be a `success`:
   request may not change on its own.
 - **Decision.** An approver approves one exact head with a comment on the pull request whose whole
   text is `<command> approve <40-character head sha>`, and withdraws it with `<command> revoke
-  <head sha>`. Only a comment by a user listed in `approvers`, with the `author_association`
-  listed for them, counts; the latest decision on the head decides. A new head needs a new
-  decision. A decision that was edited after it was written refuses the admission until it is
-  deleted, because anybody with write access can edit a comment; delete it and post the decision
-  again.
+  <head sha>`. Only a comment by a `User` (never a bot, never posted through a GitHub App) who is
+  an approver counts: a user listed in `approvers` with the `author_association` listed for them,
+  or, when `approvers` holds `{"organization": "<owner>", "role": "member"}`, any active member of
+  the organization that owns the repository. At most one organization entry is allowed and it must
+  be the repository's owner, spelled as the repository names it; it may stand beside listed users.
+  Membership is proven by the gate App's member list, by user id, when the evaluation runs (see
+  "Organization approvers" below). The latest decision on the head decides, so any member may
+  revoke another member's approval, and a member may approve their own pull request. A new head
+  needs a new decision. A decision that was edited after it was written refuses the admission until
+  it is deleted, because anybody with write access can edit a comment; delete it and post the
+  decision again.
 - **Refusal.** Without an approval of its head, a pull request that changes a protected path gets
   `failure` on every gate that would have been `success`, with the description `admission: ...`.
   `pending` and `failure` are unchanged. A pull request that changes no protected path reads no
@@ -179,6 +185,19 @@ The status caller runs when a gate run is requested or completes, when the pull 
 once an hour; a comment does not start it. An approval or a revocation posted after the gates
 finished is published by the next of those runs, or at once by a dispatch of `mod-base gate status`
 for the pull request ([OPERATIONS.md](OPERATIONS.md#protected-admission)).
+
+**Organization approvers** (v1.6.0). When the config at the default branch names an organization
+entry, the status caller's `members` job runs before the evaluation: it reads the pull request's
+comments, records every `User` author that did not post through a GitHub App, and asks the
+organization, with a token of the gate App limited to "Members: Read-only", which of the authors
+whose comment contains `approve` or `revoke` are active members. The evaluation counts a decision
+by one of those members; a decision posted after that snapshot is a refusal until the next run
+reads it, and an invitation that is still pending is no membership. Without the snapshot (an
+older caller, or no organization entry at the base) no member's decision counts. The gate App
+needs the organization permission "Members: Read-only" before a mod names an organization entry
+([OPERATIONS.md](OPERATIONS.md#the-gate-status-app)); a mod without one never runs the job and
+never needs the permission. A config with an organization entry is refused by kit releases older
+than v1.6.0: remove the entry (keep a listed user) before a pin rollback below v1.6.0.
 
 The admission is the kit's generic rule. A mod's native evaluator may hold more: an exact list of
 the paths an upgrade may touch, files that must exist, restricted transitions with their own

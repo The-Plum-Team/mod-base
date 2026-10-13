@@ -336,7 +336,8 @@ publishes nothing (it can never publish a success instead).
 | secret of that environment | `MOD_BASE_GATE_APP_PRIVATE_KEY` | a private key of that App (the PEM file) |
 
 The App is `plum-mod-base-gate` (App id 5256389), with the one repository permission "Commit
-statuses: Read and write". By owner decision of 2026-10-11 it is installed on every repository of
+statuses: Read and write" and, from kit v1.6.0 on, the one organization permission "Members:
+Read-only" (see "Organization approvers" below). By owner decision of 2026-10-11 it is installed on every repository of
 the organization, so that a new mod needs no installation step, and its key is kept instead: it
 lives only in each mod's `mod-base-gate` environment and in no canary or test repository. The
 branch restriction is not optional: it is the only
@@ -369,6 +370,29 @@ the caller pins that action and it moves only with a kit bump. A ruleset that re
 contexts names the App as their source (`integration_id`, as in
 [P1](#p1-ruleset-block-pops-master)), so that no other writer of a status with the same name
 satisfies it.
+
+**Organization approvers (v1.6.0).** A mod whose protected `admission` names the organization as
+approvers (`{"organization": "<owner>", "role": "member"}`, [Protected admission](#protected-admission))
+runs a third job in the caller, `members`, in the same environment: it mints a token of the same App
+limited to `permission-members: read` and reads which comment authors are active members. Its App
+therefore needs the organization permission "Members: Read-only". **Granting it is an owner
+operation, done once per App before any mod names an organization entry**, and nothing else changes
+(no new secret, variable, environment or installation):
+
+1. Open the App's permissions,
+   <https://github.com/organizations/The-Plum-Team/settings/apps/plum-mod-base-gate/permissions>,
+   set "Organization permissions", "Members" to "Read-only" and save.
+2. Accept the request on the installation: Organization settings, "GitHub Apps", "Installed GitHub
+   Apps", `plum-mod-base-gate`, "Configure", "Review request", "Accept new permissions". A
+   permission the installation has not accepted is not granted.
+3. Do the same for every other App a `mod-base-gate` environment holds the key of, for example
+   `plum-mod-base-canary` (App id 5284572) of the gate-status canary.
+
+Until it is done, every run of the caller of a mod with an organization entry fails in `members`
+and publishes nothing (the newest published status stays). A mod without an organization entry
+never runs that job, never enters the environment for it and does not need the permission, so a
+kit bump to v1.6.0 changes nothing for it; a mod of a user account, not an organization, cannot
+name an organization entry at all.
 
 The caller runs when a run of either gate caller is requested or has completed, on the pull
 request events that start those runs, once an hour for one open pull request in turn (of the ten
@@ -493,13 +517,19 @@ workflow or the config itself gets both contexts once its gates pass.
    route (for Block Pops a `controller-upgrade/*` pull request with the owner's exact-head
    approval). The config of the default branch decides, so the admission applies from the merge
    on. A kit release older than v1.3.0, which added `admission`, refuses a config that has it:
-   remove it before a pin rollback below v1.3.0.
+   remove it before a pin rollback below v1.3.0. Likewise a release older than v1.6.0 refuses an
+   organization entry among the approvers: before a pin rollback below v1.6.0, first revert the
+   entry to listed users (through the same approval route), then roll the pin back.
 2. List as `protected_paths` what an ordinary pull request may not change. Block Pops lists the
    `PROTECTED_PATHS` of `scripts/ci/gate_controller.py`, the `build.gradle` and `src/e2e` of every
    loader, the exact base-owned files outside them (the release matrix and
    `gradle/verification-metadata.xml`) and its forbidden paths (`.gradle`, `buildSrc`): 34 paths in
    13 directories counting the root, where at most 16 are allowed. Use the command of the mod's existing route (`/controller-upgrade`) and list
-   the owner with the association GitHub shows on their comments (`MEMBER` in an organization).
+   the owner with the association GitHub shows on their comments (`MEMBER` in an organization),
+   or, from v1.6.0 on and once the gate App has "Members: Read-only", let every member of the
+   organization approve with `{"organization": "<owner>", "role": "member"}` (alone, or beside
+   listed users). The organization entry needs no change when members join or leave: membership is
+   read again by every evaluation.
 3. Approve each exact head after reviewing it, and revoke before a merge if anything changes:
 
    ```bash
@@ -508,16 +538,43 @@ workflow or the config itself gets both contexts once its gates pass.
    ```
 
    A comment does not start the status caller. Its next run publishes the decision: a gate run, a
-   change of the pull request, the hourly reconciliation or the dispatch above. A revocation needs
-   the dispatch too, and like every status a success already published stays until a newer one
-   replaces it, so check the live statuses before merging. Never edit a decision: an edited one
-   refuses the admission until it is deleted. The decisions are read from at most 300 comments: a
-   pull request with more that changes a protected path gets no status at all, so move it to a
-   new pull request.
+   change of the pull request, the hourly reconciliation or the dispatch above. Like every status,
+   a success already published stays until a newer one replaces it, so check the live statuses
+   before merging. Never edit a decision: an edited one refuses the admission until it is deleted.
+   The decisions are read from at most 300 comments: a pull request with more that changes a
+   protected path gets no status at all, so move it to a new pull request.
+4. **Revoke** with a revocation **and** a new head or a draft: a collaborator with write access can
+   delete a revocation, which brings the approval before it back. So post the revocation, then push
+   a new commit to the pull request or convert it to a draft (`gh pr ready <N> --undo`), then
+   dispatch the status caller and check that the live statuses are no longer `success`:
+
+   ```bash
+   gh pr comment <N> --repo "$R" --body "/controller-upgrade revoke <40-character head sha>"
+   gh pr ready <N> --repo "$R" --undo
+   gh workflow run mod-base-gate-status.yml --repo "$R" --ref "$BRANCH" -f pr-number=<N>
+   ```
+
+   The same applies after removing a member from the organization: their approvals and revocations
+   stop counting at the next evaluation, so dispatch the caller for each open pull request that
+   changes a protected path. The hourly reconciliation takes one pull request per hour, and a run
+   that fails (the API, the App permission) leaves the newest published status in place.
+
+With an organization entry, who counts is decided when the evaluation runs: an approval an invitee
+posted before accepting the invitation counts once they accept, without a new comment, and a
+removed member's decisions no longer count. Any member may approve, also their own pull request,
+and any member may revoke another member's approval; a comment posted through a GitHub App or by a
+bot never counts. Anyone who comments can delay a publication but never cause a success: a
+decision-shaped comment posted while a run is in flight makes that run publish a refusal ("evaluate
+again"; dispatch the caller once more), more than 20 commenters with such comments who are missing
+from the member list fail the members job, and more than 300 comments fail every evaluation, as
+before. The members job prints which of those commenters are members (concealed ones included) in
+the run log; it never prints the member list.
 
 The kit checks the generic rule only. A mod's native evaluator may check more (an upgrade's exact
 path list, required files, the loader bootstrap, a restricted transition's declaration); while it
-no longer runs on pull requests, the approver checks those by review.
+no longer runs on pull requests, the approver checks those by review. A mod's native evaluator
+keeps its own approvers: after a rollback to a mode in which it runs again (`disabled`), its rule
+applies (for Block Pops the owner alone) until it is changed too.
 
 ### Narrowed runtime scope
 

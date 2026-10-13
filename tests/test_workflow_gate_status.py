@@ -4,8 +4,9 @@ The rules every Build/E2E callee shares are in ``tests/test_workflow_ci_policy.p
 spells out what is particular to the evaluation: only the status caller reaches it, on the four
 events that start that caller and always for one pull request; its job issues ``ci gate-status``
 twice, first to settle what needs no plan and then, only if that was not enough, after it
-authenticated the pull request and derived the plan; one document goes back to the caller, and
-nothing is staged, run, sealed or uploaded.
+authenticated the pull request and derived the plan, with the organization members snapshot of the
+caller when it passed one; one document goes back to the caller, and nothing is staged, run, sealed
+or uploaded.
 """
 
 from __future__ import annotations
@@ -39,6 +40,9 @@ SWEEP = "${{ always() && steps.subject.outcome == 'success' }}"
 #: What the jobs API calls the job, and the calling job when its ``if`` skipped the call.
 API_NAME = workflow.CI_STATUS_CALL + " / " + workflow.CI_STATUS_JOBS[JOB]
 EVENTS = ("workflow_run", "pull_request_target", "schedule", "workflow_dispatch")
+#: A members snapshot as the caller's ``members`` job writes it: one canonical line.
+SNAPSHOT = ('{"checked":[101,202],"kind":"mod-base.ci.org-members","members":[202],"organization":"example",'
+            '"pr_number":17,"schema_version":1,"through_comment_id":30}')
 
 
 def run_job(steps: list[Mapping[str, Any]], outcomes: Mapping[str, str],
@@ -80,7 +84,11 @@ class GateStatusStructureTests(unittest.TestCase):
     def test_the_pin_and_the_pull_request_go_in_and_the_intents_come_back(self) -> None:
         call = self.document["on"]["workflow_call"]
         self.assertEqual(list(call), ["inputs", "outputs"])
-        self.assertEqual(list(call["inputs"]), ["kit-sha", "pr-number"], "nothing else of the event reaches the kit")
+        self.assertEqual(list(call["inputs"]), ["kit-sha", "pr-number", "members"],
+                         "nothing else of the event reaches the kit")
+        self.assertEqual(call["inputs"]["members"], {
+            "description": "The organization members snapshot of the caller's members job, one line, or empty",
+            "required": "false", "type": "string", "default": ""})
         self.assertEqual({name: output["value"] for name, output in call["outputs"].items()},
                          {"intents": "${{ jobs.evaluate.outputs.intents }}"})
         # One document: the settling call's when it settled, else the planned evaluation's. Only
@@ -111,11 +119,14 @@ class GateStatusStructureTests(unittest.TestCase):
 
     def test_no_step_reads_anything_but_the_two_inputs_and_its_own_token(self) -> None:
         self.assertEqual({item["name"]: sorted(item["env"]) for item in self.steps if "env" in item}, {
-            PROLOGUE[0]: ["KIT_SHA", "PR_NUMBER"], PROLOGUE[3]: ["KIT_SHA"], SETTLE: ["GH_TOKEN", "PR_NUMBER"],
-            SUBJECT: ["GH_TOKEN", "PR_NUMBER"], PLAN: ["GH_TOKEN"], EVALUATE: ["GH_TOKEN", "PR_NUMBER"]})
+            PROLOGUE[0]: ["KIT_SHA", "MEMBERS", "PR_NUMBER"], PROLOGUE[3]: ["KIT_SHA"],
+            SETTLE: ["GH_TOKEN", "PR_NUMBER"], SUBJECT: ["GH_TOKEN", "PR_NUMBER"], PLAN: ["GH_TOKEN"],
+            EVALUATE: ["GH_TOKEN", "MEMBERS", "PR_NUMBER"]})
         for item in self.steps:
             if "PR_NUMBER" in item.get("env", {}):
                 self.assertEqual(item["env"]["PR_NUMBER"], "${{ inputs.pr-number }}", item["name"])
+            if "MEMBERS" in item.get("env", {}):
+                self.assertEqual(item["env"]["MEMBERS"], "${{ inputs.members }}", item["name"])
 
     def test_job_name_equals_the_registry_and_the_status_caller_is_no_producer(self) -> None:
         self.assertEqual(self.jobs[JOB]["name"], workflow.ci_workflow_template_name(NAME, JOB))
@@ -310,6 +321,39 @@ class GateStatusShellTests(unittest.TestCase):
         self.assertEqual(command[command.index("--pr") + 1], "7 --settle --pr 9")
         with self.assertRaises(MbError):
             parse_kit_argv(command)
+
+    def test_a_members_snapshot_is_one_bounded_line_or_nothing(self) -> None:
+        line = SNAPSHOT
+        longest = '{"checked":[' + "1" * (16384 - len('{"checked":[]}')) + "]}"
+        for members in ("", line, longest):
+            with self.subTest(accepted=members[:40]):
+                outcome = self.run_step(PROLOGUE[0], MEMBERS=members)
+                self.assertEqual(outcome.result.returncode, 0, outcome.result.stderr)
+        for members in (line + "\n", line + "\n" + line, " " + line, line + " ", line[:-1], line[1:], "null", "[]",
+                        '{"organization":"ex ample"}', '{"a":"$(id)"}', '{"a":"`id`"}', '{"a":"\\u0041"}',
+                        '{"a":"\u00e9"}', longest[:-2] + "1]}"):
+            with self.subTest(rejected=members[:40]):
+                outcome = self.run_step(PROLOGUE[0], MEMBERS=members)
+                self.assertNotEqual(outcome.result.returncode, 0)
+                self.assertIn("Invalid call input: members", outcome.result.stderr)
+
+    def test_only_the_verifying_call_reads_a_members_snapshot_and_only_when_there_is_one(self) -> None:
+        temp = self.runner.runner_temp
+        outcome = self.run_step(EVALUATE, MEMBERS=SNAPSHOT)
+        self.assertEqual(outcome.result.returncode, 0, outcome.result.stderr)
+        command = outcome.commands[0]
+        self.assertEqual(command[command.index("--pr"):], ["--pr", "17", "--org-members", f"{temp}/mb-org-members.json",
+                                                           "--github-output", str(self.runner.output)])
+        self.assertEqual(parse_kit_argv(command).org_members, temp / "mb-org-members.json")
+        self.assertEqual((temp / "mb-org-members.json").read_text(encoding="utf-8"), SNAPSHOT + "\n")
+        outcome = self.run_step(EVALUATE, MEMBERS="")
+        self.assertEqual(outcome.result.returncode, 0, outcome.result.stderr)
+        self.assertNotIn("--org-members", outcome.commands[0])
+        self.assertIsNone(parse_kit_argv(outcome.commands[0]).org_members)
+        self.assertFalse((temp / "mb-org-members.json").exists())
+        # The settling call never answers success, so it never takes the snapshot.
+        outcome = self.run_step(SETTLE, MEMBERS=SNAPSHOT)
+        self.assertNotIn("--org-members", outcome.commands[0])
 
     def test_a_missing_tool_or_a_failing_command_fails_the_step(self) -> None:
         for home in JDKS:

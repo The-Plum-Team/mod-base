@@ -60,7 +60,7 @@ CI_CALLEES = tuple(workflow.CI_JOB_VERBS)
 #: The inputs of each callee, in order; ``kit-sha`` is the only required one.
 CI_INPUTS = {"build": ("kit-sha", "pr-number"), "select-build": ("kit-sha",),
              "packaged-e2e": ("kit-sha", "pr-number", "mode", "build-run-id"),
-             "gate-status": ("kit-sha", "pr-number")}
+             "gate-status": ("kit-sha", "pr-number", "members")}
 #: What each callee returns to its caller, in order: output -> the job that has an output of that name.
 CI_OUTPUTS = {"build": {}, "select-build": {"mode": "select", "found": "select", "build-run-id": "select"},
               "packaged-e2e": {}, "gate-status": {"intents": "evaluate"}}
@@ -345,10 +345,11 @@ def strings(value: Any) -> Iterator[str]:
 #: and ``BUILD_RUN_ID`` are the packaged call inputs of a pull request (both empty); the record
 #: of the Build the ``input`` job then selected reaches the later jobs as ``SELECTION``, the one
 #: line ``ci select-build`` writes as its ``selection`` output, and its narrowed scope as ``SCOPE``,
-#: the line ``ci scope`` writes, which is empty for a run in full.
-SAMPLES = {"KIT_SHA": "b" * 40, "PR_NUMBER": "17", "GH_TOKEN": "step-token", "PLAN_SHA256": "c" * 64,
+#: the line ``ci scope`` writes, which is empty for a run in full. ``MEMBERS`` is the status call's
+#: organization members snapshot, empty unless the protected admission counts an organization's members.
+SAMPLES ={"KIT_SHA": "b" * 40, "PR_NUMBER": "17", "GH_TOKEN": "step-token", "PLAN_SHA256": "c" * 64,
            "TESTED_SHA": "d" * 40, "TARGET": "target-a", "LANE": "lane-a", "MODE": "", "BUILD_RUN_ID": "", "SEED_HIT": "",
-           "SELECTION": canonical_json(ci_selection()).decode("utf-8").rstrip("\n"), "SCOPE": ""}
+           "SELECTION": canonical_json(ci_selection()).decode("utf-8").rstrip("\n"), "SCOPE": "", "MEMBERS": ""}
 #: What the runner could leak into a step: every script scrubs these before it runs anything.
 AMBIENT = ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
            "ACTIONS_ID_TOKEN_REQUEST_URL", "GITHUB_TOKEN", "GH_TOKEN")
