@@ -129,8 +129,8 @@ the shapes the API returns and compared as whole-second UTC (`grammar.normalize_
 
 Fifteen kinds, strict (an unknown or duplicate key is a rejection) and at schema version 1; the
 records the kit writes are canonical JSON. Thirteen are new in v1.1.0: v1.0.3 rejects each as an
-unknown kind. `mod-base.ci.generation` is new in v1.4.0. v1.4.1, the predecessor of this change,
-reads each of those fourteen unchanged; `mod-base.ci.scope` is new after v1.4.1, which rejects it
+unknown kind. `mod-base.ci.generation` is new in v1.4.0. v1.4.1, the predecessor of v1.5.0,
+reads each of those fourteen unchanged; `mod-base.ci.scope` is new in v1.5.0, and v1.4.1 rejects it
 as an unknown kind (`tests/test_schema_evolution.py`).
 [SCHEMAS.md](SCHEMAS.md) has the field tables of the Build config, the batch manifest, the results
 index and the activation manifest. For the others the validator named here, a function of

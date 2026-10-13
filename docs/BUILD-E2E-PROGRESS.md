@@ -20,8 +20,10 @@ environment tool; v1.3.1, which remembers successful pixel checks by content wit
 process (the policy's conformance run measured the same images thousands of times); v1.4.0, a
 tag only, never a Release, whose `ci select-generation` lets a consumer job of the default branch
 read the tested generation of a commit, full or reused, with its Build bundle and verified lane
-exports (Q9 groundwork, KQ9-1 and KQ9-2); and v1.4.1, which carries all of v1.4.0 and gives the
-gallery's compare grid a cell only for a lane a release publishes. No mod is active: none has an
+exports (Q9 groundwork, KQ9-1 and KQ9-2); v1.4.1, which carries all of v1.4.0 and gives the
+gallery's compare grid a cell only for a lane a release publishes; and v1.5.0, which lets a
+pull request's packaged lanes run a narrowed, sealed runtime scope (opt-in `runtime_selection`)
+and finds each family handoff by its exact name across a whole wave of producer runs. No mod is active: none has an
 activation manifest, and managed Build/E2E callers have run on GitHub only in the K7 canary
 repository. The design awaits owner agreement; ADR 0007 is Proposed. **K7 is done: its rounds ran at v1.1.1 and the v1.1.3 fixes passed in a second canary (see its row
 below); the v1.1.3 Release is published. When K7 closed, Quick Skin and Block Pops pinned v1.1.1
@@ -33,7 +35,7 @@ without an activation manifest, and Q1–Q10, B1–B7 and the GitHub settings of
   Python 3.11 and 3.13 at the v1.1.1 release commit, 3,059 on Python 3.11 and 3.13 at the v1.1.2
   release commit, 3,060 on Python 3.11 and 3.13 at the v1.1.3 release commit, 3,080 tests on
   each Python 3.11–3.13 at the v1.2.0 release commit, 3,081 on each Python 3.11–3.13 at the v1.2.1
-  release commit, 3,124 on each Python 3.11–3.13 at the v1.3.0 release commit, 3,141 on each Python 3.11–3.13 at the v1.3.1 release commit, 3,169 on each Python 3.11–3.13 at the v1.4.0 release commit, 3,170 on each Python 3.11–3.13 at the v1.4.1 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
+  release commit, 3,124 on each Python 3.11–3.13 at the v1.3.0 release commit, 3,141 on each Python 3.11–3.13 at the v1.3.1 release commit, 3,169 on each Python 3.11–3.13 at the v1.4.0 release commit, 3,170 on each Python 3.11–3.13 at the v1.4.1 release commit, 3,218 on each Python 3.11–3.13 at the v1.5.0 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
   integration cases use real files, Git and processes, while older isolated tests also replace
   system/account operations.
 - **Hosted account proof:** `ci_linux_worker.py` (132 tests), `ci_linux_deferred.py` (2 tests) and
@@ -134,8 +136,8 @@ are new. Tag-peel, main-ancestry, digest and lock-format controls reject invalid
 
 Every lane is planned with all its obligations. A pull request's packaged lanes may run a
 narrowed scope (Quick Skin adoption gap QS-G6): the owner took decisions D1-D5 of
-[BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md) on 11 October 2026, and the unreleased
-`ci scope` implements them. The `input` job seals a `mod-base.ci.scope` record outside the plan
+[BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md) on 11 October 2026, and
+`ci scope` (v1.5.0) implements them. The `input` job seals a `mod-base.ci.scope` record outside the plan
 from the changed paths and the base commit's full packaged evidence, which protected kit code reads,
 and from what the token-free protected hook `derive_scope` selects; unknown means full, and a
 narrowed pull request never covers its push. The feature is inert until a mod's protected config

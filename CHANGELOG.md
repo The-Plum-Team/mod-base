@@ -5,7 +5,14 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased
+## v1.5.0
+
+Minor release: a pull request's packaged lanes can run a narrowed, sealed runtime scope (#22,
+Quick Skin gap QS-G6, opt-in with `runtime_selection`), and `select --family` and `admit` find
+each family handoff by its exact name across a whole wave of producer runs (#31), which lets a
+mod coalesce the publication of a wave whose producer hands off one key per run. One new document
+kind, `mod-base.ci.scope`. A mod moves from v1.4.1 to v1.5.0 with an ordinary pin bump; nothing
+changes for it until its protected config names `runtime_selection`.
 
 - Find each family handoff by its exact name across a whole wave of producer runs. `select
   --family` (`pages.select.FamilyGenerations`) and `admit` (ready family handoffs and the
@@ -62,7 +69,7 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   generation at 409 (or 413), within the test budget of 440.
 - Compatibility: the baseline moves to the archived v1.4.1 reader
   (`tests/fixtures/previous_release/v1.4.1`, built from the release commit 9f9fddd like v1.4.0's,
-  whose archive it reproduces byte for byte), the newest release while this section is open. One
+  whose archive it reproduces byte for byte), the immediate predecessor in this changelog. One
   new document kind, `mod-base.ci.scope` at schema version 1 (`new-kind` in the ledger), which
   v1.4.1 rejects as unknown; every other kind is `unchanged`. Optional fields within schema 1:
   `runtime_selection` of `mod-base.build.config`, `scope` of `mod-base.ci.results` and
@@ -75,6 +82,19 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   select-generation` refuses a reused generation whose original packaged run was narrowed, as
   `reuse.download_reuse_reference` does. Opt-in: without `runtime_selection` every run is that of
   v1.4.1. Remove `runtime_selection` before rolling a pin back below this release.
+- Upgrade: bump the pin to v1.5.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.5.0`, then `verify --network` and `template check`). A mod with `admission` lands the bump
+  through its protected route like any change to its callers. To narrow a pull request's lanes, a
+  mod then adds `runtime_selection: {input: "changed-paths-v1"}` to its protected Build config and
+  a `derive_scope` hook to its protected adapter (docs/BUILD-RUNTIME-SELECTION.md); that change is
+  itself a config change, so its own pull request runs in full. Family handoffs need no change: a
+  producer that already hands off one key per run is found by name, and the mod may now publish a
+  wave once instead of once per run.
+- Rollback: first remove `runtime_selection` from the protected config (a v1.4.1 reader refuses a
+  config, results index or tested record that carries the new optional fields), then bump the pin
+  back to v1.4.1. A narrowed run's records are only ever read by the release that wrote them:
+  post-merge reuse and `ci select-generation` never take a narrowed original, so the push after the
+  rollback runs in full. Without `runtime_selection` nothing is stored that v1.4.1 would not read.
 
 ## v1.4.1
 

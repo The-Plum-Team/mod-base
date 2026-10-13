@@ -1,11 +1,11 @@
 # Feature-selected runtime scope: design note
 
 Proposed 10 October 2026; decided by the owner on 11 October 2026 and implemented on the branch
-`kit/runtime-selection` (unreleased). This note describes how a packaged lane runs only the
+`kit/runtime-selection`, released in v1.5.0. This note describes how a packaged lane runs only the
 scenarios a pull request affects (Quick Skin adoption gap QS-G6). The owner took the recommended
 option of every decision; where the note gave none, the implementation took the most fail-closed
-option. [Decisions taken](#decisions-taken) says which and why. The note authorizes no release:
-the feature ships with the next kit release, and a mod enables it in its protected Build config.
+option. [Decisions taken](#decisions-taken) says which and why. The feature ships in
+v1.5.0, and a mod enables it in its protected Build config.
 
 ## What is asked
 
@@ -248,7 +248,7 @@ full run (`reuse`, `scope`), and only the packaged gate of a pull request may ca
 
 ## What it unblocks
 
-*As proposed on 10 October; the decisions above are now taken and implemented, unreleased.*
+*As proposed on 10 October; the decisions above are now taken and implemented and released in v1.5.0.*
 
 Q1–Q6 do not need this. The native workflows, with their selection, stay required through Q6,
 and the shadow runs of Q4 can run full profiles, which fit the lane budget (180 minutes, the same
