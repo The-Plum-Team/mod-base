@@ -158,6 +158,11 @@ KIT: dict[str, tuple[Any, str]] = {
                                          "signature and message"),
     "MAX_CI_FETCH_BUILD_REQUESTS": (8, "requests one `ci fetch-build` may spend: one REST redirect and one "
                                        "credential-free storage GET, plus retries"),
+    "MAX_CI_SCOPE_REQUESTS": (32, "API requests one `ci scope` may spend: 11 behind a direct baseline record and "
+                                  "15 behind a reuse reference, none when nothing can narrow, plus retries"),
+    "MAX_CI_SCOPE_BYTES": (64 * KIB, "one scope record and one derive_scope output: a line of a job output"),
+    "MAX_CI_SCOPE_TREE_ENTRIES": (100_000, "entries of one recursive tree listing `ci scope` compares; GitHub's "
+                                           "own listing limit, beyond which the run is full"),
     "MAX_CI_GENERATION_REQUESTS": (440, "D14 regression cap for one complete generation of either native profile; "
                                        "test_ci_generation_budget enforces it, without adding runtime admission"),
     "MAX_CI_GATE_STATUS_REQUESTS": (96, "API requests one `ci gate-status` may spend: 36 with both runs complete, "

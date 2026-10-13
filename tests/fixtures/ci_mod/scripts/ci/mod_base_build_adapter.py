@@ -36,8 +36,10 @@ from collections.abc import Callable
 from typing import Any
 
 BUILD_ADAPTER_API = 1
-HOOKS = ("derive_plan", "policy", "build_target", "verify_target", "verify_build", "derive_runtime", "run_lane",
-         "verify_runtime")
+HOOKS = ("derive_plan", "policy", "build_target", "verify_target", "verify_build", "derive_scope", "derive_runtime",
+         "run_lane", "verify_runtime")
+#: The one scenario every lane still runs when a change touches no source: its smoke run.
+SMOKE_SCENARIO = "smoke"
 FAULT_MODES = ("fail", "hang", "missing", "extra", "orphan")
 LOADERS = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge"}
 MAX_INPUT_BYTES = 1 << 20
@@ -307,12 +309,39 @@ def runtime_row(inventory: dict[str, Any], lane: str) -> dict[str, Any]:
             "production": outputs["production"], "harness": outputs["harness"]}
 
 
-def runtime_values(inventory: dict[str, Any], contract: dict[str, Any], lane: str) -> dict[str, str]:
-    """What ``run_lane`` receives: the lane's row and the scenarios it must run."""
+def derive_scope(plan: dict[str, Any], changed_paths: list[str]) -> dict[str, Any]:
+    """The synthetic selection policy: a change below ``src/`` runs every obligation of every lane;
+    any other change runs the smoke scenario of every lane, which every lane has."""
+
+    full = any(path.startswith("src/") for path in changed_paths)
+    return {"lanes": [{"id": lane["id"], "scenarios": [
+        name for name in lane["obligations"] if full or name.startswith(f"scenario/{SMOKE_SCENARIO}/")]}
+        for lane in plan["lanes"]]}
+
+
+def lane_scope(value: str | None, lane: str, obligations: list[str]) -> list[str]:
+    """The obligations a lane runs: all of them, or those of the kit's ``MB_RUNTIME_SCOPE`` for it."""
+
+    if value is None:
+        return obligations
+    scope = _object(decode(value.encode("utf-8"), "MB_RUNTIME_SCOPE"), ("lane_id", "scenarios", "scope_sha256"),
+                    "lane scope")
+    selected = scope["scenarios"]
+    if scope["lane_id"] != lane or type(selected) is not list or not selected or not set(selected) <= set(obligations):
+        raise AdapterError(f"the runtime scope does not narrow lane {lane}")
+    return [name for name in obligations if name in selected]
+
+
+def runtime_values(inventory: dict[str, Any], contract: dict[str, Any], lane: str,
+                   obligations: list[str] | None = None) -> dict[str, str]:
+    """What ``run_lane`` receives: the lane's row and the scenarios it must run, all of them or
+    those with an obligation in ``obligations``."""
 
     loader = lane_of(inventory, lane)[1]
+    scenarios = [scenario["id"] for scenario in scenarios_of(contract, loader)
+                 if obligations is None or any(name.startswith(f"scenario/{scenario['id']}/") for name in obligations)]
     return {"E2E_ROW_JSON": encode(runtime_row(inventory, lane)).decode("utf-8").rstrip("\n"),
-            "E2E_SCENARIOS": ",".join(scenario["id"] for scenario in scenarios_of(contract, loader))}
+            "E2E_SCENARIOS": ",".join(scenarios)}
 
 
 # -- Build outputs -------------------------------------------------------------------------------------

@@ -520,6 +520,146 @@ class QuickSkinSelectionTest(unittest.TestCase):
         self.assertEqual(self.pin_reads(), [], "no kit is bound before the envelope validates")
 
 
+class FamilyWaveSelectionTest(unittest.TestCase):
+    """A producer that hands off one key per run (Quick Skin: one compatibility review run per
+    target, 17 targets per wave, 15 runs observed in one wave): a key's family handoff is found by
+    its exact name across the whole wave at the head, not only in the newest
+    ``limits.MAX_CANDIDATES`` producer runs, with every authentication and fallback rule kept."""
+
+    WAVE = 17
+
+    def setUp(self) -> None:
+        self.world = World(QS_REPOSITORY, max_requests=MAX_PAGES_API_READS)
+        self.invocation = qs_invocation()
+
+    def select(self, **options: Any) -> Selected:
+        return select_evidence(self.invocation, api=self.world.api, key=QS_KEY, family=FAMILY,
+                               expected_subject_commit=HEAD, **options)
+
+    def producer_run(self, run_id: int, *, created: float, **changes: Any) -> dict[str, Any]:
+        run = self.world.run(run_id, **{"path": FAMILY_WORKFLOW, "event": "repository_dispatch", "created": created,
+                                        **changes})
+        self.world.jobs(run, [self.world.job(FAMILY_JOB, steps=((FAMILY_STEP, created + 190, created + 210),))])
+        return run
+
+    def wave(self, size: int = WAVE, *, first_key: str = QS_KEY, **first: Any
+             ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """``size`` successful producer runs at the head (ids 600.., oldest first, 100 s apart), each
+        handing off one key: ``first_key`` in the oldest (with the ``first`` handoff options), another
+        key in every later one. Returns the runs and the oldest run's handoff."""
+
+        runs = [self.producer_run(600 + index, created=100 + 100 * index) for index in range(size)]
+        oldest = self.world.family_handoff(runs[0], first_key, created=300, **first)
+        for index, run in enumerate(runs[1:], start=1):
+            self.world.family_handoff(run, f"mc1.{index}", created=300 + 100 * index)
+        return runs, oldest
+
+    def admitted_cache(self, *, owner_created: float, created: float) -> dict[str, Any]:
+        owner = self.world.run(700, path=PAGES_WORKFLOW_PATH, created=owner_created)
+        return self.world.artifact(grammar.family_cache_name(FAMILY, QS_KEY, HEAD), owner, created=created)
+
+    def inventories(self) -> list[int]:
+        """The producer runs whose artifacts were listed, in order."""
+
+        prefix = f"/repos/{QS_REPOSITORY}/actions/runs/"
+        return [int(path[len(prefix):].split("/")[0]) for path, _ in self.world.api.calls
+                if path.startswith(prefix) and path.endswith("/artifacts")]
+
+    def test_the_earliest_key_of_a_wave_is_selected_by_its_exact_name(self) -> None:
+        runs, oldest = self.wave()
+        # A publication that started before the handoff was uploaded rolled a cache forward later:
+        # it never masks the handoff (supersession is unchanged).
+        self.admitted_cache(owner_created=250, created=5000)
+        selected = self.select()
+        self.assertEqual((selected.kind, selected.artifact_id, selected.name, selected.run_id, selected.run_attempt),
+                         ("family-handoff", oldest["id"], grammar.family_handoff_name(FAMILY, QS_KEY, 1), 600, 1))
+        self.assertEqual(self.inventories(), [run["id"] for run in reversed(runs)],
+                         "newest first, down to the run holding the exact name")
+        self.assertEqual(len(self.world.api.requests("/mod-compatibility-review.yml/runs")), 1, "one listing")
+        self.assertLess(self.world.api.request_count, MAX_PAGES_API_READS)
+        # The newest MAX_CANDIDATES runs alone (the previous window) never held this key's handoff.
+        self.setUp()
+        self.wave()
+        self.admitted_cache(owner_created=250, created=5000)
+        with mock.patch.object(limits, "MAX_FAMILY_PRODUCER_RUNS", limits.MAX_CANDIDATES):
+            self.assertEqual(self.select().kind, "family-cache")
+        self.assertEqual(len(self.inventories()), limits.MAX_CANDIDATES)
+
+    def test_a_key_missing_from_the_whole_wave_falls_back_exactly_as_before(self) -> None:
+        runs, _ = self.wave(first_key="mc26.3")
+        cache = self.admitted_cache(owner_created=250, created=5000)
+        with mock.patch.object(select_module.artifacts, "download", side_effect=AssertionError("downloaded")):
+            selected = self.select()
+        self.assertEqual((selected.kind, selected.artifact_id, selected.run_id), ("family-cache", cache["id"], 700))
+        self.assertEqual(self.inventories(), [run["id"] for run in reversed(runs)], "every run of the wave, once")
+        self.setUp()
+        self.wave(first_key="mc26.3")
+        with mock.patch.object(targets, "first_parent_history", return_value=[HEAD]), \
+                self.assertRaises(Unavailable):
+            self.select()
+
+    def test_the_bound_is_explicit_and_only_ever_hides_an_older_run(self) -> None:
+        runs, _ = self.wave(limits.MAX_FAMILY_PRODUCER_RUNS + 1)
+        cache = self.admitted_cache(owner_created=250, created=9000)
+        selected = self.select()
+        self.assertEqual((selected.kind, selected.artifact_id), ("family-cache", cache["id"]))
+        self.assertEqual(self.inventories(), [run["id"] for run in reversed(runs[1:])],
+                         "the newest MAX_FAMILY_PRODUCER_RUNS runs; the oldest is never read")
+        self.assertLess(self.world.api.request_count, MAX_PAGES_API_READS)
+
+    def test_a_forged_or_mismatched_exact_name_is_never_selected(self) -> None:
+        # Producer runs that are not admissible (another repository, event or branch, or failed)
+        # upload the exact name after the genuine one: they are never listed as producers.
+        for label, changes in {"a fork": {"repository": "fork/qs-like"}, "a pull request": {"event": "pull_request"},
+                               "another branch": {"head_branch": "topic"},
+                               "a failed run": {"conclusion": "failure"}}.items():
+            with self.subTest(label):
+                self.setUp()
+                _, oldest = self.wave()
+                forged = self.producer_run(900, created=9000, **changes)
+                self.world.family_handoff(forged, QS_KEY, created=9200)
+                selected = self.select()
+                self.assertEqual((selected.kind, selected.artifact_id), ("family-handoff", oldest["id"]))
+                self.assertNotIn(900, self.inventories())
+        # A rerun holding an earlier attempt's upload: not the exact name of its latest attempt.
+        self.setUp()
+        _, oldest = self.wave()
+        rerun = self.producer_run(901, created=9000, attempt=2, earlier=({"run_attempt": 1},))
+        self.world.artifact(grammar.family_handoff_name(FAMILY, QS_KEY, 1), rerun, created=9200)
+        self.assertEqual(self.select().artifact_id, oldest["id"])
+        self.assertEqual(self.inventories()[0], 901, "the rerun was read and its stale name skipped")
+
+    def test_a_corrupt_exact_name_in_the_wave_fails_closed_and_never_falls_back(self) -> None:
+        cases = {
+            "an upload naming another head than its run": lambda run: self.world.artifact(
+                grammar.family_handoff_name(FAMILY, QS_KEY, 1), run, created=9200,
+                workflow_run={"id": run["id"], "head_sha": "d" * 40, "head_branch": "master"}),
+            "two uploads of the exact name in one run": lambda run: [
+                self.world.family_handoff(run, QS_KEY, created=9200),
+                self.world.family_handoff(run, QS_KEY, created=9210)],
+        }
+        for label, corrupt in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                self.wave()
+                self.admitted_cache(owner_created=250, created=5000)
+                corrupt(self.producer_run(902, created=9000))
+                with self.assertRaises(MbError) as caught:
+                    self.select()
+                self.assertNotIsInstance(caught.exception, Unavailable, "never 'no evidence', never a fallback")
+                self.assertEqual(self.inventories(), [902], "no older run is read past a corrupt one")
+        # The earliest key's envelope names another producer run: its kit binding fails the leg
+        # instead of falling back to the admitted cache.
+        self.setUp()
+        other = self.producer_run(903, created=9000)
+        self.wave(envelope_run=other)
+        self.admitted_cache(owner_created=250, created=5000)
+        with self.assertRaises(MbError) as caught:
+            self.select()
+        self.assertNotIsInstance(caught.exception, Unavailable)
+        self.assertEqual(caught.exception.reason, "kit-binding")
+
+
 def _without_carry_forward(root: Path) -> None:
     path = root / "site/mod-base.json"
     config = json.loads(path.read_text())
@@ -770,13 +910,12 @@ class FamilyCarryForwardTest(unittest.TestCase):
 
     def test_walk_reads_stay_within_the_pages_client_budget(self) -> None:
         # A full-depth walk over hostile history: every earlier commit has a cache whose owner is
-        # not a successful Pages run and a dozen producer runs handed off another key only.
+        # not a successful Pages run, and more producer runs than the bound handed off another key only.
         self.world = World(QS_REPOSITORY, max_requests=MAX_PAGES_API_READS)
         earlier = [f"{index:040x}" for index in range(1, limits.GENERATION_PROBES + 1)]
         for index, commit in enumerate(earlier):
             self.cache(1000 + index, commit, created=900 + index, conclusion="failure")
-        for index, commit in enumerate(earlier[:12]):
-            self.producer(200 + index, commit, key="mc26.3", created=100 + index)
+        self.hostile_walk_producers(earlier)
         with mock.patch.object(targets, "first_parent_history", return_value=[self.head, *earlier]), \
                 self.assertRaises(Unavailable):
             self.select()
@@ -784,8 +923,73 @@ class FamilyCarryForwardTest(unittest.TestCase):
                                               for commit in (self.head, *earlier)])
         self.assertEqual(self.owner_reads(), [1000 + index for index in range(len(earlier))])
         inventories = [path for path, _ in self.world.api.requests("/artifacts") if "/runs/" in path]
-        self.assertEqual(len(inventories), limits.MAX_CANDIDATES, "the newest producer runs only")
+        self.assertEqual(len(inventories), limits.MAX_FAMILY_PRODUCER_RUNS, "the newest producer runs only")
         self.assertLess(self.world.api.request_count, MAX_PAGES_API_READS)
+
+    def hostile_walk_producers(self, earlier: list[str]) -> None:
+        """Two successful producer runs at each of the newest 20 ``earlier`` commits (40, more than
+        ``limits.MAX_FAMILY_PRODUCER_RUNS``), each handing off another key only."""
+
+        for index, commit in enumerate(earlier[:20]):
+            for copy in range(2):
+                self.producer(200 + 2 * index + copy, commit, key="mc26.3", created=100 - 2 * index + copy)
+        self.assertGreater(40, limits.MAX_FAMILY_PRODUCER_RUNS)
+
+    def test_a_full_wave_window_and_a_full_walk_stay_within_the_pages_client_budget(self) -> None:
+        # The worst case of select: more producer runs at the expected commit than its bound, none
+        # of them holding this key, a family cache there for every head owner the budget reads (none
+        # a successful Pages run), then the hostile full-depth walk above.
+        self.world = World(QS_REPOSITORY, max_requests=MAX_PAGES_API_READS)
+        earlier = [f"{index:040x}" for index in range(1, limits.GENERATION_PROBES + 1)]
+        for index, commit in enumerate(earlier):
+            self.cache(1000 + index, commit, created=900 + index, conclusion="failure")
+        for index in range(limits.MAX_CANDIDATES + 1):
+            self.cache(1100 + index, self.head, created=950 + index, conclusion="failure")
+        self.hostile_walk_producers(earlier)
+        for index in range(limits.MAX_FAMILY_PRODUCER_RUNS + 1):
+            self.producer(400 + index, self.head, key="mc26.3", created=100 + index)
+        with mock.patch.object(targets, "first_parent_history", return_value=[self.head, *earlier]), \
+                self.assertRaises(Unavailable):
+            self.select()
+        inventories = [path for path, _ in self.world.api.requests("/artifacts") if "/runs/" in path]
+        self.assertEqual(len(inventories), 2 * limits.MAX_FAMILY_PRODUCER_RUNS)
+        self.assertEqual(self.world.api.request_count,
+                         4 + 2 * limits.MAX_FAMILY_PRODUCER_RUNS + limits.MAX_CANDIDATES + 2 * limits.GENERATION_PROBES,
+                         "the workflow id, two producer listings, the head's cache name and its owners, the "
+                         "inventories at the head and on the walk, then per earlier commit its cache name and owner")
+        self.assertEqual(self.world.api.request_count, 140)
+        self.assertLess(self.world.api.request_count, MAX_PAGES_API_READS)
+
+    def test_a_wave_at_an_earlier_commit_is_carried_by_its_exact_name(self) -> None:
+        # The previous commit's wave of one-key runs was never published (a coalesced publication
+        # the head overtook). Its earliest key is carried from that wave, not from the older
+        # generation below it that a walk over only the newest MAX_CANDIDATES runs reached.
+        older = self.cache(70, self.m2)
+
+        def wave() -> dict[str, Any]:
+            runs = [self.world.run(300 + index, path=FAMILY_WORKFLOW, event="repository_dispatch", head_sha=self.c3,
+                                   created=1000 + 100 * index) for index in range(17)]
+            for index, run in enumerate(runs):
+                created = 1000 + 100 * index
+                self.world.jobs(run, [self.world.job(FAMILY_JOB,
+                                                     steps=((FAMILY_STEP, created + 190, created + 210),))])
+                handoff = self.world.family_handoff(run, QS_KEY if index == 0 else f"mc1.{index}",
+                                                    created=created + 200)
+                if index == 0:
+                    earliest = handoff
+            return earliest
+
+        earliest = wave()
+        selected = self.select()
+        self.assertEqual((selected.kind, selected.artifact_id, selected.run_id),
+                         ("family-handoff", earliest["id"], 300))
+        self.setUp()
+        older = self.cache(70, self.m2)
+        wave()
+        with mock.patch.object(limits, "MAX_FAMILY_PRODUCER_RUNS", limits.MAX_CANDIDATES):
+            selected = self.select()
+        self.assertEqual((selected.kind, selected.artifact_id), ("family-cache", older["id"]),
+                         "the previous window walked past the wave to an older generation")
 
     def test_one_instance_shares_every_leg_independent_read(self) -> None:
         # build's use at Quick Skin scale: one instance re-identifies 17 carried legs. Per leg only

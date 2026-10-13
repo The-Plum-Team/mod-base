@@ -5,6 +5,97 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.5.0
+
+Minor release: a pull request's packaged lanes can run a narrowed, sealed runtime scope (#22,
+Quick Skin gap QS-G6, opt-in with `runtime_selection`), and `select --family` and `admit` find
+each family handoff by its exact name across a whole wave of producer runs (#31), which lets a
+mod coalesce the publication of a wave whose producer hands off one key per run. One new document
+kind, `mod-base.ci.scope`. A mod moves from v1.4.1 to v1.5.0 with an ordinary pin bump; nothing
+changes for it until its protected config names `runtime_selection`.
+
+- Find each family handoff by its exact name across a whole wave of producer runs. `select
+  --family` (`pages.select.FamilyGenerations`) and `admit` (ready family handoffs and the
+  `current` check) looked a key's `mb-family-handoff--<f>--<key>--a<attempt>` up only in the
+  newest `limits.MAX_CANDIDATES` (8) successful producer runs at the leg coverage. A producer that
+  hands off one key per run (Quick Skin's mod compatibility review: one run per target, 17 targets,
+  15 runs in one observed wave) left the earliest keys of a wave outside that window, so a
+  publication that coalesced a wave silently fell back to an older family cache (or the
+  carry-forward walk), and recovery could call a site `current` while a newer handoff waited. Both
+  now search the newest `limits.MAX_FAMILY_PRODUCER_RUNS` (32, new) producer runs of the one
+  `head_sha` listing, newest first, for the exact name of each run's latest attempt; inventories
+  are read only until the name is found and are shared by every key, and `admit` reads a run's job
+  graph only when its inventory holds a pending key's handoff. Every authentication and fail-closed
+  rule is unchanged: inadmissible runs (another repository, event, branch or conclusion) are never
+  producers, an earlier attempt's name in a rerun is not the exact name, two uploads of the name in
+  one run or one naming another head fail the leg, a selected handoff is still bound to its
+  envelope's exact producer attempt and kit (`kit-binding`), and a key with no handoff in the
+  window falls back to the superseding or admitted family cache, then the walk, exactly as before.
+  The bound only ever hides an older run. The carry-forward walk inventories the same bound of
+  producer runs at its earlier commits (also `limits.MAX_CANDIDATES` before), so a wave that a new
+  head overtook before it was published is carried by its exact names instead of being walked past
+  to an older generation. Worst-case reads: one `select` reads at most 48 more inventories (140 of
+  the Pages client's 160 with a full window at the coverage and a full walk, pinned by a test); for
+  the QS wave above, `admit` reads 17 inventories and only the job graphs of the runs holding a
+  ready key, and a full window at Quick Skin's 17 targets stays within its 160 (pinned by a test). No document,
+  schema, CLI flag, job or step name changes; `src/` is digested, so the `MB_KIT_TREE_DIGEST`
+  literals move.
+- Let a pull request's packaged lanes run a narrowed scope (kit gap QS-G6 of the Quick Skin
+  mapping), as the owner decided D1-D5 of docs/BUILD-RUNTIME-SELECTION.md on 11 October 2026. The
+  plan still holds every obligation of every lane, so the Build, the packaged run and the status
+  evaluation keep one plan. The packaged `input` job runs the new `ci scope` after `select-build`:
+  with the job's read-only token it reads the paths the tested merge changes against its base
+  (both Git trees) and the base commit's full packaged evidence (the tested record of its newest
+  successful push run under the same kit pin, or the reuse reference of one and the original it
+  names), then runs the new protected hook `derive_scope` as the validator, without a token, with
+  that data in `MB_SCOPE_INPUT`. What the hook selects must be each lane's own obligations in plan
+  order; a lane it names none for runs in full. The result is sealed as a new kind,
+  `mod-base.ci.scope`, bound to the plan and to the requesting run attempt, and handed to the
+  later jobs as the job output `scope`, like the selection record. A lane gives its entry to
+  `derive_runtime` and `verify_runtime` in `MB_RUNTIME_SCOPE`; the results index holds the record
+  (optional `scope`) and the packaged tested record its digest (optional `scope_sha256`); the
+  status description says "for a narrowed scope". Full is the answer, without a record, whenever
+  anything is unknown: no `runtime_selection` in the protected config, a push, a dispatch or a
+  release, a pull request from a fork, a changed kit pin, a pull request that changes the config, an adapter source, a plan
+  input or a control file, a tree the API lists incompletely, a base without complete,
+  successful, unnarrowed evidence of the same policy and plan, or a selection that narrows
+  nothing (`scope.FULL_SCOPE_REASONS`). Post-merge reuse never lets a narrowed pull request cover
+  the push after its merge (new `FULL_RUN_REASONS` entry `original-run-narrowed`), and a reuse
+  reference that names a narrowed original is refused. New root operation `take-derived-scope`,
+  limits `MAX_CI_SCOPE_REQUESTS` (32), `MAX_CI_SCOPE_BYTES` (64 KiB) and
+  `MAX_CI_SCOPE_TREE_ENTRIES` (100,000). Cost: `ci scope` sends no request without
+  `runtime_selection`, so the generation ledger is unchanged (198 / 398 / 300); with it, 11
+  requests behind a direct baseline and 15 behind a reuse reference, which puts Quick Skin's
+  generation at 409 (or 413), within the test budget of 440.
+- Compatibility: the baseline moves to the archived v1.4.1 reader
+  (`tests/fixtures/previous_release/v1.4.1`, built from the release commit 9f9fddd like v1.4.0's,
+  whose archive it reproduces byte for byte), the immediate predecessor in this changelog. One
+  new document kind, `mod-base.ci.scope` at schema version 1 (`new-kind` in the ledger), which
+  v1.4.1 rejects as unknown; every other kind is `unchanged`. Optional fields within schema 1:
+  `runtime_selection` of `mod-base.build.config`, `scope` of `mod-base.ci.results` and
+  `scope_sha256` of `mod-base.ci.gate`, which a v1.4.1 reader refuses. `BUILD_ADAPTER_API` stays 1:
+  `derive_scope` is an optional hook that runs only for a config with `runtime_selection`.
+  `ADAPTER_API`, `pixel_metrics_version` 1 and the managed files are those of v1.4.1. The packaged
+  E2E callee gains the `input` job's step "Derive the narrowed runtime scope" and its output
+  `scope`, which the receiving step of the later jobs writes for `fetch-build`, `aggregate` and
+  `seal-gate` (`--scope`); the job graph, job names and permissions are unchanged. `ci
+  select-generation` refuses a reused generation whose original packaged run was narrowed, as
+  `reuse.download_reuse_reference` does. Opt-in: without `runtime_selection` every run is that of
+  v1.4.1. Remove `runtime_selection` before rolling a pin back below this release.
+- Upgrade: bump the pin to v1.5.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.5.0`, then `verify --network` and `template check`). A mod with `admission` lands the bump
+  through its protected route like any change to its callers. To narrow a pull request's lanes, a
+  mod then adds `runtime_selection: {input: "changed-paths-v1"}` to its protected Build config and
+  a `derive_scope` hook to its protected adapter (docs/BUILD-RUNTIME-SELECTION.md); that change is
+  itself a config change, so its own pull request runs in full. Family handoffs need no change: a
+  producer that already hands off one key per run is found by name, and the mod may now publish a
+  wave once instead of once per run.
+- Rollback: first remove `runtime_selection` from the protected config (a v1.4.1 reader refuses a
+  config, results index or tested record that carries the new optional fields), then bump the pin
+  back to v1.4.1. A narrowed run's records are only ever read by the release that wrote them:
+  post-merge reuse and `ci select-generation` never take a narrowed original, so the push after the
+  rollback runs in full. Without `runtime_selection` nothing is stored that v1.4.1 would not read.
+
 ## v1.4.1
 
 Patch release: the gallery's **Compare versions** grid gets a cell only for a lane a release

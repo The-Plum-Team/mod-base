@@ -28,20 +28,24 @@ def encoded(document: object) -> bytes:
 
 
 class ContractTableTests(unittest.TestCase):
-    def test_the_eight_hooks_are_exactly_the_contract_table(self) -> None:
+    def test_the_nine_hooks_are_exactly_the_contract_table(self) -> None:
         self.assertEqual([(hook.name, hook.role, hook.unit, hook.timeout) for hook in adapter.HOOKS.values()], [
             ("derive_plan", "validator", None, "validator_seconds"),
             ("policy", "candidate", None, "policy_seconds"),
             ("build_target", "candidate", "target", "target_seconds"),
             ("verify_target", "validator", "target", "validator_seconds"),
             ("verify_build", "validator", None, "validator_seconds"),
+            ("derive_scope", "validator", None, "validator_seconds"),
             ("derive_runtime", "validator", "lane", "validator_seconds"),
             ("run_lane", "candidate", "lane", "runtime_seconds"),
             ("verify_runtime", "validator", "lane", "validator_seconds"),
         ])
-        self.assertEqual(adapter.PROTECTED_HOOKS,
-                         ("derive_plan", "verify_target", "verify_build", "derive_runtime", "verify_runtime"))
+        self.assertEqual(adapter.PROTECTED_HOOKS, ("derive_plan", "verify_target", "verify_build", "derive_scope",
+                                                   "derive_runtime", "verify_runtime"))
         self.assertEqual(adapter.CANDIDATE_HOOKS, ("policy", "build_target", "run_lane"))
+        # Only a config with a runtime selection ever runs the scope hook (BUILD_ADAPTER_API 1).
+        self.assertEqual(adapter.OPTIONAL_HOOKS, ("derive_scope",))
+        self.assertEqual(adapter.LANE_SCOPE_HOOKS, ("derive_runtime", "verify_runtime"))
 
     def test_roles_and_directories_are_the_worker_layout(self) -> None:
         self.assertEqual({hook.role for hook in adapter.HOOKS.values()}, set(WORKER_ACCOUNTS))
@@ -89,13 +93,15 @@ class CommandTests(unittest.TestCase):
         config["timeouts"] = {"policy_seconds": 1, "target_seconds": 2, "runtime_seconds": 3, "validator_seconds": 4}
         self.assertEqual({name: adapter.hook_timeout_seconds(name, config) for name in adapter.HOOKS}, {
             "derive_plan": 4, "policy": 1, "build_target": 2, "verify_target": 4, "verify_build": 4,
-            "derive_runtime": 4, "run_lane": 3, "verify_runtime": 4})
+            "derive_scope": 4, "derive_runtime": 4, "run_lane": 3, "verify_runtime": 4})
         with self.assertRaises(MbError):
             adapter.hook_timeout_seconds("compile", config)
 
 
 class EnvironmentTests(unittest.TestCase):
     RUNTIME = {"E2E_ROW_JSON": '{"id":"lane-a"}', "E2E_SCENARIOS": "smoke,gallery"}
+    SCOPE = '{"lane_id":"lane-a","scenarios":["smoke"],"scope_sha256":"' + "a" * 64 + '"}'
+    INPUT = '{"changed_paths":["src/a.java"],"format":"changed-paths-v1"}'
 
     def test_values_per_hook(self) -> None:
         self.assertEqual(adapter.hook_values("derive_plan"), {})
@@ -107,12 +113,24 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(adapter.hook_values(hook, unit_id="fabric-1.20.1"), {"MB_LANE_ID": "fabric-1.20.1"})
         self.assertEqual(adapter.hook_values("run_lane", unit_id="lane-a", runtime=self.RUNTIME),
                          {"MB_LANE_ID": "lane-a", **self.RUNTIME})
+        self.assertEqual(adapter.hook_values("derive_scope", scope=self.INPUT), {"MB_SCOPE_INPUT": self.INPUT})
+        for hook in ("derive_runtime", "verify_runtime"):
+            self.assertEqual(adapter.hook_values(hook, unit_id="lane-a", scope=self.SCOPE),
+                             {"MB_LANE_ID": "lane-a", "MB_RUNTIME_SCOPE": self.SCOPE})
+
+    def test_only_the_validator_receives_a_scope(self) -> None:
+        identity = ci_plan()["identity"]
+        for name in ("MB_SCOPE_INPUT", "MB_RUNTIME_SCOPE"):
+            with self.subTest(name=name), self.assertRaises(MbError):
+                worker_environment(role="candidate", python=PYTHON, java_home=None, identity=identity, run_id=1,
+                                   run_attempt=1, values={name: self.SCOPE})
 
     def test_the_worker_environment_accepts_every_hooks_values(self) -> None:
         identity = ci_plan()["identity"]
         for name, hook in adapter.HOOKS.items():
+            scope = self.INPUT if name == "derive_scope" else self.SCOPE if name in adapter.LANE_SCOPE_HOOKS else None
             values = adapter.hook_values(name, unit_id=None if hook.unit is None else "unit-1",
-                                         runtime=self.RUNTIME if name == "run_lane" else None)
+                                         runtime=self.RUNTIME if name == "run_lane" else None, scope=scope)
             pairs = worker_environment(role=hook.role, python=PYTHON, java_home=None, identity=identity, run_id=1,
                                        run_attempt=1, values=values)
             with self.subTest(hook=name):
@@ -133,6 +151,13 @@ class EnvironmentTests(unittest.TestCase):
             ("verify_runtime", {"unit_id": "lane-a", "runtime": self.RUNTIME}),
             ("derive_runtime", {"unit_id": "lane-a", "runtime": self.RUNTIME}),
             ("deploy", {}),
+            # The scope hook needs its input; only it and a lane's two protected hooks take a scope.
+            ("derive_scope", {}), ("derive_scope", {"unit_id": "lane-a", "scope": self.INPUT}),
+            ("derive_scope", {"scope": "smoke"}), ("derive_scope", {"scope": "{\n}"}),
+            ("derive_scope", {"scope": "{" + "x" * (64 * 1024) + "}"}),
+            ("derive_plan", {"scope": self.INPUT}), ("verify_build", {"scope": self.INPUT}),
+            ("run_lane", {"unit_id": "lane-a", "runtime": self.RUNTIME, "scope": self.SCOPE}),
+            ("verify_target", {"unit_id": "target-a", "scope": self.SCOPE}),
         ]
         for hook, arguments in cases:
             with self.subTest(hook=hook, arguments=arguments), self.assertRaises(MbError):
@@ -182,6 +207,7 @@ class FileSetTests(unittest.TestCase):
         plan = ci_plan()
         self.assertEqual(adapter.hook_outputs("derive_plan"), ("plan.json",))
         self.assertEqual(adapter.hook_outputs("derive_runtime", plan=plan, unit_id="lane-a"), ("runtime.json",))
+        self.assertEqual(adapter.hook_outputs("derive_scope", plan=plan), ("scope.json",))
         self.assertEqual(adapter.hook_outputs("verify_target", plan=plan, unit_id="target-a"), ("target-a.json",))
         self.assertEqual(adapter.hook_outputs("verify_build", plan=plan), ("target-a.json",))
         self.assertEqual(adapter.hook_outputs("verify_runtime", plan=plan, unit_id="lane-a"), ("lane-a.json",))
@@ -324,6 +350,31 @@ class ExportPathGrammarTests(unittest.TestCase):
                      None, 7, b"a", ["a"]):
             with self.subTest(path=path):
                 self.assertFalse(grammar.is_export_path(path))
+
+
+class DerivedScopeTests(unittest.TestCase):
+    SCOPE = {"lanes": [{"id": "lane-a", "scenarios": ["smoke"]}, {"id": "lane-b", "scenarios": []}]}
+
+    def test_the_lanes_and_their_scenarios_are_returned(self) -> None:
+        self.assertEqual(adapter.parse_derived_scope(encoded(self.SCOPE)), self.SCOPE)
+
+    def test_anything_else_is_rejected(self) -> None:
+        cases = {
+            "no lane": encoded({"lanes": []}),
+            "extra key": encoded({**self.SCOPE, "full": True}),
+            "lane without scenarios": encoded({"lanes": [{"id": "lane-a"}]}),
+            "unknown lane key": encoded({"lanes": [{"id": "lane-a", "scenarios": [], "env": {}}]}),
+            "repeated lane": encoded({"lanes": [{"id": "lane-a", "scenarios": []}] * 2}),
+            "repeated scenario": encoded({"lanes": [{"id": "lane-a", "scenarios": ["smoke", "smoke"]}]}),
+            "malformed lane": encoded({"lanes": [{"id": "Lane A", "scenarios": []}]}),
+            "malformed scenario": encoded({"lanes": [{"id": "lane-a", "scenarios": ["a b"]}]}),
+            "string": encoded({"lanes": [{"id": "lane-a", "scenarios": "smoke"}]}),
+            "oversized": b" " * (limits.MAX_CI_SCOPE_BYTES + 1),
+            "empty file": b"",
+        }
+        for name, data in cases.items():
+            with self.subTest(case=name), self.assertRaises(MbError):
+                adapter.parse_derived_scope(data)
 
 
 if __name__ == "__main__":

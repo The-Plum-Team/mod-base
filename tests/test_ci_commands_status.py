@@ -190,6 +190,24 @@ class GateStatusTests(GateStatusTestCase):
         self.assertLess(world.api.request_count, 60)
         self.assertLessEqual(limits.MAX_CI_GATE_STATUS_REQUESTS, 100)
 
+    def test_a_narrowed_packaged_run_passes_like_a_full_one_and_says_so(self) -> None:
+        # docs/BUILD-RUNTIME-SELECTION.md: every lane ran, each with the scenarios its scope names;
+        # the status reads that from the tested record it reads anyway, without a request.
+        def narrowed(plan, gate, mode):
+            document = ci_run_gate(plan, gate, mode)
+            if gate == "packaged":
+                document["scope_sha256"] = "a" * 64
+            return document
+
+        with patch("tests.test_ci_gate_timeline.ci_run_gate", narrowed):
+            world = self.world().gated()
+        document = self.intents(world, world.planned())
+        self.assertEqual(self.states(document),
+                         {"build": ("success", VERIFIED["build"], run_url(42)),
+                          "packaged": ("success", VERIFIED["packaged"] + ", for a narrowed scope", run_url(43))})
+        self.assertLessEqual(len(document["gates"]["packaged"]["description"]), limits.MAX_CI_STATUS_DESCRIPTION_CHARS)
+        self.assertEqual(world.api.request_count, 36)
+
     def test_a_green_build_with_a_missing_or_running_packaged_run_is_success_and_pending(self) -> None:
         world = self.world().gated(packaged=False)
         self.assertEqual(self.states(self.intents(world, world.planned())),

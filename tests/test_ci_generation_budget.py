@@ -39,6 +39,18 @@ class GenerationBudgetTests(unittest.TestCase):
                 self.assertLessEqual(sum(breakdown.values()), limits.MAX_CI_GENERATION_REQUESTS, breakdown)
                 self.assertLess(limits.MAX_CI_GENERATION_REQUESTS, 600)
 
+    def test_a_narrowed_scope_adds_its_producer_and_still_fits_the_budget(self) -> None:
+        # D2 of docs/BUILD-RUNTIME-SELECTION.md: the producer's requests count against the ledger
+        # and the test budget; the gate, the status and reuse read the scope from records they
+        # already download and add none.
+        native = ci_native.load("quick-skin", "targets.json")
+        common = dict(targets=len(native["targets"]), lanes=len(native["lanes"]), extra_inputs=1)
+        full, narrowed = (generation_breakdown(**common, runtime_selection=enabled) for enabled in (False, True))
+        self.assertEqual({job: narrowed[job] - full[job] for job in full if narrowed[job] != full[job]},
+                         {"packaged-e2e/input": COSTS["scope"].base})
+        self.assertEqual(sum(narrowed.values()), 409)
+        self.assertLessEqual(sum(narrowed.values()), limits.MAX_CI_GENERATION_REQUESTS)
+
     def test_the_structural_maximum_is_not_a_generation_capacity_promise(self) -> None:
         # D14 protects the two enrolled profiles. Keeping their native structural bounds does
         # not authorize plans this large: even before additional pagination, they exceed the

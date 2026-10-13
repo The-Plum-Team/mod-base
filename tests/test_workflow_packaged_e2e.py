@@ -23,7 +23,7 @@ from mod_base.build_ci.records import GATE_MODES
 from mod_base.model import grammar
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json
-from tests.helpers import ci_graph_jobs, ci_plan, ci_push_plan, ci_selection
+from tests.helpers import ci_graph_jobs, ci_plan, ci_push_plan, ci_scope, ci_selection
 from tests.test_workflow_ci_policy import (CANDIDATE_CHECKOUT, EXPORT_CONDITION, FUTURE_KIT_CHECKOUT, JDKS, RECEIVE_STEP,
                                            RESTORE_STEP, SAMPLES, SAVE_STEP, CiStepRunner, ci_callee, step_verb)
 from tests.test_workflow_policy import PROLOGUE, UPLOAD, parse_kit_argv, require_tools, step
@@ -35,6 +35,7 @@ PREPARE = "Fence the host and prepare the worker accounts"
 PLAN = "Derive the protected plan"
 REPLAN = "Rederive the protected plan"
 SELECT = "Select the exact Build"
+SCOPE = "Derive the narrowed runtime scope"
 RECEIVE = RECEIVE_STEP
 FETCH = "Fetch the sealed Build bundle"
 STAGE = "Stage the candidate and the sealed Build bundle"
@@ -47,7 +48,7 @@ SEAL, SEND = workflow.CI_SEAL_STEP, workflow.CI_UPLOAD_STEP
 #: The steps of each job, in order: section 5 of the architecture, per job type. The aggregate
 #: job's sealing step is ``ci aggregate`` itself: the kit indexes the lane results, no hook runs.
 STEPS = {
-    "input": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, SELECT, FINISH],
+    "input": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, PLAN, SELECT, SCOPE, FINISH],
     "lane": [*PROLOGUE, CANDIDATE_CHECKOUT, SUBJECT, PROFILE, PREPARE, REPLAN, RECEIVE, FETCH, FUTURE_KIT_CHECKOUT, SEED,
              RESTORE_STEP, STAGE, RUN, LOCK, SEAL, SEND, EXPORT, SAVE_STEP, FINISH],
     "aggregate": [*PROLOGUE, SUBJECT, CANDIDATE_CHECKOUT, PREPARE, REPLAN, RECEIVE, SEAL, SEND, FINISH],
@@ -67,8 +68,9 @@ STALE_LISTED_STEPS = {"aggregate": ["Assemble the exact lane union"]}
 PUSH = {"GITHUB_EVENT_NAME": "push", "PR_NUMBER": ""}
 SELECTED = {**PUSH, "MODE": "full", "BUILD_RUN_ID": "36042781699"}
 REUSED = {**PUSH, "MODE": "reuse", "PLAN_SHA256": "", "SELECTION": ""}
-#: Where a later job writes the record it is handed, below ``$RUNNER_TEMP``.
+#: Where a later job writes the record it is handed, below ``$RUNNER_TEMP``, and the scope beside it.
 RECEIVED = "mb-state/build-selection.json"
+RECEIVED_SCOPE = "mb-state/runtime-scope.json"
 
 
 class PackagedStructureTests(unittest.TestCase):
@@ -85,11 +87,13 @@ class PackagedStructureTests(unittest.TestCase):
                       "plan-sha256": "${{ steps.plan.outputs.plan_sha256 }}",
                       "lanes": "${{ steps.plan.outputs.lanes }}",
                       # The record of the Build the command selected: one line, for every later job.
-                      "selection": "${{ steps.select.outputs.selection }}"},
+                      "selection": "${{ steps.select.outputs.selection }}",
+                      # The narrowed scope of this run attempt, or empty for a run in full.
+                      "scope": "${{ steps.scope.outputs.scope }}"},
             "lane": None, "aggregate": None, "gate": None})
         steps = self.jobs["input"]["steps"]
         self.assertEqual({item["id"]: item["name"] for item in steps if "id" in item},
-                         {"subject": SUBJECT, "prepare": PREPARE, "plan": PLAN, "select": SELECT})
+                         {"subject": SUBJECT, "prepare": PREPARE, "plan": PLAN, "select": SELECT, "scope": SCOPE})
         # The plan outputs are the ones the kit writes for a plan.
         self.assertEqual(set(planning.plan_outputs(ci_plan())), {"plan_sha256", "targets", "lanes", "candidate_kit_sha"})
 
@@ -222,6 +226,7 @@ class PackagedShellTests(unittest.TestCase):
         self.out = ["--github-output", str(self.runner.output)]
         self.upload = ["--output", f"{temp}/mb-upload"]
         self.selection = f"{temp}/{RECEIVED}"
+        self.scope = f"{temp}/{RECEIVED_SCOPE}"
         self.seed = f"{temp}/mb-seed"
 
     def run_step(self, job_id: str, name: str, **overrides: str | None):
@@ -309,14 +314,15 @@ class PackagedShellTests(unittest.TestCase):
         # A job that holds the candidate checkout derives its subject from it and from one request.
         derived = ["ci", "subject", *job, "--producer", "packaged", "--pr", "17", "--candidate", "candidate", *out]
         expected = ["--expect-sha256", SAMPLES["PLAN_SHA256"]]
-        # Every later job gives the record it was handed to the one command that needs the Build.
-        selection = ["--selection", self.selection]
+        # Every later job gives the record it was handed to the one command that needs the Build,
+        # with the scope it was handed beside it.
+        selection = ["--selection", self.selection, "--scope", self.scope]
         finish = ["ci", "worker-finish", *job]
         self.assertEqual({job_id: self.commands(job_id) for job_id in self.jobs}, {
             # A pull request names no run: the kit finds its separate Build run and waits for it.
             "input": [subject, self.prepare("validator"), ["ci", "plan", *job, "--pin-candidate", "candidate", *out],
                       ["ci", "select-build", *job, "--build-run-id", "", "--wait-seconds", "5400",
-                       "--output", self.selection, *out], finish],
+                       "--output", self.selection, *out], ["ci", "scope", *job, *out], finish],
             # The lane alone runs a client: the image packages it needs go in before its accounts.
             "lane": [derived, ["ci", "system-profile", *job], self.prepare("candidate+validator"),
                      ["ci", "plan", *job, "--pin-candidate", "candidate", "--candidate", "candidate", *expected, *out],
@@ -353,7 +359,10 @@ class PackagedShellTests(unittest.TestCase):
         for job_id in ("lane", "aggregate", "gate"):
             self.assertNotIn("select-build", workflow.CI_JOB_VERBS[NAME][job_id], job_id)
             self.assertEqual(step(self.jobs[job_id]["steps"], RECEIVE)["env"],
-                             {"SELECTION": "${{ needs.input.outputs.selection }}"}, job_id)
+                             {"SELECTION": "${{ needs.input.outputs.selection }}",
+                              "SCOPE": "${{ needs.input.outputs.scope }}"}, job_id)
+        # The scope is derived once, after the selection, with the input job's own token.
+        self.assertEqual(step(self.jobs["input"]["steps"], SCOPE)["env"], {"GH_TOKEN": "${{ github.token }}"})
 
     def test_in_reuse_mode_the_gate_plans_alone_and_selects_no_build(self) -> None:
         job, out = self.job, self.out
@@ -432,9 +441,12 @@ class PackagedShellTests(unittest.TestCase):
                 outcome = self.runner.run(item, LC_ALL=locale)
                 with self.subTest(job=job_id, locale=locale):
                     self.assertEqual((outcome.result.returncode, outcome.commands), (0, []), outcome.result.stderr)
-                    # The canonical bytes `ci select-build` wrote for its own job, for this user alone.
+                    # The canonical bytes `ci select-build` wrote for its own job, for this user alone,
+                    # and an empty scope file for a run in full.
                     self.assertEqual(written.read_bytes(), canonical_json(ci_selection()))
                     self.assertEqual(written.stat().st_mode & 0o777, 0o600)
+                    scope = self.runner.runner_temp / RECEIVED_SCOPE
+                    self.assertEqual((scope.read_bytes(), scope.stat().st_mode & 0o777), (b"", 0o600))
         # One step in three jobs; only the gate, which also runs in reuse mode, may skip it.
         self.assertEqual(steps["lane"], steps["aggregate"])
         self.assertEqual(steps["gate"], {**steps["lane"], "if": NOT_REUSE})
@@ -471,7 +483,7 @@ class PackagedShellTests(unittest.TestCase):
     def test_a_later_job_never_replaces_or_follows_what_is_already_there(self) -> None:
         item = step(self.jobs["lane"]["steps"], RECEIVE)
         temp = Path(tempfile.mkdtemp(dir=self.runner.runner_temp.parent))
-        environment = {**self.runner.base, "SELECTION": SAMPLES["SELECTION"], "RUNNER_TEMP": str(temp)}
+        environment = {**self.runner.base, "SELECTION": SAMPLES["SELECTION"], "SCOPE": "", "RUNNER_TEMP": str(temp)}
         # Without the state directory of `ci subject` there is nowhere to write.
         result = self.runner.harness.run(item["run"], environment, cwd=self.runner.workspace)
         self.assertNotEqual(result.returncode, 0)
@@ -491,8 +503,33 @@ class PackagedShellTests(unittest.TestCase):
         result = self.runner.harness.run(item["run"], environment, cwd=self.runner.workspace)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((result.stdout, result.stderr), ("", ""))
-        self.assertEqual(sorted(path.name for path in (temp / "mb-state").iterdir()), ["build-selection.json"])
+        self.assertEqual(sorted(path.name for path in (temp / "mb-state").iterdir()),
+                         ["build-selection.json", "runtime-scope.json"])
         self.assertEqual((temp / RECEIVED).read_bytes(), canonical_json(ci_selection()))
+
+    def test_a_later_job_writes_exactly_the_scope_it_is_handed_and_refuses_another_line(self) -> None:
+        # A scenario name may hold a plus sign, which no selection record holds.
+        lanes = [{"id": "lane-a", "scenarios": ["scenario/example/server/second+plus"]}]
+        scope = canonical_json(ci_scope(lanes=lanes)).decode("utf-8").rstrip("\n")
+        self.assertIn("+", scope)
+        for job_id in ("lane", "aggregate", "gate"):
+            outcome = self.run_step(job_id, RECEIVE, SCOPE=scope)
+            with self.subTest(job=job_id):
+                self.assertEqual((outcome.result.returncode, outcome.commands), (0, []), outcome.result.stderr)
+                self.assertEqual((self.runner.runner_temp / RECEIVED_SCOPE).read_bytes(), (scope + "\n").encode())
+            (self.runner.runner_temp / RECEIVED).unlink()
+            (self.runner.runner_temp / RECEIVED_SCOPE).unlink()
+        rejected = {"another kind": scope.replace("mod-base.ci.scope", "mod-base.ci.selection"),
+                    "two lines": scope + "\n" + scope, "a space": scope.replace(":", ": ", 1),
+                    "a command": scope.replace("master", "$(id)"), "a quote": scope.replace("master", "ma'ster"),
+                    "not an object": scope[1:-1], "too long": "{" + '"kind":"mod-base.ci.scope"' + "a" * 65536 + "}"}
+        for label, value in rejected.items():
+            outcome = self.run_step("lane", RECEIVE, SCOPE=value)
+            with self.subTest(value=label):
+                self.assertNotEqual(outcome.result.returncode, 0)
+                self.assertEqual(outcome.result.stderr, "Build selection: malformed scope record\n")
+                self.assertFalse((self.runner.runner_temp / RECEIVED).exists())
+                self.assertFalse((self.runner.runner_temp / RECEIVED_SCOPE).exists())
 
     def test_the_unit_check_is_the_unit_grammar(self) -> None:
         # The matrix unit becomes part of an artifact name, so the shell admits exactly the kit's ids.

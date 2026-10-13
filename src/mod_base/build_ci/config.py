@@ -10,7 +10,9 @@ its exact head (:func:`admission`). :func:`validate_build_config` is the
 pure schema; :func:`load_build_config` reads the file from the protected checkout the prologue
 verified and requires every listed source there to have its configured hash, so its result is the
 complete protected adapter that planning hashes into the policy digest. It also records the mod's
-own control files (:data:`CONTROL_PATHS`), which the same digest covers.
+own control files (:data:`CONTROL_PATHS`), which the same digest covers. The optional
+``runtime_selection`` (:func:`runtime_selection`) lets a pull request's packaged lanes run a narrowed
+scope.
 """
 
 from __future__ import annotations
@@ -55,6 +57,10 @@ _FILE = Obj({"path": repo_path, "sha256": Str(g.SHA256, max_len=64)})
 _PATH = Obj({"path": repo_path})
 #: The kinds of seed a protected config may enable, each by the protected files its key binds.
 SEED_KINDS = ("gradle", "runtime")
+#: The formats of the kit's input to the ``derive_scope`` hook a protected config may name
+#: (``runtime_selection.input``): ``changed-paths-v1`` is the paths the tested merge changes against
+#: its base and the base commit's authenticated full packaged evidence (``build_ci.scope``).
+SCOPE_INPUTS = ("changed-paths-v1",)
 _SEED = Obj({"key_files": List(_PATH, min_items=1, max_items=lim.MAX_CI_SEED_KEY_FILES,
                                unique_by=lambda item: item["path"])})
 #: One more candidate file the plan is derived from: the name it is staged under for the protected
@@ -102,6 +108,10 @@ _CONFIG = Obj({
     # Optional within schema 1: the paths a pull request may change only with an approver's
     # decision on its exact head (:func:`admission`). Absent means no such paths.
     "admission": _ADMISSION,
+    # Optional within schema 1: a pull request's packaged lanes may run a narrowed scope that the
+    # protected ``derive_scope`` hook selects from the kit's input of this format
+    # (``build_ci.scope``). Absent means every lane runs every obligation.
+    "runtime_selection": Obj({"input": Str(choices=SCOPE_INPUTS)}),
 })
 
 
@@ -179,6 +189,13 @@ def system_profile(document: dict[str, Any]) -> str | None:
     """The kit system profile a validated config names (``runtime.system_profile``), or ``None``."""
 
     return document["runtime"]["system_profile"] if "runtime" in document else None
+
+
+def runtime_selection(document: dict[str, Any]) -> str | None:
+    """The input format of the ``derive_scope`` hook a validated config enables
+    (``runtime_selection.input``), or ``None`` when its pull requests always run in full."""
+
+    return document["runtime_selection"]["input"] if "runtime_selection" in document else None
 
 
 def seed_key_files(document: dict[str, Any], kind: str) -> tuple[str, ...] | None:

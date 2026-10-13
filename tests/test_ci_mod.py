@@ -47,7 +47,7 @@ class FixtureTests(unittest.TestCase):
         for path in sources.values():
             self.assertTrue((h.MOD / path).is_file(), path)
 
-    def test_the_dispatcher_knows_exactly_the_eight_hooks(self) -> None:
+    def test_the_dispatcher_knows_exactly_the_nine_hooks(self) -> None:
         source = (h.MOD / "scripts/ci/mod_base_build_adapter.py").read_text(encoding="utf-8")
         assignments = {node.targets[0].id: ast.literal_eval(node.value) for node in ast.parse(source).body
                        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
@@ -428,12 +428,73 @@ class DeterminismTests(unittest.TestCase):
         self.assertEqual(len(observed[0][1]), 8)
 
 
+class ScopeTests(unittest.TestCase):
+    """The synthetic selection policy: a change below src/ runs everything, any other change the
+    smoke scenario of every lane, which then runs and is verified against exactly that."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.box = h.Sandbox(Path(cls.directory.name))
+        cls.plan = cls.box.derive_plan()
+
+    def derive(self, paths: list[str]) -> dict:
+        value = canonical_json({"changed_paths": paths, "format": "changed-paths-v1"}).decode("utf-8").rstrip("\n")
+        process = self.box.run("derive_scope", scope=value)
+        self.assertEqual(process.returncode, 0, process.stdout)
+        self.assertEqual(h.files(self.box.validation), set(adapter.hook_outputs("derive_scope", plan=self.plan)))
+        try:
+            return adapter.parse_derived_scope((self.box.validation / adapter.SCOPE_OUTPUT).read_bytes())
+        finally:
+            shutil.rmtree(self.box.validation)
+
+    def test_a_change_outside_the_sources_keeps_the_smoke_run_of_every_lane(self) -> None:
+        self.assertEqual(self.derive(["README.md"]), {"lanes": [
+            {"id": lane["id"], "scenarios": [name for name in lane["obligations"] if name.startswith("scenario/smoke/")]}
+            for lane in self.plan["lanes"]]})
+        self.assertEqual(self.derive(["src/main/java/Mod.java"]), {"lanes": [
+            {"id": lane["id"], "scenarios": lane["obligations"]} for lane in self.plan["lanes"]]})
+
+    def test_a_narrowed_lane_runs_and_is_verified_against_its_scope_alone(self) -> None:
+        for target in h.TARGETS:
+            self.box.build(target)
+        lane = next(item for item in self.plan["lanes"] if item["id"] == "fabric-1.21.1")
+        smoke = [name for name in lane["obligations"] if name.startswith("scenario/smoke/")]
+        self.assertLess(len(smoke), len(lane["obligations"]))
+        scope = canonical_json({"lane_id": lane["id"], "scenarios": smoke, "scope_sha256": "a" * 64}).decode(
+            "utf-8").rstrip("\n")
+        process = self.box.run("derive_runtime", unit_id=lane["id"], scope=scope)
+        self.assertEqual(process.returncode, 0, process.stdout)
+        values = adapter.parse_runtime_values((self.box.validation / adapter.RUNTIME_OUTPUT).read_bytes())
+        shutil.rmtree(self.box.validation)
+        self.assertEqual(values["E2E_SCENARIOS"], "smoke")
+        self.box.run_lane(lane["id"], scope=scope)
+        result = json.loads((self.box.sealed_runtime / "lanes" / lane["id"] / "result.json").read_bytes())
+        self.assertEqual([check["obligation"] for check in result["checks"]], smoke)
+        verified = self.box.run("verify_runtime", unit_id=lane["id"], scope=scope)
+        self.assertEqual(verified.returncode, 0, verified.stdout)
+        report = json.loads((self.box.validation / f"{lane['id']}.json").read_bytes())
+        shutil.rmtree(self.box.validation)
+        self.assertEqual(report["obligations"], smoke)
+        # Without its scope the verifier requires every obligation, which the narrowed run did not run.
+        self.assertEqual(self.box.run("verify_runtime", unit_id=lane["id"]).returncode, 1)
+        shutil.rmtree(self.box.validation, ignore_errors=True)
+        # A scope of another lane is refused by both protected hooks.
+        other = scope.replace(lane["id"], "fabric-1.20.1")
+        for hook in ("derive_runtime", "verify_runtime"):
+            with self.subTest(hook=hook):
+                self.assertEqual(self.box.run(hook, unit_id=lane["id"], scope=other).returncode, 1)
+                shutil.rmtree(self.box.validation, ignore_errors=True)
+
+
 class FaultTests(unittest.TestCase):
     """Every hook fails on purpose when the candidate's inventory says so, and only then."""
 
     UNITS = {"build_target": "1.20.1", "verify_target": "1.20.1", "derive_runtime": "fabric-1.20.1",
              "run_lane": "fabric-1.20.1", "verify_runtime": "fabric-1.20.1"}
     RUNTIME = {"E2E_ROW_JSON": '{"id":"fabric-1.20.1"}', "E2E_SCENARIOS": "smoke"}
+    SCOPE = '{"changed_paths":["README.md"],"format":"changed-paths-v1"}'
 
     def sandbox(self, faults: list[dict]) -> h.Sandbox:
         directory = tempfile.TemporaryDirectory()
@@ -441,11 +502,12 @@ class FaultTests(unittest.TestCase):
         candidate = h.materialize(Path(directory.name) / "candidate", faults=faults)
         return h.Sandbox(Path(directory.name), candidate=candidate)
 
-    def test_fail_makes_each_of_the_eight_hooks_exit_non_zero_without_output(self) -> None:
+    def test_fail_makes_each_of_the_nine_hooks_exit_non_zero_without_output(self) -> None:
         box = self.sandbox([{"hook": name, "unit": self.UNITS.get(name), "mode": "fail"} for name in adapter.HOOKS])
         box.stage_inputs()
         for name in adapter.HOOKS:
-            process = box.run(name, unit_id=self.UNITS.get(name), runtime=self.RUNTIME if name == "run_lane" else None)
+            process = box.run(name, unit_id=self.UNITS.get(name), runtime=self.RUNTIME if name == "run_lane" else None,
+                              scope=self.SCOPE if name == "derive_scope" else None)
             with self.subTest(hook=name):
                 self.assertEqual(process.returncode, 1, process.stdout)
                 self.assertIn(b"the release inventory requests this failure", process.stdout)

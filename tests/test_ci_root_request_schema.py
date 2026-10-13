@@ -21,8 +21,8 @@ LIFECYCLE = ("grant-controller", "grant-plan-inputs", "take-derived-plan", "gran
              "grant-build-validation", "grant-runtime-validation")
 #: The operations around a candidate hook: ``ci worker-stage --bundle`` and ``ci worker-seal``.
 CANDIDATE = ("stage-bundle", "verify-candidate-source", "freeze-build-export", "freeze-runtime-export")
-#: Both hand the runner the one output of a derivation and name the accounts of the job, nothing else.
-SAME_ARGUMENTS = {"take-derived-plan", "take-derived-runtime"}
+#: Each hands the runner the one output of a derivation and names the accounts of the job, nothing else.
+SAME_ARGUMENTS = {"take-derived-plan", "take-derived-runtime", "take-derived-scope"}
 
 
 class RootRequestSchemaTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class RootRequestSchemaTests(unittest.TestCase):
     def test_one_operation_never_accepts_the_arguments_of_another(self):
         for operation in grammar.CI_ROOT_OPERATIONS:
             for other in grammar.CI_ROOT_OPERATIONS:
-                if other == operation or {operation, other} == SAME_ARGUMENTS:
+                if other == operation or {operation, other} <= SAME_ARGUMENTS:
                     continue
                 document = ci_root_request(operation)
                 document["operation"] = other
@@ -194,18 +194,21 @@ class RootRequestSchemaTests(unittest.TestCase):
         with patch.object(limits, "MAX_CI_PLAN_BYTES", 1), self.assertRaises(MbError):
             validate_root_request(ci_root_request("grant-validation-inputs"))
 
-    def test_the_runtime_derivation_names_the_accounts_like_the_plan_derivation(self):
-        document = ci_root_request("take-derived-runtime")
-        validate_root_request(document)
-        self.assertEqual(document["arguments"], ci_root_request("take-derived-plan")["arguments"])
-        for mutate in (lambda d: d["arguments"].update(output="runtime.json"),
-                       lambda d: d["arguments"].update(lane_id="lane-a"),
-                       lambda d: d["arguments"].pop("validator"),
-                       lambda d: d["arguments"]["candidate"].update(uid=d["arguments"]["validator"]["uid"])):
-            changed = copy.deepcopy(document)
-            mutate(changed)
-            with self.subTest(changed=str(changed["arguments"])[:80]), self.assertRaises(MbError):
-                validate_root_request(changed)
+    def test_the_runtime_and_scope_derivations_name_the_accounts_like_the_plan_derivation(self):
+        for operation, output in (("take-derived-runtime", "runtime.json"), ("take-derived-scope", "scope.json")):
+            document = ci_root_request(operation)
+            validate_root_request(document)
+            self.assertEqual(document["arguments"], ci_root_request("take-derived-plan")["arguments"])
+            for mutate in (lambda d: d["arguments"].update(output=output),
+                           lambda d: d["arguments"].update(lane_id="lane-a"),
+                           lambda d: d["arguments"].update(scope="{}"),
+                           lambda d: d["arguments"].pop("validator"),
+                           lambda d: d["arguments"]["candidate"].update(uid=d["arguments"]["validator"]["uid"])):
+                changed = copy.deepcopy(document)
+                mutate(changed)
+                with self.subTest(operation=operation, changed=str(changed["arguments"])[:80]), \
+                        self.assertRaises(MbError):
+                    validate_root_request(changed)
 
     def test_candidate_operations_need_both_accounts_the_protected_sources_and_the_plan(self):
         for operation in CANDIDATE:

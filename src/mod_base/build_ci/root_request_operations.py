@@ -37,7 +37,7 @@ from mod_base.build_ci.root_request import (_inspect_sources, _restore_sources, 
                                           read_root_request)
 from mod_base.build_ci.runtime_freeze import freeze_runtime_export
 from mod_base.build_ci.runtime_handoff import (_context as _runtime_context, freeze_handed_off_runtime_validation,
-                                               take_derived_runtime)
+                                               take_derived_runtime, take_derived_scope)
 from mod_base.build_ci.runtime_inputs import _inspect_inputs as _inspect_runtime_inputs, prepare_runtime_validation
 from mod_base.build_ci.source import GitSourceEntry
 from mod_base.build_ci.worker import WorkerAccount, WorkerError, authenticate_worker_account, terminate_worker
@@ -273,6 +273,10 @@ def _take_derived_runtime(boundary: HostBoundary, arguments: dict[str, Any], kit
     take_derived_runtime(boundary=boundary, validator=_job(boundary, arguments))
 
 
+def _take_derived_scope(boundary: HostBoundary, arguments: dict[str, Any], kit: _Kit) -> None:
+    take_derived_scope(boundary=boundary, validator=_job(boundary, arguments))
+
+
 def _candidate_source(boundary: HostBoundary, arguments: dict[str, Any],
                       kit: _Kit) -> tuple[dict[str, Any], Callable[[], None]]:
     """What every operation after a candidate hook checks first, as keyword arguments: the live
@@ -330,6 +334,7 @@ _OPERATIONS: dict[str, Callable[[HostBoundary, dict[str, Any], _Kit], None]] = {
     "grant-build-validation": _grant_build_validation,
     "grant-runtime-validation": _grant_runtime_validation,
     "export-seed": _export_seed,
+    "take-derived-scope": _take_derived_scope,
 }
 
 

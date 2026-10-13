@@ -187,7 +187,10 @@ def _run_verdict(reads: CommandReads, gate: str, newest: dict[str, Any], plan: d
                                   unit_id=gate)
     receipt = _gate_receipt(reads, receipt_watch, descriptor=descriptor, plan=plan, gate=gate,
                             temporary_root=temporary_root)
-    return _Verdict("success", f"the newest {label} run is complete and its gate is verified", run_id, receipt)
+    # A narrowed pull request run passes like a full one; its status says which it was.
+    narrowed = ", for a narrowed scope" if "scope_sha256" in receipt else ""
+    return _Verdict("success", f"the newest {label} run is complete and its gate is verified{narrowed}", run_id,
+                    receipt)
 
 
 def _gate(reads: CommandReads, watch: Watch, gate: str, pull: dict[str, Any], plan: dict[str, Any] | None,

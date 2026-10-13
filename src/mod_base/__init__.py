@@ -8,7 +8,7 @@ the previous one (the N/N-1 rule); for ``schema_version`` 1 that is exactly ``{1
 
 from __future__ import annotations
 
-__version__ = "1.4.1"
+__version__ = "1.5.0"
 
 #: Adapter protocol version this kit calls (SPEC §4.2). Adapters declare ``ADAPTER_API``.
 ADAPTER_API = 1
@@ -49,6 +49,7 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "mod-base.ci.activation": 1,
     "mod-base.ci.batch": 1,
     "mod-base.ci.runtime-envelope": 1,
+    "mod-base.ci.scope": 1,
 }
 
 

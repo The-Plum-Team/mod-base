@@ -243,3 +243,15 @@ text is validated and HTML-escaped at build time.
   that runs code under review on the default branch's ref with a writable cache token) could plant
   one. `seeds` is therefore off unless the owner enables it after checking that no such writer
   exists ([OPERATIONS.md](OPERATIONS.md#protected-seeds)).
+- **A narrowed runtime scope proves less than a full run.** With `runtime_selection` a pull
+  request's lanes run what the mod's protected `derive_scope` selects from the changed paths
+  ([BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md)). The trust boundary does not move: the
+  hook runs as the validator without a token and reads only data protected kit code authenticated
+  (both Git trees and the base commit's sealed full packaged evidence); a pull request that changes
+  the hook, the config, a plan input or a control file runs full, so a candidate cannot narrow its
+  own scope; a fork, a push, a dispatch and a release rehearsal run full. What remains is the mod's
+  policy: a selection that leaves out an affected scenario passes the gate. The base commit's full
+  evidence bounds that risk to what the pull request changed, a narrowed pull request never covers
+  its push (whose full run then tests the merged commit), and a narrowed record is never a baseline.
+  The scope reaches a lane as a job output of its own run attempt, bound by the results index and
+  the tested record but not by the lane's own validation record.

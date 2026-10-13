@@ -1,7 +1,8 @@
 """Runtime handoffs between the validator, the runner and root (MB11).
 
 ``derive_runtime`` answers in the validator's own home; root hands the runner a private copy of
-the one file it must write (:func:`take_derived_runtime`), exactly as it does for ``derive_plan``.
+the one file it must write (:func:`take_derived_runtime`), exactly as it does for ``derive_plan``,
+and so it does for ``derive_scope`` in a packaged ``input`` job (:func:`take_derived_scope`).
 The rest is the runner-to-root execution context of a lane's verifier, on the existing private
 channel.
 """
@@ -35,6 +36,8 @@ from mod_base.model.validators import check
 
 #: The runner's private copy of what ``derive_runtime`` wrote, as root handed it over.
 DERIVED_RUNTIME_ROOT = WORKER_ROOT / "derived-runtime"
+#: The runner's private copy of what ``derive_scope`` wrote, as root handed it over.
+DERIVED_SCOPE_ROOT = WORKER_ROOT / "derived-scope"
 
 
 def take_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) -> None:
@@ -48,12 +51,31 @@ def take_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) ->
     removed, so that the lane's verifier finds no output of this hook.
     """
 
+    _take_derived_output(boundary, validator, hook="derive_runtime", name=adapter.RUNTIME_OUTPUT,
+                         output=Path(str(DERIVED_RUNTIME_ROOT)), max_bytes=limits.MAX_CI_REPORT_BYTES)
+
+
+def take_derived_scope(*, boundary: HostBoundary, validator: WorkerAccount) -> None:
+    """Root-only: give the runner a private copy of what ``derive_scope`` wrote and remove the original.
+
+    Exactly :func:`take_derived_runtime` for the one file of ``derive_scope``, within the scope
+    record cap, in the fixed runner-private :data:`DERIVED_SCOPE_ROOT`: the packaged ``input`` job
+    of a pull request derives its scope once (``build_ci.scope``)."""
+
+    _take_derived_output(boundary, validator, hook="derive_scope", name=adapter.SCOPE_OUTPUT,
+                         output=Path(str(DERIVED_SCOPE_ROOT)), max_bytes=limits.MAX_CI_SCOPE_BYTES)
+
+
+def _take_derived_output(boundary: HostBoundary, validator: WorkerAccount, *, hook: str, name: str, output: Path,
+                         max_bytes: int) -> None:
+    """Root-only: hand the runner a private copy of the one file ``name`` a derivation hook left in
+    the validator's ``validation/`` at the new directory ``output``, and remove the original."""
+
     authenticate_privileged_host_boundary(boundary)
     _accounts(boundary, validator)
-    names = (adapter.RUNTIME_OUTPUT,)
-    bounds = dict(max_files=len(names), max_entries=len(names) + 1,
-                  max_total_bytes=limits.MAX_CI_REPORT_BYTES, max_file_bytes=limits.MAX_CI_REPORT_BYTES)
-    output = Path(str(DERIVED_RUNTIME_ROOT))
+    names = (name,)
+    bounds = dict(max_files=len(names), max_entries=len(names) + 1, max_total_bytes=max_bytes,
+                  max_file_bytes=max_bytes)
     try:
         terminate_worker(validator)
         _layout(boundary)
@@ -61,7 +83,7 @@ def take_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) ->
         try:
             info = os.fstat(home)
             if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (validator.uid, validator.gid, 0o700):
-                raise WorkerError("validator home identity changed before the runtime values were taken")
+                raise WorkerError(f"validator home identity changed before the output of {hook} was taken")
         finally:
             os.close(home)
         authenticate_tree_private_access(VALIDATOR_OUTPUT_ROOT, owner_uid=validator.uid,
@@ -70,7 +92,7 @@ def take_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) ->
         def writer(stage: Path, stage_fd: int) -> list[dict[str, Any]]:
             copied = copy_regular_files(VALIDATOR_OUTPUT_ROOT, stage_fd, **bounds)
             check([record["path"] for record in copied] == list(names), "$.derivation",
-                  "derive_runtime must leave exactly its one output file")
+                  f"{hook} must leave exactly its one output file")
             return copied
 
         copied = atomic_directory(output, writer)
@@ -79,11 +101,11 @@ def take_derived_runtime(*, boundary: HostBoundary, validator: WorkerAccount) ->
                                          max_entries=bounds["max_entries"])
         check(file_records(output, max_files=bounds["max_files"], max_total_bytes=bounds["max_total_bytes"],
                            max_file_bytes=bounds["max_file_bytes"]) == copied,
-              "$.derivation", "derived runtime values changed during the ownership transfer")
+              "$.derivation", f"the output of {hook} changed during the ownership transfer")
         _discard(VALIDATOR_OUTPUT_ROOT, names)
         authenticate_privileged_host_boundary(boundary)
     except OSError as error:
-        raise WorkerError("cannot take the derived runtime values from the validator") from error
+        raise WorkerError(f"cannot take the output of {hook} from the validator") from error
     finally:
         terminate_worker(validator)
 

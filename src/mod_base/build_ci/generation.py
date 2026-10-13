@@ -285,6 +285,8 @@ def _reused(reads: CommandReads, watch: Watch, originals: Watch, plan: dict[str,
                             packaged_descriptor=source["packaged_seal"], plan=original,
                             merged=_merged(original, covered["controller_sha"], covered["tested_sha"]),
                             temporary_root=temporary_root)
+    check("scope_sha256" not in receipts[1], "$.source.packaged_seal",
+          "a reuse reference never covers a push with a narrowed pull request run")
     reuse._originals_finished(reads, source, min(verifiers))
     return references, source, *receipts
 

@@ -136,13 +136,16 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
     "ci aggregate": (["ci", "aggregate", *REPO, "--state", "state", "--selection", "selection.json",
                       "--output", "upload"],
                      {"ci_command": "aggregate", "state": Path("state"), "selection": Path("selection.json"),
-                      "output": Path("upload")}),
+                      "scope": None, "output": Path("upload")}),
+    "ci aggregate scoped": (["ci", "aggregate", *REPO, "--state", "state", "--selection", "selection.json",
+                             "--scope", "scope.json", "--output", "upload"], {"scope": Path("scope.json")}),
     "ci seal-gate": (["ci", "seal-gate", *REPO, "--state", "state", "--gate", "build", "--output", "upload"],
                      {"ci_command": "seal-gate", "state": Path("state"), "gate": "build", "selection": None,
-                      "output": Path("upload")}),
+                      "scope": None, "output": Path("upload")}),
     "ci seal-gate packaged": (["ci", "seal-gate", *REPO, "--state", "state", "--gate", "packaged",
-                               "--selection", "selection.json", "--output", "upload"],
-                              {"gate": "packaged", "selection": Path("selection.json"), "output": Path("upload")}),
+                               "--selection", "selection.json", "--scope", "scope.json", "--output", "upload"],
+                              {"gate": "packaged", "selection": Path("selection.json"), "scope": Path("scope.json"),
+                               "output": Path("upload")}),
     "ci worker-validate target": (["ci", "worker-validate", *REPO, "--state", "state", "--hook", "verify_target",
                                    "--unit", "1.20.1", "--output", "upload"],
                                   {"ci_command": "worker-validate", "state": Path("state"), "hook": "verify_target",
@@ -181,7 +184,12 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
     "ci select-build same run": (["ci", "select-build", *REPO, "--state", "state", "--build-run-id", "same-run",
                                   "--output", "s.json", "--github-output", "out"], {"build_run_id": "same-run"}),
     "ci fetch-build": (["ci", "fetch-build", *REPO, "--state", "state", "--selection", "selection.json"],
-                       {"ci_command": "fetch-build", "state": Path("state"), "selection": Path("selection.json")}),
+                       {"ci_command": "fetch-build", "state": Path("state"), "selection": Path("selection.json"),
+                        "scope": None}),
+    "ci fetch-build scoped": (["ci", "fetch-build", *REPO, "--state", "state", "--selection", "selection.json",
+                               "--scope", "scope.json"], {"scope": Path("scope.json")}),
+    "ci scope": (["ci", "scope", *REPO, "--state", "state", "--github-output", "out"],
+                 {"ci_command": "scope", "state": Path("state"), "github_output": Path("out")}),
     "ci gate-status": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--github-output", "out"],
                        {"ci_command": "gate-status", "state": Path("state"), "pr": 7, "settle": False,
                         "github_output": Path("out")}),
@@ -355,6 +363,10 @@ class SurfaceTest(unittest.TestCase):
              "--github-output", "o"],
             ["ci", "fetch-build", *REPO, "--state", "s"],
             ["ci", "fetch-build", *REPO, "--selection", "f"],
+            ["ci", "fetch-build", *REPO, "--state", "s", "--selection", "f", "--scope"],
+            ["ci", "scope", *REPO, "--state", "s"],
+            ["ci", "scope", *REPO, "--github-output", "o"],
+            ["ci", "scope", *REPO, "--state", "s", "--github-output", "o", "--scope", "f"],
             ["ci", "gate-status", *REPO, "--state", "s", "--pr", "0", "--github-output", "o"],
             ["ci", "gate-status", *REPO, "--state", "s", "--pr", "", "--github-output", "o"],
             ["ci", "gate-status", *REPO, "--state", "s", "--pr", "7", "--settle", "true", "--github-output", "o"],
@@ -408,7 +420,8 @@ class CiVerbsTest(unittest.TestCase):
         self.assertLessEqual({"mod_base.build_ci.commands_subject", "mod_base.build_ci.commands_system",
                               "mod_base.build_ci.commands_worker", "mod_base.build_ci.commands_seed",
                               "mod_base.build_ci.commands_batch", "mod_base.build_ci.commands_packaged",
-                              "mod_base.build_ci.commands_status"}, set(commands.VERB_MODULES))
+                              "mod_base.build_ci.commands_scope", "mod_base.build_ci.commands_status"},
+                             set(commands.VERB_MODULES))
         self.assertEqual(len(set(commands.VERB_MODULES)), len(commands.VERB_MODULES))
         for name in commands.VERB_MODULES:
             with self.subTest(module=name):
@@ -417,7 +430,7 @@ class CiVerbsTest(unittest.TestCase):
         self.assertLessEqual({"subject", "system-profile", "worker-prepare", "plan", "worker-stage", "worker-run", "worker-seal",
                               "worker-validate", "worker-finish", "batch-prepare", "batch-settle", "select-build",
                               "fetch-build", "gate-status", "reuse-admit", "select-generation", "seed-key",
-                              "seed-export"}, set(verbs))
+                              "seed-export", "scope"}, set(verbs))
         for name, parser in verbs.items():
             options = {option for action in parser._actions for option in action.option_strings}
             with self.subTest(verb=name):

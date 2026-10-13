@@ -148,6 +148,18 @@ MAX_FILTERED_RUNS_LISTED = 1000
 MAX_CANDIDATES = 8
 #: Rows of one ``head_sha``-filtered source-run listing (one page; a full one is confirmed by a second).
 MAX_SUBJECT_RUNS = 100
+#: Successful ``families[].producer.workflow`` runs at the expected commit whose exact family handoff
+#: names ``select`` and ``admit`` look up, and at the earlier commits of ``select``'s carry-forward
+#: walk (one bound for all of them), newest first (one inventory each, read only until a key's
+#: ``mb-family-handoff--<f>--<key>--a<attempt>`` is found, and shared by every key of one invocation).
+#: A producer may hand off one key per run: Quick Skin runs one per target, so one wave of its 17
+#: targets is 17 runs (15 were observed), more when a target is dispatched again. The bound holds a
+#: full wave with room for 15 such repeats, stays within ``MAX_SUBJECT_RUNS`` (the one page the
+#: producer listing reads) and keeps a select with a full carry-forward walk within
+#: ``MAX_PAGES_API_READS`` (at most 140 of its 160 reads). Newest first, it can only hide an older
+#: run: a key handed off only there is treated as having no handoff at that commit (the superseding
+#: or admitted family cache, or the walk), never as an older run passing as newer.
+MAX_FAMILY_PRODUCER_RUNS = 32
 #: Rows of the canonical-branch listing searched for display-titled source runs (newest first, so
 #: the bound can only hide an older run: no evidence, never an older run passing as the newest).
 MAX_CANONICAL_RUNS = 300
@@ -317,6 +329,19 @@ MAX_CI_SELECT_BUILD_REQUESTS = MAX_CI_BUILD_POLLS + 64
 #: ``ci fetch-build`` sends one REST request for the selected archive and one credential-free
 #: storage request; the rest is for retries. Freshness is the input job's and the gate's decision.
 MAX_CI_FETCH_BUILD_REQUESTS = 8
+#: ``ci scope`` (``build_ci.scope``) sends no request without a ``runtime_selection`` in the
+#: protected config, for a subject that is not a pull request and for a candidate kit pin. Otherwise
+#: it reads the base commit and both trees (3), the newest packaged run of the base commit and that
+#: run (2), the run's artifact listing (1) and the base's tested record (2), and observes the run
+#: listing, the run and the record's artifact again before it writes (3): 11 in all. Behind a reuse
+#: reference it reads the original packaged record too (3) and observes it again (1): 15. The rest
+#: is for retries.
+MAX_CI_SCOPE_REQUESTS = 32
+#: One canonical ``mod-base.ci.scope`` record, and what the ``derive_scope`` hook writes: it travels
+#: as one line of a job output, like a selection record.
+MAX_CI_SCOPE_BYTES = 64 * KIB
+#: Entries of one recursive Git tree listing that ``ci scope`` compares; a larger tree runs in full.
+MAX_CI_SCOPE_TREE_ENTRIES = 100_000
 #: Regression budget for one generation of either enrolled native profile, including the
 #: credential-free artifact storage GETs and one final status evaluation, without waiting polls.
 #: Enforced by tests/test_ci_generation_budget.py, not a runtime plan-admission rule.

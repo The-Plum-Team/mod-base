@@ -8,6 +8,7 @@ fixed ``sealed-build`` root is pointed at a temporary directory.
 from __future__ import annotations
 
 import io
+import shutil
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ from unittest import mock
 
 from mod_base import cli
 from mod_base.build_ci import commands, exports, identity, selection
+from mod_base.build_ci import scope as scope_module
 from mod_base.build_ci.config import load_build_config
 from mod_base.build_ci.exports import verify_build_export
 from mod_base.build_ci.protocol import plan_sha256
@@ -26,7 +28,7 @@ from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json, canonical_sha256, strict_loads
 from mod_base.workflow import CI_CALLER_WORKFLOWS
 from tests import ci_mod_harness as h
-from tests.helpers import ci_plan
+from tests.helpers import ci_plan, ci_scope
 from tests.test_ci_build_selection import later_run
 from tests.test_ci_packaged_selection import rebuild
 from tests.test_ci_transport import World
@@ -383,6 +385,44 @@ class FetchBuildCommandTests(CommandTestCase):
         self.assertEqual(list((self.directory / "worker").iterdir()), [])
         self.assertEqual(sorted(path.name for path in state.iterdir()), [grammar.CI_PLAN_NAME, identity.IDENTITY_NAME])
         self.assertEqual(world.api.mutations, [])
+
+    def test_a_narrowed_scope_is_kept_for_the_protected_hooks_of_the_lane(self) -> None:
+        original = synthetic_plan
+
+        def narrowable(subject, mod=h.MOD):
+            plan = original(subject, mod)
+            plan["lanes"][0]["obligations"].append("scenario/example/server/second")
+            plan["plan_sha256"] = plan_sha256(plan)
+            return plan
+
+        with mock.patch(f"{__name__}.synthetic_plan", narrowable):
+            world = JobWorld(self.directory).build()
+        self.selected(world)
+        scope = ci_scope(world.plan)
+        scope["request"].update(run_id=43, run_attempt=2, workflow_path=PACKAGED,
+                                workflow_ref=grammar.workflow_ref(h.REPOSITORY, PACKAGED, h.BRANCH))
+        received = self.directory / "scope.json"
+        cases = {"narrowed": (canonical_json(scope), 0), "full": (b"", 0),
+                 "another attempt": (canonical_json({**scope, "request": {**scope["request"], "run_attempt": 1}}), 2)}
+        for name, (raw, expected) in cases.items():
+            shutil.rmtree(self.sealed, ignore_errors=True)
+            received.write_bytes(raw)
+            state = world.state(f"lane-{name.replace(' ', '-')}")
+            before = world.api.request_count
+            with mock.patch.object(exports, "BUILD_VALIDATION_ROOT", self.sealed):
+                code, stderr, _ = run_ci(self, world, state, "fetch-build", "--selection", str(self.record),
+                                         "--scope", str(received))
+            with self.subTest(case=name):
+                self.assertEqual(code, expected, stderr)
+                kept = state / scope_module.SCOPE_NAME
+                if name == "narrowed":
+                    self.assertEqual(kept.read_bytes(), canonical_json(scope))
+                else:
+                    self.assertFalse(kept.exists())
+                if expected:
+                    # Refused before the Build is read.
+                    self.assertEqual(world.api.request_count, before)
+                    self.assertIn("requested by another run, attempt or workflow", stderr)
 
     def test_each_route_materialises_the_selected_bundle_in_the_fixed_root(self) -> None:
         cases = {"pull request": (lambda: JobWorld(self.directory).build(), (), 2),
