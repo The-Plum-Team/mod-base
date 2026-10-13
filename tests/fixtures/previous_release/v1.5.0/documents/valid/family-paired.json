@@ -1,0 +1,172 @@
+{
+  "contracts": {
+    "mod-compatibility-contract": "d149422f9d8bc12b35d4dd57a0d8389fcc052ccf7f7a3ddead79dc930a944174",
+    "scenario-contract": "cc8321d6375c494d043fdd0260f21bc0ec51dacc9f6abb7f909cdcd3041b78bf"
+  },
+  "coverage_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+  "family": "mod-compatibility",
+  "image_policy": {
+    "derivative_box": [
+      1280,
+      720
+    ],
+    "webp_method": 6,
+    "webp_quality": 80
+  },
+  "key": "mc1.20.1",
+  "kind": "mod-base.family.paired",
+  "lanes": [
+    {
+      "artifact_node": "1.20.1-fabric",
+      "lane_id": "1.20.1-fabric/ears",
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "pairs": [
+        {
+          "candidate": {
+            "image": {
+              "format": "webp",
+              "height": 720,
+              "path": "images/3b3f27451095392d72e935566fb5cdee05611ae5a41c14c5b77a594ac1eb87fa.webp",
+              "pixel": {
+                "dark_fraction": 0.0123,
+                "file_sha256": "3b3f27451095392d72e935566fb5cdee05611ae5a41c14c5b77a594ac1eb87fa",
+                "height": 720,
+                "light_fraction": 0.0012,
+                "luma_entropy": 5.123,
+                "meaningful_colors": 18,
+                "pixel_sha256": "3c6e9c213b49533d6d052ef590d020cc950db6d8071bef1442a714899e88f390",
+                "width": 1280
+              },
+              "sha256": "3b3f27451095392d72e935566fb5cdee05611ae5a41c14c5b77a594ac1eb87fa",
+              "size": 56789,
+              "width": 1280
+            },
+            "source": {
+              "height": 1080,
+              "pixel": {
+                "dark_fraction": 0.0123,
+                "file_sha256": "fc3f1d33d10bbadc10d1b68047e3c0074c85b329e4f9114dfd563a8c7f7590dc",
+                "height": 1080,
+                "light_fraction": 0.0012,
+                "luma_entropy": 5.123,
+                "meaningful_colors": 18,
+                "pixel_sha256": "c7cdcecdf7ad22590fa1d3acb7ff8359bb2574116d688101d7728afa18e77ed9",
+                "width": 1920
+              },
+              "sha256": "fc3f1d33d10bbadc10d1b68047e3c0074c85b329e4f9114dfd563a8c7f7590dc",
+              "width": 1920
+            }
+          },
+          "capture_id": "mod-compatibility.client_a.integration_visual",
+          "expectation": "The Ears features render beside the plaid skin.",
+          "metrics": {
+            "candidate_semantic_sha256": "c41c510b217329f599f564303541ed104b1e9d74638d9012377b4533b8128d99",
+            "perceptual_delta": 3.25,
+            "reference_semantic_sha256": "b9c995c1f053bb2c52adb9e685700f04c96a1a6abd74682e002de9557e1228ea",
+            "semantic_changed_fraction": 0.0412
+          },
+          "pair_id": "mod-compatibility.client_a.integration_visual",
+          "reference": {
+            "image": {
+              "format": "webp",
+              "height": 720,
+              "path": "images/87f6134b6ee0592e002ad9fefc631dbc92a04b51d9053536b666f7df10fdff13.webp",
+              "pixel": {
+                "dark_fraction": 0.0123,
+                "file_sha256": "87f6134b6ee0592e002ad9fefc631dbc92a04b51d9053536b666f7df10fdff13",
+                "height": 720,
+                "light_fraction": 0.0012,
+                "luma_entropy": 5.123,
+                "meaningful_colors": 18,
+                "pixel_sha256": "fcc91ad1a03559616936daaf4fb4b909ff8bd34d589e95f09cb1597f120efad3",
+                "width": 1280
+              },
+              "sha256": "87f6134b6ee0592e002ad9fefc631dbc92a04b51d9053536b666f7df10fdff13",
+              "size": 56789,
+              "width": 1280
+            },
+            "source": {
+              "height": 1080,
+              "pixel": {
+                "dark_fraction": 0.0123,
+                "file_sha256": "d5830109e3cc31d874bed220cdf24fad2bca8e556d093d5536dd57ccb98d4484",
+                "height": 1080,
+                "light_fraction": 0.0012,
+                "luma_entropy": 5.123,
+                "meaningful_colors": 18,
+                "pixel_sha256": "9c9d9fafc56e8eb6cbb7ae8eea68319a82a6cef1575a835b74b1bf503789afcd",
+                "width": 1920
+              },
+              "sha256": "d5830109e3cc31d874bed220cdf24fad2bca8e556d093d5536dd57ccb98d4484",
+              "width": 1920
+            }
+          },
+          "reference_capture_id": "full.client_a.skin_apply",
+          "runtime_evidence": "PASS integration_visual: ears active on the local player",
+          "title": "Ears features",
+          "verdict": {
+            "defect": false,
+            "matches_reference": null,
+            "runtime_passed": true,
+            "semantic_valid": true
+          }
+        }
+      ],
+      "review": {
+        "manifest_sha256": "ec901c9d266018584b1b40e15e0edba0132fe4af99141697b22bb8411134a34f",
+        "proof_sha256": "c1cda26362828b69266512052b97cb3729e3b052e4ade47c0a1e3383defe73c7",
+        "report_sha256": "845e91831319e89c4d656bdb80c278ac09a7230d61e5dfd2e1b1fbb436ac8917",
+        "reviewed_frame_count": 2
+      },
+      "variant": {
+        "id": "ears",
+        "name": "Ears",
+        "version": "1.4.6",
+        "version_id": "Ab12Cd34"
+      }
+    }
+  ],
+  "not_applicable": [
+    {
+      "artifact_node": "1.20.1-forge",
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "reason": "Ears publishes no Forge build for Minecraft 1.20.1.",
+      "variant_id": "ears",
+      "variant_name": "Ears"
+    }
+  ],
+  "provenance": {
+    "links": [
+      {
+        "label": "Compatibility runtime",
+        "run_id": 303
+      },
+      {
+        "label": "Clean reference",
+        "run_id": 101
+      }
+    ],
+    "producer": {
+      "branch": "master",
+      "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "conclusion": "success",
+      "controller_branch": "master",
+      "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "created_at": "2026-09-25T10:00:00Z",
+      "event": "workflow_dispatch",
+      "head_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "run_attempt": 1,
+      "run_id": 202,
+      "workflow_path": ".github/workflows/mod-compatibility-review.yml"
+    }
+  },
+  "schema_version": 1,
+  "status": "available",
+  "subject": {
+    "branch": "master",
+    "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "tree": "5459e70b2b7c2688978c36fedc9a4958a5b2cde0"
+  }
+}

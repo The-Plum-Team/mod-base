@@ -1,8 +1,8 @@
 {
   "baseline": {
-    "commit": "9f9fddd1a6c40dce13114ff7272e1bcedfc59f65",
-    "source_sha256": "e3cbd6a4b8ebe574d654e02eba96dc815e8b7fc75c3543a5ee4badaf5530ad07",
-    "tag": "v1.4.1"
+    "commit": "1273a5384dd1e39e6eb941148610d4555d8ff3f0",
+    "source_sha256": "0369622b9a17664616ddfb28e8b5dee6e6934f72661c47c29d978b23d4c221ba",
+    "tag": "v1.5.0"
   },
   "kinds": {
     "mod-base.build": {
@@ -72,8 +72,8 @@
     },
     "mod-base.ci.scope": {
       "current_version": 1,
-      "decision": "new-kind",
-      "previous_version": null
+      "decision": "unchanged",
+      "previous_version": 1
     },
     "mod-base.ci.selection": {
       "current_version": 1,

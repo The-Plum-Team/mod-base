@@ -513,6 +513,35 @@ class ReadOnlyTests(ClientTestCase):
         with self.assertRaises(MbError):
             client.post_json(dispatch, ["not", "an", "object"])  # type: ignore[arg-type]
 
+    def test_a_post_that_must_not_replay_is_retried_only_after_a_rate_limit(self) -> None:
+        # A workflow dispatch is not idempotent: an answer that may hide an accepted request (a
+        # transport error, a 5xx, a 408) ends it at once instead of starting a second run.
+        dispatch = f"/repos/{REPOSITORY}/actions/workflows/mod-base-build.yml/dispatches"
+        ambiguous = {
+            **{f"HTTP {code}": http_error(code) for code in sorted(api.RETRYABLE_HTTP_STATUSES - {429})},
+            "URLError": urllib.error.URLError("temporary failure in name resolution"),
+            "timeout": TimeoutError("timed out"),
+            "disconnected": http.client.RemoteDisconnected("closed"),
+        }
+        for label, failure in ambiguous.items():
+            with self.subTest(once=label):
+                client, opener, sleeps = self.client([failure, Response(status=204, body=b"")], writable=True)
+                with self.assertRaises(ApiError) as caught:
+                    client.post_json(dispatch, {"ref": "master"}, replay=False)
+                self.assertNotIsInstance(caught.exception, ApiRateLimited)
+                self.assertEqual((1, [], 1), (len(opener.requests), sleeps, client.request_count))
+                # The same answer is retried for a request that may be sent again.
+                client, opener, _ = self.client([failure, Response(status=204, body=b"")], writable=True)
+                self.assertIsNone(client.post_json(dispatch, {"ref": "master"}))
+                self.assertEqual(2, len(opener.requests))
+        # GitHub acts on no request it answers as rate-limited, so that one is sent again.
+        for code, header_values in ((429, {}), (403, {"X-RateLimit-Remaining": "0"})):
+            with self.subTest(rate_limited=code):
+                client, opener, sleeps = self.client([http_error(code, b"{}", header_values),
+                                                      Response(status=204, body=b"")], writable=True)
+                self.assertIsNone(client.post_json(dispatch, {"ref": "master"}, replay=False))
+                self.assertEqual((2, 1), (len(opener.requests), len(sleeps)))
+
 
 class DownloadTests(ClientTestCase):
     ZIP = f"/repos/{REPOSITORY}/actions/artifacts/7/zip"

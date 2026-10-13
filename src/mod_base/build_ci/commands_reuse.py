@@ -44,7 +44,8 @@ ADMISSION_NAME = "ci-reuse-admission.json"
 
 
 def add_verbs(verbs: argparse._SubParsersAction) -> None:
-    """Register ``reuse-admit`` on the ``ci`` verb group ``verbs``."""
+    """Register ``reuse-admit``, ``select-generation`` and ``request-generation`` on the ``ci`` verb
+    group ``verbs``."""
 
     admit = verbs.add_parser("reuse-admit", help="decide whether this push reuses the gates of its pull request")
     commands.add_job_arguments(admit)
@@ -63,6 +64,13 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     lanes.add_argument("--all-lanes", action="store_true", help="also keep the verified export of every lane")
     select.add_argument("--github-output", type=cli.PATH, required=True, metavar="FILE")
     select.set_defaults(handler=run_select_generation)
+    request = verbs.add_parser("request-generation",
+                               help="request a full generation of this default-branch commit after none was selected")
+    commands.add_job_arguments(request)
+    request.add_argument("--reason", choices=generation.REQUESTABLE_REASONS, required=True,
+                         help="the reason `ci select-generation` gave for selecting no generation")
+    request.add_argument("--github-output", type=cli.PATH, required=True, metavar="FILE")
+    request.set_defaults(handler=run_request_generation)
 
 
 def _job(args: argparse.Namespace) -> tuple[runtime.Invocation, dict[str, Any], dict[str, Any]]:
@@ -95,6 +103,25 @@ def run_reuse_admit(args: argparse.Namespace) -> int:
     identity.write_state_record(args.state, ADMISSION_NAME, canonical_json(admission))
     cli.write_github_output(args.github_output, {"mode": admission["mode"], "reason": admission["reason"]})
     sys.stdout.write(f"reuse-admit: {single_line(line)}\n")
+    return 0
+
+
+def run_request_generation(args: argparse.Namespace) -> int:
+    """``ci request-generation --reason TOKEN``: after ``ci select-generation`` selected no
+    generation for the job's subject, request a full one of that default-branch commit when it is
+    still the live head (``generation.request_generation``, KQ9-4). Outputs ``requested`` (``true``
+    or ``false``) and ``outcome`` (a key of ``generation.REQUEST_OUTCOMES``) and prints one line. The
+    job's state needs only the subject: the request runs no hook, so its job can hold the
+    ``actions: write`` token a dispatch needs. Budget ``MAX_CI_REQUEST_GENERATION_REQUESTS``."""
+
+    invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
+    subject = identity.read_subject(args.state)["subject"]
+    check(invocation.repository == subject["repository"] and invocation.implementation_sha == subject["controller_sha"],
+          "$.state", "the state directory belongs to another repository or controller commit")
+    api = commands.api_client(invocation, max_requests=limits.MAX_CI_REQUEST_GENERATION_REQUESTS, writable=True)
+    outcome = generation.request_generation(api, subject=subject, reason=args.reason)
+    cli.write_github_output(args.github_output, {"requested": outcome == "requested", "outcome": outcome})
+    sys.stdout.write(f"request-generation: {outcome}: {generation.REQUEST_OUTCOMES[outcome]}\n")
     return 0
 
 

@@ -386,6 +386,18 @@ MAX_CI_REUSE_ADMIT_REQUESTS = 96
 #: the rest is for retries and for the further pages of a run that lists more than 100 jobs or
 #: artifacts.
 MAX_CI_SELECT_GENERATION_REQUESTS = 96 + 3 * MAX_CI_LANES
+#: ``ci request-generation`` reads the default branch and its head twice, lists the newest run of
+#: each managed caller, dispatches the Build caller, lists its runs until the new one appears, reads
+#: the default branch and its head once more and dispatches the packaged caller: 10 requests and
+#: one for each listing of its runs (at most 34; 33 when the run never appears, with one
+#: dispatch). When a newest run is a dispatched one it also lists the artifacts of the newest runs
+#: until one shows its evidence gone (a page per 100 artifacts); the rest is for retries.
+#: Dispatches are never retried after an answer that may hide their acceptance.
+MAX_CI_REQUEST_GENERATION_REQUESTS = 64
+#: How often ``ci request-generation`` lists the Build caller's runs for the run it dispatched, and
+#: the seconds before each listing: GitHub lists a dispatched run within seconds, so two minutes.
+CI_REQUEST_GENERATION_POLLS = 24
+CI_REQUEST_GENERATION_POLL_SECONDS = 5
 #: ``ci aggregate`` sends 13 requests and 2 per lane (archive REST redirect and storage GET;
 #: metadata is already authenticated from the listing), 81 for 34 lanes; the
 #: rest is for retries and for the further pages of a run that lists more than 100 jobs or artifacts.
