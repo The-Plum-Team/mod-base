@@ -404,7 +404,7 @@ def permission_level(permissions: Any, scope: str) -> int:
 GH_STUB = r'''
 import json, os, pathlib, subprocess, sys
 arguments = sys.argv[1:]
-route, jq_filter, payload = " ".join(arguments), None, None
+route, jq_filter, payload, headers = " ".join(arguments), None, None, []
 if arguments[:1] == ["api"]:
     rest, method, endpoint, index = arguments[1:], "GET", None, 0
     while index < len(rest):
@@ -415,6 +415,8 @@ if arguments[:1] == ["api"]:
             jq_filter = rest[index + 1]; index += 2
         elif item in ("-f", "-F", "--raw-field", "--field"):
             index += 2
+        elif item in ("-H", "--header"):
+            headers.append(rest[index + 1]); index += 2
         elif item == "--input":
             payload = pathlib.Path(rest[index + 1]).read_text(encoding="utf-8"); index += 2
         elif item.startswith("-"):
@@ -425,7 +427,7 @@ if arguments[:1] == ["api"]:
             endpoint = item; index += 1
     route = f"{method} {endpoint}"
 with pathlib.Path(os.environ["STUB_CALLS"]).open("a", encoding="utf-8") as stream:
-    stream.write(json.dumps({"tool": "gh", "argv": arguments, "route": route, "input": payload,
+    stream.write(json.dumps({"tool": "gh", "argv": arguments, "route": route, "input": payload, "headers": headers,
                              "token": os.environ.get("GH_TOKEN"), "repo": os.environ.get("GH_REPO"),
                              "retry": [os.environ.get("GITHUB_API_RETRY_ATTEMPTS"),
                                        os.environ.get("GITHUB_API_RETRY_MAX_DELAY_SECONDS")]}) + "\n")

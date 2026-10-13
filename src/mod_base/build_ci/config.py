@@ -6,7 +6,9 @@ the candidate files a plan is derived from (the inventory, the scenario contract
 Build, the two required status contexts, the native timeouts and, optionally, the kit system profile
 a lane installs before its accounts exist (:func:`system_profile`), the seeds its jobs restore
 (:func:`seed_key_files`) and the paths a pull request may change only with an approver's decision on
-its exact head (:func:`admission`). :func:`validate_build_config` is the
+its exact head (:func:`admission`): an approver is a user with the association listed for them or,
+since v1.6.0, every active member of the organization that owns the repository
+(:func:`admission_organization`). :func:`validate_build_config` is the
 pure schema; :func:`load_build_config` reads the file from the protected checkout the prologue
 verified and requires every listed source there to have its configured hash, so its result is the
 complete protected adapter that planning hashes into the policy digest. It also records the mod's
@@ -32,7 +34,7 @@ from mod_base.io.secure_json import loads
 from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.canonical import read_regular_file, sha256_hex
-from mod_base.model.validators import Const, Int, List, Obj, Str, check, fail
+from mod_base.model.validators import Const, Int, List, Obj, OneOf, Str, check, fail
 
 
 BUILD_CONFIG_PATH = 'scripts/ci/mod-base-build.json'
@@ -71,15 +73,33 @@ _PLAN_INPUT = Obj({"name": plan_input_name, "path": repo_path})
 ADMISSION_COMMAND = re.compile(r"^/[a-z][a-z0-9-]{0,62}$")
 #: A GitHub login, compared without regard to case as GitHub does.
 _LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
-#: The ``author_association`` an approver's comment must carry: the repository's owner, a member of
-#: the organization that owns it, or an invited collaborator. No other association can approve.
+#: The ``author_association`` a listed user's comment must carry: the repository's owner, a member of
+#: the organization that owns it, or an invited collaborator. No other association can approve. The
+#: association is what GitHub shows the API's caller, so it cannot prove a private membership; an
+#: organization entry (:data:`ADMISSION_ROLES`) is proven by the organization's member list instead.
 ADMISSION_ASSOCIATIONS = ("COLLABORATOR", "MEMBER", "OWNER")
-_APPROVER = Obj({"login": Str(_LOGIN, max_len=39), "association": Str(choices=ADMISSION_ASSOCIATIONS)})
+#: The ``role`` of an organization entry among the approvers: ``member`` is every active member of
+#: the organization that owns the repository, its owners included, whatever its membership's
+#: visibility. A pending invitation is no membership.
+ADMISSION_ROLES = ("member",)
+_USER_APPROVER = Obj({"login": Str(_LOGIN, max_len=39), "association": Str(choices=ADMISSION_ASSOCIATIONS)})
+_ORGANIZATION_APPROVER = Obj({"organization": Str(_LOGIN, max_len=39), "role": Str(choices=ADMISSION_ROLES)})
+_APPROVER = OneOf(_USER_APPROVER, _ORGANIZATION_APPROVER)
+
+
+def _approver_key(approver: dict[str, Any]) -> tuple[str, str]:
+    """What two approvers of one list may not share: a user's login or an organization, by kind,
+    without regard to case as GitHub compares them."""
+
+    if "organization" in approver:
+        return "organization", approver["organization"].casefold()
+    return "user", approver["login"].casefold()
+
+
 _ADMISSION = Obj({
     "protected_paths": List(repo_path, min_items=1, max_items=lim.MAX_CI_ADMISSION_PATHS, sorted_values=True),
     "command": Str(ADMISSION_COMMAND, max_len=63),
-    "approvers": List(_APPROVER, min_items=1, max_items=lim.MAX_CI_ADMISSION_APPROVERS,
-                      unique_by=lambda item: item["login"].casefold()),
+    "approvers": List(_APPROVER, min_items=1, max_items=lim.MAX_CI_ADMISSION_APPROVERS, unique_by=_approver_key),
 })
 _CONFIG = Obj({
     "kind": Const("mod-base.build.config"),
@@ -145,6 +165,7 @@ def validate_build_config(document: Any, *, path: str = "$") -> dict[str, Any]:
             check(listed == sorted(listed), f"{path}.seeds.{kind}.key_files", "must be sorted by path")
     if "admission" in document:
         _check_admission(document["admission"], [BUILD_CONFIG_PATH, *CONTROL_PATHS, *inventory], f"{path}.admission")
+        _check_approvers(document["admission"]["approvers"], document["repository"], f"{path}.admission.approvers")
     return document
 
 
@@ -178,11 +199,31 @@ def _check_admission(admission: dict[str, Any], required: list[str], path: str) 
     check(not missing, f"{path}.protected_paths", f"does not protect {missing[0] if missing else ''}")
 
 
+def _check_approvers(approvers: list[dict[str, Any]], repository: str, path: str) -> None:
+    """At most one organization entry, and only the organization that owns ``repository``: its
+    member list is the only one the gate App of the repository is asked for."""
+
+    organizations = [index for index, approver in enumerate(approvers) if "organization" in approver]
+    check(len(organizations) <= 1, path, "names more than one organization")
+    for index in organizations:
+        check(approvers[index]["organization"] == repository.split("/")[0], f"{path}[{index}].organization",
+              "must be the organization that owns the repository, spelled as the repository names it")
+
+
 def admission(document: dict[str, Any]) -> dict[str, Any] | None:
     """The protected admission of a validated config (``protected_paths``, ``command`` and
     ``approvers``), or ``None`` when it names none."""
 
     return document.get("admission")
+
+
+def admission_organization(policy: dict[str, Any] | None) -> str | None:
+    """The organization whose active members approve under the admission ``policy`` (the
+    repository's owner), or ``None`` when ``policy`` is absent or lists users alone."""
+
+    if policy is None:
+        return None
+    return next((approver["organization"] for approver in policy["approvers"] if "organization" in approver), None)
 
 
 def system_profile(document: dict[str, Any]) -> str | None:

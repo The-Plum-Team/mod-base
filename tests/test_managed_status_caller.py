@@ -2,13 +2,15 @@
 contexts and exact graphs", "Identity and execution boundaries").
 
 Every case reads the template as ``template sync`` renders it for a mod. Structure: its four
-triggers, permissions, the one secret and the one environment in the publishing job alone, the one
-third-party action at its reviewed pin, the non-cancelling lock of a pull request. Jobs: the
-``if:`` conditions are evaluated with GitHub's expression rules, so that no failed, skipped or empty
-evaluation ever reaches the publishing job. The guard's shell admits the caller on its four events.
-The ``locate`` and ``publish`` scripts run under the shell harness against a stub ``gh``: which pull
-request an event names, and which statuses reach GitHub for which evaluated document and which
-live pull request.
+triggers, permissions, the one secret and the one environment in the members and publishing jobs
+alone, the one third-party action at its reviewed pin, the non-cancelling lock of a pull request.
+Jobs: the ``if:`` conditions are evaluated with GitHub's expression rules, so that no failed,
+skipped or empty evaluation ever reaches the publishing job, and the members job runs only when the
+protected admission counts an organization's members. The guard's shell admits the caller on its
+four events. The ``locate``, ``members`` and ``publish`` scripts run under the shell harness against
+a stub ``gh``: which pull request an event names and whether its admission counts members, which
+comment authors are checked and which of them are members, and which statuses reach GitHub for which
+evaluated document, which live pull request and which membership.
 """
 
 from __future__ import annotations
@@ -25,7 +27,9 @@ from typing import Any
 
 from mod_base import workflow
 from mod_base.build_ci.activation import BUILD_CALLER, CALLERS, GUARD_CALLER, PACKAGED_CALLER, STATUS_CALLER
+from mod_base.build_ci.membership import load_org_members
 from mod_base.model import limits
+from mod_base.model.canonical import canonical_json
 from mod_base.pin import parse_pin_files
 from mod_base.template import tool
 from tests.test_ci_activation import MANAGED, STATES
@@ -45,9 +49,25 @@ CRON = "17 * * * *"
 LOCATE_STEP = "Find the pull request of this event"
 MINT_STEP = "Mint a statuses-only App token"
 PUBLISH_STEP = "Publish the evaluated statuses on the live pull request head"
+AUTHORS_STEP = "Read the authors of the pull request comments"
+MEMBERS_MINT_STEP = "Mint a members-read App token"
+SNAPSHOT_STEP = "Read the membership of the candidates"
+RECHECK_STEP = "Recheck the membership of the candidates"
+DECIDE_STEP = "Decide whether the membership is read again"
 READ_PULLS = {"pull-requests": "read"}
-LOCATED = "needs.locate.outputs.pr-number != ''"
-EVALUATED = "needs.evaluate.outputs.intents != ''"
+READ_LOCATE = {"contents": "read", "pull-requests": "read"}
+#: The members job runs exactly when the protected config's admission counts the organization's members.
+COUNTED = "needs.locate.outputs.organization != ''"
+#: The evaluation runs for a located pull request once the guard succeeded and the members job, when
+#: it had to run, finished: a failed one leaves the evaluation without a snapshot, which refuses every
+#: change to a protected path, so that a failure or a revocation is still published. A skipped
+#: members job is enough only when it was not asked to run.
+LOCATED = ("${{ !cancelled() && needs.guard.result == 'success' && needs.locate.result == 'success' && "
+           "needs.locate.outputs.pr-number != '' && (needs.members.result == 'success' || "
+           "needs.members.result == 'failure' || "
+           "(needs.members.result == 'skipped' && needs.locate.outputs.organization == '')) }}")
+EVALUATED = "${{ !cancelled() && needs.evaluate.result == 'success' && needs.evaluate.outputs.intents != '' }}"
+RECHECKED = "steps.recheck.outputs.needed == 'true'"
 GROUP = ("mod-base-gate-status-${{ github.event.pull_request.number || "
          "github.event.workflow_run.pull_requests[0].number || inputs.pr-number || "
          "format('run-{0}', github.run_id) }}")
@@ -146,43 +166,71 @@ class StatusCallerStructureTests(unittest.TestCase):
     def test_no_permission_at_the_top_level_and_only_read_grants_below(self) -> None:
         self.assertEqual(self.document["permissions"], {})
         self.assertEqual({job_id: job["permissions"] for job_id, job in self.jobs.items()},
-                         {"guard": READ_RUN, "locate": READ_PULLS, "evaluate": READ_ALL, "publish": READ_PULLS})
+                         {"guard": READ_RUN, "locate": READ_LOCATE, "members": READ_PULLS, "evaluate": READ_ALL,
+                          "publish": READ_PULLS})
         # The one `write` of the file is what the App token may do, and it may do nothing else.
         self.assertEqual([line.strip() for line in self.text.splitlines() if re.search(r"\bwrite\b", line)
                           and not line.lstrip().startswith("#")], ["permission-statuses: write"])
         self.assertNotIn("id-token", self.text)
 
-    def test_the_secret_the_variable_and_the_environment_are_named_in_the_publishing_job_alone(self) -> None:
-        self.assertEqual(self.text.count("secrets"), 1)
-        self.assertEqual(self.text.count("vars."), 1)
-        self.assertEqual(len(re.findall(r"^\s*environment:", self.text, re.MULTILINE)), 1)
+    def test_the_secret_the_variable_and_the_environment_are_named_in_the_members_and_publishing_jobs_alone(
+            self) -> None:
+        # The App key appears only in the `with` of the three mint steps.
+        self.assertEqual(self.text.count("secrets"), 3)
+        self.assertEqual(self.text.count("vars."), 3)
+        self.assertEqual(self.text.count("${{ secrets." + PRIVATE_KEY + " }}"), 3)
+        self.assertEqual(len(re.findall(r"^\s*environment:", self.text, re.MULTILINE)), 2)
         self.assertEqual({job_id: job.get("environment") for job_id, job in self.jobs.items()},
-                         {"guard": None, "locate": None, "evaluate": None, "publish": ENVIRONMENT})
+                         {"guard": None, "locate": None, "members": ENVIRONMENT, "evaluate": None,
+                          "publish": ENVIRONMENT})
+        key = {"client-id": "${{ vars." + CLIENT_ID + " }}", "private-key": "${{ secrets." + PRIVATE_KEY + " }}"}
         mint = step(self.jobs["publish"]["steps"], MINT_STEP)
-        self.assertEqual(mint, {"name": MINT_STEP, "id": "app", "uses": APP_TOKEN, "with": {
-            "client-id": "${{ vars." + CLIENT_ID + " }}", "private-key": "${{ secrets." + PRIVATE_KEY + " }}",
-            "permission-statuses": "write"}})
-        # No owner and no repository list: the token is scoped to this repository alone.
-        self.assertEqual([key for key in mint["with"] if key.startswith("permission-")], ["permission-statuses"])
+        self.assertEqual(mint, {"name": MINT_STEP, "id": "app", "uses": APP_TOKEN,
+                                "with": {**key, "permission-statuses": "write"}})
+        members_mint = {"name": MEMBERS_MINT_STEP, "id": "app-members", "uses": APP_TOKEN,
+                        "with": {**key, "permission-members": "read"}}
+        self.assertEqual(step(self.jobs["members"]["steps"], MEMBERS_MINT_STEP),
+                         {**members_mint, "if": "steps.authors.outputs.candidates != '[]'"})
+        self.assertEqual(step(self.jobs["publish"]["steps"], MEMBERS_MINT_STEP), {**members_mint, "if": RECHECKED})
+        # No owner and no repository list: each token is scoped to this repository alone, and may
+        # do one thing: write statuses, or read the organization's members.
+        for item in (mint, members_mint):
+            self.assertEqual([name for name in item["with"] if name not in key], [
+                "permission-statuses" if item is mint else "permission-members"])
+        self.assertEqual(self.text.count("permission-members: read"), 2)
+        self.assertEqual(self.text.count("permission-"), 3)
         for job_id in ("guard", "locate", "evaluate"):
             body = json.dumps(self.jobs[job_id])
             for word in ("secrets", "vars.", ENVIRONMENT, "STATUS_TOKEN", "steps.app"):
                 self.assertNotIn(word, body, f"{job_id} never sees {word}")
         self.assertNotIn("secrets", self.jobs["evaluate"], "the kit workflow is passed no secret")
         self.assertNotIn("inherit", self.text)
-        # The minted token reaches one step, the publishing script, as one variable.
+        # The statuses token reaches one step, the publishing script, as one variable; the
+        # members token reaches the step that reads the membership in each of its two jobs.
         self.assertEqual(self.text.count("steps.app.outputs.token"), 1)
         self.assertEqual(self.text.count("steps.app.outputs."), 2, "the token and the name the App writes under")
         self.assertEqual(step(self.jobs["publish"]["steps"], PUBLISH_STEP)["env"]["STATUS_TOKEN"],
                          "${{ steps.app.outputs.token }}")
+        self.assertEqual(self.text.count("steps.app-members.outputs."), 2)
+        for job_id, name in (("members", SNAPSHOT_STEP), ("publish", RECHECK_STEP)):
+            self.assertEqual(step(self.jobs[job_id]["steps"], name)["env"]["GH_TOKEN"],
+                             "${{ steps.app-members.outputs.token }}")
+        # The members token is minted before the statuses token, and only after the comments
+        # were read with the job token.
+        names = [item["name"] for item in self.jobs["publish"]["steps"]]
+        self.assertEqual(names, [DECIDE_STEP, MEMBERS_MINT_STEP, RECHECK_STEP, MINT_STEP, PUBLISH_STEP])
+        self.assertEqual(step(self.jobs["publish"]["steps"], DECIDE_STEP)["id"], "recheck")
+        self.assertEqual([item["name"] for item in self.jobs["members"]["steps"]],
+                         [AUTHORS_STEP, MEMBERS_MINT_STEP, SNAPSHOT_STEP])
 
     def test_the_app_token_action_is_the_one_action_at_its_reviewed_pin(self) -> None:
         used = {(job_id, item["name"]): item["uses"] for job_id, job in self.jobs.items()
                 for item in job.get("steps", []) if "uses" in item}
-        self.assertEqual(used, {("publish", MINT_STEP): APP_TOKEN})
+        self.assertEqual(used, {("members", MEMBERS_MINT_STEP): APP_TOKEN, ("publish", MEMBERS_MINT_STEP): APP_TOKEN,
+                                ("publish", MINT_STEP): APP_TOKEN})
         self.assertEqual(APP_TOKEN, "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1")
         self.assertEqual(PINNED_ACTIONS[APP_TOKEN], "v3.2.0")
-        self.assertIn(f"        uses: {APP_TOKEN} # {PINNED_ACTIONS[APP_TOKEN]}\n", self.text)
+        self.assertEqual(self.text.count(f"        uses: {APP_TOKEN} # {PINNED_ACTIONS[APP_TOKEN]}\n"), 3)
         self.assertNotIn("actions/checkout", self.text, "no job of the caller checks anything out")
         # Wherever third-party actions of managed callers are listed: a mod that manages this
         # caller must keep Dependabot off the action, and a freshly seeded mod already does.
@@ -198,11 +246,11 @@ class StatusCallerStructureTests(unittest.TestCase):
                          {"guard": LOCAL_GUARD, "evaluate": f"{kit_workflow('gate-status')}@{KIT_SHA}"})
         self.assertEqual(set(workflow.CI_STATUS_CALLS), {job_id for job_id, job in self.jobs.items() if "uses" in job})
         self.assertEqual({job_id: job.get("needs") for job_id, job in self.jobs.items()},
-                         {"guard": None, "locate": None, "evaluate": ["guard", "locate"],
-                          "publish": ["locate", "evaluate"]})
+                         {"guard": None, "locate": None, "members": ["locate"], "evaluate": ["guard", "locate", "members"],
+                          "publish": ["locate", "members", "evaluate"]})
         self.assertEqual({job_id: job.get("if") for job_id, job in self.jobs.items()},
-                         {"guard": None, "locate": None, "evaluate": LOCATED, "publish": EVALUATED})
-        for job_id in ("locate", "publish"):
+                         {"guard": None, "locate": None, "members": COUNTED, "evaluate": LOCATED, "publish": EVALUATED})
+        for job_id in ("locate", "members", "publish"):
             self.assertEqual((self.jobs[job_id]["runs-on"], self.jobs[job_id]["timeout-minutes"]),
                              ("ubuntu-24.04", "5"))
         self.assertEqual(workflow.ci_api_job_name("status", "evaluate", "evaluate"),
@@ -219,7 +267,8 @@ class StatusCallerStructureTests(unittest.TestCase):
         self.assertEqual(self.jobs["guard"]["permissions"], guard["jobs"]["verify"]["permissions"])
         passed = self.jobs["evaluate"]["with"]
         self.assertEqual(list(passed.items()), [("kit-sha", "${{ needs.guard.outputs.kit-sha }}"),
-                                                ("pr-number", "${{ needs.locate.outputs.pr-number }}")])
+                                                ("pr-number", "${{ needs.locate.outputs.pr-number }}"),
+                                                ("members", "${{ needs.members.outputs.members }}")])
         callee = load_yaml(ROOT / workflow.CI_CALLEE_WORKFLOWS["gate-status"])
         inputs = callee["on"]["workflow_call"]["inputs"]
         self.assertEqual(list(passed), list(inputs), "every input, in the callee's order")
@@ -227,7 +276,12 @@ class StatusCallerStructureTests(unittest.TestCase):
         held = [job["permissions"] for job in callee["jobs"].values()]
         self.assertEqual(held, [self.jobs["evaluate"]["permissions"]])
         self.assertEqual(held, list(workflow.CI_JOB_PERMISSIONS["gate-status"].values()))
-        self.assertEqual(self.jobs["locate"]["outputs"], {"pr-number": "${{ steps.locate.outputs.pr-number }}"})
+        self.assertEqual(self.jobs["locate"]["outputs"], {"pr-number": "${{ steps.locate.outputs.pr-number }}",
+                                                          "organization": "${{ steps.locate.outputs.organization }}",
+                                                          "command": "${{ steps.locate.outputs.command }}"})
+        self.assertEqual(self.jobs["members"]["outputs"], {"members": "${{ steps.members.outputs.members }}",
+                                                           "candidates": "${{ steps.authors.outputs.candidates }}",
+                                                           "recheck": "${{ steps.members.outputs.recheck }}"})
 
     def test_one_non_cancelling_lock_for_each_pull_request(self) -> None:
         concurrency = self.document["concurrency"]
@@ -262,6 +316,22 @@ class StatusCallerStructureTests(unittest.TestCase):
                 "RUN_HEAD_BRANCH": "${{ github.event.workflow_run.head_branch }}",
                 "RUN_HEAD_SHA": "${{ github.event.workflow_run.head_sha }}",
                 "RUN_HEAD_REPOSITORY": "${{ github.event.workflow_run.head_repository.full_name }}"},
+            ("members", AUTHORS_STEP): {
+                "GH_TOKEN": "${{ github.token }}", "ORGANIZATION": "${{ needs.locate.outputs.organization }}",
+                "COMMAND": "${{ needs.locate.outputs.command }}", "PR_NUMBER": "${{ needs.locate.outputs.pr-number }}"},
+            ("members", SNAPSHOT_STEP): {
+                "GH_TOKEN": "${{ steps.app-members.outputs.token }}",
+                "ORGANIZATION": "${{ needs.locate.outputs.organization }}",
+                "PR_NUMBER": "${{ needs.locate.outputs.pr-number }}",
+                "CHECKED": "${{ steps.authors.outputs.checked }}", "THROUGH": "${{ steps.authors.outputs.through }}",
+                "CANDIDATES": "${{ steps.authors.outputs.candidates }}"},
+            ("publish", DECIDE_STEP): {
+                "RECHECK": "${{ needs.members.outputs.recheck }}", "INTENTS": "${{ needs.evaluate.outputs.intents }}"},
+            ("publish", RECHECK_STEP): {
+                "GH_TOKEN": "${{ steps.app-members.outputs.token }}",
+                "ORGANIZATION": "${{ needs.locate.outputs.organization }}",
+                "MEMBERS": "${{ needs.members.outputs.members }}",
+                "CANDIDATES": "${{ needs.members.outputs.candidates }}"},
             ("publish", PUBLISH_STEP): {
                 "GH_TOKEN": "${{ github.token }}", "STATUS_TOKEN": "${{ steps.app.outputs.token }}",
                 "APP_SLUG": "${{ steps.app.outputs.app-slug }}",
@@ -273,7 +343,10 @@ class StatusCallerStructureTests(unittest.TestCase):
             for item in job.get("steps", []):
                 if "uses" in item:
                     continue
-                self.assertEqual(set(item), {"name", "shell", "env", "run"} | ({"id"} if "id" in item else set()))
+                # Only the recheck has a condition: it runs when a success rests on a member.
+                self.assertEqual(set(item), {"name", "shell", "env", "run"} | ({"id"} if "id" in item else set())
+                                 | ({"if"} if item["name"] == RECHECK_STEP else set()))
+                self.assertEqual(item.get("if", RECHECKED), RECHECKED)
                 self.assertEqual(item["shell"], "bash")
                 self.assertNotRegex(item["run"], EXPRESSION)
                 self.assertTrue(item["run"].startswith("set -euo pipefail\n"))
@@ -289,11 +362,28 @@ class StatusCallerStructureTests(unittest.TestCase):
         pattern = re.compile(r"(?ms)^protected_gh_api_retry\(\) \{.*?^\}\n")
         pages = pattern.findall(step(caller()["jobs"]["verify-kit"]["steps"],
                                      "Bind the executing callee to the protected pin")["run"])
-        for job, name in (("locate", LOCATE_STEP), ("publish", PUBLISH_STEP)):
+        for job, name in (("locate", LOCATE_STEP), ("members", AUTHORS_STEP), ("members", SNAPSHOT_STEP),
+                          ("publish", RECHECK_STEP), ("publish", PUBLISH_STEP)):
             own = pattern.findall(script(job, name))
-            self.assertEqual((len(own), own), (1, pages), job)
+            self.assertEqual((len(own), own), (1, pages), name)
+
+    def test_the_recheck_reads_the_membership_exactly_as_the_snapshot_did(self) -> None:
+        pattern = re.compile(r"(?ms)^# Which of the candidates .*?^org_members_of\(\) \{.*?^\}\n")
+        snapshot, recheck = (pattern.findall(script(job, name)) for job, name in
+                             (("members", SNAPSHOT_STEP), ("publish", RECHECK_STEP)))
+        self.assertEqual(len(snapshot), 1)
+        self.assertEqual(snapshot, recheck)
+        self.assertNotIn("comments", script("publish", RECHECK_STEP), "the recheck never reads the comments again")
 
     def test_the_document_bounds_are_the_kit_s(self) -> None:
+        authors = script("members", AUTHORS_STEP)
+        self.assertIn(f"(( total <= {limits.MAX_CI_ADMISSION_COMMENTS} ))", authors)
+        self.assertIn(f"for page in {' '.join(str(page) for page in range(1, limits.MAX_CI_ADMISSION_COMMENTS // 100 + 2))}; do",
+                      authors)
+        self.assertIn(f"(( ${{#document}} <= {limits.MAX_CI_ORG_MEMBERS_BYTES} ))", script("members", SNAPSHOT_STEP))
+        self.assertIn(f"(( ${{#config}} <= {limits.MAX_CI_CONFIG_BYTES} ))", script("locate", LOCATE_STEP))
+        callee = (ROOT / workflow.CI_CALLEE_WORKFLOWS["gate-status"]).read_text(encoding="utf-8")
+        self.assertIn(f"${{#MEMBERS}} -le {limits.MAX_CI_ORG_MEMBERS_BYTES}", callee)
         body = script("publish", PUBLISH_STEP)
         self.assertIn(f"length <= {limits.MAX_CI_STATUS_DESCRIPTION_CHARS} and", body)
         # A context is the protected string, at most 100 characters, with " (shadow)" in shadow mode.
@@ -338,7 +428,10 @@ class StatusCallerDependabotTests(unittest.TestCase):
 class StatusCallerJobTests(unittest.TestCase):
     """Which jobs run: nothing but a successful, non-empty evaluation reaches ``publish``."""
 
-    LOCATED = {"guard": {"kit-sha": KIT_SHA}, "locate": {"pr-number": "17"}, "evaluate": {"intents": "{}"}}
+    LOCATED = {"guard": {"kit-sha": KIT_SHA}, "locate": {"pr-number": "17", "organization": ""},
+               "evaluate": {"intents": "{}"}}
+    COUNTING = {**LOCATED, "locate": {"pr-number": "17", "organization": OWNER},
+                "members": {"members": "{}", "candidates": "[]", "recheck": "false"}}
 
     def setUp(self) -> None:
         self.document = document()
@@ -351,18 +444,41 @@ class StatusCallerJobTests(unittest.TestCase):
     def test_every_event_evaluates_and_publishes_for_its_pull_request(self) -> None:
         for name in STATUS_EVENTS:
             with self.subTest(event=name):
-                self.assertEqual(self.results(name),
-                                 dict.fromkeys(("guard", "locate", "evaluate", "publish"), "success"))
+                # Without an organization among the approvers no members job runs, and nothing waits for it.
+                self.assertEqual(self.results(name), {"guard": "success", "locate": "success", "members": "skipped",
+                                                      "evaluate": "success", "publish": "success"})
+                self.assertEqual(self.results(name, job_outputs=self.COUNTING),
+                                 dict.fromkeys(("guard", "locate", "members", "evaluate", "publish"), "success"))
 
     def test_an_event_without_a_pull_request_evaluates_and_publishes_nothing(self) -> None:
-        for located in ({"pr-number": ""}, {}):
+        for located in ({"pr-number": "", "organization": ""}, {}):
             results = self.results(job_outputs={**self.LOCATED, "locate": located})
-            self.assertEqual(results, {"guard": "success", "locate": "success", "evaluate": "skipped",
-                                       "publish": "skipped"})
+            self.assertEqual(results, {"guard": "success", "locate": "success", "members": "skipped",
+                                       "evaluate": "skipped", "publish": "skipped"})
+
+    def test_a_failed_members_job_still_evaluates_and_publishes_without_its_snapshot(self) -> None:
+        # The evaluation then has no snapshot and refuses every change to a protected path: a
+        # failure or a revocation is published, never a success that rests on a member.
+        results = self.results(job_outputs={**self.COUNTING, "members": {}}, outcomes={"members": "failure"})
+        self.assertEqual((results["members"], results["evaluate"], results["publish"]),
+                         ("failure", "success", "success"))
+        # A cancelled members job stops the evaluation, and a failed guard or locate job still
+        # stops everything.
+        results = self.results(job_outputs=self.COUNTING, outcomes={"members": "cancelled"})
+        self.assertEqual((results["members"], results["evaluate"], results["publish"]),
+                         ("cancelled", "skipped", "skipped"))
+        for failed in ("guard", "locate"):
+            with self.subTest(failed=failed):
+                results = self.results(job_outputs=self.COUNTING, outcomes={failed: "failure"})
+                self.assertEqual((results["evaluate"], results["publish"]), ("skipped", "skipped"))
+        results = self.results(job_outputs=self.COUNTING, cancelled=True)
+        self.assertEqual(set(results.values()) - {"success"}, {"skipped"})
+        self.assertEqual((results["members"], results["evaluate"], results["publish"]), ("skipped",) * 3)
 
     def test_a_failed_skipped_or_empty_evaluation_publishes_nothing(self) -> None:
         cases = {
             "the guard failed": ({"outcomes": {"guard": "failure"}}, "skipped"),
+            "the guard was cancelled": ({"outcomes": {"guard": "cancelled"}}, "skipped"),
             "no pull request was located": ({"outcomes": {"locate": "failure"}}, "skipped"),
             "the evaluation failed": ({"outcomes": {"evaluate": "failure"}}, "failure"),
             "the evaluation was cancelled": ({"outcomes": {"evaluate": "cancelled"}}, "cancelled"),
@@ -379,11 +495,19 @@ class StatusCallerJobTests(unittest.TestCase):
     def test_every_job_after_the_two_first_needs_them(self) -> None:
         jobs = self.document["jobs"]
         self.assertEqual({job_id: needed(job) for job_id, job in jobs.items()},
-                         {"guard": [], "locate": [], "evaluate": ["guard", "locate"],
-                          "publish": ["locate", "evaluate"]})
+                         {"guard": [], "locate": [], "members": ["locate"], "evaluate": ["guard", "locate", "members"],
+                          "publish": ["locate", "members", "evaluate"]})
+        self.assertNotRegex(jobs["members"]["if"], r"always\(\)|failure\(\)|cancelled\(\)|success\(\)",
+                            "success() stays implied: the members job never outlives the locate job")
+        # The evaluation must also run when the members job was skipped because it had nothing to
+        # read or failed, so its condition names every result it needs instead of an implied success().
         for job_id in ("evaluate", "publish"):
-            self.assertNotRegex(jobs[job_id]["if"], r"always\(\)|failure\(\)|cancelled\(\)|success\(\)",
-                                "success() stays implied: a job never outlives a job it needs")
+            condition = jobs[job_id]["if"]
+            self.assertNotRegex(condition, r"always\(\)|failure\(\)|success\(\)")
+            self.assertTrue(condition.startswith("${{ !cancelled() && "), condition)
+        for name in ("guard", "locate", "members"):
+            self.assertIn(f"needs.{name}.result == 'success'", jobs["evaluate"]["if"])
+        self.assertIn("needs.evaluate.result == 'success'", jobs["publish"]["if"])
 
 
 class StatusGuardTests(GuardCase):
@@ -503,6 +627,16 @@ class ScriptCase(unittest.TestCase):
         return [record for record in self.harness.records() if record["tool"] == tool_name]
 
 
+#: The protected Build config of the run's commit (``GITHUB_SHA``), read raw by the locate job.
+CONFIG = f"GET repos/{REPOSITORY}/contents/scripts/ci/mod-base-build.json?ref={OTHER}"
+#: What the locate job reads of it: the approvers of its admission.
+USERS = {"admission": {"approvers": [{"login": "AkaNebur", "association": "MEMBER"}]}}
+COMMAND = "/controller-upgrade"
+MEMBERS_OF_OWNER = {"admission": {"command": COMMAND,
+                                  "approvers": [{"login": "AkaNebur", "association": "MEMBER"},
+                                                {"organization": OWNER, "role": "member"}]}}
+
+
 class LocateTests(ScriptCase):
     JOB, STEP = "locate", LOCATE_STEP
     STUBS = ("gh", "sleep", "date")
@@ -521,19 +655,79 @@ class LocateTests(ScriptCase):
             values.update(RUN_EVENT="pull_request_target", RUN_HEAD_BRANCH=FEATURE, RUN_HEAD_SHA=HEAD,
                           RUN_HEAD_REPOSITORY=REPOSITORY)
         values.update(environment)
-        return self.run_script(values, fixtures)
+        return self.run_script(values, {CONFIG: {"body": USERS}, **(fixtures or {})})
 
-    def assert_located(self, result: subprocess.CompletedProcess[str], number: str, *, requests: list[str]) -> None:
+    def assert_located(self, result: subprocess.CompletedProcess[str], number: str, *, requests: list[str],
+                       organization: str = "") -> None:
+        """``number`` is located after ``requests``; the protected config is read for it alone."""
+
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(outputs(self.output), {"pr-number": number})
-        self.assertEqual([record["route"] for record in self.calls()], requests)
+        self.assertEqual(outputs(self.output), {"pr-number": number, "organization": organization,
+                                                "command": COMMAND if organization else ""})
+        self.assertEqual([record["route"] for record in self.calls()], [*requests, *([CONFIG] if number else [])])
         self.assertTrue(all(record["token"] == TOKEN for record in self.calls()))
+        self.assertEqual({tuple(record["headers"]) for record in self.calls() if record["route"] == CONFIG},
+                         {("Accept: application/vnd.github.raw+json",)} if number else set())
         self.assertIn(f"pull request #{number}" if number else "names no open pull request", result.stdout)
 
     def assert_refused(self, result: subprocess.CompletedProcess[str], message: str = "") -> None:
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Locate pull request: " + message, result.stderr)
         self.assertEqual(outputs(self.output), {})
+
+    def test_the_members_job_is_asked_for_exactly_when_the_protected_admission_counts_the_owner_s_members(
+            self) -> None:
+        for label, config in {"users alone": USERS, "no admission": {}, "an empty list": {"admission": {}},
+                              "null approvers": {"admission": {"approvers": None}}}.items():
+            with self.subTest(config=label):
+                self.assert_located(self.locate("pull_request_target", {CONFIG: {"body": config}},
+                                                EVENT_PR_NUMBER="17"), "17", requests=[])
+        result = self.locate("pull_request_target", {CONFIG: {"body": MEMBERS_OF_OWNER}}, EVENT_PR_NUMBER="17")
+        self.assert_located(result, "17", requests=[], organization=OWNER)
+        self.assertIn(f"Its admission counts the members of {OWNER}", result.stdout)
+        result = self.locate("workflow_run", {self.BRANCH_PULLS: {"body": [pull()]},
+                                              CONFIG: {"body": MEMBERS_OF_OWNER}})
+        self.assert_located(result, "17", requests=[self.BRANCH_PULLS], organization=OWNER)
+        # No pull request, no config read and no members job.
+        self.assert_located(self.locate("workflow_run", {self.BRANCH_PULLS: {"body": []},
+                                                         CONFIG: {"body": MEMBERS_OF_OWNER}}),
+                            "", requests=[self.BRANCH_PULLS])
+
+    def test_a_config_that_cannot_say_whom_the_admission_counts_is_refused(self) -> None:
+        other = {"admission": {"approvers": [{"organization": "another-org", "role": "member"}]}}
+        twice = {"admission": {"approvers": [{"organization": OWNER, "role": "member"},
+                                             {"organization": OWNER, "role": "member"}]}}
+        cases = {
+            "another organization": ({"body": other}, "the protected Build config names an organization that does "
+                                                      "not own this repository"),
+            "the owner in another case": ({"body": {"admission": {"approvers": [
+                {"organization": OWNER.lower(), "role": "member"}]}}}, "the protected Build config names an organization"),
+            "no command": ({"body": {"admission": {"approvers": [{"organization": OWNER, "role": "member"}]}}},
+                           "the protected Build config is malformed"),
+            "a command that is no text": ({"body": {"admission": {**MEMBERS_OF_OWNER["admission"], "command": 7}}},
+                                          "the protected Build config is malformed"),
+            "a malformed command": ({"body": {"admission": {**MEMBERS_OF_OWNER["admission"],
+                                                            "command": "/x approve\n"}}},
+                                    "the protected Build config is malformed"),
+            "two organizations": ({"body": twice}, "the protected Build config is malformed"),
+            "a number": ({"body": {"admission": {"approvers": [{"organization": 7}]}}},
+                         "the protected Build config is malformed"),
+            "no object": ({"body": [MEMBERS_OF_OWNER]}, "the protected Build config is malformed"),
+            "approvers that are no list": ({"body": {"admission": {"approvers": {"organization": OWNER}}}},
+                                           "the protected Build config is malformed"),
+            "no JSON": ({"body": "{"}, "the protected Build config is malformed"),
+            "a config too large": ({"body": " " * 1048577}, "the protected Build config is too large"),
+            "no config": ({"fail": "gh: Not Found (HTTP 404)"}, "cannot read the protected Build config"),
+        }
+        for label, (response, message) in cases.items():
+            with self.subTest(case=label):
+                self.assert_refused(self.locate("pull_request_target", {CONFIG: response}, EVENT_PR_NUMBER="17"),
+                                    message)
+        for label, environment in {"a malformed commit": {"GITHUB_SHA": "HEAD"},
+                                   "a malformed repository": {"GITHUB_REPOSITORY": "The-Plum-Team"}}.items():
+            with self.subTest(case=label):
+                self.assert_refused(self.locate("pull_request_target", EVENT_PR_NUMBER="17", **environment))
+                self.assertEqual(self.calls(), [])
 
     def test_a_pull_request_event_and_a_dispatch_name_their_pull_request_without_a_request(self) -> None:
         self.assert_located(self.locate("pull_request_target", EVENT_PR_NUMBER="17"), "17", requests=[])
@@ -618,6 +812,9 @@ class LocateTests(ScriptCase):
         self.assertEqual([record["argv"] for record in self.calls("sleep")], [["5"], ["10"]])
         self.assert_refused(self.locate("workflow_run", {self.BRANCH_PULLS: [transient] * 9}))
         self.assertEqual(len(self.calls()), 4)
+        result = self.locate("pull_request_target", {CONFIG: [transient, {"body": MEMBERS_OF_OWNER}]},
+                             EVENT_PR_NUMBER="17")
+        self.assert_located(result, "17", requests=[CONFIG], organization=OWNER)
 
     def test_the_hourly_run_takes_one_open_ready_pull_request_in_turn(self) -> None:
         listed = [pull(31), pull(12), pull(25, draft=True), pull(19, head={"repo": {"full_name": "contributor/fork"}}),
@@ -1032,6 +1229,367 @@ class PublishTests(ScriptCase):
         result = self.publish(fixtures={self.STATUSES: [transient] * 9})
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(self.posted()), 4)
+
+
+
+MEMBERS_TOKEN = "fixture-members-token"
+COMMENTS = f"GET repos/{REPOSITORY}/issues/17/comments?per_page=100&page={{page}}"
+ORG_MEMBERS = f"GET orgs/{OWNER}/members?filter=all&role=all&per_page=100&page={{page}}"
+MEMBERSHIP = f"GET orgs/{OWNER}/memberships/{{login}}"
+#: The repository, read by the members job for its owner.
+REPOSITORY_ROUTE = f"GET repos/{REPOSITORY}"
+OWNED = {REPOSITORY_ROUTE: {"body": {"full_name": REPOSITORY, "owner": {"login": OWNER, "type": "Organization"}}}}
+
+
+def user_comment(number: int, author: int, body: str = "hello", *, login: str | None = None, kind: str = "User",
+                 **changes: Any) -> dict[str, Any]:
+    """One comment of pull request 17 as the API lists it."""
+
+    return {"id": number, "body": body, "user": {"login": login or f"user-{author}", "id": author, "type": kind},
+            "author_association": "NONE", "performed_via_github_app": None, **changes}
+
+
+def org_member(user_id: int) -> dict[str, Any]:
+    return {"login": f"user-{user_id}", "id": user_id, "type": "User", "site_admin": False}
+
+
+class MembersAuthorsTests(ScriptCase):
+    """The members job's first step: every comment author it must check, read like the kit reads them."""
+
+    JOB, STEP = "members", AUTHORS_STEP
+
+    def authors(self, pages: list[list[dict[str, Any]]] | Mapping[str, Any],
+                **environment: str | None) -> subprocess.CompletedProcess[str]:
+        fixtures = pages if isinstance(pages, Mapping) else {
+            COMMENTS.format(page=index + 1): {"body": rows} for index, rows in enumerate(pages)}
+        return self.run_script({**self.base(), "ORGANIZATION": OWNER, "COMMAND": COMMAND, "PR_NUMBER": "17",
+                                **environment}, {**OWNED, **fixtures})
+
+    def written(self, result: subprocess.CompletedProcess[str]) -> tuple[list[int], int, list[dict[str, Any]]]:
+        self.assertEqual(result.returncode, 0, result.stderr)
+        written = outputs(self.output)
+        self.assertEqual(set(written), {"checked", "through", "candidates"})
+        self.assertTrue(all(record["token"] == TOKEN for record in self.calls()))
+        return json.loads(written["checked"]), int(written["through"]), json.loads(written["candidates"])
+
+    def test_every_user_author_is_checked_whatever_the_comment_says(self) -> None:
+        approve = f"/controller-upgrade approve {HEAD}"
+        rows = [user_comment(5, 303, "thanks"), user_comment(9, 202, approve), user_comment(7, 202, "LGTM"),
+                user_comment(11, 404, f" {approve} "), user_comment(12, 505, f"\x1f/controller-upgrade revoke {HEAD}"),
+                user_comment(13, 606, "I approve of this, approved"), user_comment(14, 707, "APPROVE"),
+                user_comment(15, 808, f"/x revoke {HEAD}"), user_comment(16, 909, "/controller-upgrade approve"),
+                user_comment(17, 111, "see /controller-upgrade revoke later")]
+        result = self.authors([rows])
+        checked, through, candidates = self.written(result)
+        self.assertEqual(checked, [111, 202, 303, 404, 505, 606, 707, 808, 909])
+        self.assertEqual(through, 17)
+        # Whatever the kit recognises as a decision contains the command, a space and the word with a
+        # space after it, so its author is a candidate whose membership is read; anywhere in any
+        # comment. The words alone, another command or no head after them make no candidate.
+        self.assertEqual(candidates, [{"id": 111, "login": "user-111"}, {"id": 202, "login": "user-202"},
+                                      {"id": 404, "login": "user-404"}, {"id": 505, "login": "user-505"}])
+        self.assertEqual([record["route"] for record in self.calls()], [REPOSITORY_ROUTE, COMMENTS.format(page=1)])
+        self.assertNotIn("user-202", result.stdout)
+        self.assertIn("Read 10 comment(s) through comment 17: 9 author(s) checked, 4 whose comment could be a decision",
+                      result.stdout)
+
+    def test_only_a_repository_of_the_named_organization_reads_its_comments(self) -> None:
+        for label, response in {
+                "a user account": {"body": {"owner": {"login": OWNER, "type": "User"}}},
+                "another owner": {"body": {"owner": {"login": "another-org", "type": "Organization"}}},
+                "the owner in another case": {"body": {"owner": {"login": OWNER.lower(), "type": "Organization"}}},
+                "no owner": {"body": {"full_name": REPOSITORY}},
+                "no object": {"body": [1]}}.items():
+            with self.subTest(repository=label):
+                result = self.authors({REPOSITORY_ROUTE: response, COMMENTS.format(page=1): {"body": []}})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("the repository is not owned by the organization its admission names", result.stderr)
+                self.assertEqual([record["route"] for record in self.calls()], [REPOSITORY_ROUTE])
+                self.assertEqual(outputs(self.output), {})
+        result = self.authors({REPOSITORY_ROUTE: {"fail": "gh: Not Found (HTTP 404)"}})
+        self.assertIn("cannot read the repository", result.stderr)
+        self.assertEqual(outputs(self.output), {})
+        for command in ("", "controller-upgrade", "/Controller", "/x approve", "/x\n"):
+            with self.subTest(command=command):
+                result = self.authors([[]], COMMAND=command)
+                self.assertIn("malformed admission command", result.stderr)
+                self.assertEqual(self.calls(), [])
+
+    def test_bots_and_comments_through_an_app_are_skipped_as_the_kit_skips_them(self) -> None:
+        approve = f"/controller-upgrade approve {HEAD}"
+        rows = [user_comment(20, 1, approve, kind="Bot", login="github-actions[bot]"),
+                user_comment(21, 2, approve, performed_via_github_app={"id": 3, "slug": "an-app"}),
+                user_comment(22, 3, approve, performed_via_github_app=""),
+                {**user_comment(23, 4, approve), "user": None},
+                {key: value for key, value in user_comment(24, 5, approve).items() if key != "performed_via_github_app"},
+                user_comment(25, 6, approve, kind="Organization")]
+        checked, through, candidates = self.written(self.authors([rows]))
+        # An absent `performed_via_github_app` is no App, as for the kit.
+        self.assertEqual((checked, through, candidates), ([5], 25, [{"id": 5, "login": "user-5"}]))
+
+    def test_no_comment_and_three_hundred_comments_are_read_and_one_more_fails(self) -> None:
+        self.assertEqual(self.written(self.authors([[]])), ([], 0, []))
+        full = [[user_comment(page * 100 + index + 1, 1000 + page) for index in range(100)] for page in range(3)]
+        checked, through, _ = self.written(self.authors([*full, []]))
+        self.assertEqual((checked, through), ([1000, 1001, 1002], 300))
+        self.assertEqual([record["route"] for record in self.calls()],
+                         [REPOSITORY_ROUTE, *[COMMENTS.format(page=page) for page in (1, 2, 3, 4)]])
+        result = self.authors([*full, [user_comment(301, 1)]])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("more than 300 comments", result.stderr)
+        self.assertEqual(outputs(self.output), {})
+
+    def test_a_malformed_or_unreadable_listing_fails(self) -> None:
+        approve = f"/controller-upgrade approve {HEAD}"
+        for label, rows in {"an object": {"message": "x"}, "no id": [{"body": "x"}], "a text id": [{"id": "1", "body": "x"}],
+                            "no body": [{"id": 1}], "a body that is no text": [{"id": 1, "body": 7}],
+                            "a user without id": [{**user_comment(1, 2, approve), "user": {"login": "x", "type": "User"}}],
+                            "a user without login": [{**user_comment(1, 2), "user": {"id": 2, "type": "User"}}],
+                            "a fractional id": [user_comment(1, 2) | {"id": 1.5}],
+                            "a long page": [user_comment(index + 1, 2) for index in range(101)]}.items():
+            with self.subTest(listing=label):
+                result = self.authors([rows])  # type: ignore[list-item]
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("the comments of the pull request are malformed", result.stderr)
+                self.assertEqual(outputs(self.output), {})
+        result = self.authors({COMMENTS.format(page=1): {"fail": "gh: Forbidden (HTTP 403)"}})
+        self.assertIn("cannot list the comments of the pull request", result.stderr)
+        for number in ("", "0", "17 ", "17; id"):
+            with self.subTest(number=number):
+                result = self.authors([[]], PR_NUMBER=number)
+                self.assertIn("malformed pull request number", result.stderr)
+                self.assertEqual(self.calls(), [])
+
+
+class MembersSnapshotTests(ScriptCase):
+    """The members job's last step: the active members among the candidates, as one canonical document."""
+
+    JOB, STEP = "members", SNAPSHOT_STEP
+    CANDIDATES = [{"id": 202, "login": "concealed"}, {"id": 303, "login": "collaborator"}]
+
+    def snapshot(self, fixtures: Mapping[str, Any], *, checked: list[int] | None = None,
+                 candidates: list[dict[str, Any]] | None = None, **environment: str | None
+                 ) -> subprocess.CompletedProcess[str]:
+        values = {**self.base(), "GH_TOKEN": MEMBERS_TOKEN, "ORGANIZATION": OWNER, "PR_NUMBER": "17", "THROUGH": "30",
+                  "CHECKED": json.dumps([101, 202, 303] if checked is None else checked),
+                  "CANDIDATES": json.dumps(self.CANDIDATES if candidates is None else candidates), **environment}
+        return self.run_script(values, fixtures)
+
+    def document(self, result: subprocess.CompletedProcess[str]) -> tuple[dict[str, Any], str]:
+        self.assertEqual(result.returncode, 0, result.stderr)
+        written = outputs(self.output)
+        self.assertEqual(set(written), {"members", "recheck"})
+        # Exactly the bytes the kit admits: canonical JSON of this pull request and owner.
+        path = self.root / "snapshot.json"
+        path.write_text(written["members"] + "\n", encoding="utf-8")
+        loaded = load_org_members(path, repository=REPOSITORY, pr_number=17)
+        self.assertEqual(path.read_bytes(), canonical_json(json.loads(written["members"])))
+        self.assertTrue(all(record["token"] == MEMBERS_TOKEN for record in self.calls()))
+        self.assertEqual(written["recheck"], "true" if loaded.members else "false")
+        return json.loads(written["members"]), written["recheck"]
+
+    def test_without_a_candidate_nothing_is_read_and_no_token_is_needed(self) -> None:
+        document, recheck = self.document(self.snapshot({}, candidates=[], GH_TOKEN=""))
+        self.assertEqual(document, {"kind": "mod-base.ci.org-members", "schema_version": 1, "organization": OWNER,
+                                    "pr_number": 17, "through_comment_id": 30, "checked": [101, 202, 303],
+                                    "candidates": [], "members": []})
+        self.assertEqual((recheck, self.calls()), ("false", []))
+
+    def test_the_candidates_on_the_member_list_are_its_members_by_id(self) -> None:
+        listed = [org_member(user_id) for user_id in (1, 202, 999)]
+        result = self.snapshot({ORG_MEMBERS.format(page=1): {"body": listed},
+                                MEMBERSHIP.format(login="collaborator"): {"fail": "gh: Not Found (HTTP 404)"}})
+        document, recheck = self.document(result)
+        self.assertEqual((document["candidates"], document["members"], recheck), ([202, 303], [202], "true"))
+        self.assertEqual([record["route"] for record in self.calls()],
+                         [ORG_MEMBERS.format(page=1), MEMBERSHIP.format(login="collaborator")])
+        # The member list itself is never printed: only the members among the candidates.
+        for hidden in ("user-1", "user-999", '"id":999', "999"):
+            self.assertNotIn(hidden, result.stdout + result.stderr)
+        self.assertIn("Members of The-Plum-Team among the candidates: [202]", result.stdout)
+
+    def test_the_list_is_read_until_every_candidate_is_found_and_more_than_a_thousand_members_fail(self) -> None:
+        pages = {ORG_MEMBERS.format(page=page): {"body": [org_member(page * 1000 + index) for index in range(100)]}
+                 for page in range(1, 11)}
+        pages[ORG_MEMBERS.format(page=1)]["body"][7] = org_member(202)
+        pages[ORG_MEMBERS.format(page=10)]["body"][3] = org_member(303)
+        document, _ = self.document(self.snapshot({**pages, ORG_MEMBERS.format(page=11): {"body": []}}))
+        self.assertEqual(document["members"], [202, 303])
+        # Once every candidate is found, no further page is read.
+        self.assertEqual([record["route"] for record in self.calls()],
+                         [ORG_MEMBERS.format(page=page) for page in range(1, 11)])
+        document, _ = self.document(self.snapshot(pages, candidates=[{"id": 202, "login": "concealed"}]))
+        self.assertEqual((document["members"], [record["route"] for record in self.calls()]),
+                         ([202], [ORG_MEMBERS.format(page=1)]))
+        # A candidate on no page: the list is read to its end, and the candidate is asked.
+        absent = {"id": 404, "login": "absent"}
+        candidates = [*self.CANDIDATES, absent]
+        asked = {MEMBERSHIP.format(login="absent"): {"fail": "gh: Not Found (HTTP 404)"}}
+        document, _ = self.document(self.snapshot({**pages, **asked, ORG_MEMBERS.format(page=11): {"body": []}},
+                                                  checked=[101, 202, 303, 404], candidates=candidates))
+        self.assertEqual((document["members"], len(self.calls())), ([202, 303], 12))
+        result = self.snapshot({**pages, **asked, ORG_MEMBERS.format(page=11): {"body": [org_member(5)]}},
+                               checked=[101, 202, 303, 404], candidates=candidates)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("more than 1000 members", result.stderr)
+        self.assertEqual(outputs(self.output), {})
+
+    def test_a_candidate_missing_from_the_list_is_asked_for_its_own_active_membership(self) -> None:
+        listing = {ORG_MEMBERS.format(page=1): {"body": [org_member(1)]}}
+        answers = {
+            "active": ({"state": "active", "role": "member", "user": {"id": 202, "login": "concealed"}}, [202]),
+            "an active owner": ({"state": "active", "role": "admin", "user": {"id": 202, "login": "concealed"}}, [202]),
+            "pending": ({"state": "pending", "role": "member", "user": {"id": 202, "login": "concealed"}}, []),
+            # A billing manager holds no seat and is no member, whatever the state says.
+            "an active billing manager": ({"state": "active", "role": "billing_manager",
+                                           "user": {"id": 202, "login": "concealed"}}, []),
+            "an unknown role": ({"state": "active", "role": "outside", "user": {"id": 202, "login": "concealed"}}, []),
+            "not a member": ({"fail": "gh: Not Found (HTTP 404)"}, []),
+        }
+        for label, (answer, members) in answers.items():
+            with self.subTest(answer=label):
+                response = answer if "fail" in answer else {"body": answer}
+                result = self.snapshot({**listing, MEMBERSHIP.format(login="concealed"): response,
+                                        MEMBERSHIP.format(login="collaborator"): {"fail": "gh: Not Found (HTTP 404)"}})
+                self.assertEqual(self.document(result)[0]["members"], members)
+        for label, response in {
+                "another account under the login": {"body": {"state": "active", "user": {"id": 9, "login": "x"}}},
+                "no state": {"body": {"user": {"id": 202}, "role": "member"}},
+                "no role": {"body": {"state": "active", "user": {"id": 202, "login": "concealed"}}},
+                "a role that is no text": {"body": {"state": "active", "role": ["member"], "user": {"id": 202}}},
+                "a refusal": {"fail": "gh: Forbidden (HTTP 403)"},
+                "no JSON": {"body": "<html>"}}.items():
+            with self.subTest(answer=label):
+                result = self.snapshot({**listing, MEMBERSHIP.format(login="concealed"): response,
+                                        MEMBERSHIP.format(login="collaborator"): {"fail": "gh: Not Found (HTTP 404)"}})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("cannot read the membership of the candidates", result.stderr)
+                self.assertEqual(outputs(self.output), {})
+
+    def test_at_most_twenty_candidates_are_asked_one_by_one(self) -> None:
+        def candidates(count: int) -> list[dict[str, Any]]:
+            return [{"id": 1000 + index, "login": f"user-{1000 + index}"} for index in range(count)]
+
+        absent = {MEMBERSHIP.format(login=f"user-{1000 + index}"): {"fail": "gh: Not Found (HTTP 404)"}
+                  for index in range(21)}
+        listing = {ORG_MEMBERS.format(page=1): {"body": []}}
+        twenty = candidates(20)
+        document, _ = self.document(self.snapshot({**listing, **absent}, checked=[item["id"] for item in twenty],
+                                                  candidates=twenty))
+        self.assertEqual((document["members"], len(self.calls())), ([], 21))
+        many = candidates(21)
+        result = self.snapshot({**listing, **absent}, checked=[item["id"] for item in many], candidates=many)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("More than 20 candidates are missing from the member list", result.stderr)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_malformed_inputs_or_a_malformed_list_read_nothing_or_fail(self) -> None:
+        for label, environment in {
+                "another organization": {"ORGANIZATION": "another-org"}, "no organization": {"ORGANIZATION": ""},
+                "a malformed number": {"PR_NUMBER": "17 "}, "a malformed comment id": {"THROUGH": "-1"},
+                "a candidate that was not checked": {"CHECKED": "[101]"},
+                "a candidate with more keys": {"CANDIDATES": '[{"id":202,"login":"x","admin":true}]'},
+                "checked authors that are no list": {"CHECKED": "{}"}, "no App token": {"GH_TOKEN": ""}}.items():
+            with self.subTest(case=label):
+                result = self.snapshot({ORG_MEMBERS.format(page=1): {"body": []}}, **environment)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Read the organization members: ", result.stderr)
+                self.assertEqual((self.calls(), outputs(self.output)), ([], {}))
+        for label, response in {"an object": {"body": {"message": "x"}}, "an entry without id": {"body": [{}]},
+                                "a refusal": {"fail": "gh: Forbidden (HTTP 403)"},
+                                "a long page": {"body": [org_member(index + 1) for index in range(101)]}}.items():
+            with self.subTest(listing=label):
+                result = self.snapshot({ORG_MEMBERS.format(page=1): response})
+                self.assertIn("cannot read the membership of the candidates", result.stderr)
+                self.assertEqual(outputs(self.output), {})
+        # A login that could leave the path is never requested.
+        result = self.snapshot({ORG_MEMBERS.format(page=1): {"body": []}}, CANDIDATES='[{"id":202,"login":"../x"}]')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([record["route"] for record in self.calls()], [ORG_MEMBERS.format(page=1)])
+
+
+class RecheckTests(ScriptCase):
+    """The publishing job reads the membership of the snapshot's candidates again, and nothing else."""
+
+    JOB, STEP = "publish", RECHECK_STEP
+    CANDIDATES = [{"id": 202, "login": "concealed"}, {"id": 303, "login": "collaborator"}]
+    DOCUMENT = {"kind": "mod-base.ci.org-members", "schema_version": 1, "organization": OWNER, "pr_number": 17,
+                "through_comment_id": 30, "checked": [101, 202, 303], "candidates": [202, 303], "members": [202]}
+
+    def recheck(self, listed: list[int], **environment: str | None) -> subprocess.CompletedProcess[str]:
+        values = {**self.base(), "GH_TOKEN": MEMBERS_TOKEN, "ORGANIZATION": OWNER,
+                  "MEMBERS": json.dumps(self.DOCUMENT, separators=(",", ":"), sort_keys=True),
+                  "CANDIDATES": json.dumps(self.CANDIDATES), **environment}
+        return self.run_script(values, {ORG_MEMBERS.format(page=1): {"body": [org_member(item) for item in listed]},
+                                        MEMBERSHIP.format(login="collaborator"): {"fail": "gh: Not Found (HTTP 404)"},
+                                        MEMBERSHIP.format(login="concealed"): {"fail": "gh: Not Found (HTTP 404)"}})
+
+    def test_the_same_members_pass_and_any_change_publishes_nothing(self) -> None:
+        result = self.recheck([1, 202])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([record["route"] for record in self.calls()],
+                         [ORG_MEMBERS.format(page=1), MEMBERSHIP.format(login="collaborator")])
+        self.assertTrue(all(record["token"] == MEMBERS_TOKEN for record in self.calls()))
+        for label, listed in {"a member was removed": [1], "a candidate became a member": [202, 303]}.items():
+            with self.subTest(case=label):
+                result = self.recheck(listed)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("the membership of the candidates changed after the evaluation; nothing is published",
+                              result.stderr)
+
+    def test_a_comment_posted_since_the_snapshot_cannot_fail_the_recheck(self) -> None:
+        # The recheck reads the candidates of the snapshot alone: no comment listing is even routed.
+        result = self.recheck([202])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any("comments" in record["route"] for record in self.calls()))
+
+    def test_malformed_inputs_fail(self) -> None:
+        for label, environment in {"no token": {"GH_TOKEN": ""}, "another organization": {"ORGANIZATION": "x"},
+                                   "no document": {"MEMBERS": ""}, "no members": {"MEMBERS": '{"members":7}'},
+                                   "no candidates": {"CANDIDATES": "{}"},
+                                   "candidates the snapshot did not read": {"CANDIDATES": json.dumps(self.CANDIDATES[:1])},
+                                   "a snapshot without candidates": {"MEMBERS": json.dumps(
+                                       {key: value for key, value in self.DOCUMENT.items() if key != "candidates"})}
+                                   }.items():
+            with self.subTest(case=label):
+                result = self.recheck([202], **environment)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Recheck the organization members: ", result.stderr)
+
+
+class DecideRecheckTests(ScriptCase):
+    """The publishing job reads the membership again only when a success it would write rests on it."""
+
+    JOB, STEP = "publish", DECIDE_STEP
+
+    def decide(self, evaluated: Any, recheck: str | None = "true") -> str:
+        raw = evaluated if isinstance(evaluated, str) else json.dumps(evaluated, separators=(",", ":"), sort_keys=True)
+        result = self.run_script({**self.base(), "RECHECK": recheck, "INTENTS": raw})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [])
+        written = outputs(self.output)
+        self.assertEqual(set(written), {"needed"})
+        return written["needed"]
+
+    def test_a_success_that_rests_on_a_member_is_rechecked(self) -> None:
+        self.assertEqual(self.decide(intents()), "true")
+        self.assertEqual(self.decide(intents(build=intent("build", "failure"))), "true")
+        self.assertEqual(self.decide(intents(packaged=intent("packaged", "pending"))), "true")
+
+    def test_no_success_or_no_member_reads_nothing_again(self) -> None:
+        # A failure or a pending state is written whatever the membership is now.
+        refused = intents(build=intent("build", "failure"), packaged=intent("packaged", "failure"))
+        self.assertEqual(self.decide(refused), "false")
+        self.assertEqual(self.decide(intents(build=intent("build", "pending"), packaged=intent("packaged", "pending"))),
+                         "false")
+        for recheck in ("false", "", "True"):
+            with self.subTest(recheck=recheck):
+                self.assertEqual(self.decide(intents(), recheck), "false")
+
+    def test_a_document_that_cannot_be_read_is_rechecked(self) -> None:
+        for raw in ("{", "[]", '{"gates":7}', '"success"', '{"gates":{"build":{"state":"success"}}} {}'):
+            with self.subTest(intents=raw):
+                self.assertEqual(self.decide(raw), "true")
 
 
 class StatusCallerLintTests(unittest.TestCase):

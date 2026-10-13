@@ -227,14 +227,86 @@ text is validated and HTML-escaped at build time.
   the defense that does not depend on it.
 - **Protected admission trusts the approvers' comments.** With `admission` in the Build config, a
   pull request that changes a protected path gets no gate `success` without the latest decision
-  of a listed approver on its exact head. Anybody with write access can edit or delete a comment:
+  of an approver on its exact head. Anybody with write access can edit or delete a comment:
   an edited decision refuses the admission, but a deleted revocation leaves the approval before it
   in force, as it does for a mod's own evaluator. A comment does not start an evaluation, so a
   success published before a revocation stays until the next run of the status caller; the owner
-  dispatches it after revoking and checks the live statuses before merging. The kit checks only
+  dispatches it after revoking and checks the live statuses before merging. A run whose
+  evaluation or publication fails (an API error, a snapshot that disagrees, a membership that
+  changed before a success is written) also leaves the newest published status in place until a
+  run succeeds; a members job that cannot read the organization does not stop the run, whose
+  evaluation then refuses every change to a protected path. The kit checks only
   the generic rule: an upgrade's exact path list, a restricted transition's declaration or a
   forbidden path that the mod's own evaluator refused even with approval are the approver's to
   review.
+- **Organization approvers are proven by the gate App's member list (v1.6.0).** An approver entry
+  `{"organization": <owner>, "role": "member"}` counts every active member of the organization
+  that owns the repository. `author_association` and the workflow's own token cannot prove a
+  membership that is kept private, so the status caller's `members` job proves it: only when the
+  protected config at the base names such an entry does it enter `mod-base-gate`, read the pull
+  request's comments with the read-only job token, mint a token of the gate App with the one
+  organization permission "Members: Read-only" (`permission-members: read`; the private key appears
+  only in the `with` of the mint step) and compare the organization's member list with the comment
+  authors by numeric user id; a member found on no page of the list is asked for its own
+  membership, which counts only when it is `active` in the role `admin` or `member` (a billing
+  manager is no member). The list is never printed; the job outputs the ids of every `User`
+  comment author that did not post through a GitHub App (`checked`, whatever they wrote, so that no
+  author of a decision the kit recognises escapes the check, whatever white space Python strips),
+  the `candidates` among them whose comment could be a decision (it contains the command and
+  `approve ` or `revoke `), the active members among the candidates, and the greatest comment id
+  it read. The evaluation counts a decision of such a member; it refuses (a published `failure`,
+  "evaluate again") a decision the snapshot did not read as one, posted after it or edited into
+  one since; and it fails without publishing when a decision the snapshot should have checked is
+  missing from it. When the members job fails, the evaluation runs without the snapshot and
+  refuses every change to a protected path, a listed user's approval included, so that a member's
+  revocation it cannot count never leaves another approval standing, and a failure or a newer
+  failed run is still published. Before a `success` is written, the publishing job reads the same
+  candidates' membership again and publishes nothing if it changed; a `failure` or `pending`
+  never waits for that read. Comments posted through a GitHub App (`performed_via_github_app`) and
+  bot accounts never decide, for listed users too. What this does and does not separate:
+  - Membership is checked when the evaluation runs, not when the comment was written. An approval
+    an invitee posted before accepting the invitation counts as soon as they accept, with no new
+    comment; a removed member's approvals and revocations stop counting at the next evaluation, so
+    an earlier approval by another member can take effect again.
+  - Any member may approve, also their own pull request, and any member may revoke another's
+    approval. Anything acting with a member's token is that member: an OAuth app or a script using
+    a member's `gh` login cannot be told apart. A machine account that is a member counts.
+  - The organization's base repository permission is `admin` (2026-10-13): every member can edit
+    rulesets and environment branch policies, and through those reach the gate App key, and can
+    edit or delete any comment. The admission therefore separates members from everybody else (an
+    outside collaborator with write access, anybody commenting on a public repository), as the
+    owner decided on 2026-10-13; it does not protect against a member.
+  - Revocation is not durable: a collaborator with write access can delete a member's revocation
+    and dispatch the status caller, which brings back the approval before it. The revoke
+    procedure is therefore to revoke **and** push a new head or convert the pull request to a
+    draft, then dispatch `mod-base-gate-status.yml`
+    ([OPERATIONS.md](OPERATIONS.md#protected-admission)).
+  - Availability, not admission: anybody who can comment can keep a pull request that changes a
+    protected path from succeeding. A decision-shaped comment the snapshot did not read makes that
+    run publish a refusal, and comments do not start the caller, so the refusal stays until the
+    next run; more than 20 such commenters missing from the member list, or more than 300
+    comments, fail the members job, and the evaluation then refuses the protected change on every
+    run until the comments are deleted (locking the conversation stops new ones). None of these
+    can produce a success, and a pull request that changes no protected path is evaluated whatever
+    its comments are: the members job's outcome only reaches the admission, which reads nothing
+    for such a pull request.
+  - Budget: the members job reads the member list only when a comment could be a decision, stops
+    at the page where it has found every candidate, and asks at most 20 unlisted candidates one
+    by one; the publishing job reads it again only for a success. These requests share the gate
+    App installation's hourly rate limit with the statuses token of every repository it is
+    installed on. Exhausting it fails the members job (a refusal of protected changes) and the
+    publishing job (no status), never a success.
+  - Disclosure: the run log of a public repository shows, through the members document, which
+    comment authors whose comment could be a decision are members, concealed members
+    included. Anyone with write access can edit an old comment of somebody else into that shape
+    and so learn whether that person is a member. Members who never write such a comment stay
+    concealed.
+  - Not yet proven live: that an installation token minted for one repository carries the
+    organization permission and that the member list then includes concealed members. If either
+    fails, the members job fails or counts too few members, and every outcome is a refusal or no
+    status; a candidate missing from the list is also asked for its own membership
+    (`GET /orgs/{org}/memberships/{login}`, `state` `active`, `role` `admin` or `member`), which
+    covers concealed members independently of the list.
 - **Build/E2E seeds trust the default branch's Actions cache.** A target or lane job restores the
   exact key protected code derived, and the cache action extracts the entry as the runner before
   the candidate is staged; only a protected push or dispatch of the kit's jobs saves one, from a

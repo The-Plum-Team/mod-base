@@ -22,6 +22,10 @@ Without ``--settle``, ``--state`` is this job's private directory. The command c
 earlier step did, and keeps the tested records it downloads in a private temporary directory
 below it. When the directory holds the plan this job derived (``ci-plan.json``, written by
 ``ci plan``), the gates are verified against it; without that record no gate can be ``success``.
+``--org-members`` is the organization members snapshot the caller's ``members`` job wrote
+(:mod:`mod_base.build_ci.membership`), given only when the protected config's admission names the
+organization that owns the repository; it is refused with ``--settle``, which never answers
+``success`` and so never asks the admission.
 """
 
 from __future__ import annotations
@@ -35,7 +39,8 @@ from pathlib import Path
 from mod_base import cli, runtime
 from mod_base.build_ci import commands, identity, status
 from mod_base.build_ci.commands_packaged import job_plan
-from mod_base.build_ci.config import load_build_config
+from mod_base.build_ci.config import admission, admission_organization, load_build_config
+from mod_base.build_ci.membership import MembershipError, load_org_members
 from mod_base.errors import MbError
 from mod_base.model import grammar, limits
 from mod_base.model.canonical import canonical_json
@@ -54,6 +59,8 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     parser.add_argument("--settle", action="store_true",
                         help="before `ci subject`: answer only when no gate needs the protected plan, and output "
                              "settled=true or settled=false")
+    parser.add_argument("--org-members", type=cli.PATH, metavar="FILE",
+                        help="the organization members snapshot of the caller's members job (not with --settle)")
     parser.add_argument("--github-output", type=cli.PATH, required=True, metavar="FILE")
     parser.set_defaults(handler=run_gate_status)
 
@@ -82,9 +89,17 @@ def _settle(args: argparse.Namespace, invocation: runtime.Invocation) -> int:
 def run_gate_status(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
     if args.settle:
+        if args.org_members is not None:
+            raise MbError("`ci gate-status --settle` never answers success and takes no --org-members", reason="usage")
         return _settle(args, invocation)
     config = load_build_config(invocation.repo_root, repository=invocation.repository)
     activation = tool.load_template_activation(invocation.repo_root)
+    members = None
+    if args.org_members is not None:
+        members = load_org_members(args.org_members, repository=invocation.repository, pr_number=args.pr)
+        if admission_organization(admission(config.data)) != members.organization:
+            raise MembershipError("an organization members snapshot was passed, but the protected admission names no "
+                                  "organization approver")
     if not os.path.lexists(args.state):
         identity.create_state(args.state)
     plan = job_plan(args.state) if os.path.lexists(args.state / grammar.CI_PLAN_NAME) else None
@@ -93,7 +108,7 @@ def run_gate_status(args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory(prefix="mb-ci-status-", dir=args.state) as temporary:
             document = status.evaluate_gates(api, pr_number=args.pr, config=config, activation=activation,
                                              controller_sha=invocation.implementation_sha, plan=plan,
-                                             temporary_root=Path(temporary))
+                                             temporary_root=Path(temporary), members=members)
     except OSError as error:
         raise MbError("cannot hold the tested records of this evaluation privately", reason="ci-status") from error
     raw = canonical_json(document)

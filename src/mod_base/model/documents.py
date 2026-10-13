@@ -31,6 +31,7 @@ from mod_base.build_ci.batch_schema import validate_batch_manifest
 from mod_base.build_ci.runtime_schema import validate_runtime_envelope
 from mod_base.build_ci.validation import validate_validation_receipt
 from mod_base.build_ci.handoff import validate_execution_handoff
+from mod_base.build_ci.membership import validate_org_members
 from mod_base.build_ci.root_request_schema import validate_root_request
 from mod_base.build_ci.records import (validate_build_envelope, validate_gate_receipt, validate_generation,
                                        validate_results_index, validate_reuse_reference, validate_scope_record,
@@ -2128,6 +2129,7 @@ VALIDATORS: dict[str, Callable[..., dict[str, Any]]] = {
     "mod-base.ci.batch": validate_batch_manifest,
     "mod-base.ci.runtime-envelope": validate_runtime_envelope,
     "mod-base.ci.scope": validate_scope_record,
+    "mod-base.ci.org-members": validate_org_members,
     "mod-base.evidence.expectation": validate_expectation,
     "mod-base.evidence.handoff": validate_handoff,
     "mod-base.evidence.compact": validate_compact,
@@ -2160,6 +2162,7 @@ MAX_DOCUMENT_BYTES: dict[str, int] = {
     "mod-base.ci.batch": lim.MAX_CI_BATCH_DOCUMENT_BYTES,
     "mod-base.ci.runtime-envelope": lim.MAX_CI_RUNTIME_ENVELOPE_BYTES,
     "mod-base.ci.scope": lim.MAX_CI_SCOPE_BYTES,
+    "mod-base.ci.org-members": lim.MAX_CI_ORG_MEMBERS_BYTES,
     "mod-base.evidence.expectation": lim.MAX_EXPECTATION_BYTES,
     "mod-base.evidence.handoff": lim.MAX_MANIFEST_BYTES,
     "mod-base.evidence.compact": lim.MAX_MANIFEST_BYTES,

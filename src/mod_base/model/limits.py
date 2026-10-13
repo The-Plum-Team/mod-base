@@ -359,6 +359,10 @@ MAX_CI_ADMISSION_PATHS = 64
 MAX_CI_ADMISSION_DIRECTORIES = 16
 MAX_CI_ADMISSION_APPROVERS = 8
 MAX_CI_ADMISSION_COMMENTS = 300
+#: The organization members snapshot (``mod-base.ci.org-members``) the status caller's ``members``
+#: job hands to the evaluation: at most ``MAX_CI_ADMISSION_COMMENTS`` user ids checked and as many
+#: members among them, each at most 16 digits, on one line.
+MAX_CI_ORG_MEMBERS_BYTES = 16384
 #: The description of a status intent: GitHub's own bound for a commit status description.
 MAX_CI_STATUS_DESCRIPTION_CHARS = 140
 #: ``ci assemble`` sends 13 requests and 2 per target (archive REST redirect and storage GET;

@@ -192,9 +192,11 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                  {"ci_command": "scope", "state": Path("state"), "github_output": Path("out")}),
     "ci gate-status": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--github-output", "out"],
                        {"ci_command": "gate-status", "state": Path("state"), "pr": 7, "settle": False,
-                        "github_output": Path("out")}),
+                        "org_members": None, "github_output": Path("out")}),
     "ci gate-status settle": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--settle",
                                "--github-output", "out"], {"pr": 7, "settle": True}),
+    "ci gate-status members": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--org-members",
+                                "members.json", "--github-output", "out"], {"org_members": Path("members.json")}),
 }
 
 

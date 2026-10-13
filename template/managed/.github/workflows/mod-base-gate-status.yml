@@ -7,10 +7,15 @@ name: mod-base gate status
 # hour for one open pull request in turn (events can be lost), or on request for one pull request.
 # The guard binds the run to the pin; a native job finds the pull request; the kit's read-only
 # workflow evaluates both gates and returns the statuses they may show, each pending until its
-# newest run is verified; and a last job publishes exactly those. Only that job names the
-# protected environment and the App key, mints a token that can write commit statuses and
-# nothing else, and reads the live pull request again before it writes; a status that already
-# says the same is not written twice. The kit workflow receives no secret, and no evaluation
+# newest run is verified; and a last job publishes exactly those. Only that job mints a token that
+# can write commit statuses and nothing else, and it reads the live pull request again before it
+# writes; a status that already says the same is not written twice. When the protected admission
+# counts the members of the organization that owns the repository, and only then, a members job
+# reads which comment authors are active members with a token that may read the organization's
+# members and nothing else; when it fails, the evaluation runs without its snapshot and refuses
+# every change to a protected path, so a failure or a revocation is still published. Before it
+# writes a success, the publishing job reads that membership again. Only those two jobs name the
+# protected environment and the App key. The kit workflow receives no secret, and no evaluation
 # that failed, was skipped or returned nothing reaches a status.
 on:
   workflow_run:
@@ -56,9 +61,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       pr-number: ${{ steps.locate.outputs.pr-number }}
+      organization: ${{ steps.locate.outputs.organization }}
+      command: ${{ steps.locate.outputs.command }}
     steps:
       - name: Find the pull request of this event
         id: locate
@@ -148,17 +156,269 @@ jobs:
             fi
             [[ -z "$number" || "$number" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed pull request number"
           fi
+          # Whether the admission of the protected Build config of this run's commit (the one the
+          # evaluation checks out) counts the members of the organization that owns the repository:
+          # only then does the members job run, enter the protected environment and mint a token. It
+          # is also told the admission's command, which names the comments that could be decisions.
+          organization=""
+          command=""
           if [[ -n "$number" ]]; then
             printf 'This run evaluates pull request #%s\n' "$number"
+            [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+            [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit of this run"
+            config="$(protected_gh_api_retry -H 'Accept: application/vnd.github.raw+json' \
+                "repos/$GITHUB_REPOSITORY/contents/scripts/ci/mod-base-build.json?ref=$GITHUB_SHA")" ||
+              fail "cannot read the protected Build config"
+            (( ${#config} <= 1048576 )) || fail "the protected Build config is too large"
+            organization="$(jq -r '
+                if type != "object" then error("no object") else . end |
+                [.admission // {} | .approvers // [] | if type != "array" then error("no list") else .[] end |
+                  objects | select(has("organization")) | .organization] |
+                if length == 0 then "" elif length == 1 and (.[0] | type) == "string" then .[0]
+                else error("several") end' <<< "$config")" || fail "the protected Build config is malformed"
+            [[ -z "$organization" || "$organization" == "${GITHUB_REPOSITORY%%/*}" ]] ||
+              fail "the protected Build config names an organization that does not own this repository"
+            if [[ -n "$organization" ]]; then
+              command="$(jq -r '.admission.command | if type == "string" then . else error("no command") end' \
+                  <<< "$config")" || fail "the protected Build config is malformed"
+              [[ "$command" =~ ^/[a-z][a-z0-9-]{0,62}$ ]] || fail "the protected Build config is malformed"
+              printf 'Its admission counts the members of %s\n' "$organization"
+            fi
           else
             printf 'This event names no open pull request: nothing is evaluated or published\n'
           fi
-          printf 'pr-number=%s\n' "$number" >> "$GITHUB_OUTPUT"
+          {
+            printf 'pr-number=%s\n' "$number"
+            printf 'organization=%s\n' "$organization"
+            printf 'command=%s\n' "$command"
+          } >> "$GITHUB_OUTPUT"
+
+  members:
+    name: Read the organization members
+    needs: [locate]
+    if: needs.locate.outputs.organization != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: mod-base-gate
+    permissions:
+      pull-requests: read
+    outputs:
+      members: ${{ steps.members.outputs.members }}
+      candidates: ${{ steps.authors.outputs.candidates }}
+      recheck: ${{ steps.members.outputs.recheck }}
+    steps:
+      - name: Read the authors of the pull request comments
+        id: authors
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORGANIZATION: ${{ needs.locate.outputs.organization }}
+          COMMAND: ${{ needs.locate.outputs.command }}
+          PR_NUMBER: ${{ needs.locate.outputs.pr-number }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          fail() { printf 'Read the comment authors: %s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed pull request number"
+          [[ "$COMMAND" =~ ^/[a-z][a-z0-9-]{0,62}$ ]] || fail "malformed admission command"
+          # Only an organization has members: a repository of a user account that names itself as an
+          # organization approver fails here, before any token is minted.
+          repository="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY")" || fail "cannot read the repository"
+          jq -e --arg organization "$ORGANIZATION" \
+              'type == "object" and .owner.type == "Organization" and .owner.login == $organization' \
+              <<< "$repository" > /dev/null ||
+            fail "the repository is not owned by the organization its admission names"
+          # Every comment of the pull request, read as the kit's admission reads them: pages of 100 until a
+          # short one, and more than 300 comments fail as the kit's own listing does. Each one must have a
+          # numeric id and a text. Every author that is a User and did not comment through a GitHub App is
+          # checked, whatever the comment says, so that no decision the kit recognises comes from an author
+          # this snapshot did not check; the candidates are those of them whose comment could be a decision
+          # (it contains the command, a space and "approve " or "revoke "), the only authors whose
+          # membership is read. A comment that becomes a decision by an edit later was no candidate's, and
+          # the kit refuses it until a newer snapshot reads it.
+          total=0
+          through=0
+          authors='[]'
+          for page in 1 2 3 4; do
+            listed="$(protected_gh_api_retry "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100&page=$page")" ||
+              fail "cannot list the comments of the pull request"
+            read_page="$(jq -c --arg approve "$COMMAND approve " --arg revoke "$COMMAND revoke " '
+                def id: type == "number" and . >= 1 and . <= 9007199254740991 and . == floor;
+                if type != "array" or length > 100 then error("malformed") else . end |
+                map(if type == "object" and (.id | id) and (.body | type) == "string" then . else error("malformed") end) |
+                {count: length, through: (map(.id) | max // 0),
+                 authors: [.[] | select((.user | type) == "object" and .user.type == "User" and
+                   .performed_via_github_app == null) |
+                   if (.user.id | id) and (.user.login | type) == "string"
+                   then {id: .user.id, login: .user.login, candidate: (.body | contains($approve) or contains($revoke))}
+                   else error("malformed") end]}' <<< "$listed")" || fail "the comments of the pull request are malformed"
+            count="$(jq -r .count <<< "$read_page")"
+            total=$(( total + count ))
+            (( total <= 300 )) || fail "the pull request has more than 300 comments, which the kit's admission refuses"
+            through="$(jq -r --argjson through "$through" '[.through, $through] | max' <<< "$read_page")"
+            authors="$(jq -c --argjson authors "$authors" '$authors + .authors' <<< "$read_page")"
+            if (( count < 100 )); then
+              break
+            fi
+          done
+          checked="$(jq -c 'map(.id) | unique' <<< "$authors")"
+          candidates="$(jq -c 'map(select(.candidate) | {id, login}) | unique_by(.id)' <<< "$authors")"
+          {
+            printf 'checked=%s\n' "$checked"
+            printf 'through=%s\n' "$through"
+            printf 'candidates=%s\n' "$candidates"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Read %s comment(s) through comment %s: %s author(s) checked, %s whose comment could be a decision\n' \
+            "$total" "$through" "$(jq length <<< "$checked")" "$(jq length <<< "$candidates")"
+      - name: Mint a members-read App token
+        id: app-members
+        if: steps.authors.outputs.candidates != '[]'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MOD_BASE_GATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MOD_BASE_GATE_APP_PRIVATE_KEY }}
+          permission-members: read
+      - name: Read the membership of the candidates
+        id: members
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-members.outputs.token }}
+          ORGANIZATION: ${{ needs.locate.outputs.organization }}
+          PR_NUMBER: ${{ needs.locate.outputs.pr-number }}
+          CHECKED: ${{ steps.authors.outputs.checked }}
+          THROUGH: ${{ steps.authors.outputs.through }}
+          CANDIDATES: ${{ steps.authors.outputs.candidates }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          # Which of the candidates ($CANDIDATES, a JSON array of {id, login}) are active members of
+          # $ORGANIZATION, as a sorted JSON array of ids, read with the members-read App token in GH_TOKEN.
+          # The member list is read page by page until every candidate was found on it or a page is short
+          # (at most 10 pages of 100; an eleventh that is not empty fails), compared by numeric id and
+          # never printed or kept beyond the candidates. A candidate it does not list is asked for its own
+          # membership, which counts only when it is active, in the role admin or member (a billing
+          # manager is no member) and names the same id; at most 20 such candidates are asked. Any other
+          # answer fails.
+          org_members_of() {
+            local page listed ids found='[]' unlisted id login answer membership
+            for page in 1 2 3 4 5 6 7 8 9 10 11; do
+              listed="$(protected_gh_api_retry "orgs/$ORGANIZATION/members?filter=all&role=all&per_page=100&page=$page")" ||
+                return 1
+              ids="$(jq -c '
+                  if type != "array" or length > 100 then error("malformed") else . end |
+                  map(.id | if type == "number" and . >= 1 and . <= 9007199254740991 and . == floor then .
+                    else error("malformed") end)' <<< "$listed")" || return 1
+              if (( page == 11 )) && [[ "$ids" != "[]" ]]; then
+                printf 'The organization lists more than 1000 members\n' >&2
+                return 1
+              fi
+              found="$(jq -c --argjson ids "$ids" --argjson found "$found" '$found + (map(.id) | . - (. - $ids))' \
+                  <<< "$CANDIDATES")" || return 1
+              if [[ "$(jq -c --argjson found "$found" 'map(.id) - $found' <<< "$CANDIDATES")" == "[]" ]] ||
+                  (( $(jq length <<< "$ids") < 100 )); then
+                break
+              fi
+            done
+            unlisted="$(jq -c --argjson found "$found" '[.[] | select(([.id] - $found) != [])]' <<< "$CANDIDATES")" || return 1
+            if (( $(jq length <<< "$unlisted") > 20 )); then
+              printf 'More than 20 candidates are missing from the member list\n' >&2
+              return 1
+            fi
+            while IFS=$'\t' read -r id login; do
+              [[ "$id" =~ ^[1-9][0-9]{0,15}$ && "$login" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
+              if answer="$(protected_gh_api_retry "orgs/$ORGANIZATION/memberships/$login" 2>&1)"; then
+                membership="$(jq -r --argjson id "$id" '
+                    if type == "object" and (.user | type) == "object" and .user.id == $id and
+                      (.state | type) == "string" and (.role | type) == "string"
+                    then if .state == "active" and (.role == "admin" or .role == "member") then "member" else "none" end
+                    else error("malformed") end' <<< "$answer")" || return 1
+                if [[ "$membership" == member ]]; then
+                  found="$(jq -c --argjson id "$id" '. + [$id]' <<< "$found")" || return 1
+                fi
+              elif ! grep -q 'HTTP 404' <<< "$answer"; then
+                return 1
+              fi
+            done < <(jq -r '.[] | [.id, .login] | @tsv' <<< "$unlisted")
+            jq -c 'unique' <<< "$found"
+          }
+          fail() { printf 'Read the organization members: %s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+          [[ "$ORGANIZATION" == "${GITHUB_REPOSITORY%%/*}" ]] || fail "the organization does not own this repository"
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]] || fail "malformed pull request number"
+          [[ "$THROUGH" =~ ^(0|[1-9][0-9]{0,15})$ ]] || fail "malformed comment id"
+          jq -e 'type == "array" and length <= 300 and all(.[]; type == "number")' <<< "$CHECKED" > /dev/null ||
+            fail "malformed checked authors"
+          jq -e --argjson checked "$CHECKED" 'type == "array" and length <= 300 and
+              all(.[]; type == "object" and keys == ["id", "login"] and ([.id] - $checked) == [])' \
+              <<< "$CANDIDATES" > /dev/null || fail "malformed candidates"
+          members='[]'
+          if [[ "$CANDIDATES" != "[]" ]]; then
+            [[ -n "$GH_TOKEN" && "$GH_TOKEN" != *[[:space:]]* ]] || fail "no App token was minted"
+            members="$(org_members_of)" || fail "cannot read the membership of the candidates"
+          fi
+          document="$(jq -cnS --arg organization "$ORGANIZATION" --argjson pr "$PR_NUMBER" --argjson through "$THROUGH" \
+              --argjson checked "$CHECKED" --argjson candidates "$CANDIDATES" --argjson members "$members" '
+                {kind: "mod-base.ci.org-members", schema_version: 1, organization: $organization, pr_number: $pr,
+                 through_comment_id: $through, checked: $checked, candidates: ($candidates | map(.id) | sort),
+                 members: $members}')" || fail "cannot build the snapshot"
+          (( ${#document} <= 16384 )) || fail "the snapshot exceeds its bound"
+          recheck=false
+          if [[ "$members" != "[]" ]]; then
+            recheck=true
+          fi
+          {
+            printf 'members=%s\n' "$document"
+            printf 'recheck=%s\n' "$recheck"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Members of %s among the candidates: %s\n' "$ORGANIZATION" "$members"
 
   evaluate:
     name: Evaluate protected gates
-    needs: [guard, locate]
-    if: needs.locate.outputs.pr-number != ''
+    needs: [guard, locate, members]
+    if: >-
+      ${{ !cancelled() && needs.guard.result == 'success' && needs.locate.result == 'success' &&
+      needs.locate.outputs.pr-number != '' && (needs.members.result == 'success' ||
+      needs.members.result == 'failure' ||
+      (needs.members.result == 'skipped' && needs.locate.outputs.organization == '')) }}
     permissions:
       actions: read
       contents: read
@@ -167,17 +427,150 @@ jobs:
     with:
       kit-sha: ${{ needs.guard.outputs.kit-sha }}
       pr-number: ${{ needs.locate.outputs.pr-number }}
+      members: ${{ needs.members.outputs.members }}
 
   publish:
     name: Publish protected gate statuses
-    needs: [locate, evaluate]
-    if: needs.evaluate.outputs.intents != ''
+    needs: [locate, members, evaluate]
+    if: ${{ !cancelled() && needs.evaluate.result == 'success' && needs.evaluate.outputs.intents != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment: mod-base-gate
     permissions:
       pull-requests: read
     steps:
+      - name: Decide whether the membership is read again
+        id: recheck
+        shell: bash
+        env:
+          RECHECK: ${{ needs.members.outputs.recheck }}
+          INTENTS: ${{ needs.evaluate.outputs.intents }}
+        run: |
+          set -euo pipefail
+          # Only a success can rest on a member's decision, and nothing may keep a failure or a pending
+          # state from being written: the membership is read again only when the snapshot counted a
+          # member and the evaluation would write a success (or returned a document that cannot be
+          # read, which the publishing step refuses anyway).
+          needed=false
+          if [[ "$RECHECK" == true ]]; then
+            if ! success="$(jq -r 'if type == "object" and (.gates | type) == "object"
+                then [.gates[] | objects | .state] | any(. == "success") else true end' <<< "$INTENTS" 2> /dev/null)" ||
+                [[ "$success" != false ]]; then
+              needed=true
+            fi
+          fi
+          printf 'needed=%s\n' "$needed" >> "$GITHUB_OUTPUT"
+          if [[ "$needed" == true ]]; then
+            printf 'A success rests on the membership of the candidates: it is read again\n'
+          else
+            printf 'No status of this run rests on a membership: it is not read again\n'
+          fi
+      - name: Mint a members-read App token
+        id: app-members
+        if: steps.recheck.outputs.needed == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MOD_BASE_GATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MOD_BASE_GATE_APP_PRIVATE_KEY }}
+          permission-members: read
+      - name: Recheck the membership of the candidates
+        if: steps.recheck.outputs.needed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-members.outputs.token }}
+          ORGANIZATION: ${{ needs.locate.outputs.organization }}
+          MEMBERS: ${{ needs.members.outputs.members }}
+          CANDIDATES: ${{ needs.members.outputs.candidates }}
+        run: |
+          set -euo pipefail
+          protected_gh_api_retry() {  # 4 attempts, 5 s doubling to a 20 s cap; rate-limit, 408/429/5xx, transport only
+            local attempt=1 delay=5 output status
+            while true; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              else
+                status=$?
+              fi
+              if (( attempt >= 4 )) || ! grep -Eqi \
+                  'HTTP (408|429|5[0-9][0-9])|rate limit|timed out|timeout|connection (reset|refused)|temporary failure|TLS handshake|unexpected EOF' \
+                  <<< "$output"; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              delay=$(( delay * 2 > 20 ? 20 : delay * 2 ))
+            done
+          }
+          # Which of the candidates ($CANDIDATES, a JSON array of {id, login}) are active members of
+          # $ORGANIZATION, as a sorted JSON array of ids, read with the members-read App token in GH_TOKEN.
+          # The member list is read page by page until every candidate was found on it or a page is short
+          # (at most 10 pages of 100; an eleventh that is not empty fails), compared by numeric id and
+          # never printed or kept beyond the candidates. A candidate it does not list is asked for its own
+          # membership, which counts only when it is active, in the role admin or member (a billing
+          # manager is no member) and names the same id; at most 20 such candidates are asked. Any other
+          # answer fails.
+          org_members_of() {
+            local page listed ids found='[]' unlisted id login answer membership
+            for page in 1 2 3 4 5 6 7 8 9 10 11; do
+              listed="$(protected_gh_api_retry "orgs/$ORGANIZATION/members?filter=all&role=all&per_page=100&page=$page")" ||
+                return 1
+              ids="$(jq -c '
+                  if type != "array" or length > 100 then error("malformed") else . end |
+                  map(.id | if type == "number" and . >= 1 and . <= 9007199254740991 and . == floor then .
+                    else error("malformed") end)' <<< "$listed")" || return 1
+              if (( page == 11 )) && [[ "$ids" != "[]" ]]; then
+                printf 'The organization lists more than 1000 members\n' >&2
+                return 1
+              fi
+              found="$(jq -c --argjson ids "$ids" --argjson found "$found" '$found + (map(.id) | . - (. - $ids))' \
+                  <<< "$CANDIDATES")" || return 1
+              if [[ "$(jq -c --argjson found "$found" 'map(.id) - $found' <<< "$CANDIDATES")" == "[]" ]] ||
+                  (( $(jq length <<< "$ids") < 100 )); then
+                break
+              fi
+            done
+            unlisted="$(jq -c --argjson found "$found" '[.[] | select(([.id] - $found) != [])]' <<< "$CANDIDATES")" || return 1
+            if (( $(jq length <<< "$unlisted") > 20 )); then
+              printf 'More than 20 candidates are missing from the member list\n' >&2
+              return 1
+            fi
+            while IFS=$'\t' read -r id login; do
+              [[ "$id" =~ ^[1-9][0-9]{0,15}$ && "$login" =~ ^[A-Za-z0-9-]{1,39}$ ]] || return 1
+              if answer="$(protected_gh_api_retry "orgs/$ORGANIZATION/memberships/$login" 2>&1)"; then
+                membership="$(jq -r --argjson id "$id" '
+                    if type == "object" and (.user | type) == "object" and .user.id == $id and
+                      (.state | type) == "string" and (.role | type) == "string"
+                    then if .state == "active" and (.role == "admin" or .role == "member") then "member" else "none" end
+                    else error("malformed") end' <<< "$answer")" || return 1
+                if [[ "$membership" == member ]]; then
+                  found="$(jq -c --argjson id "$id" '. + [$id]' <<< "$found")" || return 1
+                fi
+              elif ! grep -q 'HTTP 404' <<< "$answer"; then
+                return 1
+              fi
+            done < <(jq -r '.[] | [.id, .login] | @tsv' <<< "$unlisted")
+            jq -c 'unique' <<< "$found"
+          }
+          fail() { printf 'Recheck the organization members: %s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "malformed repository"
+          [[ "$ORGANIZATION" == "${GITHUB_REPOSITORY%%/*}" ]] || fail "the organization does not own this repository"
+          [[ -n "$GH_TOKEN" && "$GH_TOKEN" != *[[:space:]]* ]] || fail "no App token was minted"
+          # The candidates of the snapshot alone are read again, so nothing posted since can fail this
+          # step. Their membership must still be exactly what the evaluation counted.
+          [[ -n "$MEMBERS" ]] || fail "the members snapshot is missing"
+          expected="$(jq -c 'if type == "object" and (.members | type) == "array" then .members else error("malformed") end' \
+              <<< "$MEMBERS")" || fail "the members snapshot is malformed"
+          read_ids="$(jq -c 'if type == "object" and (.candidates | type) == "array" then .candidates
+              else error("malformed") end' <<< "$MEMBERS")" || fail "the members snapshot is malformed"
+          jq -e --argjson read "$read_ids" 'type == "array" and length <= 300 and
+              all(.[]; type == "object" and keys == ["id", "login"] and (.id | type) == "number") and
+              (map(.id) | sort) == $read' <<< "$CANDIDATES" > /dev/null || fail "malformed candidates"
+          actual="$(org_members_of)" || fail "cannot read the membership of the candidates again"
+          [[ "$actual" == "$expected" ]] ||
+            fail "the membership of the candidates changed after the evaluation; nothing is published"
+          printf 'The members of %s among the candidates are unchanged: %s\n' "$ORGANIZATION" "$actual"
       - name: Mint a statuses-only App token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0

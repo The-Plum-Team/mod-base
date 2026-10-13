@@ -137,7 +137,10 @@ Check: a clean build with `--refresh-dependencies` passes with the mirror and wi
 
 The status caller mints its token from the variable `MOD_BASE_GATE_APP_CLIENT_ID` and the secret
 `MOD_BASE_GATE_APP_PRIVATE_KEY` of the environment `mod-base-gate`, which must admit the default
-branch alone. The App is already installed on the repository; what the mod needs is the key.
+branch alone. The App is already installed on the repository; what the mod needs is the key. A mod
+whose `admission` names the organization as approvers also needs the App's organization
+permission "Members: Read-only", which the owner grants once for every repository
+([OPERATIONS.md](OPERATIONS.md#the-gate-status-app)).
 
 **The key.** GitHub shows an App private key once, when it is generated, and keeps no copy the
 owner can read back; the keys already stored in the mods' environments cannot be read out either.

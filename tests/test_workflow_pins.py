@@ -59,7 +59,7 @@ GUARDED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE)
 #: caller's publishing job and nothing else. A mod that manages the caller must keep Dependabot
 #: off that action (``template.tool``: the ignore list of ``.github/dependabot.yml``).
 ACTIVATION_ACTIONS = {GUARD_TEMPLATE: (), BUILD_TEMPLATE: (), PACKAGED_TEMPLATE: (),
-                      STATUS_TEMPLATE: (f"{APP_TOKEN} # v3.2.0",)}
+                      STATUS_TEMPLATE: (f"{APP_TOKEN} # v3.2.0",) * 3}
 #: How often ``{{PIN}}`` (and ``{{VERSION}}``) appears in each: once per kit reference, and once in
 #: the guard, which carries the pin as the literal it verifies.
 ACTIVATION_PLACEHOLDERS = {GUARD_TEMPLATE: 1, BUILD_TEMPLATE: 1, PACKAGED_TEMPLATE: 3, STATUS_TEMPLATE: 1}

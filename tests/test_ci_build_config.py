@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 from mod_base.build_ci.config import (BUILD_CONFIG_PATH, AdapterFile, BuildConfig, admission, admission_directories,
-                                      load_build_config, protects, validate_build_config)
+                                      admission_organization, load_build_config, protects, validate_build_config)
 from mod_base.build_ci.protocol import PROFILES
 from mod_base.errors import MbError
 from mod_base.model import limits
@@ -277,6 +277,40 @@ class AdmissionSchemaTests(unittest.TestCase):
                           [{"login": "AkaNebur", "association": "MEMBER", "type": "User"}]):
             with self.subTest(approvers=approvers), self.assertRaises(MbError):
                 validate_build_config(self.document(approvers=approvers))
+
+
+    def test_an_organization_entry_is_every_member_of_the_repository_owner(self) -> None:
+        # ``ci_config()`` is the configuration of ``example/mod``.
+        organization = {"organization": "example", "role": "member"}
+        policy = admission(validate_build_config(self.document(approvers=[organization])))
+        self.assertEqual(admission_organization(policy), "example")
+        self.assertIsNone(admission_organization(admission(validate_build_config(self.document()))))
+        self.assertIsNone(admission_organization(None))
+        # Beside listed users, in any order, and beside a user who happens to share its name.
+        for approvers in ([{"login": "AkaNebur", "association": "MEMBER"}, organization],
+                          [organization, {"login": "AkaNebur", "association": "OWNER"}],
+                          [organization, {"login": "example", "association": "OWNER"}]):
+            with self.subTest(approvers=approvers):
+                validated = validate_build_config(self.document(approvers=approvers))
+                self.assertEqual(admission_organization(admission(validated)), "example")
+        for approvers, message in (
+                ([{"organization": "other", "role": "member"}], "must be the organization that owns the repository"),
+                ([{"organization": "Example", "role": "member"}], "must be the organization that owns the repository"),
+                ([organization, organization], "duplicates an earlier item"),
+                ([organization, {"organization": "EXAMPLE", "role": "member"}], "duplicates an earlier item"),
+                ([organization, {"organization": "other", "role": "member"}], "names more than one organization"),
+                ([{"organization": "example", "role": "admin"}], "matches no alternative"),
+                ([{"organization": "example", "role": "MEMBER"}], "matches no alternative"),
+                ([{"organization": "example"}], "matches no alternative"),
+                ([{"organization": "example", "role": "member", "association": "MEMBER"}], "matches no alternative"),
+                ([{"organization": "example", "role": "member", "login": "AkaNebur"}], "matches no alternative"),
+                ([{"organization": "-example", "role": "member"}], "matches no alternative"),
+                ([{"organization": "example/mod", "role": "member"}], "matches no alternative"),
+                ([{"organization": 7, "role": "member"}], "matches no alternative")):
+            with self.subTest(approvers=approvers), self.assertRaises(MbError) as caught:
+                validate_build_config(self.document(approvers=approvers))
+            if message != "matches no alternative":
+                self.assertIn(message, str(caught.exception))
 
 
 class LoadTests(unittest.TestCase):

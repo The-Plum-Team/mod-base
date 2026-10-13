@@ -1,21 +1,24 @@
 # Schemas (v1)
 
-The fifteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
+The sixteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
 `mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1: thirteen since v1.1.0,
-`mod-base.ci.generation` since v1.4.0, `mod-base.ci.scope` since v1.5.0) are listed in
+`mod-base.ci.generation` since v1.4.0, `mod-base.ci.scope` since v1.5.0,
+`mod-base.ci.org-members` since v1.6.0) are listed in
 [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the validator that
-defines it. This page has the field tables of five of them, in its last five sections: the Build
-config, the batch manifest, the results index, the tested generation and the activation manifest.
+defines it. This page has the field tables of six of them, in its last six sections: the Build
+config, the batch manifest, the results index, the tested generation, the activation manifest and
+the organization members snapshot.
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.4.1, which
-reads every kind of this release unchanged except `mod-base.ci.scope`, a `new-kind` it rejects as
-unknown. The optional `seeds` of the Build config (v1.2.0) stays within schema 1; a reader older
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.5.0, which
+reads every kind of this release unchanged except `mod-base.ci.org-members`, a `new-kind` it
+rejects as unknown. The optional `seeds` of the Build config (v1.2.0) stays within schema 1; a reader older
 than v1.2.0 refuses a config that sets it. So does the optional `admission` (v1.3.0); a v1.2.1
 reader refuses a config that sets it. So do the optional `runtime_selection` of the Build config,
 `scope` of the results index and `scope_sha256` of a tested record (v1.5.0), which a v1.4.1
-reader refuses ([BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md), D3).
+reader refuses ([BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md), D3). So does an
+organization entry among the `admission` approvers (v1.6.0), which a v1.5.0 reader refuses.
 
 The v1 Build plan (since v1.1.0) optionally carries `candidate_kit: {sha, version}` when
 candidate tests use a different released kit. The plan hash binds it; `identity.kit`
@@ -703,7 +706,7 @@ source in the protected checkout to have its configured hash.
 | `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.protocol.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
 | `runtime_selection` | optional (added within schema 1 in v1.5.0): exactly `{input}`, where `input` is `changed-paths-v1`, the format of the kit's input to the `derive_scope` hook; absent means a pull request's lanes always run every obligation |
 | `seeds` | optional (added within schema 1): at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..16 `{path}` objects (canonical repository paths, unique, sorted by path) of the protected checkout whose bytes key the seed; absent means no seed |
-| `admission` | optional (added within schema 1, v1.3.0): exactly `{protected_paths, command, approvers}`. `protected_paths`: 1..64 canonical repository paths (files or directories), strictly ascending, none inside another, held by at most 16 directories counting the root, that together protect this config, every `adapter.files` path, `site/mod-base-build-activation.json` and the four `.github/workflows/mod-base-*.yml` callers. `command`: `/` and a lower-case word of `a-z 0-9 -` starting with a letter, at most 63 characters. `approvers`: 1..8 `{login, association}` objects, logins (GitHub login grammar) unique ignoring case, each `association` one of `OWNER`, `MEMBER`, `COLLABORATOR`; absent means no admission |
+| `admission` | optional (added within schema 1, v1.3.0): exactly `{protected_paths, command, approvers}`. `protected_paths`: 1..64 canonical repository paths (files or directories), strictly ascending, none inside another, held by at most 16 directories counting the root, that together protect this config, every `adapter.files` path, `site/mod-base-build-activation.json` and the four `.github/workflows/mod-base-*.yml` callers. `command`: `/` and a lower-case word of `a-z 0-9 -` starting with a letter, at most 63 characters. `approvers`: 1..8 objects, each exactly `{login, association}` (a GitHub login, `association` one of `OWNER`, `MEMBER`, `COLLABORATOR`) or, since v1.6.0, exactly `{organization, role}` (`role` `member`: every active member of that organization); at most one organization entry, equal to the owner part of `repository`; logins and organizations unique ignoring case; absent means no admission |
 
 The config path, every adapter source, every candidate file (the inventory, the scenario contract
 and each `plan_inputs` path) and the bundle directory are
@@ -856,3 +859,21 @@ A manifest changes only along these transitions, at an unchanged pin, and only i
 when it has no Build configuration either; a Build configuration without a manifest fails
 `template check`. The document is data: it is not owner approval, and the protected controller
 admits each transition (`mod_base.build_ci.transition`).
+
+## Organization members snapshot data v1
+
+`mod-base.ci.org-members` (`membership.validate_org_members`, at most 16 KiB, canonical JSON on one
+line). The status caller's `members` job writes it when the protected `admission` at the base names
+an organization entry, and passes it to `gate-status.yml` as the input `members`; `ci gate-status
+--org-members` reads it for this repository and pull request only. It is no file of the mod and is
+never uploaded.
+
+| Field | Rule |
+|---|---|
+| `kind`, `schema_version` | `mod-base.ci.org-members`, 1 |
+| `organization` | the organization login, exactly the owner part of the repository |
+| `pr_number` | the pull request evaluated, exactly `--pr` |
+| `through_comment_id` | the greatest comment id the job read, 0 for none; a decision with a greater id was posted after the snapshot and refuses the admission |
+| `checked` | strictly ascending user ids, at most 300: every comment author of type `User` that did not post through a GitHub App, whatever they wrote |
+| `candidates` | strictly ascending user ids within `checked`: the authors whose comment could be a decision when the job read it (it contains the admission's command followed by `approve ` or `revoke `), the only ones whose membership was read; a decision by a checked author who is no candidate was edited in since and refuses the admission |
+| `members` | strictly ascending user ids within `candidates`: those that are active members of the organization in the role `admin` or `member` |

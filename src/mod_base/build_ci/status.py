@@ -16,7 +16,8 @@ read, by the listing rules of :mod:`mod_base.build_ci.selection`. The state is
   has the head, base and test merge of that plan and is not a draft, and the protected admission
   of the Build config, when it names one, admits the pull request
   (:func:`~mod_base.build_ci.admission.admission_refusal`: a change to a protected path needs an
-  approver's decision on the exact head);
+  approver's decision on the exact head; an organization's members count by the snapshot the
+  caller's ``members`` job passed, :mod:`mod_base.build_ci.membership`);
 * ``failure`` otherwise, with one bounded line that says why. A newer failed run is a failure
   whatever an older run proved, and so is a run whose evidence is gone: an artifact it needs that
   has expired, that its run no longer lists or whose numeric id GitHub answers with 404 or 410.
@@ -53,6 +54,7 @@ from mod_base.build_ci.admission import admission_refusal
 from mod_base.build_ci.activation import BUILD_CALLER, PACKAGED_CALLER, STATUS_CALLER, managed_callers, managed_mode
 from mod_base.build_ci.config import BuildConfig
 from mod_base.build_ci.graph import authenticate_graph, run_graph
+from mod_base.build_ci.membership import OrgMembers
 from mod_base.build_ci.identity import policy_sha256
 from mod_base.build_ci.protocol import subject_of
 from mod_base.build_ci.reads import CommandReads, Watch
@@ -237,8 +239,8 @@ def _coupled(build: _Verdict, packaged: _Verdict) -> _Verdict:
 
 
 def _evaluate(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None,
-              controller_sha: str, plan: dict[str, Any] | None,
-              temporary_root: Path | None) -> dict[str, Any] | None:
+              controller_sha: str, plan: dict[str, Any] | None, temporary_root: Path | None,
+              members: OrgMembers | None = None) -> dict[str, Any] | None:
     """The intents document of :func:`evaluate_gates`. Without a directory for tested records
     (:func:`settle_gates`, which holds no plan either) the answer is None as soon as one gate
     cannot be decided without the plan."""
@@ -267,7 +269,7 @@ def _evaluate(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation
         if "packaged" in verdicts:
             verdicts["packaged"] = _coupled(verdicts["build"], verdicts["packaged"])
         if plan is not None and any(verdict.state == "success" for verdict in verdicts.values()):
-            refusal = admission_refusal(reads, watch, config=config, plan=plan)
+            refusal = admission_refusal(reads, watch, config=config, plan=plan, members=members)
             if refusal is not None:
                 verdicts = {gate: _Verdict("failure", refusal, verdict.run_id) if verdict.state == "success"
                             else verdict for gate, verdict in verdicts.items()}
@@ -282,13 +284,17 @@ def _evaluate(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation
 
 
 def evaluate_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activation: dict[str, Any] | None,
-                   controller_sha: str, plan: dict[str, Any] | None, temporary_root: Path) -> dict[str, Any]:
+                   controller_sha: str, plan: dict[str, Any] | None, temporary_root: Path,
+                   members: OrgMembers | None = None) -> dict[str, Any]:
     """The status intents of the protected gates for the current head of pull request ``pr_number``.
 
     ``config`` is the protected Build config and ``activation`` the validated activation manifest
     of the checkout that is executing at ``controller_sha``; ``plan`` is the plan this job derived
     for the pull request, or None when it could derive none (no gate can then succeed);
-    ``temporary_root`` is a private directory for the tested records. Returns
+    ``temporary_root`` is a private directory for the tested records; ``members`` is the
+    organization members snapshot of the status caller's ``members`` job, or None when it passed
+    none (an admission that names an organization then refuses every change to a protected path).
+    Returns
     ``{repository, pr_number, target_sha, gates}``, where ``gates`` maps each evaluated gate
     (:func:`gate_contexts`) to its ``context``, ``state`` (``success``, ``pending`` or
     ``failure``), one-line ``description`` and ``target_url``: the canonical URL of the run that
@@ -301,7 +307,7 @@ def evaluate_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activ
 
     check(isinstance(temporary_root, Path), "$.temporary_root", "must be a private directory for the tested records")
     document = _evaluate(api, pr_number=pr_number, config=config, activation=activation,
-                         controller_sha=controller_sha, plan=plan, temporary_root=temporary_root)
+                         controller_sha=controller_sha, plan=plan, temporary_root=temporary_root, members=members)
     if document is None:  # only an evaluation without that directory may leave a gate open
         raise StatusError("the evaluation left a gate undecided")
     return document
