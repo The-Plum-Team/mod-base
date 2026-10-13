@@ -2,7 +2,7 @@
 
 The fifteen Build and packaged E2E kinds (`mod-base.build.config`, `mod-base.build.plan`,
 `mod-base.build.envelope` and the `mod-base.ci.*` kinds, all at version 1: thirteen since v1.1.0,
-`mod-base.ci.generation` since v1.4.0, `mod-base.ci.scope` after v1.4.1) are listed in
+`mod-base.ci.generation` since v1.4.0, `mod-base.ci.scope` since v1.5.0) are listed in
 [BUILD-PROTOCOL.md](BUILD-PROTOCOL.md#document-kinds) with what each holds and the validator that
 defines it. This page has the field tables of five of them, in its last five sections: the Build
 config, the batch manifest, the results index, the tested generation and the activation manifest.
@@ -10,11 +10,11 @@ These kinds are separate from `mod-base.build`, the Pages publication record, an
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
 with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.4.1, which
-reads every kind of this tree unchanged except `mod-base.ci.scope`, a `new-kind` it rejects as
+reads every kind of this release unchanged except `mod-base.ci.scope`, a `new-kind` it rejects as
 unknown. The optional `seeds` of the Build config (v1.2.0) stays within schema 1; a reader older
 than v1.2.0 refuses a config that sets it. So does the optional `admission` (v1.3.0); a v1.2.1
 reader refuses a config that sets it. So do the optional `runtime_selection` of the Build config,
-`scope` of the results index and `scope_sha256` of a tested record (after v1.4.1), which a v1.4.1
+`scope` of the results index and `scope_sha256` of a tested record (v1.5.0), which a v1.4.1
 reader refuses ([BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md), D3).
 
 The v1 Build plan (since v1.1.0) optionally carries `candidate_kit: {sha, version}` when
@@ -701,7 +701,7 @@ source in the protected checkout to have its configured hash.
 | `contexts.build`, `contexts.packaged` | the two required status contexts: trimmed printable ASCII without `<`, `>`, `{{`, `}}`, 1..100 characters, distinct ignoring case |
 | `timeouts` | `{policy_seconds, target_seconds, runtime_seconds, validator_seconds}`, each 1..21600 |
 | `runtime` | optional (added within schema 1): exactly `{system_profile}`, a profile of `build_ci.protocol.SYSTEM_PROFILES` (`xvfb-mesa`); absent means none |
-| `runtime_selection` | optional (added within schema 1 after v1.4.1): exactly `{input}`, where `input` is `changed-paths-v1`, the format of the kit's input to the `derive_scope` hook; absent means a pull request's lanes always run every obligation |
+| `runtime_selection` | optional (added within schema 1 in v1.5.0): exactly `{input}`, where `input` is `changed-paths-v1`, the format of the kit's input to the `derive_scope` hook; absent means a pull request's lanes always run every obligation |
 | `seeds` | optional (added within schema 1): at least one of `gradle` and `runtime`, each exactly `{key_files}`: 1..16 `{path}` objects (canonical repository paths, unique, sorted by path) of the protected checkout whose bytes key the seed; absent means no seed |
 | `admission` | optional (added within schema 1, v1.3.0): exactly `{protected_paths, command, approvers}`. `protected_paths`: 1..64 canonical repository paths (files or directories), strictly ascending, none inside another, held by at most 16 directories counting the root, that together protect this config, every `adapter.files` path, `site/mod-base-build-activation.json` and the four `.github/workflows/mod-base-*.yml` callers. `command`: `/` and a lower-case word of `a-z 0-9 -` starting with a letter, at most 63 characters. `approvers`: 1..8 `{login, association}` objects, logins (GitHub login grammar) unique ignoring case, each `association` one of `OWNER`, `MEMBER`, `COLLABORATOR`; absent means no admission |
 
@@ -769,7 +769,7 @@ owning_build, build_envelope_sha256 and lanes, and the optional scope.
 | `owning_build` | The descriptor of the complete Build every lane ran: the bundle this same attempt rebuilt (a standalone run only), or the bundle of a separate run of the Build caller. |
 | `build_envelope_sha256` | SHA-256 of that Build's canonical envelope, as the job's selection record carries it. |
 | `lanes` | 1..256 entries: exactly the planned lanes, in plan order. |
-| `scope` | Optional (added within schema 1 after v1.4.1): the `mod-base.ci.scope` record the attempt's `input` job handed to every lane, when a pull request ran a narrowed scope: the same binding, requested by the attempt that sealed the index. Absent for a run in full. The packaged tested record of the attempt carries its SHA-256 as `scope_sha256`. |
+| `scope` | Optional (added within schema 1 in v1.5.0): the `mod-base.ci.scope` record the attempt's `input` job handed to every lane, when a pull request ran a narrowed scope: the same binding, requested by the attempt that sealed the index. Absent for a run in full. The packaged tested record of the attempt carries its SHA-256 as `scope_sha256`. |
 
 A lane has exactly:
 
