@@ -5,7 +5,17 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased
+## v1.6.0
+
+Minor release: any current member of the organization that owns a mod may decide its protected
+admission (#35, owner decision of 2026-10-13), proven by the gate App's member list rather than by
+`author_association`, and a late consumer of a default-branch commit whose shared evidence expired
+requests a full generation of the live head with `ci request-generation` (#33, KQ9-4), with route A
+decided for Pages consumption of a shared generation (KQ9-3). One new document kind,
+`mod-base.ci.org-members`. The managed `mod-base-gate-status.yml` and the callee `gate-status.yml`
+change. A mod moves from v1.5.0 to v1.6.0 with an ordinary pin bump; nothing changes for it until
+its protected config names an organization approver or its own consumer job calls `ci
+request-generation`.
 
 - `ci request-generation --reason TOKEN --github-output F` (KQ9-4, D-Q9-b as the owner accepted it
   on 2026-10-13: one request per commit, never a native fallback, a superseded commit fails
@@ -43,8 +53,8 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
 - Compatibility of KQ9-3 and KQ9-4: no document kind, schema version, managed file, job or step
   changes; `src/` is digested, so the `MB_KIT_TREE_DIGEST` literals move. The baseline moves to the
   archived v1.5.0 reader (`tests/fixtures/previous_release/v1.5.0`, built from the release commit
-  1273a53 like v1.4.1's, whose archive the same build reproduces byte for byte), the newest release
-  while this section is open. It reads every kind of this tree that existed in v1.5.0 unchanged.
+  1273a53 like v1.4.1's, whose archive the same build reproduces byte for byte), the immediate
+  predecessor in this changelog. It reads every kind of this tree that existed in v1.5.0 unchanged.
 - Organization approvers of the protected admission (owner decision of 2026-10-13: any current
   member of the organization may decide a `/controller-upgrade`, future members included, with no
   further change). An approver of `admission.approvers` in the Build config may now be
@@ -82,8 +92,8 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   No request is added to `ci gate-status` (`MAX_CI_GATE_STATUS_REQUESTS` unchanged).
 - Owner action before any mod names an organization entry: grant the gate App (`plum-mod-base-gate`,
   and `plum-mod-base-canary` for the gate-status canary) the organization permission "Members:
-  Read-only" and accept the request on the installation (docs/OPERATIONS.md, "The gate status App").
-  Until then a mod that names one gets no `success` on a pull request that changes a protected
+  Read-only" and accept the request on the installation (docs/OPERATIONS.md, "The gate status App";
+  the owner granted it to both Apps and accepted both requests on 2026-10-13). Until then a mod that names one gets no `success` on a pull request that changes a protected
   path (any decision makes its `members` job fail); every other pull request is unaffected.
   The revoke procedure is now a revocation plus a new head or a draft, then a dispatch of the status
   caller, because a collaborator with write access can delete a revocation (docs/OPERATIONS.md,
@@ -95,6 +105,36 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   so does the callee `gate-status.yml` (input `members`). A Build config with an organization entry
   is refused by kits older than v1.6.0: revert the entry before a pin rollback below v1.6.0. The
   `MB_KIT_TREE_DIGEST` literals and the staged-file lock move.
+- Compatibility of the release as a whole: the baseline is the archived v1.5.0 reader, the
+  immediate predecessor. `mod-base.ci.org-members` is `new-kind` in the ledger and every other kind
+  is `unchanged`; the optional organization entry of `admission.approvers` stays within schema 1 of
+  `mod-base.build.config`, and a v1.5.0 reader refuses a config that has it. `ADAPTER_API` 1,
+  `BUILD_ADAPTER_API` 1 and `pixel_metrics_version` 1 are those of v1.5.0. The only managed file
+  that changes is `.github/workflows/mod-base-gate-status.yml`, which `bump` resynchronizes with
+  the pin. Without an organization entry the `members` job is skipped and no new permission is
+  used, so every evaluation is that of v1.5.0, except that a comment posted through a GitHub App
+  never decides and a decision's author must carry a numeric id.
+- Upgrade: bump the pin to v1.6.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to
+  v1.6.0`, then `verify --network` and `template check`). A mod with `admission` lands the bump
+  through its protected route like any change to its callers: the config of the default branch
+  still names its listed approvers, so one of them approves the bump's exact head. To let every
+  member decide, the mod then adds `{"organization": "<owner>", "role": "member"}` to
+  `admission.approvers` in its protected Build config, in a second pull request that the listed
+  approvers decide (keep a listed user beside it as a fallback if wanted). Only an organization
+  has members: a user-owned repository names no organization entry. The gate App needs the
+  organization permission "Members: Read-only" first (above). A consumer that wants expired
+  evidence rebuilt adds the `ci request-generation` step and its dedicated App (docs/OPERATIONS.md,
+  "Late consumers of a default-branch commit"); nothing else needs a change.
+- Rollback: a rollback below v1.6.0 requires removing a mod's organization approver first. Revert
+  the organization entry of `admission.approvers` to listed users through the mod's protected
+  route (its listed approvers or, while the entry stands, any member decides it), wait until that
+  change is on the default branch, and only then bump the pin back to v1.5.0: a v1.5.0 reader
+  refuses a config with an organization entry, so a pin rolled back first would run a kit that
+  cannot read the mod's protected config. Also remove any
+  consumer step that calls `ci request-generation`, a command v1.5.0 does not have. Nothing a
+  v1.6.0 run stores outlives it in a form v1.5.0 must read: the `mod-base.ci.org-members`
+  snapshot is produced and consumed within one status run, and a generation that `ci
+  request-generation` dispatched is an ordinary full generation of the managed callers.
 
 ## v1.5.0
 
