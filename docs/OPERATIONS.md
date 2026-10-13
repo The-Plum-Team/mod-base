@@ -453,7 +453,7 @@ key, an owner operation) or change one of the key files; to stop, remove `seeds`
 A kit release older than the one that added `seeds` refuses a config that has it: remove `seeds`
 before a pin rollback below that release.
 
-### Late consumers of a default-branch commit (unreleased: KQ9-4)
+### Late consumers of a default-branch commit (v1.6.0: KQ9-4)
 
 A consumer job of the mod's own workflow reads the tested generation of the live default-branch
 commit with `ci select-generation`. Shared Build and runtime artifacts are kept 7 days, records 90.

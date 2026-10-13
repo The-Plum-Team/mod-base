@@ -269,7 +269,7 @@ Route A is the Pages step of the Quick Skin order. Still a separate kit addition
 optional field of the source manifest and of the family envelope that records the `generation.json`
 digest and the run ids it names, displayed by Pages and checked cheaply (each id a successful run
 of a managed caller at the key's commit). Route B (a shared-generation source kind) is not planned;
-it would need a new owner decision. What route A requires of the consumer, with v1.5.0:
+it would need a new owner decision. What route A requires of the consumer, with v1.6.0:
 
 * It hands off every key of the commit from the one run that selected the generation. Its runs
   that hand off nothing (a wake that found the generation pending, a run that requested one) are

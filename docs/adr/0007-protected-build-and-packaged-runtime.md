@@ -59,7 +59,7 @@ All thirteen are new, strict, canonical JSON at schema version 1. The previous r
 each as an unknown kind (`tests/test_schema_evolution.py`). A fourteenth, `mod-base.ci.scope`,
 came after v1.2.1 with the narrowed runtime scope ([BUILD-RUNTIME-SELECTION.md](../BUILD-RUNTIME-SELECTION.md)):
 new at schema version 1, and v1.2.1 rejects it as an unknown kind. A fifteenth,
-`mod-base.ci.org-members`, came after v1.5.0 with organization approvers of the protected
+`mod-base.ci.org-members`, came in v1.6.0 with organization approvers of the protected
 admission: new at schema version 1, and v1.5.0 rejects it as an unknown kind.
 
 | Kind | Holds |
