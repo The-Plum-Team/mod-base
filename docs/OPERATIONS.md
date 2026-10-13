@@ -462,6 +462,31 @@ The kit checks the generic rule only. A mod's native evaluator may check more (a
 path list, required files, the loader bootstrap, a restricted transition's declaration); while it
 no longer runs on pull requests, the approver checks those by review.
 
+### Narrowed runtime scope
+
+`runtime_selection` of `scripts/ci/mod-base-build.json`
+([BUILD-ADAPTER.md](BUILD-ADAPTER.md#narrowed-runtime-scope),
+[BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md)) lets a pull request's packaged lanes run
+only the scenarios the mod's protected `derive_scope` hook selects from the changed paths. A push,
+a dispatch and every release rehearsal still run every obligation, and a narrowed pull request
+never covers the push after its merge, so the default branch keeps a full packaged run of every
+commit a pull request lands. Enabling it is a change of the protected config and of the adapter
+(the hook), reviewed like any other, and **the owner decides it** once:
+
+1. `derive_scope` keeps a smoke scenario in every lane it does not run in full, and the mod's
+   `verify_runtime` reads `MB_RUNTIME_SCOPE` and requires its native results to cover exactly
+   those scenarios. The kit checks only that they are the lane's own obligations.
+2. The narrowed status description ("for a narrowed scope") is acceptable for the required
+   packaged context: a narrowed run passes the gate like a full one.
+3. The cost is acceptable: 11 more requests in the packaged `input` job of a narrowed pull request
+   (15 behind a reuse reference); none otherwise.
+
+Without a successful full packaged run of the base commit under the same kit pin, policy and plan
+(after a pin bump, a policy change or an expired record) pull requests run in full until the next
+push of the default branch has one. To stop, remove `runtime_selection`. A kit release older than
+the one that added it refuses a config that has it: remove it before a pin rollback below that
+release.
+
 ## Canary procedure
 
 The canary is a separate public caller repository, so it exercises exactly the cross-repository

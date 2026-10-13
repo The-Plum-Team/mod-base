@@ -258,6 +258,7 @@ _OPERATIONS = {
         Obj({**_JOB, "plan": _plan, "build": _envelope, "runtime": _runtime, "lane_id": _UNIT,
              "run_id": _RUN, "run_attempt": _ATTEMPT}), _runtime_grant),
     "export-seed": (Obj({**_CANDIDATE_JOB, "execution": _EXECUTION}), _job),
+    "take-derived-scope": (Obj(_JOB), _job),
 }
 
 

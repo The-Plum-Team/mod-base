@@ -21,7 +21,10 @@ whose artifacts it reads:
 
 ``--selection FILE`` is where the job wrote the record its ``input`` job handed to it. It is read
 before any request is sent (``commands_packaged.received_selection``): canonical, of this plan
-and requested by this very run attempt.
+and requested by this very run attempt. ``--scope FILE`` of ``aggregate`` and the packaged
+``seal-gate`` is the same for the narrowed scope that job handed over, and an empty file for a run
+in full (``commands_scope.received_scope``): the results index holds the scope record and the
+tested record its digest.
 
 A command knows its job from the state directory (``identity.json`` and ``ci-plan.json``) and its
 run and attempt from ``GITHUB_RUN_ID`` and ``GITHUB_RUN_ATTEMPT``; the state must belong to the
@@ -44,6 +47,7 @@ from typing import Any
 from mod_base import cli, runtime
 from mod_base.build_ci import commands, gate, identity, planning
 from mod_base.build_ci.commands_packaged import add_selection_argument, received_selection
+from mod_base.build_ci.commands_scope import add_scope_argument, received_scope
 from mod_base.build_ci.config import load_build_config
 from mod_base.build_ci.exports import BUILD_VALIDATION_ROOT, assemble_build_export
 from mod_base.build_ci.records import GATE_MODES
@@ -97,6 +101,7 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     aggregate = verbs.add_parser("aggregate", help="authenticate this attempt's lane results and write their index")
     commands.add_job_arguments(aggregate)
     add_selection_argument(aggregate, required=True)
+    add_scope_argument(aggregate)
     aggregate.add_argument("--output", type=cli.PATH, required=True, metavar="DIR",
                            help="the new directory that receives the one record to upload")
     aggregate.set_defaults(handler=run_aggregate)
@@ -105,6 +110,7 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     commands.add_job_arguments(seal)
     seal.add_argument("--gate", choices=tuple(GATE_MODES), required=True, help="the gate this job seals")
     add_selection_argument(seal, required=False)
+    add_scope_argument(seal)
     seal.add_argument("--output", type=cli.PATH, required=True, metavar="DIR",
                       help="the new directory that receives the one record to upload")
     seal.set_defaults(handler=run_seal_gate)
@@ -144,6 +150,14 @@ def _selection(path: Path, job: _Job) -> dict[str, Any]:
                               workflow_path=job.record["workflow_path"])
 
 
+def _scope(path: Path | None, job: _Job) -> dict[str, Any] | None:
+    """The scope record this job received (``--scope``), bound to its run attempt, or ``None`` for
+    a run in full."""
+
+    return received_scope(path, plan=job.plan, run_id=job.run_id, run_attempt=job.run_attempt,
+                          workflow_path=job.record["workflow_path"])
+
+
 def _write_record(output: Path, name: str, document: dict[str, Any]) -> None:
     """Create the upload directory ``output`` with ``document`` as its one canonical file."""
 
@@ -156,12 +170,14 @@ def run_aggregate(args: argparse.Namespace) -> int:
     check(job.record["producer"] == "packaged", "$.state.producer", "`ci aggregate` is a step of a packaged job")
     check(not os.path.lexists(args.output), "$.output", "the upload directory already exists")
     selection = _selection(args.selection, job)
+    narrowed = _scope(args.scope, job)
     config_sha256 = _config_sha256(invocation, job)
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_AGGREGATE_REQUESTS)
     with tempfile.TemporaryDirectory(prefix="mb-ci-aggregate-", dir=args.state) as temporary:
         name, document = gate.seal_results(api, record=job.record, plan=job.plan, selection=selection,
                                            run_id=job.run_id, run_attempt=job.run_attempt,
-                                           config_sha256=config_sha256, temporary_root=Path(temporary))
+                                           config_sha256=config_sha256, temporary_root=Path(temporary),
+                                           scope=narrowed)
     _write_record(args.output, name, document)
     sys.stdout.write(f"aggregate: {len(document['lanes'])} lane results of run {job.run_id} attempt "
                      f"{job.run_attempt} indexed as {name}\n")
@@ -174,12 +190,16 @@ def run_seal_gate(args: argparse.Namespace) -> int:
     check(not os.path.lexists(args.output), "$.output", "the upload directory already exists")
     check(args.gate == "packaged" or args.selection is None, "$.selection",
           "only a packaged gate judges a selected Build")
+    check(args.gate == "packaged" or args.scope is None, "$.scope", "only a packaged gate judges a narrowed scope")
     selection = None if args.selection is None else _selection(args.selection, job)
-    seal = functools.partial(gate.seal_gate, config_sha256=_config_sha256(invocation, job), selection=selection)
+    narrowed = _scope(args.scope, job)
+    seal = functools.partial(gate.seal_gate, config_sha256=_config_sha256(invocation, job), selection=selection,
+                             scope=narrowed)
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_GATE_REQUESTS)
     attempt = gate.authenticate_attempt(api, record=job.record, plan=job.plan, gate=args.gate, run_id=job.run_id,
                                         run_attempt=job.run_attempt)
-    check(attempt.mode != "reuse" or selection is None, "$.selection", "a reuse run selected no Build")
+    check(attempt.mode != "reuse" or (selection is None and narrowed is None), "$.selection",
+          "a reuse run selected no Build and narrowed no scope")
     with tempfile.TemporaryDirectory(prefix="mb-ci-gate-", dir=args.state) as temporary:
         name, document = (gate.seal_reuse if attempt.mode == "reuse" else seal)(attempt, temporary_root=Path(temporary))
     _write_record(args.output, name, document)

@@ -329,6 +329,19 @@ MAX_CI_SELECT_BUILD_REQUESTS = MAX_CI_BUILD_POLLS + 64
 #: ``ci fetch-build`` sends one REST request for the selected archive and one credential-free
 #: storage request; the rest is for retries. Freshness is the input job's and the gate's decision.
 MAX_CI_FETCH_BUILD_REQUESTS = 8
+#: ``ci scope`` (``build_ci.scope``) sends no request without a ``runtime_selection`` in the
+#: protected config, for a subject that is not a pull request and for a candidate kit pin. Otherwise
+#: it reads the base commit and both trees (3), the newest packaged run of the base commit and that
+#: run (2), the run's artifact listing (1) and the base's tested record (2), and observes the run
+#: listing, the run and the record's artifact again before it writes (3): 11 in all. Behind a reuse
+#: reference it reads the original packaged record too (3) and observes it again (1): 15. The rest
+#: is for retries.
+MAX_CI_SCOPE_REQUESTS = 32
+#: One canonical ``mod-base.ci.scope`` record, and what the ``derive_scope`` hook writes: it travels
+#: as one line of a job output, like a selection record.
+MAX_CI_SCOPE_BYTES = 64 * KIB
+#: Entries of one recursive Git tree listing that ``ci scope`` compares; a larger tree runs in full.
+MAX_CI_SCOPE_TREE_ENTRIES = 100_000
 #: Regression budget for one generation of either enrolled native profile, including the
 #: credential-free artifact storage GETs and one final status evaluation, without waiting polls.
 #: Enforced by tests/test_ci_generation_budget.py, not a runtime plan-admission rule.

@@ -49,6 +49,7 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "mod-base.ci.activation": 1,
     "mod-base.ci.batch": 1,
     "mod-base.ci.runtime-envelope": 1,
+    "mod-base.ci.scope": 1,
 }
 
 

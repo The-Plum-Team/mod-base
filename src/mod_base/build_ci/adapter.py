@@ -25,7 +25,7 @@ from mod_base.build_ci.protocol import ID, repo_path, validate_plan, validate_pl
 from mod_base.errors import MbError
 from mod_base.io.secure_json import loads
 from mod_base.model import grammar, limits
-from mod_base.model.validators import Obj, Str, check
+from mod_base.model.validators import List, Obj, Str, check
 
 
 class AdapterError(MbError):
@@ -53,6 +53,7 @@ HOOKS = {hook.name: hook for hook in (
     Hook("build_target", "candidate", "target", "target_seconds"),
     Hook("verify_target", "validator", "target", "validator_seconds"),
     Hook("verify_build", "validator", None, "validator_seconds"),
+    Hook("derive_scope", "validator", None, "validator_seconds"),
     Hook("derive_runtime", "validator", "lane", "validator_seconds"),
     Hook("run_lane", "candidate", "lane", "runtime_seconds"),
     Hook("verify_runtime", "validator", "lane", "validator_seconds"),
@@ -63,6 +64,18 @@ CANDIDATE_HOOKS = tuple(name for name, hook in HOOKS.items() if hook.role == "ca
 UNIT_ENVIRONMENT = {"target": "MB_TARGET_ID", "lane": "MB_LANE_ID"}
 #: The names ``derive_runtime`` returns for its lane; ``run_lane`` receives exactly these.
 RUNTIME_VALUES = ("E2E_ROW_JSON", "E2E_SCENARIOS")
+#: Hooks that run only when the protected config enables them: ``derive_scope`` runs in the packaged
+#: ``input`` job of a pull request, and only under a ``runtime_selection`` (``build_ci.scope``).
+OPTIONAL_HOOKS = ("derive_scope",)
+#: The environment name of the kit's input to ``derive_scope``: one line of canonical JSON in the
+#: format the config's ``runtime_selection.input`` names, written by protected kit code only.
+SCOPE_INPUT_ENVIRONMENT = "MB_SCOPE_INPUT"
+#: The environment name of a lane's narrowed scope, given to ``derive_runtime`` and
+#: ``verify_runtime`` of a lane that runs a narrowed scope (:func:`hook_values`): one line of
+#: canonical JSON, ``{"lane_id", "scenarios", "scope_sha256"}``. Absent means the lane runs in full.
+LANE_SCOPE_ENVIRONMENT = "MB_RUNTIME_SCOPE"
+#: The protected hooks a lane's narrowed scope reaches.
+LANE_SCOPE_HOOKS = ("derive_runtime", "verify_runtime")
 
 #: Files of ``validation-input/``: the bytes of the candidate files the config names (the
 #: inventory, the scenario contract and every extra ``plan_inputs`` file under its configured
@@ -76,6 +89,7 @@ PLAN_INPUT = grammar.CI_PLAN_NAME
 RESERVED_INPUT_NAMES = frozenset({INVENTORY_INPUT, SCENARIO_INPUT, PLAN_INPUT})
 #: Files a derivation hook leaves in ``validation/``; a verification hook leaves one report per unit.
 PLAN_OUTPUT = "plan.json"
+SCOPE_OUTPUT = "scope.json"
 RUNTIME_OUTPUT = "runtime.json"
 REPORT_SUFFIX = ".json"
 #: Unit ids whose report would take the name of another file of ``validation/`` or of its sealed copy.
@@ -123,10 +137,22 @@ def _runtime_value(value: Any, path: str) -> str:
 _RUNTIME = Obj({"values": Obj({name: _runtime_value for name in RUNTIME_VALUES})})
 
 
-def hook_values(hook: str, *, unit_id: str | None = None,
-                runtime: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The extra environment of one hook run: its unit id and, for ``run_lane`` only, the values
-    ``derive_runtime`` returned for that lane (:func:`parse_runtime_values`)."""
+def _scope_value(value: Any, path: str) -> str:
+    """One line of canonical JSON the kit wrote for a protected hook, within the scope record cap."""
+
+    _VALUE(value, path)
+    check(len(value.encode("utf-8")) <= limits.MAX_CI_SCOPE_BYTES and value.startswith("{")
+          and value.endswith("}"), path, "must be one line of a JSON object within the scope cap")
+    return value
+
+
+def hook_values(hook: str, *, unit_id: str | None = None, runtime: Mapping[str, str] | None = None,
+                scope: str | None = None) -> dict[str, str]:
+    """The extra environment of one hook run: its unit id; for ``run_lane`` only, the values
+    ``derive_runtime`` returned for that lane (:func:`parse_runtime_values`); for ``derive_scope``
+    the kit's input under :data:`SCOPE_INPUT_ENVIRONMENT`, which it requires; and for the hooks of
+    :data:`LANE_SCOPE_HOOKS` a lane's narrowed scope under :data:`LANE_SCOPE_ENVIRONMENT`, when the
+    lane runs one. No other hook takes a ``scope``."""
 
     contract = _hook(hook)
     values: dict[str, str] = {}
@@ -139,6 +165,12 @@ def hook_values(hook: str, *, unit_id: str | None = None,
         values.update(_RUNTIME({"values": dict(runtime)}, "$.runtime")["values"])
     else:
         check(runtime is None, "$.runtime", f"{contract.name} receives no runtime values")
+    if contract.name == "derive_scope":
+        check(scope is not None, "$.scope", "derive_scope requires the kit's scope input")
+        values[SCOPE_INPUT_ENVIRONMENT] = _scope_value(scope, "$.scope")
+    elif scope is not None:
+        check(contract.name in LANE_SCOPE_HOOKS, "$.scope", f"{contract.name} receives no scope")
+        values[LANE_SCOPE_ENVIRONMENT] = _scope_value(scope, "$.scope")
     return values
 
 
@@ -208,6 +240,8 @@ def hook_outputs(hook: str, *, plan: dict[str, Any] | None = None, unit_id: str 
     if plan is None:
         raise AdapterError(f"{contract.name} runs against the protected plan")
     unit = plan_unit(plan, contract.name, unit_id)
+    if contract.name == "derive_scope":
+        return (SCOPE_OUTPUT,)
     if contract.name == "derive_runtime":
         return (RUNTIME_OUTPUT,)
     units = plan["targets"] if unit is None else [unit]
@@ -232,6 +266,22 @@ def parse_derived_plan(data: bytes) -> dict[str, Any]:
             check(unit["id"] not in RESERVED_UNIT_IDS, f"$.plan.{kind}[{index}].id",
                   "would name a reserved validation file")
     return document
+
+
+_SCOPE_LANE = Obj({"id": ID, "scenarios": List(Str(grammar.IDENT, max_len=200),
+                                                 max_items=limits.MAX_CI_OBLIGATIONS_PER_LANE, unique=True)})
+_DERIVED_SCOPE = Obj({"lanes": List(_SCOPE_LANE, min_items=1, max_items=limits.MAX_CI_LANES,
+                                    unique_by=lambda item: item["id"])})
+
+
+def parse_derived_scope(data: bytes) -> dict[str, Any]:
+    """Strictly decode what ``derive_scope`` wrote: ``{"lanes": [{"id", "scenarios"}]}``, one entry
+    per lane with the scenarios that lane runs. Structure only: ``build_ci.scope`` requires the
+    planned lanes in plan order and each lane's scenarios to be its own obligations in plan order,
+    and runs a lane that names none in full."""
+
+    document = loads(data, label="derive_scope output", max_bytes=limits.MAX_CI_SCOPE_BYTES)
+    return _DERIVED_SCOPE(document, "$.scope")
 
 
 def parse_runtime_values(data: bytes) -> dict[str, str]:

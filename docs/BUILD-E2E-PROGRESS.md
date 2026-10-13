@@ -132,6 +132,16 @@ protected release first; unsupported future digest/lock formats require a compat
 release. Stage/root record formats and the job graph stay unchanged; conditional checkout steps
 are new. Tag-peel, main-ancestry, digest and lock-format controls reject invalid future kits.
 
+Every lane is planned with all its obligations. A pull request's packaged lanes may run a
+narrowed scope (Quick Skin adoption gap QS-G6): the owner took decisions D1-D5 of
+[BUILD-RUNTIME-SELECTION.md](BUILD-RUNTIME-SELECTION.md) on 11 October 2026, and the unreleased
+`ci scope` implements them. The `input` job seals a `mod-base.ci.scope` record outside the plan
+from the changed paths and the base commit's full packaged evidence, which protected kit code reads,
+and from what the token-free protected hook `derive_scope` selects; unknown means full, and a
+narrowed pull request never covers its push. The feature is inert until a mod's protected config
+names `runtime_selection`, so until a kit release carries it and a mod enables it, Q7 activates
+full profiles.
+
 Subject admission waits up to 15 seconds/four observations for a pending PR test merge. An
 outdated base fails with `ci-pr-base-outdated` and asks for a branch update. A default branch
 advance invalidates in-flight generations; rerunning the old run keeps its old controller, so a

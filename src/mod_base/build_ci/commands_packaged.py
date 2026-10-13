@@ -29,7 +29,9 @@ this very run attempt requested.
 the selected artifact bytes and publishes its complete bundle at the fixed
 ``exports.BUILD_VALIDATION_ROOT`` (:func:`mod_base.build_ci.selection.fetch_build`); the bound
 record is kept as ``ci-selection.json`` in the state directory, where the worker steps of the
-lane find the Build they run against.
+lane find the Build they run against. With ``--scope`` it also keeps the narrowed scope this run
+attempt's ``input`` job handed over, as ``ci-scope.json``, where the lane's protected hooks find
+their lane's scenarios (``commands_scope``); an empty file is a run in full and keeps nothing.
 
 Both read the job's subject and plan from the state directory and write nothing to GitHub.
 """
@@ -43,9 +45,11 @@ from typing import Any
 
 from mod_base import cli, runtime
 from mod_base.build_ci import commands, exports, identity, planning, selection
+from mod_base.build_ci.commands_scope import add_scope_argument, received_scope
 from mod_base.build_ci.config import load_build_config
 from mod_base.build_ci.protocol import validate_plan
 from mod_base.build_ci.records import bind_source_selection
+from mod_base.build_ci.scope import SCOPE_NAME
 from mod_base.errors import MbError
 from mod_base.io.secure_json import loads
 from mod_base.model import grammar, limits
@@ -91,6 +95,7 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     fetch = verbs.add_parser("fetch-build", help="download and verify the selected Build bundle")
     commands.add_job_arguments(fetch)
     add_selection_argument(fetch, required=True)
+    add_scope_argument(fetch)
     fetch.set_defaults(handler=run_fetch_build)
 
 
@@ -181,10 +186,14 @@ def run_fetch_build(args: argparse.Namespace) -> int:
     invocation, record, plan, run_id, run_attempt = _job(args)
     document = received_selection(args.selection, plan=plan, run_id=run_id, run_attempt=run_attempt,
                                   workflow_path=record["workflow_path"])
+    narrowed = received_scope(args.scope, plan=plan, run_id=run_id, run_attempt=run_attempt,
+                              workflow_path=record["workflow_path"])
     config = load_build_config(invocation.repo_root, repository=invocation.repository)
     api = commands.api_client(invocation, max_requests=limits.MAX_CI_FETCH_BUILD_REQUESTS)
     selection.fetch_build(api, record=document, plan=plan, run_id=run_id, run_attempt=run_attempt,
                           workflow_path=record["workflow_path"], event=record["event"],
                           output=Path(exports.BUILD_VALIDATION_ROOT), source_config_sha256=config.sha256)
     identity.write_state_record(args.state, selection.SELECTION_NAME, canonical_json(document))
+    if narrowed is not None:
+        identity.write_state_record(args.state, SCOPE_NAME, canonical_json(narrowed))
     return 0

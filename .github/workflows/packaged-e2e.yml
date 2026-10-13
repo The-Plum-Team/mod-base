@@ -50,7 +50,7 @@ on:
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:fec17c0f6a2aafa3b1a272caf8fd844d3775b98728f46e9e1fe72168a5cf2f0e"
+  MB_KIT_TREE_DIGEST: "sha256:c43e757283f27043ed3094368d2c0f5101cc61fd493474fa7c97dccd02620bf5"
 
 jobs:
   input:
@@ -67,6 +67,7 @@ jobs:
       plan-sha256: ${{ steps.plan.outputs.plan_sha256 }}
       lanes: ${{ steps.plan.outputs.lanes }}
       selection: ${{ steps.select.outputs.selection }}
+      scope: ${{ steps.scope.outputs.scope }}
     steps:
       - name: Validate call inputs before any checkout
         shell: bash
@@ -228,6 +229,17 @@ jobs:
             python3 -P -m mod_base ci select-build --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
             --build-run-id "$BUILD_RUN_ID" --wait-seconds 5400 \
             --output "$RUNNER_TEMP/mb-state/build-selection.json" --github-output "$GITHUB_OUTPUT"
+      - name: Derive the narrowed runtime scope
+        id: scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            python3 -P -m mod_base ci scope --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
+            --github-output "$GITHUB_OUTPUT"
       - name: Terminate and lock the worker accounts
         if: ${{ always() && steps.subject.outcome == 'success' }}
         shell: bash
@@ -417,6 +429,7 @@ jobs:
         shell: bash
         env:
           SELECTION: ${{ needs.input.outputs.selection }}
+          SCOPE: ${{ needs.input.outputs.scope }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
@@ -425,9 +438,14 @@ jobs:
           canonical='^\{[][{}",:A-Za-z0-9._/@-]+\}$'
           [[ "${#SELECTION}" -le 65536 && "$SELECTION" =~ $canonical &&
              "$SELECTION" == *'"kind":"mod-base.ci.selection"'* ]] || fail "malformed selection record"
+          # The scope is empty for a run in full; its scenario names may also hold a plus sign.
+          scoped='^\{[][{}",:A-Za-z0-9._/@+-]+\}$'
+          [[ -z "$SCOPE" || ( "${#SCOPE}" -le 65536 && "$SCOPE" =~ $scoped &&
+             "$SCOPE" == *'"kind":"mod-base.ci.scope"'* ) ]] || fail "malformed scope record"
           umask 077
           set -o noclobber
           printf '%s\n' "$SELECTION" > "$RUNNER_TEMP/mb-state/build-selection.json"
+          if [[ -n "$SCOPE" ]]; then printf '%s\n' "$SCOPE"; fi > "$RUNNER_TEMP/mb-state/runtime-scope.json"
       - name: Fetch the sealed Build bundle
         shell: bash
         env:
@@ -437,7 +455,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci fetch-build --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --selection "$RUNNER_TEMP/mb-state/build-selection.json"
+            --selection "$RUNNER_TEMP/mb-state/build-selection.json" --scope "$RUNNER_TEMP/mb-state/runtime-scope.json"
       - name: Check out the admitted candidate kit
         if: steps.plan.outputs.candidate_kit_sha != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -709,6 +727,7 @@ jobs:
         shell: bash
         env:
           SELECTION: ${{ needs.input.outputs.selection }}
+          SCOPE: ${{ needs.input.outputs.scope }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
@@ -717,9 +736,14 @@ jobs:
           canonical='^\{[][{}",:A-Za-z0-9._/@-]+\}$'
           [[ "${#SELECTION}" -le 65536 && "$SELECTION" =~ $canonical &&
              "$SELECTION" == *'"kind":"mod-base.ci.selection"'* ]] || fail "malformed selection record"
+          # The scope is empty for a run in full; its scenario names may also hold a plus sign.
+          scoped='^\{[][{}",:A-Za-z0-9._/@+-]+\}$'
+          [[ -z "$SCOPE" || ( "${#SCOPE}" -le 65536 && "$SCOPE" =~ $scoped &&
+             "$SCOPE" == *'"kind":"mod-base.ci.scope"'* ) ]] || fail "malformed scope record"
           umask 077
           set -o noclobber
           printf '%s\n' "$SELECTION" > "$RUNNER_TEMP/mb-state/build-selection.json"
+          if [[ -n "$SCOPE" ]]; then printf '%s\n' "$SCOPE"; fi > "$RUNNER_TEMP/mb-state/runtime-scope.json"
       - name: Validate frozen native exports
         shell: bash
         env:
@@ -729,7 +753,8 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci aggregate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \
-            --selection "$RUNNER_TEMP/mb-state/build-selection.json" --output "$RUNNER_TEMP/mb-upload"
+            --selection "$RUNNER_TEMP/mb-state/build-selection.json" --scope "$RUNNER_TEMP/mb-state/runtime-scope.json" \
+            --output "$RUNNER_TEMP/mb-upload"
       - name: Upload sealed outputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -921,6 +946,7 @@ jobs:
         shell: bash
         env:
           SELECTION: ${{ needs.input.outputs.selection }}
+          SCOPE: ${{ needs.input.outputs.scope }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
@@ -929,9 +955,14 @@ jobs:
           canonical='^\{[][{}",:A-Za-z0-9._/@-]+\}$'
           [[ "${#SELECTION}" -le 65536 && "$SELECTION" =~ $canonical &&
              "$SELECTION" == *'"kind":"mod-base.ci.selection"'* ]] || fail "malformed selection record"
+          # The scope is empty for a run in full; its scenario names may also hold a plus sign.
+          scoped='^\{[][{}",:A-Za-z0-9._/@+-]+\}$'
+          [[ -z "$SCOPE" || ( "${#SCOPE}" -le 65536 && "$SCOPE" =~ $scoped &&
+             "$SCOPE" == *'"kind":"mod-base.ci.scope"'* ) ]] || fail "malformed scope record"
           umask 077
           set -o noclobber
           printf '%s\n' "$SELECTION" > "$RUNNER_TEMP/mb-state/build-selection.json"
+          if [[ -n "$SCOPE" ]]; then printf '%s\n' "$SCOPE"; fi > "$RUNNER_TEMP/mb-state/runtime-scope.json"
       - name: Validate frozen native exports
         shell: bash
         env:
@@ -942,7 +973,8 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           selection=()
           if [[ "$MODE" != reuse ]]; then
-            selection=(--selection "$RUNNER_TEMP/mb-state/build-selection.json")
+            selection=(--selection "$RUNNER_TEMP/mb-state/build-selection.json"
+                       --scope "$RUNNER_TEMP/mb-state/runtime-scope.json")
           fi
           env -u PYTHONPATH PYTHONPATH="$GITHUB_WORKSPACE/kit/src" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
             python3 -P -m mod_base ci seal-gate --repo mod --config mod/site/mod-base.json --state "$RUNNER_TEMP/mb-state" \

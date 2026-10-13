@@ -82,15 +82,18 @@ from mod_base.build_ci.root_request import (request_build_export_freeze, request
                                             request_build_validation_grant, request_bundle_staging,
                                             request_candidate_source_check, request_candidate_staging,
                                             request_controller_grant, request_derived_plan, request_derived_runtime,
+                                            request_derived_scope,
                                             request_host_fence, request_plan_inputs_grant,
                                             request_runtime_export_freeze, request_runtime_validation_freeze,
                                             request_runtime_validation_grant, request_validation_inputs_grant,
                                             run_root_operation)
 from mod_base.build_ci.root_request_schema import _ACCOUNT, _BOUNDARY
 from mod_base.build_ci.runtime_exports import verify_runtime_export
-from mod_base.build_ci.runtime_handoff import DERIVED_RUNTIME_ROOT, record_runtime_validation_execution
+from mod_base.build_ci.runtime_handoff import (DERIVED_RUNTIME_ROOT, DERIVED_SCOPE_ROOT,
+                                               record_runtime_validation_execution)
 from mod_base.build_ci.runtime_inputs import (RUNTIME_VALIDATION_ROOT, execute_frozen_runtime_validator,
                                               read_sealed_runtime)
+from mod_base.build_ci.scope import SCOPE_NAME, lane_scope_value, received_scope
 from mod_base.build_ci.source import GitSourceEntry, parse_source_inventory, verify_source_copy
 from mod_base.build_ci.toolchain import (ToolTreeProof, _execution_tool_paths, authenticate_toolchains,
                                          execute_tool_fenced_worker, inspect_worker_toolchains)
@@ -505,19 +508,22 @@ def checkout_candidate_files(checkout: Path, job: Job) -> dict[str, bytes]:
 
 
 def run_protected_hook(job: Job, worker: Worker, hook: str, *, plan: dict[str, Any] | None,
-                       unit_id: str | None, log: Callable[[str], object]) -> WorkerResult:
+                       unit_id: str | None, log: Callable[[str], object], scope: str | None = None) -> WorkerResult:
     """Run one protected hook as the validator and write its neutralised log through ``log``.
 
-    ``plan`` is ``None`` only for ``derive_plan``, which runs for the job's subject. A hook that
-    fails, hangs or leaves a process behind raises after its log was written; either way the
-    validator ends terminated and locked.
+    ``plan`` is ``None`` only for ``derive_plan``, which runs for the job's subject. ``scope`` is
+    the kit's scope line the hook receives (``adapter.hook_values``): the input of
+    ``derive_scope``, or a narrowed lane's scope for ``derive_runtime`` and ``verify_runtime``. A
+    hook that fails, hangs or leaves a process behind raises after its log was written; either way
+    the validator ends terminated and locked.
     """
 
     try:
         result = execute_controller_validator(
             boundary=worker.boundary, validator=worker.validator, sources=job.sources, tools=worker.tools,
             plan=plan, subject=job.subject if plan is None else None, hook=hook, unit_id=unit_id,
-            python=worker.python, java_home=worker.java_home, run_id=job.run_id, run_attempt=job.run_attempt)
+            python=worker.python, java_home=worker.java_home, run_id=job.run_id, run_attempt=job.run_attempt,
+            scope=scope)
     except WorkerExecutionError as error:
         log(render_worker_log(error.result, role="validator"))
         raise
@@ -772,14 +778,53 @@ def stage_candidate(job: Job, worker: Worker, plan: dict[str, Any], checkout: Pa
     return read_stage(job)
 
 
+def derive_scope(job: Job, worker: Worker, plan: dict[str, Any], scope_input: str, *,
+                 log: Callable[[str], object]) -> bytes:
+    """What the protected ``derive_scope`` hook selects for ``plan`` (``ci scope``): the hook runs
+    as the validator with the kit's input line ``scope_input`` (``scope.derive_scope`` builds it)
+    and the plan inputs ``ci plan`` granted, ``take-derived-scope`` hands the runner a private copy
+    of its one output and removes the original, and the copy's bytes are returned for the kit to
+    decode and check. A job derives its scope once."""
+
+    check(job.record["producer"] == "packaged", "$.state.producer", "`ci scope` is a step of a packaged job")
+    if os.path.lexists(str(DERIVED_SCOPE_ROOT)):
+        raise LifecycleError("this job already derived its scope; `ci scope` runs once")
+    with resting(worker.accounts):
+        run_protected_hook(job, worker, "derive_scope", plan=plan, unit_id=None, log=log, scope=scope_input)
+        _root(job, worker.python, "take-derived-scope",
+              request_derived_scope(boundary=worker.boundary, validator=worker.validator))
+        authenticate_host_boundary(worker.boundary)
+        _layout(worker.boundary)
+        try:
+            return _read_private_record(Path(str(DERIVED_SCOPE_ROOT)), name=adapter.SCOPE_OUTPUT,
+                                        owner_uid=worker.boundary.uid, owner_gid=worker.boundary.gid,
+                                        max_bytes=limits.MAX_CI_SCOPE_BYTES, label="derived scope")
+        except OSError as error:
+            raise LifecycleError("cannot read the scope root handed over") from error
+
+
+def read_scope(job: Job, plan: dict[str, Any]) -> dict[str, Any] | None:
+    """The narrowed scope this run attempt's ``input`` job handed to a packaged job, as the job
+    kept it (``ci-scope.json``, written by ``ci scope`` or ``ci fetch-build``), or ``None`` for a
+    run in full: bound to ``plan`` and to this run attempt (``records.bind_scope_record``)."""
+
+    if not _recorded(job.state, SCOPE_NAME):
+        return None
+    raw = identity.read_state_record(job.state, SCOPE_NAME, max_bytes=limits.MAX_CI_SCOPE_BYTES)
+    return received_scope(raw, plan=plan, run_id=job.run_id, run_attempt=job.run_attempt,
+                          workflow_path=job.record["workflow_path"])
+
+
 def derive_runtime(job: Job, worker: Worker, plan: dict[str, Any], lane_id: str, *,
                    log: Callable[[str], object]) -> dict[str, str]:
     """The values ``run_lane`` receives for ``lane_id``, as the protected ``derive_runtime`` hook
-    returns them: the hook runs as the validator, ``take-derived-runtime`` hands the runner a
-    private copy of its one output and removes the original, and the copy is decoded strictly
-    (``adapter.parse_runtime_values``). A job derives them once."""
+    returns them: the hook runs as the validator, with the lane's narrowed scope when the run
+    attempt has one (:func:`read_scope`, ``scope.lane_scope_value``), ``take-derived-runtime``
+    hands the runner a private copy of its one output and removes the original, and the copy is
+    decoded strictly (``adapter.parse_runtime_values``). A job derives them once."""
 
-    run_protected_hook(job, worker, "derive_runtime", plan=plan, unit_id=lane_id, log=log)
+    run_protected_hook(job, worker, "derive_runtime", plan=plan, unit_id=lane_id, log=log,
+                       scope=lane_scope_value(read_scope(job, plan), lane_id))
     _root(job, worker.python, "take-derived-runtime",
           request_derived_runtime(boundary=worker.boundary, validator=worker.validator))
     authenticate_host_boundary(worker.boundary)
@@ -1087,8 +1132,10 @@ def validate_export(job: Job, worker: Worker, *, hook: str, unit_id: str | None,
     boundary, validator, sources = worker.boundary, worker.validator, job.sources
     run = dict(run_id=job.run_id, run_attempt=job.run_attempt)
 
+    lane_scope = lane_scope_value(read_scope(job, plan), unit_id) if hook == "verify_runtime" else None
+
     def execute() -> WorkerResult:
-        return run_protected_hook(job, worker, hook, plan=plan, unit_id=unit_id, log=log)
+        return run_protected_hook(job, worker, hook, plan=plan, unit_id=unit_id, log=log, scope=lane_scope)
 
     def root(operation: str, nonce: str) -> None:
         _root(job, worker.python, operation, nonce)
