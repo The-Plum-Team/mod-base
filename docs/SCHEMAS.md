@@ -875,4 +875,5 @@ never uploaded.
 | `pr_number` | the pull request evaluated, exactly `--pr` |
 | `through_comment_id` | the greatest comment id the job read, 0 for none; a decision with a greater id was posted after the snapshot and refuses the admission |
 | `checked` | strictly ascending user ids, at most 300: every comment author of type `User` that did not post through a GitHub App, whatever they wrote |
-| `members` | strictly ascending user ids within `checked`: the active members of the organization among the authors whose comment contains `approve` or `revoke` |
+| `candidates` | strictly ascending user ids within `checked`: the authors whose comment could be a decision when the job read it (it contains the admission's command followed by `approve ` or `revoke `), the only ones whose membership was read; a decision by a checked author who is no candidate was edited in since and refuses the admission |
+| `members` | strictly ascending user ids within `candidates`: those that are active members of the organization in the role `admin` or `member` |

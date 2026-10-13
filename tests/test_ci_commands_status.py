@@ -956,7 +956,8 @@ class AdmissionStatusTests(GateStatusTestCase):
 ORG_ADMISSION = {**ADMISSION, "approvers": [{"organization": h.REPOSITORY.split("/")[0], "role": "member"}]}
 #: Two members (one keeps the membership private) and an outside collaborator, by user id.
 CONCEALED, MEMBER, COLLABORATOR = 202, 505, 303
-LATE = "admission: a `/controller-upgrade` decision on this head was posted after its members were read; evaluate again"
+LATE = "admission: a `/controller-upgrade` decision on this head is newer than its members snapshot; evaluate again"
+UNREAD = "admission: scripts/ci is protected; the organization's members were not read; evaluate again"
 
 
 class OrganizationAdmissionStatusTests(GateStatusTestCase):
@@ -981,7 +982,7 @@ class OrganizationAdmissionStatusTests(GateStatusTestCase):
     def snapshot(self, name: str = "members.json", **changes: Any) -> Path:
         document = {"kind": "mod-base.ci.org-members", "schema_version": 1, "organization": "example",
                     "pr_number": 7, "through_comment_id": 10, "checked": [CONCEALED, COLLABORATOR, MEMBER],
-                    "members": [CONCEALED, MEMBER], **changes}
+                    "candidates": [CONCEALED, COLLABORATOR, MEMBER], "members": [CONCEALED, MEMBER], **changes}
         path = self.directory / name
         path.write_bytes(canonical_json(document))
         return path
@@ -1019,18 +1020,53 @@ class OrganizationAdmissionStatusTests(GateStatusTestCase):
         self.assertEqual(self.states_with(world, world.planned(), "--org-members", str(self.snapshot())),
                          {"build": ("failure", REFUSED, run_url(42)), "packaged": ("failure", REFUSED, run_url(43))})
 
-    def test_without_a_snapshot_no_member_s_approval_counts(self) -> None:
+    def test_without_a_snapshot_no_decision_counts_and_no_comment_is_read(self) -> None:
         world = self.world(protected_change=True).gated()
         self.comments(world, (CONCEALED, "approve", h.HEAD_SHA))
-        unread = ("admission: scripts/ci is protected; the organization's members were not read, so no member's "
-                  "approval counts")
         self.assertEqual(self.states_with(world, world.planned()),
-                         {"build": ("failure", unread, run_url(42)), "packaged": ("failure", unread, run_url(43))})
+                         {"build": ("failure", UNREAD, run_url(42)), "packaged": ("failure", UNREAD, run_url(43))})
+        # The base commit, both roots and both `scripts` trees: the comments are not read.
+        self.assertEqual(world.api.request_count, 36 + 5)
+        # A failed members job must not let a listed user's approval stand over a member's
+        # revocation it could not count: without the snapshot a listed user decides nothing either.
+        mixed = {**ORG_ADMISSION, "approvers": [{"login": "AkaNebur", "association": "MEMBER"},
+                                                *ORG_ADMISSION["approvers"]]}
+        (self.mod / BUILD_CONFIG_PATH).write_bytes(h.pretty({**h.build_config(), "admission": mixed}))
+        world = self.world(protected_change=True).gated()
+        world.api.set_comments(7, [
+            {"id": 1, "body": f"/controller-upgrade approve {h.HEAD_SHA}", "author_association": "MEMBER",
+             "user": {"login": "AkaNebur", "id": 1, "type": "User"}, "created_at": "2026-10-11T10:00:00Z",
+             "updated_at": "2026-10-11T10:00:00Z"}])
+        self.assertEqual(self.states_with(world, world.planned()),
+                         {"build": ("failure", UNREAD, run_url(42)), "packaged": ("failure", UNREAD, run_url(43))})
+        world = self.world(protected_change=True).gated()
+        world.api.set_comments(7, [
+            {"id": 1, "body": f"/controller-upgrade approve {h.HEAD_SHA}", "author_association": "MEMBER",
+             "user": {"login": "AkaNebur", "id": 1, "type": "User"}, "created_at": "2026-10-11T10:00:00Z",
+             "updated_at": "2026-10-11T10:00:00Z"}])
+        self.assertEqual(self.states_with(world, world.planned(), "--org-members", str(self.snapshot())),
+                         {"build": ("success", VERIFIED["build"], run_url(42)),
+                          "packaged": ("success", VERIFIED["packaged"], run_url(43))})
+
+    def test_without_a_snapshot_a_change_to_no_protected_path_is_evaluated_as_before(self) -> None:
+        world = self.world(protected_change=False).gated()
+        self.assertEqual(self.states_with(world, world.planned()),
+                         {"build": ("success", VERIFIED["build"], run_url(42)),
+                          "packaged": ("success", VERIFIED["packaged"], run_url(43))})
 
     def test_a_decision_posted_after_the_snapshot_is_a_published_refusal(self) -> None:
         world = self.world(protected_change=True).gated()
         self.comments(world, (CONCEALED, "approve", h.HEAD_SHA), (COLLABORATOR, "revoke", h.HEAD_SHA))
         snapshot = self.snapshot(through_comment_id=1)
+        self.assertEqual(self.states_with(world, world.planned(), "--org-members", str(snapshot)),
+                         {"build": ("failure", LATE, run_url(42)), "packaged": ("failure", LATE, run_url(43))})
+
+    def test_a_decision_edited_in_since_the_snapshot_is_a_published_refusal(self) -> None:
+        # The collaborator's comment was no decision when the members job read it, so their
+        # membership was not read; it is a decision now, by an edit.
+        world = self.world(protected_change=True).gated()
+        self.comments(world, (CONCEALED, "approve", h.HEAD_SHA), (COLLABORATOR, "revoke", h.HEAD_SHA))
+        snapshot = self.snapshot(candidates=[CONCEALED, MEMBER])
         self.assertEqual(self.states_with(world, world.planned(), "--org-members", str(snapshot)),
                          {"build": ("failure", LATE, run_url(42)), "packaged": ("failure", LATE, run_url(43))})
 
@@ -1054,8 +1090,10 @@ class OrganizationAdmissionStatusTests(GateStatusTestCase):
         cases = {
             "another organization": (self.snapshot("other.json", organization="other"), "another organization"),
             "another pull request": (self.snapshot("pull.json", pr_number=8), "another pull request"),
-            "a member it did not check": (self.snapshot("unchecked.json", members=[CONCEALED, 999]),
-                                          "names a user the snapshot did not check"),
+            "a member it did not read": (self.snapshot("unread.json", members=[CONCEALED, 999]),
+                                         "names a user whose membership the snapshot did not read"),
+            "a candidate it did not check": (self.snapshot("unchecked.json", candidates=[CONCEALED, 999]),
+                                             "names a user the snapshot did not check"),
             "another kind": (self.snapshot("kind.json", kind="mod-base.ci.scope"), "$.kind"),
             "its bytes are not canonical": (noncanonical, "canonical bytes"),
             "it is too large": (oversized, "organization members snapshot"),

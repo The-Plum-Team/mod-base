@@ -27,9 +27,11 @@ config (:func:`mod_base.build_ci.config.admission`) states the same rule as data
 * The latest decision counts, and it must approve. A decision on another head, by anybody else or
   in other words counts for nothing, and a decision that was edited after it was written refuses
   the admission until it is deleted: anybody with write access can edit a comment. A decision
-  posted after the members snapshot (a comment id above its ``through_comment_id``) refuses too,
-  until an evaluation with a newer snapshot decides it. Without a snapshot no member's decision
-  counts, and a comment that the snapshot should have checked but did not is an error.
+  the members snapshot did not read as one (posted after it, a comment id above its
+  ``through_comment_id``, or edited into one since) refuses too, until an evaluation with a newer
+  snapshot decides it. Without a snapshot an admission that names an organization refuses every
+  change to a protected path, whoever decided, and a comment that the snapshot should have checked
+  but did not is an error.
 * A refusal is a reason, which the evaluation publishes as a failure of every gate that would
   otherwise have been a success. An API failure is never a refusal: it propagates and no intent is
   produced, as for every other read of the evaluation.
@@ -93,9 +95,10 @@ def head_decisions(api: GitHubApi | CommandReads, *, pr_number: int, head_sha: s
     ``<command> approve|revoke <head_sha>``, written by a ``User`` and not through a GitHub App,
     whose author is a user of ``approvers`` with the association listed for them or, when
     ``approvers`` name an organization and ``members`` is its snapshot, one of its members. ``late``
-    marks a decision posted after the snapshot (an id above ``members.through_comment_id``) by an
-    author no user entry admits: it is not known to be a member's yet. At most
-    ``limits.MAX_CI_ADMISSION_COMMENTS`` comments are read.
+    marks a decision by an author no user entry admits that the snapshot did not read as one:
+    posted after it (an id above ``members.through_comment_id``), or by a checked author who was no
+    candidate, so the comment became a decision by an edit since. Its author is not known to be a
+    member yet. At most ``limits.MAX_CI_ADMISSION_COMMENTS`` comments are read.
 
     A comment is skipped for its author's type and for ``performed_via_github_app`` before its text
     is read, as the ``members`` job skips it before it records its author: the job checks every
@@ -135,6 +138,10 @@ def head_decisions(api: GitHubApi | CommandReads, *, pr_number: int, head_sha: s
             elif user["id"] not in members.checked:
                 raise MembershipError("the organization members snapshot did not check the author of a decision it "
                                       "should have read")
+            elif user["id"] not in members.candidates:
+                # Its comment was no decision when the snapshot read it, so it was edited since,
+                # and the author's membership was not read.
+                late = True
             elif user["id"] not in members.members:
                 continue
         created = grammar.normalize_timestamp(row.get("created_at"), f"{where}.created_at")
@@ -152,7 +159,8 @@ def admission_refusal(api: GitHubApi | CommandReads, watch: Watch, *, config: Bu
 
     ``plan`` is the verified plan of the evaluation, so its head, base and tested tree are those of
     the live pull request. ``members`` is the organization members snapshot of the status caller,
-    or None when it passed none. The decisions are read through ``watch``, which the evaluation
+    or None when it passed none: an admission that names an organization then refuses a change to a
+    protected path without reading any decision. The decisions are read through ``watch``, which the evaluation
     rechecks before it returns its document."""
 
     policy = admission(config.data)
@@ -163,19 +171,20 @@ def admission_refusal(api: GitHubApi | CommandReads, watch: Watch, *, config: Bu
                                      protected_paths=policy["protected_paths"])
     if changed is None:
         return None
+    if admission_organization(policy) is not None and members is None:
+        # The members job failed (or no caller passed its snapshot). A member's revocation could
+        # then not be counted, so no decision is, a listed user's included, and no comment is read.
+        return f"admission: {changed} is protected; the organization's members were not read; evaluate again"
     command = policy["command"]
     decisions = watch.read(("approver decisions on the pull request head",), functools.partial(
         head_decisions, api, pr_number=identity["pr_number"], head_sha=identity["head_sha"], command=command,
         approvers=policy["approvers"], members=members))
     if not decisions:
-        if admission_organization(policy) is not None and members is None:
-            return (f"admission: {changed} is protected; the organization's members were not read, so no member's "
-                    f"approval counts")
         return f"admission: {changed} is protected; needs `{command} approve <head sha>` from an approver"
     if any(decision["edited"] for decision in decisions):
         return f"admission: a `{command}` decision on this head was edited; delete it and decide again"
     if any(decision["late"] for decision in decisions):
-        return f"admission: a `{command}` decision on this head was posted after its members were read; evaluate again"
+        return f"admission: a `{command}` decision on this head is newer than its members snapshot; evaluate again"
     if decisions[-1]["decision"] != "approve":
         return f"admission: the latest `{command}` decision on this head revokes it"
     return None

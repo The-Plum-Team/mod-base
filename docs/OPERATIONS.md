@@ -388,11 +388,19 @@ operation, done once per App before any mod names an organization entry**, and n
 3. Do the same for every other App a `mod-base-gate` environment holds the key of, for example
    `plum-mod-base-canary` (App id 5284572) of the gate-status canary.
 
-Until it is done, every run of the caller of a mod with an organization entry fails in `members`
-and publishes nothing (the newest published status stays). A mod without an organization entry
-never runs that job, never enters the environment for it and does not need the permission, so a
-kit bump to v1.6.0 changes nothing for it; a mod of a user account, not an organization, cannot
-name an organization entry at all.
+Until it is done, the `members` job of a mod with an organization entry fails as soon as a comment
+of the pull request could be a decision (it contains `<command> approve ` or `<command> revoke `),
+because that is when it mints the members-read token; on a pull request without such a comment it
+mints nothing and succeeds. A failed `members` job does not stop the caller: the evaluation runs
+without the snapshot, a pull request that changes a protected path gets `failure` ("the
+organization's members were not read; evaluate again") whoever approved it, a listed user
+included, and every other pull request is evaluated as without the entry. A mod without an
+organization entry never runs that job, never enters the environment for it and does not need the
+permission, so a kit bump to v1.6.0 changes nothing for it. Only an organization has members: in a
+repository of a user account an organization entry passes the config's validation (it names the
+owner), but its `members` job always fails before minting ("the repository is not owned by the
+organization its admission names"), so every change to a protected path is refused. Do not name
+one there.
 
 The caller runs when a run of either gate caller is requested or has completed, on the pull
 request events that start those runs, once an hour for one open pull request in turn (of the ten
@@ -542,7 +550,9 @@ workflow or the config itself gets both contexts once its gates pass.
    a success already published stays until a newer one replaces it, so check the live statuses
    before merging. Never edit a decision: an edited one refuses the admission until it is deleted.
    The decisions are read from at most 300 comments: a pull request with more that changes a
-   protected path gets no status at all, so move it to a new pull request.
+   protected path gets no status at all (with an organization entry: `failure`, because its
+   `members` job fails), so move it to a new pull request. A pull request that changes no
+   protected path is not affected.
 4. **Revoke** with a revocation **and** a new head or a draft: a collaborator with write access can
    delete a revocation, which brings the approval before it back. So post the revocation, then push
    a new commit to the pull request or convert it to a draft (`gh pr ready <N> --undo`), then
@@ -556,19 +566,34 @@ workflow or the config itself gets both contexts once its gates pass.
 
    The same applies after removing a member from the organization: their approvals and revocations
    stop counting at the next evaluation, so dispatch the caller for each open pull request that
-   changes a protected path. The hourly reconciliation takes one pull request per hour, and a run
-   that fails (the API, the App permission) leaves the newest published status in place.
+   changes a protected path. The hourly reconciliation takes one pull request per hour. A run whose
+   evaluation or publication fails (the API, the App permission) leaves the newest published status
+   in place; a failed `members` job does not, since the evaluation then refuses the protected
+   change.
 
 With an organization entry, who counts is decided when the evaluation runs: an approval an invitee
 posted before accepting the invitation counts once they accept, without a new comment, and a
 removed member's decisions no longer count. Any member may approve, also their own pull request,
 and any member may revoke another member's approval; a comment posted through a GitHub App or by a
-bot never counts. Anyone who comments can delay a publication but never cause a success: a
-decision-shaped comment posted while a run is in flight makes that run publish a refusal ("evaluate
-again"; dispatch the caller once more), more than 20 commenters with such comments who are missing
-from the member list fail the members job, and more than 300 comments fail every evaluation, as
-before. The members job prints which of those commenters are members (concealed ones included) in
-the run log; it never prints the member list.
+bot never counts. Anyone who comments can delay or block the success of a pull request that
+changes a protected path, but never cause one, and a pull request that changes no protected path
+is evaluated whatever its comments say:
+
+- a decision-shaped comment by an author the run's snapshot did not read as one (posted while the
+  run is in flight, or an older comment edited into a decision) makes that run publish a refusal
+  ("... is newer than its members snapshot; evaluate again"). Comments do not start the caller, so
+  the refusal stays until the next event, the hourly turn or a dispatch;
+- more than 20 commenters with decision-shaped comments who are missing from the member list, an
+  organization of more than 1000 members that does not list a candidate, more than 300 comments, a
+  rate limit or a missing App permission fail the `members` job, and the evaluation then refuses
+  every change to a protected path ("the organization's members were not read").
+
+A public repository cannot keep anyone from commenting. When a pull request is flooded, lock its
+conversation ("Lock conversation" on the pull request, or
+`gh api --method PUT repos/$R/issues/<N>/lock`: only collaborators with write access can comment
+then), delete the offending comments and dispatch the caller; if more than
+300 comments remain, move the change to a new pull request. The members job prints which of those
+commenters are members (concealed ones included) in the run log; it never prints the member list.
 
 The kit checks the generic rule only. A mod's native evaluator may check more (an upgrade's exact
 path list, required files, the loader bootstrap, a restricted transition's declaration); while it

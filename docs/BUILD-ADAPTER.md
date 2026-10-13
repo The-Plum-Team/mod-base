@@ -190,10 +190,15 @@ for the pull request ([OPERATIONS.md](OPERATIONS.md#protected-admission)).
 entry, the status caller's `members` job runs before the evaluation: it reads the pull request's
 comments, records every `User` author that did not post through a GitHub App, and asks the
 organization, with a token of the gate App limited to "Members: Read-only", which of the authors
-whose comment contains `approve` or `revoke` are active members. The evaluation counts a decision
-by one of those members; a decision posted after that snapshot is a refusal until the next run
-reads it, and an invitation that is still pending is no membership. Without the snapshot (an
-older caller, or no organization entry at the base) no member's decision counts. The gate App
+whose comment could be a decision (it contains `<command> approve ` or `<command> revoke `) are
+active members; a pending invitation and a billing manager are no membership. The evaluation
+counts a decision by one of those members; a decision the snapshot did not read as one (posted
+after it, or edited into one since) is a refusal until the next run reads it. When the `members`
+job fails (more than 300 comments, more than 20 unlisted candidates, the API, the App permission,
+a repository of a user account), the evaluation runs without the snapshot and every change to a
+protected path is refused, whoever approved it; a pull request that changes no protected path is
+evaluated as usual. Only an organization has members: do not name an organization entry in a
+repository of a user account. The gate App
 needs the organization permission "Members: Read-only" before a mod names an organization entry
 ([OPERATIONS.md](OPERATIONS.md#the-gate-status-app)); a mod without one never runs the job and
 never needs the permission. A config with an organization entry is refused by kit releases older

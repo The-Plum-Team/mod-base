@@ -293,7 +293,8 @@ def evaluate_gates(api: GitHubApi, *, pr_number: int, config: BuildConfig, activ
     for the pull request, or None when it could derive none (no gate can then succeed);
     ``temporary_root`` is a private directory for the tested records; ``members`` is the
     organization members snapshot of the status caller's ``members`` job, or None when it passed
-    none (no member's decision counts then). Returns
+    none (an admission that names an organization then refuses every change to a protected path).
+    Returns
     ``{repository, pr_number, target_sha, gates}``, where ``gates`` maps each evaluated gate
     (:func:`gate_contexts`) to its ``context``, ``state`` (``success``, ``pending`` or
     ``failure``), one-line ``description`` and ``target_url``: the canonical URL of the run that

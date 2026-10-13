@@ -284,9 +284,12 @@ CONCEALED, MEMBER, COLLABORATOR, INVITEE = 202, 505, 303, 404
 
 
 def snapshot(*, checked: tuple[int, ...] = (CONCEALED, MEMBER, COLLABORATOR, INVITEE),
-             members: tuple[int, ...] = (CONCEALED, MEMBER), through: int = 100,
-             organization: str = "example") -> OrgMembers:
-    return OrgMembers(organization, 7, through, frozenset(checked), frozenset(members))
+             candidates: tuple[int, ...] | None = None, members: tuple[int, ...] = (CONCEALED, MEMBER),
+             through: int = 100, organization: str = "example") -> OrgMembers:
+    """By default every checked author wrote a decision-shaped comment, so each one's membership was read."""
+
+    return OrgMembers(organization, 7, through, frozenset(checked),
+                      frozenset(checked if candidates is None else candidates), frozenset(members))
 
 
 def by(user_id: int, body: str, **changes: Any) -> dict[str, Any]:
@@ -381,6 +384,15 @@ class OrganizationDecisionTests(unittest.TestCase):
         # A comment after the snapshot that is no decision is no concern of the admission.
         self.assertEqual(self.decisions([by(999, "LGTM", number=150)]), [])
 
+    def test_a_decision_by_a_checked_author_whose_membership_was_not_read_is_late(self) -> None:
+        # The comment was no decision when the members job read it: it became one by an edit since.
+        approve = f"{COMMAND} approve {HEAD}"
+        unread = snapshot(candidates=(CONCEALED,), members=(CONCEALED,))
+        for author in (MEMBER, COLLABORATOR):
+            with self.subTest(author=author):
+                self.assertEqual(self.decisions([by(author, approve, number=50)], unread), [(50, "approve", True)])
+        self.assertEqual(self.decisions([by(CONCEALED, approve, number=50)], unread), [(50, "approve", False)])
+
     def test_a_decision_the_snapshot_should_have_checked_is_an_error(self) -> None:
         with self.assertRaises(MembershipError):
             self.decisions([by(999, f"{COMMAND} approve {HEAD}", number=100)])
@@ -438,19 +450,26 @@ class OrganizationRefusalTests(unittest.TestCase):
         self.assertEqual(self.refusal([approve], members=snapshot(members=(MEMBER,))),
                          f"admission: scripts/ci is protected; needs `{COMMAND} approve <head sha>` from an approver")
 
-    def test_without_a_snapshot_the_refusal_says_so(self) -> None:
+    def test_without_a_snapshot_every_protected_change_is_refused_unread(self) -> None:
         self.protect()
-        unread = ("admission: scripts/ci is protected; the organization's members were not read, so no member's "
-                  "approval counts")
+        unread = "admission: scripts/ci is protected; the organization's members were not read; evaluate again"
         self.assertEqual(self.refusal([by(CONCEALED, f"{COMMAND} approve {HEAD}")], members=None), unread)
         self.assertLessEqual(len(unread), limits.MAX_CI_STATUS_DESCRIPTION_CHARS)
+        # A listed user's approval does not stand either: a member's revocation could not be counted.
+        owner = comment(f"{COMMAND} approve {HEAD}", number=1, user_id=1)
+        mixed = {**ORG_ADMISSION, "approvers": [*APPROVERS, *ORGANIZATION]}
+        self.repository.api.set_comments(7, [owner])
+        self.assertEqual(admission_refusal(CommandReads.of(self.repository.api), Watch(), config=self.config(mixed),
+                                           plan=self.plan, members=None), unread)
+        self.assertIsNone(admission_refusal(CommandReads.of(self.repository.api), Watch(), config=self.config(mixed),
+                                            plan=self.plan, members=snapshot()))
         self.assertEqual(self.refusal([], members=snapshot()),
                          f"admission: scripts/ci is protected; needs `{COMMAND} approve <head sha>` from an approver")
 
     def test_a_decision_after_the_snapshot_refuses_until_the_next_evaluation(self) -> None:
         self.protect()
         approve = by(CONCEALED, f"{COMMAND} approve {HEAD}", number=1)
-        late = f"admission: a `{COMMAND}` decision on this head was posted after its members were read; evaluate again"
+        late = f"admission: a `{COMMAND}` decision on this head is newer than its members snapshot; evaluate again"
         self.assertLessEqual(len(late), limits.MAX_CI_STATUS_DESCRIPTION_CHARS)
         for author in (CONCEALED, MEMBER, COLLABORATOR, 999):
             for decision in ("approve", "revoke"):

@@ -1298,13 +1298,16 @@ def ci_runtime_envelope() -> dict[str, Any]:
 
 
 def ci_org_members(*, organization: str = "example", pr_number: int = 7, through_comment_id: int = 30,
-                   checked: list[int] | None = None, members: list[int] | None = None) -> dict[str, Any]:
+                   checked: list[int] | None = None, candidates: list[int] | None = None,
+                   members: list[int] | None = None) -> dict[str, Any]:
     """An organization members snapshot of the status caller's ``members`` job: three comment
-    authors checked, one of them an active member."""
+    authors checked, two of them candidates whose membership was read, one an active member."""
 
     return {"kind": "mod-base.ci.org-members", "schema_version": 1, "organization": organization,
             "pr_number": pr_number, "through_comment_id": through_comment_id,
-            "checked": [101, 202, 303] if checked is None else checked, "members": [202] if members is None else members}
+            "checked": [101, 202, 303] if checked is None else checked,
+            "candidates": [202, 303] if candidates is None else candidates,
+            "members": [202] if members is None else members}
 
 
 def sample_documents() -> dict[str, dict[str, Any]]:

@@ -30,15 +30,19 @@ class SchemaTests(unittest.TestCase):
         document = ci_org_members()
         self.assertIs(validate_document(document, kind=ORG_MEMBERS_KIND), document)
 
-    def test_ids_are_ascending_bounded_and_the_members_are_checked(self) -> None:
+    def test_ids_are_ascending_bounded_and_the_members_are_read_candidates_who_were_checked(self) -> None:
         most = list(range(1, limits.MAX_CI_ADMISSION_COMMENTS + 1))
-        for changes in ({"checked": [], "members": []}, {"checked": most, "members": most},
-                        {"through_comment_id": 0}, {"members": []}):
+        for changes in ({"checked": [], "candidates": [], "members": []},
+                        {"checked": most, "candidates": most, "members": most},
+                        {"through_comment_id": 0}, {"members": []}, {"candidates": [202], "members": [202]},
+                        {"candidates": [101, 202, 303]}):
             with self.subTest(valid=changes):
                 validate_org_members(ci_org_members(**changes))
         for changes in ({"checked": [*most, len(most) + 1]}, {"checked": [101, 101]}, {"checked": [202, 101]},
                         {"checked": [0]}, {"checked": [True]}, {"checked": [1.5]}, {"members": [404]},
                         {"members": [303, 202]}, {"through_comment_id": -1}, {"pr_number": 0},
+                        {"candidates": [202, 404], "members": [202]}, {"candidates": [303], "members": [202]},
+                        {"candidates": [303, 202]}, {"members": [101]},
                         {"organization": ""}, {"organization": "a" * 40}, {"organization": "example\n"}):
             with self.subTest(invalid=changes), self.assertRaises(MbError):
                 validate_org_members(ci_org_members(**changes))
@@ -66,7 +70,8 @@ class LoadTests(unittest.TestCase):
 
     def test_the_snapshot_of_this_pull_request_and_owner_is_loaded(self) -> None:
         loaded = load_org_members(self.write(ci_org_members()), repository=REPOSITORY, pr_number=7)
-        self.assertEqual(loaded, OrgMembers("example", 7, 30, frozenset({101, 202, 303}), frozenset({202})))
+        self.assertEqual(loaded, OrgMembers("example", 7, 30, frozenset({101, 202, 303}), frozenset({202, 303}),
+                                            frozenset({202})))
 
     def test_anything_else_is_refused(self) -> None:
         document = ci_org_members()

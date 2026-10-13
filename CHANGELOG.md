@@ -55,34 +55,43 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   `author_association` cannot prove a private membership, so the managed `mod-base-gate-status.yml`
   gains a job `members` ("Read the organization members", `workflow.CI_CALLER_JOBS`) that runs only
   when the protected config at the base names such an entry (`locate` reads it, with `contents:
-  read`, and outputs `organization`); otherwise nothing changes and no new permission is needed. In
-  the environment `mod-base-gate`, it reads the pull request's comments with the job token (more
+  read`, and outputs `organization` and the admission's `command`); otherwise nothing changes and
+  no new permission is needed. In the environment `mod-base-gate`, it checks that an organization
+  of that name owns the repository, reads the pull request's comments with the job token (more
   than 300 fail, as the kit's admission does), checks every `User` author that did not post through
-  a GitHub App whatever they wrote, and, only when one of them wrote `approve` or `revoke`, mints a
-  token of the gate App limited to `permission-members: read` and reads the organization's member
-  list (at most 1000 members, by numeric id, never printed; a candidate missing from it is asked for
-  its own active membership, at most 20). Its output is the new document kind
-  `mod-base.ci.org-members` (schema 1, `build_ci.membership`, at most `MAX_CI_ORG_MEMBERS_BYTES`,
-  16 KiB): `checked`, `members` and `through_comment_id`. `gate-status.yml` takes it as the new
-  optional input `members` and passes it to the verifying call only, as `ci gate-status
-  --org-members FILE` (refused with `--settle`). The admission counts a decision of a member by
-  id; a decision posted after the snapshot is a published refusal ("evaluate again"); a decision
-  below it by an author the snapshot did not check fails without publishing; without the snapshot no
-  member's decision counts. Before minting the statuses token, `publish` reads the membership of
-  the same candidates again (never the comments) and publishes nothing if it changed. For every
-  approver, listed users included, a comment posted through a GitHub App
+  a GitHub App whatever they wrote, and, only when a comment could be a decision (it contains
+  `<command> approve ` or `<command> revoke `: its author is a candidate), mints a token of the
+  gate App limited to `permission-members: read` and reads the organization's member list until
+  every candidate is found (at most 1000 members, by numeric id, never printed; a candidate missing
+  from it is asked for its own membership, `active` in the role `admin` or `member`, at most 20).
+  Its output is the new document kind `mod-base.ci.org-members` (schema 1, `build_ci.membership`,
+  at most `MAX_CI_ORG_MEMBERS_BYTES`, 16 KiB): `checked`, `candidates`, `members` and
+  `through_comment_id`. `gate-status.yml` takes it as the new optional input `members` and passes
+  it to the verifying call only, as `ci gate-status --org-members FILE` (refused with `--settle`).
+  The admission counts a decision of a member by id; a decision the snapshot did not read as one
+  (posted after it, or by a checked author who was no candidate, so edited into one since) is a
+  published refusal ("evaluate again"); a decision below it by an author the snapshot did not check
+  fails without publishing. A failed `members` job does not stop the caller: the evaluation runs
+  without the snapshot, and without it an admission that names an organization refuses every
+  change to a protected path before reading any comment, a listed user's approval included, so a
+  failure, a revocation or a newer failed run is still published and a pull request that changes
+  no protected path is evaluated as before. Before writing a `success` (and only then), `publish`
+  reads the membership of the same candidates again (never the comments) and publishes nothing if
+  it changed. For every approver, listed users included, a comment posted through a GitHub App
   (`performed_via_github_app`) now never decides, and a decision's author must carry a numeric id.
   No request is added to `ci gate-status` (`MAX_CI_GATE_STATUS_REQUESTS` unchanged).
 - Owner action before any mod names an organization entry: grant the gate App (`plum-mod-base-gate`,
   and `plum-mod-base-canary` for the gate-status canary) the organization permission "Members:
   Read-only" and accept the request on the installation (docs/OPERATIONS.md, "The gate status App").
+  Until then a mod that names one gets no `success` on a pull request that changes a protected
+  path (any decision makes its `members` job fail); every other pull request is unaffected.
   The revoke procedure is now a revocation plus a new head or a draft, then a dispatch of the status
   caller, because a collaborator with write access can delete a revocation (docs/OPERATIONS.md,
   "Protected admission"; docs/SECURITY-MODEL.md).
 - Compatibility of the organization approvers: one new document kind, `mod-base.ci.org-members`,
   a `new-kind` that the v1.5.0 reader rejects as unknown (ledger, ADR 0007, SCHEMAS.md). The
   managed file `.github/workflows/mod-base-gate-status.yml` changes (the `members` job, `locate`'s
-  `contents: read`, three mint steps of the one pinned App-token action, the publish recheck), and
+  `contents: read`, three mint steps of the one pinned App-token action, the publish decision and recheck), and
   so does the callee `gate-status.yml` (input `members`). A Build config with an organization entry
   is refused by kits older than v1.6.0: revert the entry before a pin rollback below v1.6.0. The
   `MB_KIT_TREE_DIGEST` literals and the staged-file lock move.

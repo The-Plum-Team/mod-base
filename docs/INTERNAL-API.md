@@ -761,7 +761,7 @@ Protected Build/runtime (independent ceilings, no change to Pages budgets):
 * `MAX_CI_GENERATION_REQUESTS`: 440, a regression budget enforced by `tests/test_ci_generation_budget.py` for the two enrolled native profiles, including one final status evaluation and no waiting polls; not runtime plan admission.
 * `MAX_CI_GATE_STATUS_REQUESTS`: 96, the request budget of `ci gate-status` (36 with both runs complete; a protected admission adds 3 when no protected directory changes and at most 1 + 2 * `MAX_CI_ADMISSION_DIRECTORIES` + 2 * 4 otherwise: the comments are read twice, three full pages and the empty one that ends the listing).
 * `MAX_CI_ADMISSION_PATHS`, `MAX_CI_ADMISSION_DIRECTORIES`, `MAX_CI_ADMISSION_APPROVERS`, `MAX_CI_ADMISSION_COMMENTS`: The 64 protected paths of one `admission` of the Build config, the 16 directories that may hold them (the root included: the trees read on either side of a pull request), its 8 approvers and the 300 comments of a pull request read for their decisions (one more fails the evaluation, and the status caller's `members` job too).
-* `MAX_CI_ORG_MEMBERS_BYTES`: 16384 bytes for one organization members snapshot (`mod-base.ci.org-members`): at most 300 checked user ids and as many members, 16 digits each, on one line. The status callee refuses a larger `members` input and the members job a larger document.
+* `MAX_CI_ORG_MEMBERS_BYTES`: 16384 bytes for one organization members snapshot (`mod-base.ci.org-members`): at most 300 checked user ids and as many candidates and members, 16 digits each, on one line. The status callee refuses a larger `members` input and the members job a larger document.
 * `MAX_CI_PRIVATE_RECORD_ENTRIES`: Exact entry budget of a fixed single-leaf private record directory. MB1 entry caps count the root, so the directory plus its one leaf; an empty stage stays 1.
 * `MAX_CI_POLICY_TESTS`, `MAX_CI_POLICY_WORKERS`: Policy discovery/count and worker ceilings.
 * `MAX_CI_ENVELOPE_BYTES`, `MAX_CI_RECORD_BYTES`, `MAX_CI_ARTIFACTS_PER_GATE`
@@ -3036,22 +3036,24 @@ approve, an edited one refuses until it is deleted, and one posted after the sna
 the next evaluation. Read-only; trees are read once, the decisions through the evaluation's watch.
 
 * `def changed_protected_path(api: GitHubApi | CommandReads, *, base_sha: str, tested_tree: str, protected_paths: list[str] | tuple[str, ...]) -> str | None`: The first protected path whose tree entry (mode, type, object id; absence included) differs between the commit `base_sha` and the tree `tested_tree`, or `None`. One commit read, then non-recursive tree reads from the root down, never below a directory whose object is equal on both sides.
-* `def head_decisions(api: GitHubApi | CommandReads, *, pr_number: int, head_sha: str, command: str, approvers: list[dict[str, Any]], members: OrgMembers | None = None) -> list[dict[str, Any]]`: The approver decisions on `head_sha` among the comments of the pull request (at most `MAX_CI_ADMISSION_COMMENTS`), oldest first, each `{id, decision, created_at, edited, late}`; `late` marks a decision posted after the snapshot (a comment id above `through_comment_id`) by an author no user entry admits. A comment by no `User` or through a GitHub App is skipped before its text is read, as the members job skips it; a malformed comment, a decision's author without a numeric id, a decision below `through_comment_id` by an author the snapshot did not check, and a snapshot for an admission that names no such organization are rejections.
-* `def admission_refusal(api: GitHubApi | CommandReads, watch: Watch, *, config: BuildConfig, plan: dict[str, Any], members: OrgMembers | None = None) -> str | None`: Why the gates of the verified generation `plan` may not succeed (one line), or `None`: no admission, no protected path changed, or the latest decision approves. An edited decision, then a late one, refuse first; without a snapshot under an organization approver the refusal says that no member's approval counts. The decisions are read through `watch`.
+* `def head_decisions(api: GitHubApi | CommandReads, *, pr_number: int, head_sha: str, command: str, approvers: list[dict[str, Any]], members: OrgMembers | None = None) -> list[dict[str, Any]]`: The approver decisions on `head_sha` among the comments of the pull request (at most `MAX_CI_ADMISSION_COMMENTS`), oldest first, each `{id, decision, created_at, edited, late}`; `late` marks a decision by an author no user entry admits that the snapshot did not read as one: posted after it (a comment id above `through_comment_id`) or by a checked author who was no candidate (edited into a decision since). A comment by no `User` or through a GitHub App is skipped before its text is read, as the members job skips it; a malformed comment, a decision's author without a numeric id, a decision below `through_comment_id` by an author the snapshot did not check, and a snapshot for an admission that names no such organization are rejections.
+* `def admission_refusal(api: GitHubApi | CommandReads, watch: Watch, *, config: BuildConfig, plan: dict[str, Any], members: OrgMembers | None = None) -> str | None`: Why the gates of the verified generation `plan` may not succeed (one line), or `None`: no admission, no protected path changed, or the latest decision approves. Without a snapshot under an organization approver, a changed protected path is refused before any comment is read, whoever decided; otherwise an edited decision, then a late one, refuse first. The decisions are read through `watch`.
 
 ## `mod_base.build_ci.membership`
 
 Owner: MB11. The organization members snapshot (`mod-base.ci.org-members`, schema 1) that the
 status caller's `members` job writes when the protected admission names the organization that owns
 the repository: `checked`, every `User` comment author not posting through a GitHub App, whatever
-they wrote; `members`, the active members among those whose comment contains `approve` or
-`revoke`; `through_comment_id`, the greatest comment id it read. Read-only, no request.
+they wrote; `candidates`, those of them whose comment could be a decision (it contains the
+command followed by `approve ` or `revoke `), the only authors whose membership it read;
+`members`, the active members among the candidates (role `admin` or `member`);
+`through_comment_id`, the greatest comment id it read. Read-only, no request.
 
 * `ORG_MEMBERS_KIND = 'mod-base.ci.org-members'`
 * `class MembershipError(MbError)`: The snapshot cannot be used for this evaluation (reason `ci-status`); no intent is produced.
-* `def validate_org_members(document: Any, *, path: str = '$') -> dict[str, Any]`: The schema: the organization login, a positive `pr_number`, `through_comment_id` >= 0, `checked` and `members` strictly ascending positive ids, at most `MAX_CI_ADMISSION_COMMENTS` each, `members` within `checked`.
+* `def validate_org_members(document: Any, *, path: str = '$') -> dict[str, Any]`: The schema: the organization login, a positive `pr_number`, `through_comment_id` >= 0, `checked`, `candidates` and `members` strictly ascending positive ids, at most `MAX_CI_ADMISSION_COMMENTS` each, `members` within `candidates` within `checked`.
 * `class OrgMembers`: A validated snapshot.
-  * fields: `organization: str, pr_number: int, through_comment_id: int, checked: frozenset[int], members: frozenset[int]`
+  * fields: `organization: str, pr_number: int, through_comment_id: int, checked: frozenset[int], candidates: frozenset[int], members: frozenset[int]`
 * `def load_org_members(path: Path, *, repository: str, pr_number: int) -> OrgMembers`: Read the snapshot from a regular file of at most `MAX_CI_ORG_MEMBERS_BYTES` in canonical bytes; it must name the owner of `repository` exactly and `pr_number`.
 
 ## `mod_base.build_ci.runtime_schema`
