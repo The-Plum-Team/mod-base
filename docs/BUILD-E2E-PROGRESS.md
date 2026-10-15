@@ -26,9 +26,12 @@ pull request's packaged lanes run a narrowed, sealed runtime scope (opt-in `runt
 and finds each family handoff by its exact name across a whole wave of producer runs; and
 v1.6.0, which lets any current member of the owning organization decide a protected admission
 (proven by the gate App's member list) and lets a late consumer request a full shared generation
-of the live head (`ci request-generation`, KQ9-4). No mod is active: none has an
-activation manifest, and managed Build/E2E callers have run on GitHub only in the K7 canary
-repository. The design awaits owner agreement; ADR 0007 is Proposed. **K7 is done: its rounds ran at v1.1.1 and the v1.1.3 fixes passed in a second canary (see its row
+of the live head (`ci request-generation`, KQ9-4); and v1.6.1, which gives the processes of a
+hook that exited 0 ten seconds to exit before it fails the hook for leaving one behind, and names
+the survivors (#37), with `actions/upload-artifact` v7.0.2. Both mods run the shared pipeline:
+Quick Skin and Block Pops have activation mode `shared-build-and-e2e` (Block Pops since
+`5c51526`, Quick Skin since `66c9b8c`, both 11 October 2026) and pinned v1.6.0 when v1.6.1 was
+released. The design awaits owner agreement; ADR 0007 is Proposed. **K7 is done: its rounds ran at v1.1.1 and the v1.1.3 fixes passed in a second canary (see its row
 below); the v1.1.3 Release is published. When K7 closed, Quick Skin and Block Pops pinned v1.1.1
 without an activation manifest, and Q1–Q10, B1–B7 and the GitHub settings of the mods were untouched.**
 
@@ -38,7 +41,7 @@ without an activation manifest, and Q1–Q10, B1–B7 and the GitHub settings of
   Python 3.11 and 3.13 at the v1.1.1 release commit, 3,059 on Python 3.11 and 3.13 at the v1.1.2
   release commit, 3,060 on Python 3.11 and 3.13 at the v1.1.3 release commit, 3,080 tests on
   each Python 3.11–3.13 at the v1.2.0 release commit, 3,081 on each Python 3.11–3.13 at the v1.2.1
-  release commit, 3,124 on each Python 3.11–3.13 at the v1.3.0 release commit, 3,141 on each Python 3.11–3.13 at the v1.3.1 release commit, 3,169 on each Python 3.11–3.13 at the v1.4.0 release commit, 3,170 on each Python 3.11–3.13 at the v1.4.1 release commit, 3,218 on each Python 3.11–3.13 at the v1.5.0 release commit, 3,288 on each Python 3.11–3.13 at the v1.6.0 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
+  release commit, 3,124 on each Python 3.11–3.13 at the v1.3.0 release commit, 3,141 on each Python 3.11–3.13 at the v1.3.1 release commit, 3,169 on each Python 3.11–3.13 at the v1.4.0 release commit, 3,170 on each Python 3.11–3.13 at the v1.4.1 release commit, 3,218 on each Python 3.11–3.13 at the v1.5.0 release commit, 3,288 on each Python 3.11–3.13 at the v1.6.0 release commit, 3,291 on each Python 3.11–3.13 at the v1.6.1 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
   integration cases use real files, Git and processes, while older isolated tests also replace
   system/account operations.
 - **Hosted account proof:** `ci_linux_worker.py` (132 tests), `ci_linux_deferred.py` (2 tests) and
@@ -156,7 +159,11 @@ catalogue remains; no protocol or artifact bound was raised to make a pipeline p
 
 ## Quick Skin (Q1 to Q10)
 
-None of these steps has started: the Quick Skin repository has not been changed for this pipeline
+Status as of v1.6.1: Quick Skin runs the shared gates in mode `shared-build-and-e2e` at v1.6.0, and
+its Q8 batch work is open in its own repository. The paragraph below is the plan as written before
+adoption began; the Quick Skin repository records which steps have landed.
+
+The plan as first written: none of these steps had started: the Quick Skin repository has not been changed for this pipeline
 and keeps its own Build and Packaged E2E workflows. Every step waits for a released kit; the
 release is the owner's procedure and needs K7 to pass first. Q1, Q2, Q7, Q8, Q9 and Q10 are
 changes in the Quick Skin repository. Four steps need the owner to act on GitHub and cannot be
@@ -170,7 +177,11 @@ changes that go with Q3 and Q6; without them Quick Skin cannot adopt this model.
 
 ## Block Pops (B1 to B7)
 
-None of these steps has started. The design begins them only after the kit and Quick Skin have
+Status as of v1.6.1: Block Pops made the mod-base Build its Build gate (mode `shared-build`,
+`d110ff6`) and then the packaged E2E its packaged gate (mode `shared-build-and-e2e`, `5c51526`), and
+runs them at v1.6.0. The paragraphs below are the plan as written before adoption began.
+
+The plan as first written: none of these steps had started. The design begins them only after the kit and Quick Skin have
 validated the pipeline, from a fresh worktree of `master`. All seven are changes in the Block Pops
 repository. B1 is a `controller-upgrade/*` change that needs the owner's approval of its exact
 head, and B2 and B3 are the two approved activations, shared Build first and shared E2E second.
