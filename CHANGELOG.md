@@ -13,6 +13,9 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   java`) (#37). A descendant still shutting down, such as a JVM, no longer fails a lane whose
   scenarios all passed; a real leftover still fails it, 10 seconds later. No document kind,
   managed file or adapter protocol changes.
+- The callees `build.yml`, `packaged-e2e.yml`, `publish.yml` and `finalize.yml` and the composites
+  `prepare-evidence` and `publish-family` pin `actions/upload-artifact` v7.0.2 (`cf430e0`, retries
+  an HTTP 429 of the artifact service) instead of v7.0.1 (#9).
 
 ## v1.6.0
 
