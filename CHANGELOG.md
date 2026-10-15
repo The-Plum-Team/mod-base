@@ -5,17 +5,32 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased
+## v1.6.1
+
+Patch release: a hook whose descendants are still exiting when it returns no longer fails for
+leaving a process behind, and a hook that does leave one names it (#37, #38); the callees and
+composites move to `actions/upload-artifact` v7.0.2 (#39). A mod moves from v1.6.0 to v1.6.1 with
+an ordinary pin bump.
 
 - `ci worker-run` gives the processes of a hook that exited 0 `CI_WORKER_EXIT_GRACE_SECONDS` (10)
   to exit before it fails the hook for leaving one behind, and the error now names up to four
   survivors by pid and inert process name (`worker dispatcher left a process behind: pid 4242
-  java`) (#37). A descendant still shutting down, such as a JVM, no longer fails a lane whose
+  java`) (#37, #38). A descendant still shutting down, such as a JVM, no longer fails a lane whose
   scenarios all passed; a real leftover still fails it, 10 seconds later. No document kind,
   managed file or adapter protocol changes.
 - The callees `build.yml`, `packaged-e2e.yml`, `publish.yml` and `finalize.yml` and the composites
   `prepare-evidence` and `publish-family` pin `actions/upload-artifact` v7.0.2 (`cf430e0`, retries
-  an HTTP 429 of the artifact service) instead of v7.0.1 (#9).
+  an HTTP 429 of the artifact service) instead of v7.0.1 (#39).
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files, the workflows' jobs, steps and permissions and the
+  request counts are those of v1.6.0. A `worker-run.json` records the longer error line in its
+  existing free-form `error` field. The compatibility baseline moves to the archived v1.6.0 reader
+  (`tests/fixtures/previous_release/v1.6.0`, built from the release commit like v1.5.0's), which
+  reads every kind of this release unchanged.
+- Upgrade: bump the pin to v1.6.1 as usual (`python3 scripts/ci/mod_base_kit.py bump --to v1.6.1`,
+  then `verify --network` and `template check`). A mod with `admission` lands the bump through its
+  protected route like any change to its callers.
+- Rollback: an ordinary pin bump back to v1.6.0; nothing is stored that it would not read.
 
 ## v1.6.0
 
