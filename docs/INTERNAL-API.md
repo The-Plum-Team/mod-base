@@ -2350,10 +2350,13 @@ verify_target|verify_build|verify_runtime [--unit ID] --output DIR` (the job's s
 not exist and becomes what the next step uploads; `--unit` is the target or lane and `verify_build`
 takes none; no API read) and `ci worker-finish --repo DIR --config F --state DIR`
 (`if: always()`; it reads only `--state` and the host). A hook's output is printed neutralised.
+`ci worker-prepare` also prints where the root fence spent its time, per phase and image tree.
 
 * `TOOL_PATH`: the argparse type of `--python` and `--java-home`, a canonical absolute POSIX path.
 * `PLAN_SHA256`: the argparse type of `--expect-sha256`, 64 lower-case hex digits.
 * `UNIT_ID`: the argparse type of `--unit`, a target or lane id (`grammar.CI_UNIT_ID`).
+* `FENCE_TIMING_KEYS`: the phases of the root fence's timing report.
+* `def fence_timing_line(payload: str) -> str | None`: The `worker-prepare: host fence timing {...}` line that `ci worker-prepare` prints after its summary from the payload of the audit event `mod_base.host_fence_timing`: one JSON object of `FENCE_TIMING_KEYS`, re-encoded with sorted keys; `None` for anything else, which is not printed.
 * `def add_verbs(verbs: argparse._SubParsersAction) -> None`
 * `def run_worker_prepare(args: argparse.Namespace) -> int`
 * `def run_plan(args: argparse.Namespace) -> int`

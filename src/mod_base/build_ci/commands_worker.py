@@ -45,6 +45,7 @@ A hook's output is printed with every line prefixed and neutralised (``worker.re
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 from mod_base import cli, runtime
@@ -133,13 +134,45 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
     finish.set_defaults(handler=run_worker_finish)
 
 
+#: The phases the root fence reports (``host.fence_worker_host``); nothing else is printed.
+FENCE_TIMING_KEYS = frozenset({"mounts", "closure", "walked_closed", "repair", "verification", "ok", "total"})
+
+
+def fence_timing_line(payload: str) -> str | None:
+    """The job-log line of the timing the root fence reported, or ``None`` for anything else.
+
+    The payload comes from the kit's own root bootstrap (``run_root_operation`` publishes it as
+    the audit event ``mod_base.host_fence_timing``); it is still re-encoded, so the line is one
+    JSON object of the known phases after a fixed prefix and can carry no workflow command.
+    """
+
+    try:
+        timing = json.loads(payload)
+    except ValueError:
+        return None
+    if not isinstance(timing, dict) or not set(timing) <= FENCE_TIMING_KEYS:
+        return None
+    return "worker-prepare: host fence timing " + json.dumps(timing, sort_keys=True, separators=(",", ":")) + "\n"
+
+
 def run_worker_prepare(args: argparse.Namespace) -> int:
     invocation = runtime.build_invocation(args.repo, args.config, cli.environ())
     job = lifecycle.open_job(invocation, args.state)
+    timings: list[str] = []
+
+    def observe(event: str, arguments: tuple[object, ...]) -> None:
+        if event == "mod_base.host_fence_timing" and not timings and arguments and isinstance(arguments[0], str):
+            timings.append(arguments[0][:limits.MAX_CI_ROOT_DIAGNOSTIC_BYTES])
+
+    sys.addaudithook(observe)
     worker = lifecycle.prepare_worker(invocation, job, roles=lifecycle.ROLE_SETS[args.roles], python=args.python,
                                       java_homes=tuple(args.java_home))
     sys.stdout.write(f"worker-prepare: {' and '.join(worker.accounts)} allocated and locked; "
                      f"{worker.tools.entries} tool entries admitted under {len(worker.tools.roots)} roots\n")
+    line = fence_timing_line(timings[0]) if timings else None
+    if line is not None:
+        # Where the cold fence spends its time, per phase and image tree (BUILD-E2E-PROGRESS.md).
+        sys.stdout.write(line)
     return 0
 
 
