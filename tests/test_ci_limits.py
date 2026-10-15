@@ -129,6 +129,11 @@ KIT: dict[str, tuple[Any, str]] = {
     "CI_ARTIFACT_UPLOAD_SKEW_SECONDS": (2, "artifact-service creation clock versus runner upload-step clock only"),
     "CI_TEST_MERGE_WAIT_SECONDS": (15, "maximum wait for GitHub to compute a pending PR test merge"),
     "CI_TEST_MERGE_POLL_SECONDS": (5, "interval between observations of a pending PR test merge"),
+    "CI_WORKER_EXIT_GRACE_SECONDS": (10.0, "time the descendants of a dispatcher that exited get to exit too before "
+                                           "the hook fails for leaving a process behind; only observed, never waited "
+                                           "past the hook's own timeout"),
+    "MAX_CI_WORKER_SURVIVORS_REPORTED": (4, "processes named (pid and sanitized name) in the error of a hook that "
+                                           "left some behind"),
     "MAX_CI_SUBJECT_REQUESTS": (16, "API requests one subject authentication may spend"),
     "MAX_CI_DERIVED_SUBJECT_REQUESTS": (4, "API requests one subject derivation in a job that holds the candidate "
                                            "checkout may spend: its one request and the retries of that request"),

@@ -194,7 +194,9 @@ class LinuxDeferredExecutionTests(hosted.HostedWorkerCase):
                 try:
                     result = self.run_dispatcher(_PROBE, role=role, timeout=120)
                 except WorkerExecutionError as error:
-                    self.assertEqual(str(error), 'worker dispatcher left a process behind')
+                    # A user manager, its session helpers or a scheduler child, each named.
+                    self.assertRegex(str(error), r'^worker dispatcher left a process behind'
+                                                 r'(: pid [0-9]+ [^ ,]+(, pid [0-9]+ [^ ,]+)*(, and [0-9]+ more)?)?$')
                     result = error.result
                 else:
                     self.fail('the hook left a detached process but the kit accepted it')

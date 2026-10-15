@@ -5,6 +5,15 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- `ci worker-run` gives the processes of a hook that exited 0 `CI_WORKER_EXIT_GRACE_SECONDS` (10)
+  to exit before it fails the hook for leaving one behind, and the error now names up to four
+  survivors by pid and inert process name (`worker dispatcher left a process behind: pid 4242
+  java`) (#37). A descendant still shutting down, such as a JVM, no longer fails a lane whose
+  scenarios all passed; a real leftover still fails it, 10 seconds later. No document kind,
+  managed file or adapter protocol changes.
+
 ## v1.6.0
 
 Minor release: any current member of the organization that owns a mod may decide its protected
