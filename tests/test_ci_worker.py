@@ -442,6 +442,21 @@ class TerminationTests(unittest.TestCase):
             worker.worker_processes(ACCOUNT)
         run.assert_not_called()
 
+    def test_survivors_are_listed_by_both_users_with_inert_names(self):
+        answers = [b"77 java\n12 ::error::x\n", b"77 java\n9 \xff\x1b[31m\n8 \nbogus\n5 a-much-longer-name-than-comm\n"]
+        with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
+             patch.object(worker, "_control", side_effect=answers) as run:
+            self.assertEqual(worker._worker_survivors(ACCOUNT),
+                             ("pid 5 a-much-longer-n", "pid 8 ?", "pid 9 ???31m", "pid 12 ??error??x", "pid 77 java"))
+        self.assertEqual([call.args[0] for call in run.call_args_list],
+                         [("/usr/bin/pgrep", "--list-name", "--runstates", "DIKPRSTWt", flag, "2000")
+                          for flag in ("-u", "-U")])
+        other = worker.WorkerAccount("candidate", 2001, 2001, ACCOUNT.home)
+        with patch.object(worker, "authenticate_worker_account", return_value=other), \
+             patch.object(worker, "_control") as run, self.assertRaises(MbError):
+            worker._worker_survivors(ACCOUNT)
+        run.assert_not_called()
+
     def test_liveness_asks_for_running_states_by_effective_and_real_user_and_signals_nothing(self):
         for answers, alive in (([b"", b""], False), ([b"123\n"], True), ([b"", b"77\n"], True)):
             with self.subTest(answers=answers), \
@@ -506,11 +521,12 @@ class ControlPipeTests(unittest.TestCase):
 class ExecutionTests(unittest.TestCase):
     def execute(self, *, chunks=(b"native-output\n", b""), code=0, command=None, ready=True,
                 clock=None, termination_error=None, read_error=None, launch_error=None, abandoned=False,
-                liveness_error=None, late_exit=False):
+                liveness_error=None, late_exit=False, lingering=0, survivors=("pid 4242 java",)):
         process = MagicMock()
         process.poll.return_value = None if late_exit else code
         process.wait.return_value = code
         events = []
+        now = [0.0]  # Only the polling sleep advances the default clock.
         selector = MagicMock()
         selector.select.return_value = [(None, None)] if ready else []
         argv = command if command is not None else (
@@ -520,19 +536,28 @@ class ExecutionTests(unittest.TestCase):
             events.append("observe")
             if liveness_error is not None:
                 raise liveness_error
-            return abandoned
+            # ``lingering`` observations see a descendant that is still exiting.
+            return abandoned or events.count("observe") <= lingering
+        def survey(account):
+            events.append("list")
+            return survivors
+        def pause(seconds):
+            events.append("sleep")
+            now[0] += seconds
         def kill(account):
             events.append("terminate")
             if termination_error is not None:
                 raise termination_error
         with patch.object(worker, "authenticate_worker_account", return_value=ACCOUNT), \
              patch.object(worker, "worker_processes", side_effect=observe), \
+             patch.object(worker, "_worker_survivors", side_effect=survey), \
              patch.object(worker, "terminate_worker", side_effect=kill) as terminate, \
              patch.object(worker.subprocess, "Popen", return_value=process, side_effect=launch_error) as launch, \
              patch.object(worker.selectors, "DefaultSelector") as create, \
              patch.object(worker.os, "set_blocking", create=True), patch.object(worker.os, "read", side_effect=read), \
              patch.object(worker.signal, "signal", return_value="previous-handler") as signals, \
-             patch.object(worker.time, "monotonic", side_effect=clock, return_value=0):
+             patch.object(worker.time, "monotonic", side_effect=clock if clock is not None else lambda: now[0]), \
+             patch.object(worker.time, "sleep", side_effect=pause):
             create.return_value.__enter__.return_value = selector
             try:
                 result = worker.execute_worker(
@@ -549,8 +574,8 @@ class ExecutionTests(unittest.TestCase):
                 self.assertIn("os.umask(0o077)", wrapper[5])
                 self.assertIn("os.execv(sys.argv[1],sys.argv[1:])", wrapper[5])
                 self.assertIn("=", arguments[-len(argv) - 7])  # Directly after the closed environment.
-                # What the hook left behind is looked for once, before the sweep that would hide it.
-                self.assertEqual(events, ["observe", "terminate"])
+                # What the hook left behind is looked for before the sweep that would hide it.
+                self.assertEqual(events[-2:], ["observe", "terminate"])
                 self.assertEqual(launch.call_args.kwargs["env"], worker._HOST_ENV)
                 self.assertIn(f"--chdir={worker.WORKER_ROOT / 'repository'}", arguments)
                 self.assertEqual(launch.call_args.kwargs["cwd"].as_posix(), str(worker.WORKER_ROOT))
@@ -561,7 +586,9 @@ class ExecutionTests(unittest.TestCase):
                     self.assertEqual(terminate.call_args_list, [unittest.mock.call(ACCOUNT)] * 2)
                 else:
                     terminate.assert_called_once_with(ACCOUNT)
-                self.assertLessEqual(events.count("observe"), 1)
+                # A success is looked at once; a lingering process at most once per poll of its grace.
+                polls = int(worker.lim.CI_WORKER_EXIT_GRACE_SECONDS / worker.lim.CI_TERMINATION_POLL_SECONDS)
+                self.assertLessEqual(events.count("observe"), 1 if not (abandoned or lingering) else polls + 2)
                 calls = [call.args for call in signals.call_args_list]
                 if calls:
                     self.assertIn((worker.signal.SIGTERM, worker.signal.SIG_IGN), calls)
@@ -576,13 +603,35 @@ class ExecutionTests(unittest.TestCase):
 
     def test_a_dispatcher_that_left_a_process_behind_fails_after_its_uid_was_swept(self):
         for late_exit in (False, True):  # The exit is seen in the loop, or only after the output ended.
-            with self.subTest(late_exit=late_exit), \
-                    self.assertRaisesRegex(worker.WorkerExecutionError, "left a process behind") as caught:
+            with self.subTest(late_exit=late_exit), self.assertRaisesRegex(
+                    worker.WorkerExecutionError, r"^worker dispatcher left a process behind: pid 4242 java$") as caught:
                 self.execute(abandoned=True, late_exit=late_exit)
             self.assertEqual(caught.exception.result, worker.WorkerResult(0, b"native-output\n", False))
         self.assertEqual(self.execute(late_exit=True), worker.WorkerResult(0, b"native-output\n", False))
         with self.assertRaisesRegex(worker.WorkerExecutionError, "returned failure"):
             self.execute(abandoned=True, code=3)  # A failed hook is reported as failed, whatever it left.
+
+    def test_a_process_left_behind_is_one_that_outlived_the_grace(self):
+        # A descendant that is still exiting when the dispatcher returns is no leftover.
+        for late_exit in (False, True):
+            with self.subTest(late_exit=late_exit):
+                self.assertEqual(self.execute(lingering=5, late_exit=late_exit),
+                                 worker.WorkerResult(0, b"native-output\n", False))
+        # The grace is measured from the observed exit, polled, and ends in exactly one sweep.
+        with patch.object(worker.lim, "CI_WORKER_EXIT_GRACE_SECONDS", 1.0), \
+                self.assertRaisesRegex(worker.WorkerExecutionError, "left a process behind"):
+            self.execute(lingering=100)
+        # A failed hook is not given one, and what it left is not listed.
+        with patch.object(worker, "_worker_survivors", side_effect=AssertionError("listed")), \
+                self.assertRaisesRegex(worker.WorkerExecutionError, "returned failure"):
+            self.execute(abandoned=True, code=3, late_exit=True)
+
+    def test_the_processes_left_behind_are_named_within_a_bound(self):
+        names = tuple(f"pid {pid} java" for pid in range(10, 17))
+        for found, message in (((), "left a process behind$"), (names[:1], "behind: pid 10 java$"),
+                               (names, "behind: pid 10 java, pid 11 java, pid 12 java, pid 13 java, and 3 more$")):
+            with self.subTest(found=len(found)), self.assertRaisesRegex(worker.WorkerExecutionError, message):
+                self.execute(abandoned=True, survivors=found)
 
     def test_a_failed_liveness_query_is_no_success_and_the_uid_is_still_swept(self):
         with self.assertRaises(worker.WorkerExecutionError):

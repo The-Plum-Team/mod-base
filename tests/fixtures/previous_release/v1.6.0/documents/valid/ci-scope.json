@@ -1,0 +1,72 @@
+{
+  "baseline": {
+    "evidence": "tested",
+    "original": null,
+    "plan_sha256": "c2b3389b82181be3a234aae86516a4f6d4ec9579f985d0755b831c6fecd89363",
+    "record": {
+      "artifact_id": 90,
+      "artifact_name": "mb-ci-tested--40--a1--packaged",
+      "digest": "sha256:818d69071474c2b450fc80e34b4844105558d6361bdc8a1eed2994f20324de34",
+      "run_attempt": 1,
+      "run_id": 40
+    },
+    "record_sha256": "0d526ee1373658fc7212e0deb99e5155cc2a7ec60b3a09580136cd27b6eb1415"
+  },
+  "changes": {
+    "base_sha": "2222222222222222222222222222222222222222",
+    "base_tree": "9999999999999999999999999999999999999999",
+    "paths": 2,
+    "paths_sha256": "d29ff7b5c6add84d57146b918016adba0afea74ec7a4172ea141161e905142f7",
+    "tested_tree": "6666666666666666666666666666666666666666"
+  },
+  "identity": {
+    "base_branch": "master",
+    "base_sha": "2222222222222222222222222222222222222222",
+    "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+    "controller_sha": "2222222222222222222222222222222222222222",
+    "controller_workflow": ".github/workflows/build-gate.yml",
+    "graph_version": 1,
+    "head_branch": "feature/example",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "inventory_blob": "7777777777777777777777777777777777777777",
+    "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+    "kit": {
+      "repository": "The-Plum-Team/mod-base",
+      "sha": "3333333333333333333333333333333333333333",
+      "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "version": "1.1.0"
+    },
+    "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "pr_number": 7,
+    "repository": "example/mod",
+    "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+    "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+    "source_repository": "example/mod",
+    "tested_parents": [
+      "2222222222222222222222222222222222222222",
+      "1111111111111111111111111111111111111111"
+    ],
+    "tested_sha": "5555555555555555555555555555555555555555",
+    "tested_tree": "6666666666666666666666666666666666666666"
+  },
+  "input": "changed-paths-v1",
+  "kind": "mod-base.ci.scope",
+  "lanes": [
+    {
+      "id": "lane-a",
+      "scenarios": [
+        "scenario/example/server/probe"
+      ]
+    }
+  ],
+  "plan_sha256": "d58df54194e7f2b3e80305289a4eb71b4a4ee50feede2011dbc87b8e48799d80",
+  "profile": "block-pops",
+  "request": {
+    "nonce": "9fba41a30463ed40127861c449019fde59091b1c912b4d970fb27697eec72534",
+    "run_attempt": 2,
+    "run_id": 43,
+    "workflow_path": ".github/workflows/mod-base-packaged-e2e.yml",
+    "workflow_ref": "example/mod/.github/workflows/mod-base-packaged-e2e.yml@refs/heads/master"
+  },
+  "schema_version": 1
+}

@@ -44,6 +44,11 @@ _DISPLAY_ENV = {
 _PRIVATE_UMASK = ("-I", "-S", "-B", "-c", "import os,sys;os.umask(0o077);os.execv(sys.argv[1],sys.argv[1:])")
 #: Every state of a process that can still run. A zombie (``Z``) only waits to be collected.
 _LIVE_STATES = "DIKPRSTWt"
+#: One line of ``pgrep --list-name``, and what of a process name may reach a diagnostic: the name is
+#: the candidate's own, so every other character becomes ``?``. 15 bytes is the kernel's ``comm``.
+_SURVIVOR_LINE = re.compile(rb"([1-9][0-9]{0,9}) (.*)")
+_SURVIVOR_UNSAFE = re.compile(r"[^A-Za-z0-9._+-]")
+_SURVIVOR_NAME_BYTES = 15
 #: The environment name that gives a candidate hook every JDK home its job installed, in the
 #: job's order and joined with ``:`` (a tool path holds none). The first one is ``JAVA_HOME``.
 JAVA_HOMES_ENVIRONMENT = "MB_JAVA_HOMES"
@@ -569,6 +574,27 @@ def worker_processes(account: WorkerAccount) -> bool:
                for selector in ("-u", "-U"))
 
 
+def _worker_survivors(account: WorkerAccount) -> tuple[str, ...]:
+    """``pid <name>`` of each process the account still runs, by real or effective user.
+
+    A diagnostic only, never a decision: a name holding a newline can split into a bogus entry.
+    Nothing is signalled.
+    """
+
+    check(type(account) is WorkerAccount, "$.account", "must be an authenticated worker account")
+    check(authenticate_worker_account(account.role) == account, "$.account", "worker account identity changed")
+    names: dict[int, str] = {}
+    for selector in ("-u", "-U"):
+        output = _control(("/usr/bin/pgrep", "--list-name", "--runstates", _LIVE_STATES, selector, str(account.uid)),
+                          timeout=lim.CI_TERMINATION_GRACE_SECONDS, accepted=frozenset({0, 1}))
+        for line in output.splitlines():
+            match = _SURVIVOR_LINE.fullmatch(line)
+            if match is not None:
+                name = match[2][:_SURVIVOR_NAME_BYTES].decode("ascii", "replace")
+                names.setdefault(int(match[1]), _SURVIVOR_UNSAFE.sub("?", name) or "?")
+    return tuple(f"pid {pid} {name}" for pid, name in sorted(names.items()))
+
+
 def _execution_command(command: tuple[str, ...], python: str, role: str) -> Path:
     check(isinstance(command, tuple) and 4 <= len(command) <= lim.MAX_CI_COMMAND_ARGUMENTS,
           "$.command", "requires a bounded fixed Python dispatcher argv")
@@ -597,7 +623,8 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
     """Execute one protected-selected dispatcher and always terminate/lock its entire UID.
 
     Only a zero exit of a dispatcher that left no process behind, after successful account
-    quiescence, returns. Failures/timeouts retain a bounded diagnostic result on
+    quiescence, returns. A process still exiting within ``CI_WORKER_EXIT_GRACE_SECONDS`` of the
+    dispatcher's exit is not left behind. Failures/timeouts retain a bounded diagnostic result on
     WorkerExecutionError. No process or raw log authorizes export. The dispatcher starts with a
     umask of 077, so what it creates is private unless it decides otherwise.
     Caller must first authenticate/copy the dispatcher/import closure and establish the private
@@ -612,18 +639,25 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
     truncated = False
     code = None
     terminated = False
-    abandoned = False
+    exited: float | None = None
+    survivors: tuple[str, ...] | None = None
 
     def interrupted(signum: int, _frame: Any) -> None:
         raise WorkerError(f"worker interrupted by signal {signum}")
 
-    def settle() -> None:
-        # The launcher has gone, so whatever the UID still runs was left behind by the hook.
-        # Look before the sweep kills it: the contract fails such a hook instead of tidying up.
-        nonlocal abandoned, terminated
-        abandoned = worker_processes(account)
+    def settle() -> bool:
+        # The launcher has gone, so whatever the UID still runs was started by the hook. A
+        # descendant may still be exiting (a JVM's shutdown, say): it gets a short grace from the
+        # observed exit. What outlives it was left behind; name it before the sweep kills it, since
+        # the contract fails such a hook instead of tidying up. A failed hook fails anyway.
+        nonlocal survivors, terminated
+        if worker_processes(account):
+            if code == 0 and exited is not None and time.monotonic() - exited < lim.CI_WORKER_EXIT_GRACE_SECONDS:
+                return False
+            survivors = _worker_survivors(account) if code == 0 else ()
         terminate_worker(account)
         terminated = True
+        return True
 
     try:
         Int(1, lim.MAX_CI_WORKER_TIMEOUT_SECONDS)(timeout_seconds, "$.timeout_seconds")
@@ -644,15 +678,21 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
         with selectors.DefaultSelector() as selector:
             os.set_blocking(process.stdout.fileno(), False)
             selector.register(process.stdout, selectors.EVENT_READ)
+            looked: float | None = None
             while True:
                 if deadline - time.monotonic() <= 0:
                     raise WorkerError("worker execution timed out")
                 if code is None:
                     code = process.poll()
                     if code is not None:
-                        # A detached child can retain stdout after its dispatcher exits. Kill
-                        # that UID now rather than waiting for EOF until the workload timeout.
-                        settle()
+                        exited = time.monotonic()
+                if code is not None and not terminated \
+                        and (looked is None or time.monotonic() - looked >= lim.CI_TERMINATION_POLL_SECONDS):
+                    # A detached child can retain stdout after its dispatcher exits. Kill that UID
+                    # after its grace rather than waiting for EOF until the workload timeout; keep
+                    # draining meanwhile, so that an exiting process never blocks on our pipe.
+                    looked = time.monotonic()
+                    if settle():
                         deadline = time.monotonic() + lim.CI_TERMINATION_GRACE_SECONDS
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -671,14 +711,23 @@ def execute_worker(account: WorkerAccount, *, command: tuple[str, ...], python: 
             raise WorkerError("worker execution timed out")
         code = process.wait(timeout=remaining)
         if not terminated:
-            settle()  # The output ended before the exit was observed.
+            # The output ended before the exit was observed, or within the grace.
+            if exited is None:
+                exited = time.monotonic()
+            while not settle():
+                time.sleep(lim.CI_TERMINATION_POLL_SECONDS)
         if code != 0:
             raise WorkerError("worker dispatcher returned failure")
-        if abandoned:
-            raise WorkerError("worker dispatcher left a process behind")
+        if survivors is not None:
+            shown = survivors[:lim.MAX_CI_WORKER_SURVIVORS_REPORTED]
+            more = len(survivors) - len(shown)
+            raise WorkerError("worker dispatcher left a process behind"
+                              + (": " + ", ".join(shown) if shown else "")
+                              + (f", and {more} more" if more else ""))
     except (MbError, OSError, subprocess.SubprocessError, ValueError) as error:
         # Structural validators may quote hostile values. Keep those out of runner command
-        # parsing; protected fixed WorkerError diagnostics contain no candidate text.
+        # parsing; protected WorkerError diagnostics contain no candidate text but the inert
+        # process names of _worker_survivors.
         message = str(error) if isinstance(error, WorkerError) else "worker execution rejected"
         raise WorkerExecutionError(message, WorkerResult(code, bytes(captured), truncated)) from error
     finally:

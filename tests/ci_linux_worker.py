@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import re
 import shutil
 import stat
 import struct
@@ -1348,7 +1349,8 @@ class LinuxWorkerTests(HostedWorkerCase):
     def test_dispatcher_that_leaves_an_orphan_holding_stdout_fails_and_the_orphan_is_reaped(self):
         # The contract fails a hook that leaves a process behind, even when the hook itself succeeded.
         started = time.monotonic()
-        with self.assertRaisesRegex(WorkerExecutionError, "left a process behind") as caught:
+        with self.assertRaisesRegex(WorkerExecutionError, r"^worker dispatcher left a process behind: "
+                                                          r"pid [1-9][0-9]* python[0-9.]*$") as caught:
             self.run_dispatcher(
                 "import os,time\n"
                 "if os.fork() == 0:\n    time.sleep(300)\n    os._exit(0)\n"
@@ -1356,6 +1358,16 @@ class LinuxWorkerTests(HostedWorkerCase):
         self.assertEqual(caught.exception.result.returncode, 0)
         self.assertIn(b"native-success", caught.exception.result.log)
         self.assertLess(time.monotonic() - started, 30)  # The orphan was killed, not waited for.
+        self.assert_quiescent()
+
+    def test_a_descendant_still_exiting_within_the_grace_is_no_orphan(self):
+        # A JVM that is still shutting down when its launcher returns is not left behind.
+        result = self.run_dispatcher(
+            "import os,time\n"
+            "if os.fork() == 0:\n    time.sleep(2)\n    os._exit(0)\n"
+            "print('native-success', flush=True)\n")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(b"native-success", result.log)
         self.assert_quiescent()
 
     def test_children_a_dispatcher_waited_for_or_only_left_as_zombies_are_no_orphans(self):
@@ -3149,7 +3161,7 @@ class LinuxLifecycleCommandTests(unittest.TestCase):
         self.fault("hang", timeout=3, error=r"^mod_base: ci-worker: worker execution timed out\n$", log="")
 
     def test_hook_that_leaves_an_orphan_process_is_rejected_and_the_orphan_is_killed(self):
-        self.fault("orphan", error=r"^mod_base: ci-worker: worker dispatcher left a process behind\n$")
+        self.fault("orphan", error=r"^mod_base: ci-worker: worker dispatcher left a process behind: pid [1-9][0-9]* python[0-9.]*\n$")
 
     def test_hook_that_writes_an_extra_file_is_rejected_by_root(self):
         self.fault("extra", error=r"^mod_base: ci-worker: root operation take-derived-plan failed with exit 2: ")
@@ -3698,12 +3710,17 @@ class LinuxCandidateCommandTests(unittest.TestCase):
 
     def run_fault(self, mode, *, error, log=None, **timeouts):
         """A hook that fails, hangs or leaves a process behind fails ``ci worker-run`` with one error
-        line; the seal then locks the candidate, seals nothing and does not fail a second time."""
+        line (``error``, or a match of it when it is a pattern); the seal then locks the candidate,
+        seals nothing and does not fail a second time."""
         self.candidate_job(faults=[{"hook": "build_target", "unit": "1.20.1", "mode": mode}], **timeouts)
         self.assertEqual(self.stage()[0], 0)
         started = time.monotonic()
         code, stdout, stderr = self.run_hook("build_target", "1.20.1")
         self.assertEqual(code, 2, stdout + stderr)
+        if isinstance(error, re.Pattern):
+            self.assertRegex(stderr, r"\Amod_base: ci-worker: [^\n]*\n\Z")
+            pattern, error = error, stderr.removeprefix("mod_base: ci-worker: ").removesuffix("\n")
+            self.assertRegex(error, pattern)
         self.assertEqual(stderr, f"mod_base: ci-worker: {error}\n")
         if log is not None:
             self.assertEqual(stdout, log)
@@ -4010,7 +4027,8 @@ class LinuxCandidateFaultTests(SharedJobCase):
         self.assertEqual(run["returncode"], 1)
 
     def test_hook_that_forks_a_process_that_outlives_it_fails_the_run_step(self):
-        run = self.run_fault("orphan", error="worker dispatcher left a process behind")
+        run = self.run_fault("orphan", error=re.compile(
+            r"^worker dispatcher left a process behind: pid [1-9][0-9]* python[0-9.]*$"))
         self.assertEqual(run["returncode"], 0)  # The hook itself reported success.
 
     def seal_fault(self, mode, *, error):
@@ -4352,7 +4370,7 @@ class LinuxWorkerValidateTests(unittest.TestCase):
         self.fault("hang", timeout=3, error=r"^mod_base: ci-worker: worker execution timed out\n$", log="")
 
     def test_verifier_that_leaves_an_orphan_process_is_rejected_and_the_orphan_is_killed(self):
-        self.fault("orphan", error=r"^mod_base: ci-worker: worker dispatcher left a process behind\n$")
+        self.fault("orphan", error=r"^mod_base: ci-worker: worker dispatcher left a process behind: pid [1-9][0-9]* python[0-9.]*\n$")
 
     def test_verifier_that_writes_an_extra_file_is_rejected_by_root(self):
         self.fault("extra", frozen=True, log="[validator] synthetic verify_build: ok, 3 files\n",

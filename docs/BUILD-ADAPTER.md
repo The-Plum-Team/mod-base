@@ -57,7 +57,9 @@ evidence.
   tool (for Gradle, `org.gradle.java.installations.paths` takes it with `,` for `:`). The
   variable is absent when the job installs no JDK. Protected hooks get `JAVA_HOME` alone.
 * The worker root is the parent directory of `HOME`. Every path below is relative to it.
-* A hook that exits non-zero, runs past its timeout or leaves a process behind fails the step.
+* A hook that exits non-zero, runs past its timeout or leaves a process behind fails the step. A
+  process is left behind when it still runs 10 seconds after the hook exited; the error names up
+  to four such processes by pid and name (characters outside `A-Za-z0-9._+-` shown as `?`).
 * A hook starts with `umask 077` and creates its output directory when it is missing. Output must
   be private regular files with one link (mode 0600 in 0700 directories, which is what that umask
   gives); a symbolic link, a special file, another mode or a file outside the expected set fails
