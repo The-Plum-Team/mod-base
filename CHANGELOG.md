@@ -5,7 +5,12 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased
+## v1.7.0
+
+Minor release that makes a mod's shared pipeline cheaper to run and to diagnose: an API client
+waits for an exhausted rate limit to reset instead of failing the job (#42), and `ci
+worker-prepare` prints where the root host fence spends its time (#41). A mod moves from v1.6.1
+to v1.7.0 with an ordinary pin bump.
 
 - `ci worker-prepare` prints where the root host fence spent its time, as a second line
   `worker-prepare: host fence timing {...}` (the phases `mounts`, `closure`, `walked_closed`,
@@ -19,6 +24,16 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   spent a mod's 5,000 requests of the hour; all 34 packaged lanes then failed in "Fetch the sealed
   Build bundle" minutes before the budget reset, and the generation had to run again. Every other
   failure keeps the ordinary 30-second cap, and every request still spends the command's budget.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files, the workflows' jobs, steps and permissions and the
+  request counts are those of v1.6.1. A job may now run longer than before while it waits for a
+  rate limit, and a job with a short timeout may be cancelled during that wait instead of failing.
+  The compatibility baseline moves to the archived v1.6.1 reader
+  (`tests/fixtures/previous_release/v1.6.1`), which reads every kind of this release unchanged.
+- Upgrade: bump the pin to v1.7.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to v1.7.0`,
+  then `verify --network` and `template check`). A mod with `admission` lands the bump through its
+  protected route like any change to its callers.
+- Rollback: an ordinary pin bump back to v1.6.1; nothing is stored that it would not read.
 
 ## v1.6.1
 
