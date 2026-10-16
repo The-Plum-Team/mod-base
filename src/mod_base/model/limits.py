@@ -140,6 +140,10 @@ LISTING_READ_ATTEMPTS = 4
 LISTING_RETRY_DELAY_SECONDS = 2.0
 #: The longest wait between two reads of one listing (so at most 2 + 4 + 8 seconds in all).
 MAX_LISTING_RETRY_DELAY_SECONDS = 8.0
+#: The longest one API client waits, in total, for GitHub's rate limits to let it retry: an
+#: exhausted hourly budget resets within the hour, and a job that waits minutes costs less than
+#: a generation failed by one refused request.
+MAX_API_RATE_LIMIT_WAIT_SECONDS = 900.0
 #: The most runs GitHub lists for a workflow-run search filtered by ``branch``, ``event``, ``head_sha``
 #: or ``status`` (among others); its ``total_count`` may be larger (``github.runs.workflow_runs``).
 MAX_FILTERED_RUNS_LISTED = 1000

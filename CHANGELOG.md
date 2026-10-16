@@ -13,6 +13,12 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   only published it as an audit event, so the 1.5–4 minutes the fence costs in every Build and
   E2E job of a mod could not be broken down from a job log. No document kind, managed file or
   adapter protocol changes.
+- A GitHub API client waits for a rate limit to clear, up to `MAX_API_RATE_LIMIT_WAIT_SECONDS`
+  (15 minutes) in total per client, instead of failing as soon as `Retry-After` or the reset of an
+  exhausted hourly budget asks for more than 30 seconds. On 2026-10-15 a burst of other workflows
+  spent a mod's 5,000 requests of the hour; all 34 packaged lanes then failed in "Fetch the sealed
+  Build bundle" minutes before the budget reset, and the generation had to run again. Every other
+  failure keeps the ordinary 30-second cap, and every request still spends the command's budget.
 
 ## v1.6.1
 

@@ -271,9 +271,20 @@ class RetryTests(ClientTestCase):
         client, _, sleeps = self.client([http_error(429, header_values={"Retry-After": "7"}), Response()])
         client.get_json(RUN_PATH)
         self.assertEqual([7.0], sleeps)
-        client, opener, sleeps = self.client([http_error(429, header_values={"Retry-After": "31"})])
+        # A rate-limit answer may wait beyond the ordinary backoff cap, within the client's allowance.
+        client, _, sleeps = self.client([http_error(429, header_values={"Retry-After": "31"}), Response()])
+        client.get_json(RUN_PATH)
+        self.assertEqual([31.0], sleeps)
+        too_long = str(int(limits.MAX_API_RATE_LIMIT_WAIT_SECONDS) + 1)
+        client, opener, sleeps = self.client([http_error(429, header_values={"Retry-After": too_long})])
         with self.assertRaises(ApiRateLimited):
             client.get_json(RUN_PATH)
+        self.assertEqual(([], 1), (sleeps, len(opener.requests)))
+        # Any other failure keeps the ordinary cap: a server asking for 31 s ends the budget at once.
+        client, opener, sleeps = self.client([http_error(503, header_values={"Retry-After": "31"})])
+        with self.assertRaises(ApiError) as caught:
+            client.get_json(RUN_PATH)
+        self.assertNotIsInstance(caught.exception, ApiRateLimited)
         self.assertEqual(([], 1), (sleeps, len(opener.requests)))
         client, _, sleeps = self.client([http_error(503, header_values={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}),
                                           Response()])
@@ -287,11 +298,26 @@ class RetryTests(ClientTestCase):
             client, _, sleeps = self.client([soon, Response()])
             client.get_json(RUN_PATH)
             self.assertEqual([11.0], sleeps)
+            # An exhausted hourly budget that resets within the allowance is waited for.
+            later = http_error(403, b"{}", {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(now) + 539)})
+            client, _, sleeps = self.client([later, Response()])
+            client.get_json(RUN_PATH)
+            self.assertEqual([540.0], sleeps)
             late = http_error(403, b"{}", {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(now) + 3600)})
             client, opener, sleeps = self.client([late])
             with self.assertRaises(ApiRateLimited):
                 client.get_json(RUN_PATH)
             self.assertEqual(([], 1), (sleeps, len(opener.requests)))
+            # The allowance is the client's in total, not per request: a second long wait that would
+            # pass it ends the budget, while the ordinary backoff stays available.
+            client, opener, sleeps = self.client([later, Response(), later, http_error(503), Response()])
+            client.get_json(RUN_PATH)
+            with self.assertRaises(ApiRateLimited):
+                client.get_json(RUN_PATH)
+            client.get_json(RUN_PATH)
+            self.assertEqual(540.0, sleeps[0])
+            self.assertEqual(2, len(sleeps))
+            self.assertLess(sleeps[1], api.MAX_RETRY_DELAY_SECONDS)
 
     def test_every_attempt_spends_the_request_budget(self) -> None:
         client, opener, _ = self.client([http_error(503), http_error(503), Response()], max_requests=2)
