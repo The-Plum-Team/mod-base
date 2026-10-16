@@ -924,5 +924,49 @@ class PlanCommandTests(JobCase):
                          (SUBJECT_REQUESTS, [limits.MAX_CI_SUBJECT_REQUESTS]))
 
 
+class FenceTimingLineTests(unittest.TestCase):
+    """``ci worker-prepare`` prints where the root fence spent its time, and nothing else."""
+
+    TIMING = {"closure": {"/usr/share/dotnet": 0.5}, "mounts": 0.01, "ok": True, "repair": {"/opt": 41.2},
+              "total": 75.0, "verification": 33.3, "walked_closed": []}
+
+    def test_only_one_object_of_the_known_phases_becomes_a_line(self):
+        from mod_base.build_ci.commands_worker import fence_timing_line
+        line = fence_timing_line(json.dumps(self.TIMING, indent=2))
+        self.assertEqual(line, "worker-prepare: host fence timing "
+                               + json.dumps(self.TIMING, sort_keys=True, separators=(",", ":")) + "\n")
+        for payload in ("", "not json", "[]", '"text"', '{"mounts": 1, "::error::x": 2}', '{"total": 1}\n::error::x'):
+            with self.subTest(payload=payload):
+                self.assertIsNone(fence_timing_line(payload))
+        # A value is re-encoded: a newline or a command marker inside it stays inside one JSON string.
+        line = fence_timing_line(json.dumps({"walked_closed": ["/opt\n::error::x"]}))
+        self.assertEqual(line.count("\n"), 1)
+        self.assertNotIn("\n::", line)
+
+    def test_the_summary_comes_first_and_the_timing_follows_it(self):
+        from mod_base.build_ci import commands_worker
+        worker = mock.Mock(accounts={"validator": None}, tools=mock.Mock(entries=7, roots=("/a", "/b")))
+        def prepare(*_args, **_kwargs):
+            import sys
+            sys.audit("mod_base.host_fence_timing", json.dumps(self.TIMING))
+            sys.audit("mod_base.host_fence_timing", json.dumps({"total": 1.0}))  # Only the first is kept.
+            return worker
+        arguments = mock.Mock(repo=Path("/repo"), config=Path("/config"), state=Path("/state"), roles="validator",
+                              python="/usr/bin/python3", java_home=[])
+        for audited in (True, False):
+            with self.subTest(audited=audited), \
+                    mock.patch.object(commands_worker.runtime, "build_invocation"), \
+                    mock.patch.object(commands_worker.lifecycle, "open_job"), \
+                    mock.patch.object(commands_worker.lifecycle, "prepare_worker",
+                                      side_effect=prepare if audited else lambda *_a, **_k: worker), \
+                    mock.patch.object(commands_worker.cli, "environ", return_value={}), \
+                    mock.patch("sys.stdout") as stdout:
+                self.assertEqual(commands_worker.run_worker_prepare(arguments), 0)
+            written = "".join(call.args[0] for call in stdout.write.call_args_list)
+            summary = "worker-prepare: validator allocated and locked; 7 tool entries admitted under 2 roots\n"
+            self.assertEqual(written, summary + (commands_worker.fence_timing_line(json.dumps(self.TIMING))
+                                                 if audited else ""))
+
+
 if __name__ == "__main__":
     unittest.main()

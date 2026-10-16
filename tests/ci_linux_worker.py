@@ -25,7 +25,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mod_base.build_ci import identity, lifecycle, worker
+from mod_base.build_ci import commands_worker, identity, lifecycle, worker
 from mod_base.build_ci.worker import (WORKER_ACCOUNTS, WORKER_ROOT, WorkerExecutionError,
                                       allocate_worker_account, authenticate_worker_account,
                                       prepare_worker_boundary, terminate_worker)
@@ -2886,8 +2886,12 @@ class LinuxLifecycleCommandTests(unittest.TestCase):
         commands = self.job()
         code, stdout, stderr = self.prepare("validator")
         self.assertEqual((code, stderr), (0, ""), stdout)
-        self.assertRegex(stdout, r"^worker-prepare: validator allocated and locked; \d+ tool entries admitted "
-                                 r"under \d+ roots\n$")
+        self.assertRegex(stdout, r"\Aworker-prepare: validator allocated and locked; \d+ tool entries admitted "
+                                 r"under \d+ roots\nworker-prepare: host fence timing \{[^\n]*\}\n\Z")
+        # The fence's own phases reach the job log; the regex above leaves no room for anything else.
+        timing = json.loads(stdout.splitlines()[1].removeprefix("worker-prepare: host fence timing "))
+        self.assertTrue(timing["ok"])
+        self.assertLessEqual(set(timing), commands_worker.FENCE_TIMING_KEYS)
         self.assertEqual(self.home(), 0o700)
         self.assert_resting("validator")
         validator = self.account("validator")

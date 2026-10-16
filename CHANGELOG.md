@@ -5,6 +5,15 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- `ci worker-prepare` prints where the root host fence spent its time, as a second line
+  `worker-prepare: host fence timing {...}` (the phases `mounts`, `closure`, `walked_closed`,
+  `repair`, `verification`, `ok` and `total`, per image tree). The kit already measured it but
+  only published it as an audit event, so the 1.5–4 minutes the fence costs in every Build and
+  E2E job of a mod could not be broken down from a job log. No document kind, managed file or
+  adapter protocol changes.
+
 ## v1.6.1
 
 Patch release: a hook whose descendants are still exiting when it returns no longer fails for
