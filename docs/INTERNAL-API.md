@@ -710,6 +710,7 @@ their units in the integration round; `DELETION_BUDGET` is 64, see the rotation-
 * `MAX_KEYS`, `MAX_BRANCHES`, `MAX_ARTIFACTS_PER_NAME`, `MAX_PAGES_API_READS`, `MAX_API_RESPONSE_BYTES`
 * `MAX_JOBS_PER_ATTEMPT`, `MAX_RUN_ATTEMPT`, `MAX_RUN_ID`, `MAX_ARTIFACT_NAME_BYTES`, `DELETION_BUDGET`
 * `RUN_POLL_ATTEMPTS`, `RUN_POLL_INTERVAL_SECONDS`
+* `MAX_API_RATE_LIMIT_WAIT_SECONDS`: the total time one API client waits for rate-limit answers (`Retry-After` or an exhausted primary budget's reset) beyond the ordinary 30-second backoff cap.
 * `LISTING_READ_ATTEMPTS`, `LISTING_RETRY_DELAY_SECONDS`, `MAX_LISTING_RETRY_DELAY_SECONDS`, `MAX_FILTERED_RUNS_LISTED`: the consistent-listing retry and the 1,000 newest runs GitHub lists for a filtered workflow-run search (see the consistent-listing amendment)
 * `MAX_CANDIDATES`, `MAX_SUBJECT_RUNS`, `MAX_CANONICAL_RUNS`, `MAX_FAMILY_LEGS`
 * `MAX_FAMILY_PRODUCER_RUNS`: the producer runs at one commit whose exact family handoff names `select` and `admit` look up (see the family-handoffs amendment)

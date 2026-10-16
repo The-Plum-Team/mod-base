@@ -15,8 +15,11 @@ network. ``max_requests`` bounds every request (retries included) of one client.
 request's state) and ``delete`` (an artifact, a Git ref).
 
 Honouring ``Retry-After`` (and, for an exhausted primary budget, ``X-RateLimit-Reset``) means the
-next attempt waits at least that long; a wait beyond :data:`MAX_RETRY_DELAY_SECONDS` ends the
-retry budget at once (:class:`ApiRateLimited`) instead of stalling a job. Paths are absolute API
+next attempt waits at least that long. A rate-limit answer may make one client wait up to
+``limits.MAX_API_RATE_LIMIT_WAIT_SECONDS`` in total: the hourly budget a repository's jobs share
+resets within the hour, and one refused read must not fail a whole generation. Any other wait
+beyond :data:`MAX_RETRY_DELAY_SECONDS`, or a rate-limit wait beyond the client's remaining
+allowance, ends the retry budget at once (:class:`ApiRateLimited`) instead of stalling a job. Paths are absolute API
 paths of unreserved characters (callers percent-encode free text); query parameters travel
 separately. The bearer token is sent only to the configured API origin: redirects are refused,
 except the single artifact-download redirect, which is followed once without any credential.
@@ -341,6 +344,7 @@ class GitHubApi:
         self._max_requests = max_requests
         self._sleep = sleep
         self._request_count = 0
+        self._rate_limit_waited = 0.0
         self._opener = _opener()
 
     def __repr__(self) -> str:  # never the token
@@ -425,10 +429,10 @@ class GitHubApi:
         message = f"GitHub API {method} {path} failed in transport: {type(exc).__name__}: {reason}"
         return _Failure(ApiError(" ".join(message.split())[:300], status=0, method=method, path=path), True)
 
-    @staticmethod
-    def _retry_delay(path: str, attempt: int, headers: Any) -> float | None:
+    def _retry_delay(self, path: str, attempt: int, headers: Any, *, rate_limited: bool) -> float | None:
         """Backoff for ``attempt`` (0-based), at least ``Retry-After``/the primary reset; ``None``
-        when honouring the server would exceed :data:`MAX_RETRY_DELAY_SECONDS`."""
+        when honouring the server would exceed :data:`MAX_RETRY_DELAY_SECONDS`, or for a
+        rate-limit answer the client's remaining ``limits.MAX_API_RATE_LIMIT_WAIT_SECONDS``."""
 
         jitter = (sum(path.encode("utf-8")) % 997) / 997
         delay = min(float(2 ** attempt) + jitter, MAX_RETRY_DELAY_SECONDS)
@@ -439,7 +443,12 @@ class GitHubApi:
             reset = _decimal(_header(headers, "X-RateLimit-Reset"))
             if reset is not None:
                 delay = max(delay, reset - time.time() + 1.0)
-        return delay if delay <= MAX_RETRY_DELAY_SECONDS else None
+        if delay <= MAX_RETRY_DELAY_SECONDS:
+            return delay
+        if rate_limited and self._rate_limit_waited + delay <= limits.MAX_API_RATE_LIMIT_WAIT_SECONDS:
+            self._rate_limit_waited += delay
+            return delay
+        return None
 
     def _retrying(self, path: str, attempt_once: Callable[[], Any], *, replay: bool = True) -> Any:
         for attempt in range(REQUEST_ATTEMPTS):
@@ -449,7 +458,8 @@ class GitHubApi:
             retryable = outcome.retryable and (replay or isinstance(outcome.error, ApiRateLimited))
             if not retryable or attempt + 1 == REQUEST_ATTEMPTS:
                 raise outcome.error
-            delay = self._retry_delay(path, attempt, outcome.headers)
+            delay = self._retry_delay(path, attempt, outcome.headers,
+                                      rate_limited=isinstance(outcome.error, ApiRateLimited))
             if delay is None:
                 raise outcome.error
             self._sleep(delay)
