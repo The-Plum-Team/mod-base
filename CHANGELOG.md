@@ -5,7 +5,11 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased
+## v1.7.1
+
+Patch release for the `ubuntu-24.04` runner image 20261018.339.1, on which the root host fence
+refused every shared Build and packaged E2E job: the fence now closes the Docker data root as it
+closes the unused SDK roots (#44). A mod moves from v1.7.0 to v1.7.1 with an ordinary pin bump.
 
 - The root host fence closes the Docker data root `/var/lib/docker` to `0700` at its existing
   owner, as it closes the unused SDK roots, so its proof no longer walks the layers of the images
@@ -26,6 +30,17 @@ rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind
   being repaired or left unwalked; an SDK inside a repair tree keeps its full repair.
 - The timing line reports the time of each walk below a closed tree under the new key
   `closed_verification`. No document kind, managed file or adapter protocol changes.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files, the workflows' jobs, steps and permissions and the
+  request counts are those of v1.7.0. The fence's informational timing line gains the key
+  `closed_verification` and grants nothing. The compatibility baseline moves to the archived
+  v1.7.0 reader (`tests/fixtures/previous_release/v1.7.0`), which reads every kind of this
+  release unchanged.
+- Upgrade: bump the pin to v1.7.1 as usual (`python3 scripts/ci/mod_base_kit.py bump --to v1.7.1`,
+  then `verify --network` and `template check`). A mod with `admission` lands the bump through its
+  protected route like any change to its callers.
+- Rollback: an ordinary pin bump back to v1.7.0; nothing is stored that it would not read. Its
+  fence again refuses every job on a runner image whose Docker layers carry a world-writable entry.
 
 ## v1.7.0
 
