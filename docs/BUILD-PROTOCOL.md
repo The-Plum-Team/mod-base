@@ -260,18 +260,42 @@ The former expected-failure regression now passes; the hosted pipeline exercises
 generations and proves that the future kit refuses execution by privileged or validator accounts.
 
 **Host fence.** Before accounts exist, root closes the unused Android, CodeQL, .NET and Swift
-SDK roots to mode `0700`, retaining and verifying their existing owners. A bounded 64 KiB
-mount-table proof rejects writable descendant aliases; an unrelated writable alias on the same
-filesystem forces a full SDK repair instead of pruning. Global verification also rejects reachable
-group-writable regular files with multiple hard links. Real-account tests cover named ACLs, hard
-links and bind mounts. Every other repair path keeps its original coverage, including private
-directories. Python/JDK, Node, Git and the runner's own runtime remain accessible.
+SDK roots and the Docker data root `/var/lib/docker` to mode `0700`, retaining and verifying their
+existing owners. A bounded 64 KiB mount-table proof rejects writable descendant aliases. An
+unrelated writable alias on the same filesystem may name a hidden hard link into a closed tree,
+so that tree is not pruned: an SDK keeps the full repair of the tree that contains it, and a
+closed tree that no repair walk reaches (the Docker data root, or an SDK on a filesystem of its
+own) is proved whole instead, failing on any group- or world-writable regular file with more than
+one link, and is never changed. Global verification also rejects reachable group-writable regular
+files with multiple hard links. Real-account tests cover named ACLs, hard links and bind mounts.
+Every other repair path keeps its original coverage, including private directories. Python/JDK,
+Node, Git and the runner's own runtime remain accessible.
 
-Repair shares one 600-second deadline across its five trees; verification has another 600 seconds,
-inside the existing 1,800-second root-operation bound. Failure prevents account creation. Each
-hosted module reports its first fence's mount, closure, per-tree repair, verification and total
-times, plus any closed SDK it had to walk. These are diagnostics, not authority records. The
-measured cold cost and image sensitivity are recorded in BUILD-E2E-PROGRESS.md.
+The Docker data root holds the layers of the images the image build pulls (several of them
+`:latest`), which keep whatever modes those images chose; Docker leaves the root `0710 root:root`,
+so the proof used to enter it. `ubuntu-24.04` 20261018.339 pulled a layer with the world-writable
+`/var/lib/pebble/default` of the `ubuntu:26.04` base image and failed every fence. A worker never
+had a path below that root (it is in no group but its own), and closing it makes the proof say
+so: it skips a directory only its existing owner can search, while the same entry anywhere else
+still fails the fence. When its mount aliases are admitted, nothing below it is changed or
+walked by the proof, and when they are not it is proved, not repaired: rewriting layers would
+break images (a layer's sticky `/tmp` would lose other write). The daemon runs as root and keeps
+working. Every start of the daemon sets the root to `0711` and then to `0710` (moby
+`setupDaemonRoot`), so for a moment everyone can search it. Only root can restart the daemon and
+no step after the fence does; still, the fence proves what that moment would expose: below the
+root it lists what the global proof would list, pruning only directories that no later account
+could search by their mode. Docker's own `0710` directories, such as `overlay2` over every layer,
+are pruned there; volume data (`volumes/<name>` is `0701`) and `buildkit` (`0711`) are not. That
+walk reads modes only: a named ACL entry on a group-searchable directory is not considered
+(Docker sets none).
+
+Repair shares one 600-second deadline across its trees; verification, including the walks below
+closed trees, has another 600 seconds, inside the existing 1,800-second root-operation bound.
+Failure prevents account creation. Each hosted module reports its first fence's mount, closure,
+per-tree repair, verification and total times, any closed tree whose aliases were not admitted
+(`walked_closed`) and the time of each walk below a closed tree (`closed_verification`). These
+are diagnostics, not authority records. The measured cold cost and image sensitivity are recorded
+in BUILD-E2E-PROGRESS.md.
 
 The verbs of every job after the prologue, in step order (`workflow.CI_JOB_VERBS`, without the
 step the note below the table describes; `seed-export` runs only where step 9a says):
@@ -419,7 +443,7 @@ without importing the kit (`tests/test_ci_privileged_bootstrap.py` keeps both eq
 
 | Operation | What root does |
 | --- | --- |
-| `host-fence` | Before any worker account exists: removes group and other write permission and default ACLs from `/opt`, `/usr/share`, `/usr/local`, `/usr/lib/jvm` and `/var/lib/gems`, then fails unless no world-writable regular file and no world-writable directory without the sticky bit is left on the root filesystem outside the worker boundary |
+| `host-fence` | Before any worker account exists: closes the unused SDK roots and the Docker data root to `0700` at their existing owners, removes group and other write permission and default ACLs from `/opt`, `/usr/share`, `/usr/local`, `/usr/lib/jvm` and `/var/lib/gems` (an SDK whose mount aliases were not admitted is repaired with its tree; a closed tree that no repair walk reaches is never changed), then fails unless no world-writable regular file, no world-writable directory without the sticky bit and no group-writable regular file with more than one link is left on the root filesystem outside the worker boundary, below the Docker data root where a daemon start would expose it, or as a writable hard link below an unadmitted closed tree that no repair walk reaches |
 | `grant-controller` | Hands the protected adapter copy in `controller/` to the validator, read-only |
 | `grant-plan-inputs`, `take-derived-plan`, `grant-validation-inputs` | Around `derive_plan`: hands the staged candidate files in `validation-input/` to the validator, takes the one file the hook wrote out of the validator's home, and hands `validation-input/` over again with the plan |
 | `stage-candidate` | Publishes the tested tree, its reduced `.git`, the kit overlay and an optional Gradle seed for the candidate; the only operation whose request names directories, all below the fenced runner home |

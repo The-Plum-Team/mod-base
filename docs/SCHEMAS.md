@@ -11,7 +11,7 @@ the organization members snapshot.
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.6.1, which
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.7.0, which
 reads every kind of this release unchanged. The optional `seeds` of the Build config (v1.2.0) stays within schema 1; a reader older
 than v1.2.0 refuses a config that sets it. So does the optional `admission` (v1.3.0); a v1.2.1
 reader refuses a config that sets it. So do the optional `runtime_selection` of the Build config,

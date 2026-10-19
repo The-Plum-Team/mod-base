@@ -1,0 +1,144 @@
+{
+  "anchor": {
+    "artifact_nodes": [
+      "1.20.1-fabric",
+      "1.20.1-forge"
+    ]
+  },
+  "captures": [
+    {
+      "capture_id": "full.client_a.title_screen",
+      "capture_order": 0,
+      "expectation": "The Quick Skin title-screen button is visible.",
+      "frame_id": "1.20.1-fabric/full/client_a/title_screen",
+      "lane_id": "1.20.1-fabric/full",
+      "review_tier": "key",
+      "role": "client_a",
+      "step": "title_screen",
+      "title": "Title screen"
+    },
+    {
+      "capture_id": "full.client_a.skin_apply",
+      "capture_order": 1,
+      "expectation": "The plaid local skin renders on the player model.",
+      "frame_id": "1.20.1-fabric/full/client_a/skin_apply",
+      "lane_id": "1.20.1-fabric/full",
+      "review_tier": "all",
+      "role": "client_a",
+      "step": "skin_apply",
+      "title": "Applied local skin"
+    },
+    {
+      "capture_id": "full.client_a.title_screen",
+      "capture_order": 0,
+      "expectation": "The Quick Skin title-screen button is visible.",
+      "frame_id": "1.20.1-forge/full/client_a/title_screen",
+      "lane_id": "1.20.1-forge/full",
+      "review_tier": "key",
+      "role": "client_a",
+      "step": "title_screen",
+      "title": "Title screen"
+    },
+    {
+      "capture_id": "full.client_a.skin_apply",
+      "capture_order": 1,
+      "expectation": "The plaid local skin renders on the player model.",
+      "frame_id": "1.20.1-forge/full/client_a/skin_apply",
+      "lane_id": "1.20.1-forge/full",
+      "review_tier": "all",
+      "role": "client_a",
+      "step": "skin_apply",
+      "title": "Applied local skin"
+    }
+  ],
+  "comparisons": [
+    {
+      "comparison_id": "1.20.1-fabric/full/client_a/skin_changed",
+      "first_frame_id": "1.20.1-fabric/full/client_a/title_screen",
+      "lane_id": "1.20.1-fabric/full",
+      "minimum_changed_fraction": 0.02,
+      "region": [
+        0.25,
+        0.1,
+        0.75,
+        0.9
+      ],
+      "role": "client_a",
+      "second_frame_id": "1.20.1-fabric/full/client_a/skin_apply"
+    },
+    {
+      "comparison_id": "1.20.1-forge/full/client_a/skin_changed",
+      "first_frame_id": "1.20.1-forge/full/client_a/title_screen",
+      "lane_id": "1.20.1-forge/full",
+      "minimum_changed_fraction": 0.02,
+      "region": [
+        0.25,
+        0.1,
+        0.75,
+        0.9
+      ],
+      "role": "client_a",
+      "second_frame_id": "1.20.1-forge/full/client_a/skin_apply"
+    }
+  ],
+  "contract_path": "e2e/scenario-contract.json",
+  "contract_sha256": "cc8321d6375c494d043fdd0260f21bc0ec51dacc9f6abb7f909cdcd3041b78bf",
+  "image_policy": {
+    "derivative_box": [
+      1600,
+      900
+    ],
+    "pixel_metrics_version": 1,
+    "source_size": [
+      1920,
+      1080
+    ],
+    "webp_method": 6,
+    "webp_quality": 82
+  },
+  "key": "mc1.20.1",
+  "kind": "mod-base.evidence.expectation",
+  "label": "Minecraft 1.20.1",
+  "lanes": [
+    {
+      "artifact_node": "1.20.1-fabric",
+      "java": 17,
+      "lane_id": "1.20.1-fabric/full",
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "roles": [
+        "client_a"
+      ],
+      "scenario": "full"
+    },
+    {
+      "artifact_node": "1.20.1-forge",
+      "java": 17,
+      "lane_id": "1.20.1-forge/full",
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "roles": [
+        "client_a"
+      ],
+      "scenario": "full"
+    }
+  ],
+  "matrix_sha256": "6e00cd562cc2d88e238dfb81d9439de7ec843ee9d0c9879d549cb1436786f975",
+  "profile": "pr",
+  "repository": "The-Plum-Team/Quick-Skin-Mod",
+  "scenarios": [
+    {
+      "id": "full",
+      "title": "Full suite"
+    }
+  ],
+  "schema_version": 1,
+  "scope": {
+    "kind": "complete"
+  },
+  "subject": {
+    "branch": "master",
+    "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "tree": "5459e70b2b7c2688978c36fedc9a4958a5b2cde0"
+  }
+}

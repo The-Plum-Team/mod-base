@@ -36,9 +36,23 @@ HOST_FENCE_TREES = ("/opt", "/usr/share", "/usr/local", "/usr/lib/jvm", "/var/li
 # These image SDKs are not inputs to the Python/JDK worker profile or the runner's later
 # checkout/upload actions. Keep Python, JDKs, Node, Git and their runtime/configuration trees
 # accessible; close only these known unused SDK roots, without changing their existing owner.
+# Neither is the Docker data root, which only the root daemon uses. Docker leaves it 0710
+# root:root, so the proof entered it, and the layers of the images the image build pulls keep the
+# modes those images chose (``ubuntu-24.04`` 20261018.339 pulled one with a world-writable
+# ``/var/lib/pebble/default``). Closing the root ends that drift without changing a layer.
+_DOCKER_DATA_ROOT = "/var/lib/docker"
 _UNUSED_IMAGE_TREES = ("/opt/hostedtoolcache/CodeQL", "/usr/local/lib/android",
-                       "/usr/share/dotnet", "/usr/share/swift")
+                       "/usr/share/dotnet", "/usr/share/swift", _DOCKER_DATA_ROOT)
+# Closed trees whose owner opens them to everyone's search again: every start of the Docker daemon
+# sets its data root to 0711 before 0710 (moby ``setupDaemonRoot``). What that moment exposes stays
+# under the proof (``_closed_tree_entries``); Docker's own 0710 directories, such as the layers'
+# ``overlay2``, keep everything below them out of it.
+_REOPENED_IMAGE_TREES = (_DOCKER_DATA_ROOT,)
 _FENCE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+# What the proof refuses: a world-writable non-sticky directory, a world-writable regular file, or
+# a group-writable regular file with another link (``_reachable_writable_entries``).
+_WRITABLE_ENTRY = ("(", "-type", "d", "-perm", "-0002", "!", "-perm", "-1000", "-o",
+                   "-type", "f", "-perm", "-0002", "-o", "-type", "f", "-perm", "-0020", "-links", "+1", ")")
 
 
 @dataclass(frozen=True)
@@ -423,15 +437,18 @@ def _admit_closed_tree_mounts(tree: str, device: int, mounts: tuple[_Mount, ...]
         if root in mount.root.parents:
             raise WorkerError("unused image tree has a writable descendant mount alias outside its closure")
         if mount.root != root and mount.root not in root.parents:
-            # An unrelated filesystem path can name a hard link to an SDK inode. Its bind alias
-            # may sit below another filesystem, outside the root proof's -xdev traversal. Retain
-            # the original complete repair of this SDK instead of assuming that inode unrelated.
+            # An unrelated filesystem path can name a hard link to an inode of the tree. Its bind
+            # alias may sit below another filesystem, outside the root proof's -xdev traversal.
+            # Repair or prove the whole tree instead of assuming that inode unrelated.
             prune = False
     return prune
 
 
 def _close_unused_image_tree(tree: str, *, mounts: tuple[_Mount, ...] | None = None) -> bool:
-    """Close one real SDK directory to future accounts, preserving its existing owner's access."""
+    """Close one real unused image directory to future accounts, preserving its existing owner's access.
+
+    Returns whether its mount aliases were admitted, so that nothing below it needs repair or proof.
+    """
     import pwd
 
     descriptor = _open_directory(tuple(PurePosixPath(tree).parts[1:]))
@@ -457,11 +474,11 @@ def _close_unused_image_tree(tree: str, *, mounts: tuple[_Mount, ...] | None = N
 
 def _close_writable_trees(trees: tuple[str, ...], *, closed_trees: tuple[str, ...] = (),
                           timings: dict[str, float] | None = None) -> None:
-    """One walk: drop group/other write and default ACLs outside explicitly admitted closed SDKs.
+    """One walk: drop group/other write and default ACLs outside explicitly admitted closed trees.
 
     Only entries that carry a write bit are changed, so a second run leaves metadata alone. Links
     are never followed or changed, and the walk stays on each tree's own filesystem. Only the
-    SDK roots whose closure and mount aliases were admitted may be skipped. Other private
+    closed roots whose closure and mount aliases were admitted may be skipped. Other private
     directories retain their original complete repair, including aliases of their contents.
     """
 
@@ -482,46 +499,106 @@ def _close_writable_trees(trees: tuple[str, ...], *, closed_trees: tuple[str, ..
                 timings[tree] = round(time.monotonic() - started, 6)
 
 
-def _reachable_writable_entries(root: str, *, skip: str) -> tuple[list[str], bool]:
+def _repair_reaches(tree: str, repair_trees: tuple[str, ...]) -> bool:
+    """Whether the ``find -xdev`` walk of one of ``repair_trees`` reaches the directory ``tree``.
+
+    It does when a repair tree contains it and every directory from that tree down to it is on
+    the repair tree's own filesystem; ``find -xdev`` enters no other.
+    """
+
+    path = PurePosixPath(tree)
+    for root in map(PurePosixPath, repair_trees):
+        if root not in path.parents:
+            continue
+        device = os.stat(root, follow_symlinks=False).st_dev
+        current = root
+        for part in path.relative_to(root).parts:
+            current = current / part
+            if os.stat(current, follow_symlinks=False).st_dev != device:
+                break
+        else:
+            return True
+    return False
+
+
+def _listed_entries(output: bytes, device: int) -> list[str]:
+    """The ``%D %p\\0`` records of a bounded listing that lie on ``device``."""
+
+    expected = str(device).encode("ascii")
+    entries = []
+    for record in output.split(b"\0")[:-1]:  # A cut-off last record has no terminator and is dropped.
+        number, _, path = record.partition(b" ")
+        if number == expected:  # A mount point is listed with the device of what is mounted on it.
+            entries.append(path.decode("utf-8", "backslashreplace"))
+    return entries
+
+
+def _reachable_writable_entries(root: str, *, skip: str,
+                                deadline: float | None = None) -> tuple[list[str], bool]:
     """Reachable world-writable entries or group-writable hard links on ``root``'s filesystem.
 
     ``skip`` (the worker boundary) is not entered. Neither is a directory that only its owner can
     search when that owner is an existing account: an account created later can never be that
     owner, so nothing below is reachable for it. Sticky directories are entered but not reported.
-    A group-writable hard link can alias a skipped SDK inode; its group-mode ACL mask can grant
+    A group-writable hard link can alias an inode of a closed tree; its group-mode ACL mask can grant
     a future numeric UID/GID write even when its owning group already exists. Reject it without
     guessing future IDs or parsing access ACLs. Returns entries and listing completeness.
     """
 
-    device = str(os.stat(root, follow_symlinks=False).st_dev).encode("ascii")
+    device = os.stat(root, follow_symlinks=False).st_dev
     output, complete = _fence_command((
         "/usr/bin/find", root, "-xdev", "-ignore_readdir_race", "-path", skip, "-prune", "-o",
         "(", "-type", "d", "!", "-perm", "/0011", "!", "-nouser", "-prune", ")", "-o",
-        "(", "(", "-type", "d", "-perm", "-0002", "!", "-perm", "-1000", "-o",
-        "-type", "f", "-perm", "-0002", "-o", "-type", "f", "-perm", "-0020", "-links", "+1", ")",
-        "-printf", "%D %p\\0", ")"), phase="verification")
-    records = output.split(b"\0")[:-1]  # A cut-off last record has no terminator and is dropped.
-    entries = []
-    for record in records:
-        number, _, path = record.partition(b" ")
-        if number == device:  # A mount point is listed with the device of what is mounted on it.
-            entries.append(path.decode("utf-8", "backslashreplace"))
-    return entries, complete
+        "(", *_WRITABLE_ENTRY, "-printf", "%D %p\\0", ")"), phase="verification", deadline=deadline)
+    return _listed_entries(output, device), complete
+
+
+def _closed_tree_entries(tree: str, *, whole: bool, deadline: float | None = None) -> tuple[list[str], bool]:
+    """What a later account could still reach below a closed tree, which the proof skips.
+
+    ``whole``: the tree's mount aliases were not admitted and no repair walk reaches it, so an
+    unrelated same-device mount may name a hard link to one of its regular files from below
+    another filesystem. List every group- or world-writable regular file with more than one link,
+    private directories included. Nothing else below the closed root has another path: a
+    directory has no hard link and a descendant mount alias was refused.
+
+    Otherwise the tree's owner reopens it to search by everyone (``_REOPENED_IMAGE_TREES``). List
+    what the proof would list below it, pruning only the directories that no later account could
+    search even then by their mode: not searchable by others, nor by an owner or group that does
+    not exist yet. Unlike the proof's pruning, which holds under ACLs because a directory's group
+    bits are its mask, this one reads modes only: a named ACL entry of a group-searchable
+    directory is not considered (Docker sets none). Returns entries and listing completeness.
+    """
+
+    device = os.stat(tree, follow_symlinks=False).st_dev
+    if whole:
+        expression = ("-type", "f", "-links", "+1", "-perm", "/0022", "-printf", "%D %p\\0")
+    else:
+        expression = ("(", "-type", "d", "!", "-perm", "-0001", "!", "(", "-nouser", "-perm", "-0100", ")",
+                      "!", "(", "-nogroup", "-perm", "-0010", ")", "-prune", ")", "-o",
+                      "(", *_WRITABLE_ENTRY, "-printf", "%D %p\\0", ")")
+    output, complete = _fence_command(("/usr/bin/find", tree, "-xdev", "-ignore_readdir_race", "-mindepth", "1",
+                                       *expression), phase="verification", deadline=deadline)
+    return _listed_entries(output, device), complete
 
 
 def fence_worker_host(*, boundary: HostBoundary) -> None:
     """Root-only, before any worker account exists: close the hosted image to later accounts.
 
-    Closes unused image SDKs at their existing owner, removes group/other write permission and
-    default ACLs from reachable ``HOST_FENCE_TREES``, then proves that no world-writable non-sticky
-    directory, world-writable regular file or group-writable hard-link alias remains reachable
-    outside the worker boundary. Anything left is a failure, as is an unprovable closure or a
-    command that fails. Sticky directories outside those trees, such as ``/tmp``, stay as they are.
+    Closes unused image SDKs and the Docker data root at their existing owner, removes group/other
+    write permission and default ACLs from reachable ``HOST_FENCE_TREES``, then proves that no
+    world-writable non-sticky directory, world-writable regular file or group-writable hard-link
+    alias remains reachable outside the worker boundary. It also proves what the closures cannot
+    hide: the writable hard links of a closed tree whose mount aliases were not admitted and that
+    no repair walk reaches, and what a reopened tree exposes. Anything left is a failure, as is an
+    unprovable closure or a command that fails. Nothing below a closed tree is changed except by
+    the repair of a tree containing it. Sticky directories outside those trees, such as ``/tmp``,
+    stay as they are.
     """
 
     started = time.monotonic()
     timings: dict[str, Any] = {"mounts": 0.0, "closure": {}, "walked_closed": [], "repair": {},
-                               "verification": 0.0, "ok": False}
+                               "verification": 0.0, "closed_verification": {}, "ok": False}
     try:
         _fence_worker_host(boundary, timings)
         timings["ok"] = True
@@ -550,18 +627,18 @@ def _fence_worker_host(boundary: HostBoundary, timings: dict[str, Any]) -> None:
             mounts = _host_mounts()
         finally:
             timings["mounts"] = round(time.monotonic() - started, 6)
-        closed_trees = []
+        present, closed_trees, unadmitted = [], [], []
         for tree in _UNUSED_IMAGE_TREES:
             started = time.monotonic()
             try:
-                if _close_unused_image_tree(tree, mounts=mounts):
-                    closed_trees.append(tree)
-                else:
-                    timings["walked_closed"].append(tree)
+                admitted = _close_unused_image_tree(tree, mounts=mounts)
             except FileNotFoundError:
                 continue
             finally:
                 timings["closure"][tree] = round(time.monotonic() - started, 6)
+            present.append(tree)
+            (closed_trees if admitted else unadmitted).append(tree)
+        timings["walked_closed"].extend(unadmitted)
         trees = []
         for tree in HOST_FENCE_TREES:
             try:
@@ -569,13 +646,31 @@ def _fence_worker_host(boundary: HostBoundary, timings: dict[str, Any]) -> None:
             except FileNotFoundError:
                 continue
             trees.append(tree)
+        # A closed tree whose aliases were not admitted keeps the complete repair of the tree that
+        # contains it. One that no repair walk reaches (the Docker data root, or an SDK on a
+        # filesystem of its own) is proved whole instead: its contents are not the fence's to
+        # change, and changing image layers would break the images.
+        proved_whole = tuple(tree for tree in unadmitted if not _repair_reaches(tree, tuple(trees)))
         if trees:
             _close_writable_trees(tuple(trees), closed_trees=tuple(closed_trees), timings=timings["repair"])
         started = time.monotonic()
+        deadline = started + limits.CI_HOST_FENCE_TIMEOUT_SECONDS
         try:
-            entries, complete = _reachable_writable_entries("/", skip=str(WORKER_ROOT.parent))
+            entries, complete = _reachable_writable_entries("/", skip=str(WORKER_ROOT.parent), deadline=deadline)
         finally:
             timings["verification"] = round(time.monotonic() - started, 6)
+        for tree in present:
+            walks = (True,) * (tree in proved_whole) + (False,) * (tree in _REOPENED_IMAGE_TREES)
+            if not walks:
+                continue
+            started = time.monotonic()
+            try:
+                for whole in walks:
+                    found, fits = _closed_tree_entries(tree, whole=whole, deadline=deadline)
+                    entries.extend(found)
+                    complete = complete and fits
+            finally:
+                timings["closed_verification"][tree] = round(time.monotonic() - started, 6)
     except OSError as error:
         raise WorkerError("cannot fence the worker host") from error
     if entries or not complete:

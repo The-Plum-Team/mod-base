@@ -135,7 +135,8 @@ def add_verbs(verbs: argparse._SubParsersAction) -> None:
 
 
 #: The phases the root fence reports (``host.fence_worker_host``); nothing else is printed.
-FENCE_TIMING_KEYS = frozenset({"mounts", "closure", "walked_closed", "repair", "verification", "ok", "total"})
+FENCE_TIMING_KEYS = frozenset({"mounts", "closure", "walked_closed", "repair", "verification", "closed_verification",
+                               "ok", "total"})
 
 
 def fence_timing_line(payload: str) -> str | None:
