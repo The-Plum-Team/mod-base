@@ -46,7 +46,7 @@ without an activation manifest, and Q1–Q10, B1–B7 and the GitHub settings of
   release commit, 3,124 on each Python 3.11–3.13 at the v1.3.0 release commit, 3,141 on each Python 3.11–3.13 at the v1.3.1 release commit, 3,169 on each Python 3.11–3.13 at the v1.4.0 release commit, 3,170 on each Python 3.11–3.13 at the v1.4.1 release commit, 3,218 on each Python 3.11–3.13 at the v1.5.0 release commit, 3,288 on each Python 3.11–3.13 at the v1.6.0 release commit, 3,291 on each Python 3.11–3.13 at the v1.6.1 release commit, 3,293 on each Python 3.11–3.13 at the v1.7.0 release commit, with one skip and one documented expected failure. GitHub is `FakeGitHub`;
   integration cases use real files, Git and processes, while older isolated tests also replace
   system/account operations.
-- **Hosted account proof:** `ci_linux_worker.py` (132 tests), `ci_linux_deferred.py` (2 tests) and
+- **Hosted account proof:** `ci_linux_worker.py` (138 tests), `ci_linux_deferred.py` (2 tests) and
   `ci_linux_system_profile.py` (1 test, a real `xvfb-mesa` install before the fence) run separately in the kit's own CI on each Python version. They exercise the real accounts,
   host fence, root operations, cleanup and deferred-execution deadlines.
 - **Pipeline proof:** `ci_linux_pipeline.py` runs workflow-derived command lines through the
@@ -120,12 +120,24 @@ median **185.6 s**. After it, CI 37997489264 and 38004405307 measured eighteen f
 two and a half minutes per Build or E2E job, mostly the repair walk of `/opt`, `/usr/share` and
 `/usr/local` and a 30–40-second verification walk.
 
-The fence closes four unused SDK roots (Android, CodeQL, .NET and Swift), proves them inaccessible
-to new accounts and skips their contents only when mount admission permits. All other repair
-coverage remains; ambiguous mount aliases retain the full SDK walk. Hosted tests exercise ACL,
-hard-link and bind-mount bypasses with real accounts. Python/JDK, Node, Git and runner paths stay
-available. Repair and verification keep their separate 600-second limits; no timeout was raised.
-Image layout or future tool requirements can change this cost and must be checked at adoption.
+The fence closes four unused SDK roots (Android, CodeQL, .NET and Swift) and the Docker data root,
+proves them inaccessible to new accounts and skips their contents only when mount admission
+permits. All other repair coverage remains; ambiguous mount aliases retain the full repair of an
+SDK's tree, or a whole proof of a closed tree no repair walk reaches. Below the Docker data root
+the proof walks only what a daemon start would expose, which prunes `overlay2` and every layer.
+Hosted tests exercise ACL, hard-link and bind-mount bypasses with real accounts. Python/JDK, Node,
+Git and runner paths stay available. Repair and verification keep their separate 600-second limits;
+no timeout was raised. Image layout or future tool requirements can change this cost and must be
+checked at adoption.
+
+Image drift: `ubuntu-24.04` 20261018.339.1 failed every fence (Block Pops run 39287786040, three
+attempts of one target, whose `worker-prepare` step ran 3.9–7.7 minutes before the refusal, against
+1.4–2.9 minutes, fence 77–167 s, for the nine targets on 20261012.334.1 in the same run; a failed
+fence prints no timing line, so where the extra time went is not measured) on
+`/var/lib/pebble/default` inside a Docker layer: the `ubuntu:26.04` base image ships it
+`0777 root:root`, and the image build pulls several images as `:latest`, most likely among them
+`ghcr.io/github/gh-aw-firewall/agent`, rebased on `ubuntu:26.04` on 2026-10-16. The verification
+entered the `0710 root:root` Docker data root until the fence closed it.
 
 ## Known behavior and explicit scope decisions
 

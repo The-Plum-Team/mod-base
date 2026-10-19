@@ -1,0 +1,19 @@
+{
+  "candidates": [
+    202,
+    303
+  ],
+  "checked": [
+    101,
+    202,
+    303
+  ],
+  "kind": "mod-base.ci.org-members",
+  "members": [
+    202
+  ],
+  "organization": "example",
+  "pr_number": 7,
+  "schema_version": 1,
+  "through_comment_id": 30
+}

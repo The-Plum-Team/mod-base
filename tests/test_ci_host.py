@@ -3,6 +3,9 @@
 Syscall mocks here are protocol tests; the required Linux fixture exercises actual UID access.
 """
 
+import contextlib
+import io
+import json
 import os
 import shutil
 import stat
@@ -194,6 +197,90 @@ class HostFenceTests(unittest.TestCase):
                     host.authenticate_host_boundary(boundary)
         opening.assert_not_called()
 
+    def fence(self, unadmitted=(), missing=(), elsewhere=(), found=None):
+        """The root fence's composition over an image whose trees all exist but ``missing``.
+
+        ``unadmitted`` closed trees are those whose mount aliases ``_close_unused_image_tree``
+        could not admit, ``elsewhere`` the SDKs on a filesystem no repair walk enters, and
+        ``found`` maps a ``(tree, whole)`` walk of ``_closed_tree_entries`` to what it lists.
+        Returns the repair walk's trees and pruned closed trees, the closed-tree walks in order
+        and the timing report; a refusal raises.
+        """
+
+        def close(tree, *, mounts):
+            if tree in missing:
+                raise FileNotFoundError(tree)
+            return tree not in unadmitted
+
+        def reaches(tree, repair_trees):
+            self.assertEqual(repair_trees, host.HOST_FENCE_TREES)
+            return tree in self.SDKS and tree not in elsewhere
+
+        walks = []
+
+        def closed_entries(tree, *, whole, deadline):
+            walks.append((tree, whole))
+            return (found or {}).get((tree, whole), []), True
+
+        def getpwnam(name):
+            raise KeyError(name)  # No worker account exists yet.
+
+        accounts = SimpleNamespace(getpwnam=getpwnam)
+        report = io.StringIO()
+        try:
+            with patch.object(host, "authenticate_privileged_host_boundary") as authenticate, \
+                    patch.dict(sys.modules, {"pwd": accounts}), patch.object(host, "_host_mounts", return_value=()), \
+                    patch.object(host, "_close_unused_image_tree", side_effect=close), \
+                    patch.object(host, "_open_directory", return_value=10), patch.object(host.os, "close"), \
+                    patch.object(host, "_repair_reaches", side_effect=reaches), \
+                    patch.object(host, "_close_writable_trees") as repair, \
+                    patch.object(host, "_reachable_writable_entries", return_value=([], True)) as verify, \
+                    patch.object(host, "_closed_tree_entries", side_effect=closed_entries), \
+                    contextlib.redirect_stderr(report):
+                host.fence_worker_host(boundary=BOUNDARY)
+        finally:
+            self.timing = json.loads(report.getvalue().removeprefix("mod-base host-fence timing: "))
+        self.assertEqual(authenticate.call_count, 2)
+        self.assertEqual(verify.call_args.args, ("/",))
+        self.assertEqual(verify.call_args.kwargs["skip"], str(worker.WORKER_ROOT.parent))
+        repair.assert_called_once()
+        return repair.call_args.args[0], repair.call_args.kwargs["closed_trees"], walks, self.timing
+
+    SDKS = ("/opt/hostedtoolcache/CodeQL", "/usr/local/lib/android", "/usr/share/dotnet", "/usr/share/swift")
+
+    def test_the_docker_data_root_is_closed_with_the_sdks_and_never_repaired(self):
+        docker = "/var/lib/docker"
+        trees, closed, walks, timing = self.fence()
+        # Admitted: the data root is closed like an SDK; only what a daemon start reopens is walked.
+        self.assertEqual(trees, host.HOST_FENCE_TREES)
+        self.assertEqual(closed, (*self.SDKS, docker))
+        self.assertEqual(walks, [(docker, False)])
+        self.assertEqual((timing["walked_closed"], set(timing["closure"])), ([], {*self.SDKS, docker}))
+        self.assertEqual(set(timing["closed_verification"]), {docker})
+        trees, closed, walks, timing = self.fence(unadmitted=("/usr/local/lib/android", docker))
+        # Unadmitted: an SDK keeps the complete repair of its tree; the data root, which no repair
+        # walk reaches, is proved whole instead, and no layer is changed.
+        self.assertEqual(trees, host.HOST_FENCE_TREES)
+        self.assertEqual(closed, ("/opt/hostedtoolcache/CodeQL", "/usr/share/dotnet", "/usr/share/swift"))
+        self.assertEqual(walks, [(docker, True), (docker, False)])
+        self.assertEqual(timing["walked_closed"], ["/usr/local/lib/android", docker])
+        # An SDK on a filesystem of its own is not reached by its repair tree's -xdev walk either.
+        trees, closed, walks, timing = self.fence(unadmitted=("/usr/share/dotnet",), elsewhere=("/usr/share/dotnet",))
+        self.assertEqual(trees, host.HOST_FENCE_TREES)
+        self.assertEqual(walks, [("/usr/share/dotnet", True), (docker, False)])
+        # An image without Docker has nothing to close or walk there.
+        trees, closed, walks, timing = self.fence(unadmitted=(docker,), missing=(docker,))
+        self.assertEqual((trees, closed, walks, timing["walked_closed"]), (host.HOST_FENCE_TREES, self.SDKS, [], []))
+        self.assertTrue(timing["ok"])
+
+    def test_what_a_closed_tree_walk_lists_fails_the_fence(self):
+        docker = "/var/lib/docker"
+        for whole, entry in ((False, docker + "/volumes/cache/_data"), (True, docker + "/overlay2/l/diff/etc/shadow")):
+            with self.subTest(whole=whole), \
+                    self.assertRaisesRegex(MbError, f"host fence left 1 world-writable .* first '{entry}'"):
+                self.fence(unadmitted=(docker,), found={(docker, whole): [entry]})
+            self.assertFalse(self.timing["ok"])
+
 
 @unittest.skipUnless(sys.platform == "linux" and all(map(os.path.exists, ("/usr/bin/find", "/usr/bin/setfacl"))),
                      "the fence runs GNU find, chmod and setfacl")
@@ -312,6 +399,95 @@ class HostFenceCommandTests(unittest.TestCase):
         self.assertEqual(self.entries(), [str(alias)])
         leaf.chmod(0o640)
         self.assertEqual(self.entries(), [])
+
+    def docker_root(self):
+        """Docker's own modes over the layers of the hosted 20261018.339 failure, closed by the fence.
+
+        A ``0710`` ``overlay2`` and layer, image content as the image chose it (the world-writable
+        ``/var/lib/pebble/default``, a sticky ``/tmp``, a loose file), ``0701`` volumes and a
+        ``0711`` ``buildkit``.
+        """
+        host._close_writable_trees((str(self.tree),))
+        root = self.base / "var/lib/docker"
+        layer = root / "overlay2" / ("4" * 64)
+        (layer / "diff/var/lib/pebble/default").mkdir(parents=True)
+        (layer / "diff/tmp").mkdir()
+        (layer / "diff/etc").mkdir()
+        (layer / "diff/etc/loose.conf").write_bytes(b"image bytes")
+        (root / "volumes/cache/_data").mkdir(parents=True)
+        (root / "buildkit").mkdir()
+        (root / "buildkit/cache.db").write_bytes(b"")
+        for path, mode in ((layer / "diff/var/lib/pebble/default", 0o777), (layer / "diff/tmp", 0o1777),
+                           (layer / "diff/etc/loose.conf", 0o666), (root / "volumes/cache/_data", 0o755),
+                           (root / "volumes/cache", 0o701), (root / "volumes", 0o701), (root / "buildkit", 0o711),
+                           (layer, 0o710), (root / "overlay2", 0o710), (root, 0o710)):
+            path.chmod(mode)
+        return root, layer
+
+    @staticmethod
+    def stamps(root):
+        return {path: (path.lstat().st_mode, path.lstat().st_ctime_ns) for path in (root, *root.rglob("*"))}
+
+    def test_a_closed_docker_data_root_keeps_its_layers_and_proves_what_a_daemon_start_reopens(self):
+        root, layer = self.docker_root()
+        # The hosted failure: the proof used to enter Docker's 0710 root and every layer.
+        self.assertEqual(self.entries(), sorted([str(layer / "diff/var/lib/pebble/default"),
+                                                 str(layer / "diff/etc/loose.conf")]))
+        layers = self.stamps(root / "overlay2")
+        host._close_unused_image_tree(str(root))
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+        self.assertEqual(self.entries(), [])
+        # What a daemon start (0711) exposes: overlay2 is not entered, volumes and buildkit are.
+        self.assertEqual(host._closed_tree_entries(str(root), whole=False), ([], True))
+        for path, mode in ((root / "volumes/cache/_data", 0o777), (root / "buildkit/cache.db", 0o666)):
+            path.chmod(mode)
+            self.assertEqual(host._closed_tree_entries(str(root), whole=False), ([str(path)], True))
+            path.chmod(0o755 if path.is_dir() else 0o644)
+        (root / "volumes/cache/_data").chmod(0o1777)  # A sticky directory is entered, not listed.
+        self.assertEqual(host._closed_tree_entries(str(root), whole=False), ([], True))
+        (root / "volumes/cache/_data").chmod(0o755)
+        self.assertEqual(self.stamps(root / "overlay2"), layers)  # No layer was changed.
+        # The closure hides only what is below it: the same entry anywhere else still fails the proof.
+        loose = self.base / "var/lib/pebble"
+        loose.mkdir()
+        loose.chmod(0o777)
+        self.assertEqual(self.entries(), [str(loose)])
+
+    def test_an_unadmitted_closed_tree_is_proved_whole_for_writable_hard_links(self):
+        root, layer = self.docker_root()
+        host._close_unused_image_tree(str(root))
+        # Without hard links, nothing below the closed root has another path, wherever it lies.
+        self.assertEqual(host._closed_tree_entries(str(root), whole=True), ([], True))
+        hidden = root / "image"
+        hidden.mkdir(mode=0o700)
+        (hidden / "state").write_bytes(b"")
+        os.link(hidden / "state", hidden / "state-link")
+        for mode, listed in ((0o644, False), (0o664, True), (0o646, True), (0o600, False)):
+            with self.subTest(mode=oct(mode)):
+                (hidden / "state").chmod(mode)
+                found, complete = host._closed_tree_entries(str(root), whole=True)
+                self.assertTrue(complete)
+                self.assertEqual(sorted(found), sorted([str(hidden / "state"), str(hidden / "state-link")])
+                                 if listed else [])
+        # A world-writable single-link file or directory has no path but through the closed root.
+        self.assertEqual(stat.S_IMODE((layer / "diff/var/lib/pebble/default").stat().st_mode), 0o777)
+        self.assertEqual((layer / "diff/etc/loose.conf").stat().st_nlink, 1)
+
+    def test_a_repair_walk_reaches_only_trees_on_its_own_filesystem(self):
+        tree = self.tree / "toolcache/Python"
+        self.assertTrue(host._repair_reaches(str(tree), (str(self.base / "usr"), str(self.tree))))
+        self.assertFalse(host._repair_reaches(str(tree), (str(self.base / "usr"),)))
+        self.assertFalse(host._repair_reaches(str(self.tree), (str(self.tree),)))  # Not below itself.
+        real = os.stat
+
+        def moved(path, *, follow_symlinks=True):
+            info = real(path, follow_symlinks=follow_symlinks)
+            if str(path) == str(self.tree / "toolcache"):
+                return os.stat_result((info.st_mode, info.st_ino, info.st_dev + 1, *tuple(info)[3:]))
+            return info
+
+        with patch.object(host.os, "stat", side_effect=moved):
+            self.assertFalse(host._repair_reaches(str(tree), (str(self.tree),)))
 
     def test_other_private_directories_keep_the_original_complete_repair(self):
         self.tree.chmod(0o700)

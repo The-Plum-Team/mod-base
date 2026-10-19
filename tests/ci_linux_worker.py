@@ -375,6 +375,63 @@ class LinuxHostFenceTests(HostedWorkerCase):
                 self.assertEqual(self.as_worker(role, "/usr/bin/test", "-w", str(sdk.parent),
                                                 accepted=(0, 1)).returncode, 1)
 
+    def test_docker_data_root_is_closed_without_walking_its_layers_and_real_accounts_cannot_enter(self):
+        """What the image's pre-pulled layers hold stays as it is and unreachable (20261018.339)."""
+        from mod_base.build_ci.root_request import root_request_path
+
+        docker = Path("/var/lib/docker")
+        created = not docker.exists()
+        if created:
+            command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "-m", "0710", "--", str(docker))
+        self.assertFalse(docker.is_symlink())
+        # A stand-in of Docker's 0710 overlay2 over a layer as the image chose it, and of a volume
+        # (0701) whose _data a daemon start makes reachable by opening the root to 0711.
+        root = docker / f"mod-base-fence-standin-{os.getpid()}"
+        layer = root / "diff/var/lib/pebble/default"
+        volume = docker / f"mod-base-fence-volume-{os.getpid()}"
+        data = volume / "_data"
+
+        def remove_standin():
+            command("/usr/bin/sudo", "-n", "/usr/bin/rm", "-rf", "--", str(root), str(volume))
+            if created:
+                # Refuse to remove the root if anything other than our inert fixtures arrived.
+                command("/usr/bin/sudo", "-n", "/usr/bin/rmdir", "--", str(docker))
+
+        self.addCleanup(remove_standin)
+        command("/usr/bin/sudo", "-n", "/usr/bin/mkdir", "-p", "--", str(layer), str(data))
+        command("/usr/bin/sudo", "-n", "/usr/bin/touch", "--", str(layer / "state"))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0777", "--", str(layer), str(data))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0666", "--", str(layer / "state"))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0710", "--", str(root))
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0701", "--", str(volume))
+        # Docker's own mode, which an earlier fence of this process may already have closed.
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0710", "--", str(docker))
+        owner = docker.stat().st_uid
+        with self.assertRaises(MbError) as caught:
+            fence_host(self.host_boundary)
+        self.assertIn(str(data), str(caught.exception))
+        self.assertEqual(_FENCE_TIMINGS[-1]["ok"], False)
+        command("/usr/bin/sudo", "-n", "/usr/bin/chmod", "0755", "--", str(data))
+        # One request per operation and boundary: the failed one is never reused.
+        shutil.rmtree(Path(str(root_request_path("host-fence"))))
+        fence_host(self.host_boundary)
+        self.assertEqual((docker.stat().st_uid, stat.S_IMODE(docker.stat().st_mode)), (owner, 0o700))
+        self.assertNotIn(str(docker), _FENCE_TIMINGS[-1]["walked_closed"])
+        self.assertNotIn(str(docker), _FENCE_TIMINGS[-1]["repair"])
+        self.assertIn(str(docker), _FENCE_TIMINGS[-1]["closed_verification"])
+        for path, mode in ((root, b"710"), (layer, b"777"), (layer / "state", b"666")):
+            self.assertEqual(command("/usr/bin/sudo", "-n", "/usr/bin/stat", "--format=%a", "--",
+                                     str(path)).stdout.strip(), mode)
+        self.allocate_accounts()
+        for role in WORKER_ACCOUNTS:
+            with self.subTest(role=role):
+                self.assertEqual(self.as_worker(role, "/usr/bin/test", "-x", str(docker),
+                                                accepted=(0, 1)).returncode, 1)
+                self.assertEqual(self.as_worker(role, "/usr/bin/truncate", "-s", "0", str(layer / "state"),
+                                                accepted=(0, 1)).returncode, 1)
+                self.assertEqual(self.as_worker(role, "/usr/bin/touch", str(layer / "planted"),
+                                                accepted=(0, 1)).returncode, 1)
+
     def test_hard_link_acl_aliases_of_a_closed_sdk_fail_before_accounts_are_recreated(self):
         import grp
         import pwd
@@ -497,6 +554,12 @@ class LinuxHostFenceTests(HostedWorkerCase):
         shutil.rmtree(Path(str(root_request_path("host-fence"))))
         fence_host(self.host_boundary)
         self.assertIn(str(sdk), _FENCE_TIMINGS[-1]["walked_closed"])
+        if Path("/var/lib/docker").is_dir():
+            # No repair walk reaches the Docker data root: unadmitted, it is proved whole for
+            # writable hard links instead, and none of its layers is changed.
+            self.assertIn("/var/lib/docker", _FENCE_TIMINGS[-1]["walked_closed"])
+            self.assertNotIn("/var/lib/docker", _FENCE_TIMINGS[-1]["repair"])
+            self.assertIn("/var/lib/docker", _FENCE_TIMINGS[-1]["closed_verification"])
         self.assertEqual(stat.S_IMODE(mounted.stat().st_mode), 0o640)
         replacement = allocate_worker_account("candidate")
         self.accounts.append(("candidate", replacement.uid, replacement.gid))

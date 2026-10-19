@@ -927,8 +927,8 @@ class PlanCommandTests(JobCase):
 class FenceTimingLineTests(unittest.TestCase):
     """``ci worker-prepare`` prints where the root fence spent its time, and nothing else."""
 
-    TIMING = {"closure": {"/usr/share/dotnet": 0.5}, "mounts": 0.01, "ok": True, "repair": {"/opt": 41.2},
-              "total": 75.0, "verification": 33.3, "walked_closed": []}
+    TIMING = {"closed_verification": {"/var/lib/docker": 0.02}, "closure": {"/usr/share/dotnet": 0.5}, "mounts": 0.01,
+              "ok": True, "repair": {"/opt": 41.2}, "total": 75.0, "verification": 33.3, "walked_closed": []}
 
     def test_only_one_object_of_the_known_phases_becomes_a_line(self):
         from mod_base.build_ci.commands_worker import fence_timing_line

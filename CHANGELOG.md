@@ -5,6 +5,28 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased
+
+- The root host fence closes the Docker data root `/var/lib/docker` to `0700` at its existing
+  owner, as it closes the unused SDK roots, so its proof no longer walks the layers of the images
+  a hosted image pulls. Docker leaves that root `0710 root:root`, which no worker account can
+  search but which the proof entered, and those layers keep their images' own modes:
+  `ubuntu-24.04` 20261018.339.1 pulled one with the world-writable `/var/lib/pebble/default` of
+  the `ubuntu:26.04` base image, and every Build and E2E job on it failed in `ci worker-prepare`
+  with `host fence left 1 world-writable or aliased group-writable entries reachable on the root
+  filesystem, first '/var/lib/docker/overlay2/.../diff/var/lib/pebble/default'`. The fence never
+  changes anything below the data root, and the same entry anywhere else still fails it.
+- Every start of the Docker daemon sets its data root to `0711` before `0710`, so the fence still
+  proves what that moment would expose: below the root it lists what the global proof lists,
+  pruning only directories no later account could search by their mode. Docker's own `0710`
+  directories, `overlay2` among them, are pruned; world-writable volume data still fails.
+- When an unrelated writable mount alias keeps a closed tree from being admitted, a closed tree
+  that no repair walk reaches (the Docker data root, or an SDK on a filesystem of its own) is
+  proved whole for group- or world-writable regular files with more than one link instead of
+  being repaired or left unwalked; an SDK inside a repair tree keeps its full repair.
+- The timing line reports the time of each walk below a closed tree under the new key
+  `closed_verification`. No document kind, managed file or adapter protocol changes.
+
 ## v1.7.0
 
 Minor release that makes a mod's shared pipeline cheaper to run and to diagnose: an API client
