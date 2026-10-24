@@ -1,5 +1,5 @@
-# Copied byte-for-byte from the Pillow==12.3.0 stanza of e2e/requirements.txt in Quick Skin and Block Pops (86 wheel hashes).
-Pillow==12.3.0 \
+# Copied byte-for-byte from the Pillow==13.0.0 stanza of e2e/requirements.txt in Quick Skin and Block Pops (86 wheel hashes).
+Pillow==13.0.0 \
     --hash=sha256:6c0016e7b354317c4e9e525b937ac8596c38d2d232b419529b9cd7a1cd46e39a \
     --hash=sha256:bcc33feacfaefce60c12fd500a277533bdc02b10a19f7f6d348763d8140bbba7 \
     --hash=sha256:5594fc43d548a7ed94949d139aa1341b270f1863f11cfd37f5a6c8b778a6b67f \
