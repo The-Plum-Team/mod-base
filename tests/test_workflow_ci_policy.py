@@ -520,8 +520,9 @@ class CiRegistryTests(unittest.TestCase):
     def test_every_kit_workflow_file_is_registered(self) -> None:
         registered = {Path(path).name for path in workflow.CALLEE_WORKFLOWS.values()}
         registered |= {CI_CALLEE_PATHS[name].name for name in CI_CALLEES}
+        registered |= {Path(workflow.REL_CALLEE_WORKFLOW).name}  # policed by tests/test_workflow_release_policy.py
         self.assertEqual({path.name for path in WORKFLOWS.iterdir()}, registered | {OWN_WORKFLOW},
-                         "a workflow outside both registries is policed by nothing")
+                         "a workflow outside the registries is policed by nothing")
 
     def test_every_callee_has_its_own_test_module_in_the_workflow_policy_job(self) -> None:
         policy = load_yaml(WORKFLOWS / OWN_WORKFLOW)["jobs"]["workflow-policy"]
@@ -917,7 +918,8 @@ class CiCalleePolicyTests(unittest.TestCase):
 
     def test_the_digest_tool_maintains_the_literal_of_every_callee(self) -> None:
         require_tools("git")
-        tracked = [*workflow.CALLEE_WORKFLOWS.values(), *(workflow.CI_CALLEE_WORKFLOWS[name] for name in CI_CALLEES)]
+        tracked = [*workflow.CALLEE_WORKFLOWS.values(), *(workflow.CI_CALLEE_WORKFLOWS[name] for name in CI_CALLEES),
+                   workflow.REL_CALLEE_WORKFLOW]
         self.assertEqual(list(update_tree_digest.CALLEES), tracked)
         carrying = sorted(path.relative_to(ROOT).as_posix() for path in WORKFLOWS.iterdir()
                           if "MB_KIT_TREE_DIGEST" in path.read_text(encoding="utf-8"))

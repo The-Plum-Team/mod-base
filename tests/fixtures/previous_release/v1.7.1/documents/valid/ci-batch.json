@@ -1,0 +1,32 @@
+{
+  "base_branch": "master",
+  "base_sha": "3a1ed9cc985c8b970df26e8578d426deebfcd702",
+  "base_tree": "099ff2cafe501a1acfdd2a45508f9b10c8316928",
+  "branch": "batch/fixture",
+  "kind": "mod-base.ci.batch",
+  "members": [
+    {
+      "head_sha": "e2aabbc49cc7ed09c854403e8ba7cf909c103bc4",
+      "head_tree": "b872608236041c4d255da56d175c83a1c927ac16",
+      "merge_base_sha": "3a1ed9cc985c8b970df26e8578d426deebfcd702",
+      "patch_sha256": "05bfb323ecafab81cc6e946b3855ad8ccffac040b81758c4f115edb32875a696",
+      "pr_number": 1,
+      "result_tree": "b872608236041c4d255da56d175c83a1c927ac16",
+      "squash_sha": "aa599fc6164e3a937fd540f1fbf7c9f971d2062d",
+      "title": "fix: change fix/alpha"
+    },
+    {
+      "head_sha": "578135289ef824afedfa9f201319dacac5d597b8",
+      "head_tree": "d402a457761d5db463c12d305b72a0c6e7930037",
+      "merge_base_sha": "3a1ed9cc985c8b970df26e8578d426deebfcd702",
+      "patch_sha256": "3006c8f029910e55f6c37623708686d6f542d9c860951302a36f0236ffe8390a",
+      "pr_number": 2,
+      "result_tree": "929852cff2d0aecd767154b690ce0dd587cb4ce6",
+      "squash_sha": "05ac3d1c501d5712d42642d46d3f00c62e1e6e90",
+      "title": "fix: change feat/beta"
+    }
+  ],
+  "repository": "example/mod",
+  "result_tree": "929852cff2d0aecd767154b690ce0dd587cb4ce6",
+  "schema_version": 1
+}

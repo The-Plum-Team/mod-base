@@ -626,6 +626,38 @@ push of the default branch has one. To stop, remove `runtime_selection`. A kit r
 the one that added it refuses a config that has it: remove it before a pin rollback below that
 release.
 
+## Releasing a mod
+
+The managed caller `mod-base-release.yml` ([RELEASE-PROTOCOL.md](RELEASE-PROTOCOL.md)) exists in
+every mod whose activation mode is `shared-build-and-e2e`. Before the first release the owner:
+
+1. adds `scripts/ci/mod-base-release.json` (`mod-base.release.config`) through a reviewed pull
+   request;
+2. creates the environment `mod-base-release` with the deployment branch policy "the default
+   branch only", one required reviewer and the secrets `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN`
+   (the tokens the native release used may move; the native environment is retired afterwards).
+
+To release, merge the version bump with its dated changelog section, wait for the Build and
+packaged E2E of that head to pass (a post-merge reuse counts), then:
+
+```bash
+gh workflow run mod-base-release.yml --ref <default branch> -f publish=false   # rehearsal
+gh workflow run mod-base-release.yml --ref <default branch> -f publish=true    # publication
+```
+
+A publication asks for one approval of `mod-base-release`. Nothing may merge between the dispatch
+and that approval: `release admit` refuses a moved head, and the dispatch is simply repeated.
+
+- **Resume:** dispatch with `publish=true` again. Published files are recognized by content and
+  skipped; the ledger in each draft release's body says which rows are left.
+- **Moderation:** what is still pending after the job's wait is finished by the caller's hourly
+  schedule. To finish sooner, re-dispatch with `publish=true`; a rehearsal publishes nothing.
+- **A fenced row** (`uploading` with no remote file) is never retried automatically. Check the
+  marketplace's author dashboard; only when it never accepted the file, edit that one row of the
+  draft's ledger back to `unstarted` and re-dispatch.
+- **Kill switch:** disable `mod-base-release.yml` in the Actions settings. Drafts stay drafts;
+  nothing already published is touched.
+
 ## Canary procedure
 
 The canary is a separate public caller repository, so it exercises exactly the cross-repository

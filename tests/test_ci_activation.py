@@ -26,6 +26,7 @@ GUARD = ".github/workflows/mod-base-guard.yml"
 BUILD = ".github/workflows/mod-base-build.yml"
 PACKAGED = ".github/workflows/mod-base-packaged-e2e.yml"
 STATUS = ".github/workflows/mod-base-gate-status.yml"
+RELEASE = ".github/workflows/mod-base-release.yml"
 
 #: What is managed in each state (the architecture's section 5), a reviewed rollback by the mode it leaves.
 MANAGED = {
@@ -33,7 +34,7 @@ MANAGED = {
     "disabled": set(),
     "shadow": {GUARD, BUILD, PACKAGED, STATUS},
     "shared-build": {GUARD, BUILD, STATUS},
-    "shared-build-and-e2e": {GUARD, BUILD, PACKAGED, STATUS},
+    "shared-build-and-e2e": {GUARD, BUILD, PACKAGED, STATUS, RELEASE},
 }
 
 #: Every allowed change of state (the architecture's section 5): a manifest appears and disappears
@@ -151,9 +152,10 @@ class ActivationDataTests(unittest.TestCase):
 
 class ManagedCallersTests(unittest.TestCase):
     def test_the_four_caller_paths(self) -> None:
-        self.assertEqual(CALLERS, (GUARD, BUILD, PACKAGED, STATUS))
+        self.assertEqual(CALLERS, (GUARD, BUILD, PACKAGED, STATUS, RELEASE))
         self.assertEqual((activation.GUARD_CALLER, activation.BUILD_CALLER, activation.PACKAGED_CALLER,
-                          activation.STATUS_CALLER), CALLERS)
+                          activation.STATUS_CALLER, activation.RELEASE_CALLER), CALLERS)
+        self.assertEqual(activation.GATE_CALLERS, (GUARD, BUILD, PACKAGED, STATUS))
 
     def test_each_state_manages_exactly_the_files_of_its_row(self) -> None:
         self.assertEqual(set(MANAGED_CALLERS), set(ACTIVATION_MODES) - {"reviewed-rollback"})

@@ -5,6 +5,30 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## Unreleased (planned v1.8.0)
+
+Minor release: the shared release pipeline ([ADR 0008](docs/adr/0008-shared-release-publication.md),
+[RELEASE-PROTOCOL.md](docs/RELEASE-PROTOCOL.md)). A release publishes the production files of the
+tested generation of the default branch's head to GitHub Releases, Modrinth and CurseForge, after
+one approval, without compiling anything.
+
+- New managed caller `.github/workflows/mod-base-release.yml`, managed in the
+  `shared-build-and-e2e` activation mode: a dispatch plans (and with `publish` publishes) a
+  release; an hourly schedule finishes releases that moderation held back. `template sync` adds it
+  to every mod in that mode; it does nothing until the mod adds `scripts/ci/mod-base-release.json`
+  and the `mod-base-release` environment.
+- Managed file change: the guard `.github/workflows/mod-base-guard.yml` admits the release caller
+  (`callees: release`, on `workflow_dispatch` and `schedule` only).
+- New kit callee `.github/workflows/release.yml` (one read-only job, "Plan exact release").
+- New document kinds at schema 1: `mod-base.release.config`, `mod-base.release.plan`,
+  `mod-base.release.ledger`. A v1.7.x reader refuses them as unknown.
+- New command `release` with the verbs `plan`, `admit`, `github`, `upload` and `verify`.
+- New package `mod_base.marketplace`: bounded clients for Modrinth, CurseForge (upload API, public
+  listing, CDN) and GitHub Releases. It knows CurseForge's file renaming of late October 2026
+  (`Quick Skin - Fabric - 1.20.1-4.0.0.jar` is stored as `Quick-Skin-Fabric-1.20.1-4.0.0.jar`).
+- The release caller is not a control path of the Build policy: editing it never forces a new
+  generation.
+
 ## v1.7.1
 
 Patch release for the `ubuntu-24.04` runner image 20261018.339.1, on which the root host fence

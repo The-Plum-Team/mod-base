@@ -29,7 +29,7 @@ from mod_base.model.canonical import canonical_json
 from mod_base.pin import Pin, parse_pin, parse_pin_files
 from mod_base.template import tool
 from tests.helpers import ci_activation, ci_config
-from tests.test_ci_activation import BUILD, GUARD, MANAGED, PACKAGED, STATES, STATUS
+from tests.test_ci_activation import BUILD, GUARD, MANAGED, PACKAGED, RELEASE, STATES, STATUS
 from tests.test_template_tool import (KIT_ROOT, OTHER_SHA, QS_EXTENSION, SHA, SYNTHETIC_CALLER, TEMPLATE_ROOT,
                                       TemplateCase, config_document, git, write)
 from tests.test_workflow_policy import parse_yaml, require_tools
@@ -53,6 +53,9 @@ SYNTHETIC_CALLERS = {
                "    uses: The-Plum-Team/mod-base/.github/workflows/packaged-e2e.yml@{{PIN}} # {{VERSION}}\n"),
     STATUS: ("# synthetic status caller\nname: Status\njobs:\n  evaluate:\n    steps:\n"
              "      - uses: The-Plum-Team/mod-base/actions/setup@{{PIN}} # {{VERSION}}\n"),
+    RELEASE: ("# synthetic release caller\nname: Release\njobs:\n  guard:\n"
+              "    uses: ./.github/workflows/mod-base-guard.yml\n  plan:\n    needs: guard\n"
+              "    uses: The-Plum-Team/mod-base/.github/workflows/release.yml@{{PIN}} # {{VERSION}}\n"),
 }
 
 
@@ -256,7 +259,7 @@ class ModeGatingTest(CallerCase):
         self.enter("reviewed-rollback:shadow")
         self.assertEqual(self.check(), [], "a rollback keeps the callers of the mode it leaves")
         self.enter("disabled")
-        self.assertEqual(self.kinds(), [(path, "forbidden") for path in CALLERS])
+        self.assertEqual(self.kinds(), [(path, "forbidden") for path in CALLERS if path in MANAGED["shadow"]])
         self.assertEqual(tool.sync(self.repo, kit_root=self.kit, write=True), [])
         self.remove_callers()
         self.assertEqual(self.check(), [])
@@ -265,10 +268,10 @@ class ModeGatingTest(CallerCase):
         tool.sync(self.repo, kit_root=self.kit, write=True)
         self.assertEqual(self.check(), [])
         self.enter("shared-build-and-e2e")
-        self.assertEqual(self.kinds(), [(PACKAGED, "missing")])
+        self.assertEqual(self.kinds(), [(PACKAGED, "missing"), (RELEASE, "missing")])
         tool.sync(self.repo, kit_root=self.kit, write=True)
         self.enter("reviewed-rollback:shared-build")
-        self.assertEqual(self.kinds(), [(PACKAGED, "forbidden")])
+        self.assertEqual(self.kinds(), [(PACKAGED, "forbidden"), (RELEASE, "forbidden")])
 
 
 # -- A managed caller is the rendered template, byte for byte ----------------------------------------
@@ -660,7 +663,7 @@ class CallerCommandsTest(CallerCase):
     def test_init_lists_the_callers_it_created(self) -> None:
         config = write(self.root, "config.json", json.dumps(config_document()) + "\n")
         write(self.repo, ".github/workflows/e2e.yml", f"      - uses: The-Plum-Team/mod-base/actions/setup@{SHA} # {VERSION}\n")
-        enter(self.repo, "shadow")
+        enter(self.repo, "shared-build-and-e2e")
         code, stdout, _ = self.run_cli("template", "init", "--repo", str(self.repo), "--from-config", str(config))
         self.assertEqual(code, 0)
         self.assertEqual([line for line in stdout.splitlines() if "mod-base-" in line],
@@ -712,7 +715,8 @@ class KitCallerTemplatesTest(unittest.TestCase):
         self.assertFalse({entry["source"] for entry in manifest["files"]} & {f"managed/{path}" for path in CALLERS})
 
     def test_every_template_renders_to_the_single_pin_with_no_placeholder_left(self) -> None:
-        expected = tool.expected_callers(KIT_ROOT, Pin(SHA, VERSION, ()), ci_activation("shadow"), BRANCH)
+        expected = tool.expected_callers(KIT_ROOT, Pin(SHA, VERSION, ()), ci_activation("shared-build-and-e2e"),
+                                         BRANCH)
         self.assertEqual(expected, real_callers())
         for path, data in expected.items():
             with self.subTest(path=path):
@@ -729,8 +733,9 @@ class KitCallerTemplatesTest(unittest.TestCase):
                                  "all three callers filter pull request bases to the canonical branch")
         found = parse_pin_files(expected)
         self.assertEqual((found.sha, found.version), (SHA, VERSION))
-        self.assertEqual({reference.split("@")[0] for reference in found.references}, {BUILD, PACKAGED, STATUS})
-        self.assertEqual(len(found.references), 5)
+        self.assertEqual({reference.split("@")[0] for reference in found.references},
+                         {BUILD, PACKAGED, STATUS, RELEASE})
+        self.assertEqual(len(found.references), 6)
 
     def test_expected_callers_follows_the_activation_state(self) -> None:
         pin = Pin(SHA, VERSION, ())
@@ -753,14 +758,16 @@ class KitCallerTemplatesTest(unittest.TestCase):
         for path, document in documents.items():
             with self.subTest(path=path):
                 self.assertEqual(document["permissions"], {})
-                # Only the status caller names a secret: the App key in each of its three mint
-                # steps (the members job's and the two of the publishing job).
-                self.assertEqual(json.dumps(document).count("secrets"), 3 if path == STATUS else 0)
+                # The status caller names the App key in each of its three mint steps (the members
+                # job's and the two of the publishing job); the release caller each marketplace
+                # token in its one upload step.
+                self.assertEqual(json.dumps(document).count("secrets"), {STATUS: 3, RELEASE: 2}.get(path, 0))
         events = ["pull_request_target", "push", "workflow_dispatch"]
         self.assertEqual({path: document["on"] if isinstance(document["on"], str) else list(document["on"])
                           for path, document in documents.items()},
                          {GUARD: ["workflow_call"], BUILD: events, PACKAGED: events,
-                          STATUS: ["workflow_run", "pull_request_target", "schedule", "workflow_dispatch"]},
+                          STATUS: ["workflow_run", "pull_request_target", "schedule", "workflow_dispatch"],
+                          RELEASE: ["workflow_dispatch", "schedule"]},
                          "the status caller runs whenever the answer for a pull request may have changed")
         guard = documents[GUARD]
         self.assertEqual(list(guard["on"]["workflow_call"]["outputs"]), ["kit-sha"])

@@ -1,0 +1,190 @@
+# mod-base managed: release caller, edit only in The-Plum-Team/mod-base template/managed/.github/workflows/mod-base-release.yml
+name: mod-base release
+
+# The shared release of the mod (docs/RELEASE-PROTOCOL.md in the kit). A dispatch of the default
+# branch plans the release of its live head from the head's tested generation, without any
+# credential; with `publish` it then publishes that exact plan after one approval of the
+# `mod-base-release` environment: the tags and GitHub Releases, then every lane to Modrinth and
+# CurseForge, verified by content and finished in the same job when the marketplaces have accepted
+# every file. The hourly schedule finishes what moderation held back: it reads only public data and
+# publishes a draft release only when its ledger proves every row verified. The jobs that hold a
+# credential run no action and no mod code: only the managed bootstrap of the protected head, which
+# runs the kit of the pin it verifies.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the plan (false rehearses it without any credential)
+        required: true
+        type: boolean
+        default: false
+  schedule:
+    - cron: "29 * * * *"
+
+permissions: {}
+
+concurrency:
+  group: mod-base-release
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Verify pinned mod-base
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/mod-base-guard.yml
+    with:
+      callees: release
+
+  plan:
+    name: Plan release
+    needs: [guard]
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: The-Plum-Team/mod-base/.github/workflows/release.yml@{{PIN}} # {{VERSION}}
+    with:
+      kit-sha: ${{ needs.guard.outputs.kit-sha }}
+
+  publish:
+    name: Publish release
+    needs: [guard, plan]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: mod-base-release
+    permissions:
+      actions: read
+      contents: write
+    env:
+      KIT_SHA: ${{ needs.guard.outputs.kit-sha }}
+    steps:
+      - name: Validate the plan outputs before any checkout
+        shell: bash
+        env:
+          PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
+          fail() { printf 'Publish release: %s\n' "$1" >&2; exit 1; }
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
+          [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed plan digest"
+      - name: Check out the protected mod head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Protected mod head: %s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed github.sha"
+          # The protected mod at github.sha, as the guard fetches it: the token reaches the one fetch
+          # through its environment and is never written to the checkout. Only the managed bootstrap
+          # runs from it, and it runs the kit of the pin it verifies.
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          credential="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 --wrap=0)"
+          printf '::add-mask::%s\n' "$credential"
+          git init --quiet --template= mod
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.$GITHUB_SERVER_URL/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" \
+            git -C mod -c core.hooksPath=/dev/null -c protocol.version=2 fetch --quiet --depth=1 --no-tags \
+            --no-recurse-submodules "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA" ||
+            fail "cannot fetch the protected mod at github.sha"
+          [[ "$(git -C mod rev-parse --verify --quiet 'FETCH_HEAD^{commit}')" == "$GITHUB_SHA" ]] ||
+            fail "the fetched commit is not github.sha"
+          git -C mod -c core.hooksPath=/dev/null -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD ||
+            fail "cannot check out the protected mod"
+          pin="$(python3 -I -B mod/scripts/ci/mod_base_kit.py pin --repo mod)" || fail "the mod carries no single pin"
+          [[ "${pin%% *}" == "$KIT_SHA" ]] || fail "the mod's pin is not the kit the guard bound to this run"
+      - name: Admit the sealed release plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release admit --plan-sha256 "$PLAN_SHA256" --output "$RUNNER_TEMP/mb-release"
+      - name: Create the tags and draft releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release github --plan "$RUNNER_TEMP/mb-release"
+      - name: Upload to Modrinth
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release upload --plan "$RUNNER_TEMP/mb-release" --marketplace modrinth
+      - name: Upload to CurseForge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release upload --plan "$RUNNER_TEMP/mb-release" --marketplace curseforge
+      - name: Verify and finish the releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release verify --plan "$RUNNER_TEMP/mb-release" --wait-seconds 1200
+
+  finish:
+    name: Finish pending releases
+    needs: [guard]
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      KIT_SHA: ${{ needs.guard.outputs.kit-sha }}
+    steps:
+      - name: Check out the protected mod head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          fail() { printf 'Protected mod head: %s\n' "$1" >&2; exit 1; }
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed github.sha"
+          # The protected mod at github.sha, as the guard fetches it: the token reaches the one fetch
+          # through its environment and is never written to the checkout. Only the managed bootstrap
+          # runs from it, and it runs the kit of the pin it verifies.
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          credential="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 --wrap=0)"
+          printf '::add-mask::%s\n' "$credential"
+          git init --quiet --template= mod
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.$GITHUB_SERVER_URL/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" \
+            git -C mod -c core.hooksPath=/dev/null -c protocol.version=2 fetch --quiet --depth=1 --no-tags \
+            --no-recurse-submodules "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA" ||
+            fail "cannot fetch the protected mod at github.sha"
+          [[ "$(git -C mod rev-parse --verify --quiet 'FETCH_HEAD^{commit}')" == "$GITHUB_SHA" ]] ||
+            fail "the fetched commit is not github.sha"
+          git -C mod -c core.hooksPath=/dev/null -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD ||
+            fail "cannot check out the protected mod"
+          pin="$(python3 -I -B mod/scripts/ci/mod_base_kit.py pin --repo mod)" || fail "the mod carries no single pin"
+          [[ "${pin%% *}" == "$KIT_SHA" ]] || fail "the mod's pin is not the kit the guard bound to this run"
+      - name: Verify and finish the pending releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release verify --drafts

@@ -3713,6 +3713,12 @@
     {"name":"ci-org-members-not-an-id", "fixture":"ci-org-members", "expect":"invalid", "error":"$.members[0]", "set":[["/members", [0]]]},
     {"name":"ci-org-members-negative-through", "fixture":"ci-org-members", "expect":"invalid", "error":"$.through_comment_id", "set":[["/through_comment_id", -1]]},
     {"name":"ci-org-members-no-organization", "fixture":"ci-org-members", "expect":"invalid", "error":"$.organization", "set":[["/organization", "-example"]]},
-    {"name":"ci-org-members-without-through", "fixture":"ci-org-members", "expect":"invalid", "error":"is missing required keys ['through_comment_id']", "delete":["/through_comment_id"]}
+    {"name":"ci-org-members-without-through", "fixture":"ci-org-members", "expect":"invalid", "error":"is missing required keys ['through_comment_id']", "delete":["/through_comment_id"]},
+    {"name":"release-config-unknown-key", "fixture":"release-config", "expect":"invalid", "error":"has unknown keys", "set":[["/extra", 1]]},
+    {"name":"release-config-tag-without-minecraft-group", "fixture":"release-config", "expect":"invalid", "error":"$.tags.template: names an unknown placeholder {minecraft}", "set":[["/tags/template", "mc{minecraft}-v{version}"]]},
+    {"name":"release-plan-short-asset-digest", "fixture":"release-plan", "expect":"invalid", "error":"$.tags[0].assets[0].sha256: does not match the required grammar", "set":[["/tags/0/assets/0/sha256", "abc"]]},
+    {"name":"release-plan-unknown-key", "fixture":"release-plan", "expect":"invalid", "error":"has unknown keys", "set":[["/extra", 1]]},
+    {"name":"release-ledger-unknown-state", "fixture":"release-ledger", "expect":"invalid", "error":"$.rows.fabric-1.20.1--modrinth.state: must be one of", "set":[["/rows/fabric-1.20.1--modrinth/state", "published"]]},
+    {"name":"release-ledger-verified-without-remote-id", "fixture":"release-ledger", "expect":"invalid", "error":"$.rows.fabric-1.20.1--modrinth: a verified row names its remote id", "set":[["/rows/fabric-1.20.1--modrinth/state", "verified"]]}
   ]
 }

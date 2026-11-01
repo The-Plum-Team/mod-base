@@ -197,6 +197,16 @@ SURFACE: dict[str, tuple[list[str], dict[str, object]]] = {
                                "--github-output", "out"], {"pr": 7, "settle": True}),
     "ci gate-status members": (["ci", "gate-status", *REPO, "--state", "state", "--pr", "7", "--org-members",
                                 "members.json", "--github-output", "out"], {"org_members": Path("members.json")}),
+    "release plan": (["release", "plan", "--repo", "mod", "--release-config", "mod/scripts/ci/mod-base-release.json",
+                      "--generation", "generation", "--output", "out", "--github-output", "gh-output"],
+                     {"verb": "plan"}),
+    "release admit": (["release", "admit", "--plan-sha256", "a" * 64, "--output", "out"], {"verb": "admit"}),
+    "release github": (["release", "github", "--plan", "out"], {"verb": "github"}),
+    "release upload": (["release", "upload", "--plan", "out", "--marketplace", "curseforge"],
+                       {"verb": "upload", "marketplace": "curseforge"}),
+    "release verify": (["release", "verify", "--plan", "out", "--wait-seconds", "60"],
+                       {"verb": "verify", "wait_seconds": 60}),
+    "release verify drafts": (["release", "verify", "--drafts"], {"verb": "verify", "drafts": True}),
 }
 
 
@@ -216,8 +226,9 @@ class SurfaceTest(unittest.TestCase):
         self.assertEqual(set(cli.COMMANDS), {
             "pin", "digest", "template", "expect", "prepare", "anchor", "family", "admit", "select", "download",
             "authenticate", "compose", "compact", "validate", "build", "refresh", "rotate", "conformance", "budget",
-            "ci",
+            "ci", "release",
         })
+        self.assertEqual(cli.COMMANDS["release"], "mod_base.release.commands")
         self.assertEqual(cli.COMMANDS["ci"], "mod_base.build_ci.commands")
         self.assertEqual(cli.COMMANDS["download"], "mod_base.github.commands")
         self.assertEqual(cli.COMMANDS["admit"], "mod_base.pages.commands_control")

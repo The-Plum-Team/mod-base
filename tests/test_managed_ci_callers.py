@@ -602,10 +602,13 @@ class CallerStructureTests(unittest.TestCase):
             for word in forbidden:
                 with self.subTest(path=path, word=word):
                     if path == GUARD_CALLER and word in status_events:
+                        release = (["workflow_dispatch | schedule) ;;",
+                                    '*) fail "the release caller runs only on workflow_dispatch or schedule" ;;']
+                                   if word == "schedule" else [])
                         self.assertEqual([line.strip() for line in text.splitlines() if word in line], [
                             "workflow_run | pull_request_target | schedule | workflow_dispatch) ;;",
                             '*) fail "the gate status caller runs only on workflow_run, pull_request_target, '
-                            'schedule or workflow_dispatch" ;;'])
+                            'schedule or workflow_dispatch" ;;', *release])
                     else:
                         self.assertNotIn(word, text)
             with self.subTest(path=path):
@@ -758,7 +761,9 @@ class CallerStructureTests(unittest.TestCase):
         script = step(self.documents[GUARD_CALLER]["jobs"]["verify"]["steps"], GUARD_STEP)["run"]
         arms = re.findall(r'^  (?:"([a-z0-9 -]+)"|([a-z0-9-]+))\) caller=(\S+) ;;$', script, re.MULTILINE)
         closed = {quoted or plain: path for quoted, plain, path in arms}
-        self.assertEqual((len(arms), script.count(" caller=")), (3, 3))
+        self.assertEqual((len(arms), script.count(" caller=")), (4, 4))
+        # The fourth is the release caller (tests/test_workflow_release_policy.py holds its policy).
+        self.assertEqual(closed.pop(workflow.REL_GUARD_CALLEES), workflow.REL_CALLER_WORKFLOW)
         self.assertEqual({callees: path for callees, path in closed.items() if path in PRODUCERS.values()},
                          {self.documents[path]["jobs"]["guard"]["with"]["callees"]:
                           workflow.CI_CALLER_WORKFLOWS[producer] for producer, path in PRODUCERS.items()})
@@ -772,11 +777,14 @@ class CallerStructureTests(unittest.TestCase):
         self.assertIn(f'"{KIT}/.github/workflows/\\(.).yml@\\($kit)"', script)
         self.assertEqual(sorted({path.rsplit("/", 1)[1][:-4] for path in workflow.CI_CALLEE_WORKFLOWS.values()}),
                          sorted(workflow.CI_CALLEE_WORKFLOWS), "a callee id is its file name, as the guard assumes")
-        # Two closed lists of events: the status caller's first, then the two producers'.
+        # Three closed lists of events: the status caller's first, the release caller's, then the
+        # two producers'.
         events = re.findall(r"^    ([a-z_ |]+)\) ;;$", script, re.MULTILINE)
-        self.assertEqual([arm.split(" | ") for arm in events], [list(STATUS_EVENTS), list(EVENTS)])
+        self.assertEqual([arm.split(" | ") for arm in events],
+                         [list(STATUS_EVENTS), sorted(workflow.REL_EVENTS, reverse=True), list(EVENTS)])
         self.assertEqual(script.count('if [[ "$CALLEES" == gate-status ]]; then'), 1)
-        self.assertEqual(len(re.findall(r"^\s+[a-z_ |]+\) ;;$", script, re.MULTILINE)), 2, "no third list")
+        self.assertEqual(script.count('elif [[ "$CALLEES" == release ]]; then'), 1)
+        self.assertEqual(len(re.findall(r"^\s+[a-z_ |]+\) ;;$", script, re.MULTILINE)), 3, "no fourth list")
 
     def test_the_retry_function_is_the_pages_caller_s(self) -> None:
         pattern = re.compile(r"(?ms)^protected_gh_api_retry\(\) \{.*?^\}\n")

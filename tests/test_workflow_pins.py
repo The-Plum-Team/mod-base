@@ -43,6 +43,7 @@ GUARD_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-guard.yml"
 BUILD_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-build.yml"
 PACKAGED_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-packaged-e2e.yml"
 STATUS_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-gate-status.yml"
+RELEASE_TEMPLATE = TEMPLATE_WORKFLOWS / "mod-base-release.yml"
 #: The Build/E2E caller templates (``template.tool.RENDERED_CALLERS``, managed by activation mode)
 #: and the only kit entry points each may reference, always at the placeholder pin.
 ACTIVATION_CALLERS = {
@@ -51,18 +52,20 @@ ACTIVATION_CALLERS = {
     PACKAGED_TEMPLATE: (".github/workflows/select-build.yml", ".github/workflows/build.yml",
                         ".github/workflows/packaged-e2e.yml"),
     STATUS_TEMPLATE: (".github/workflows/gate-status.yml",),
+    RELEASE_TEMPLATE: (".github/workflows/release.yml",),
 }
 #: The mod's own managed guard workflow, which only the three callers that call the kit call.
 LOCAL_GUARD = "./.github/workflows/mod-base-guard.yml"
-GUARDED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE)
+GUARDED_CALLERS = (BUILD_TEMPLATE, PACKAGED_TEMPLATE, STATUS_TEMPLATE, RELEASE_TEMPLATE)
 #: Every other ``uses:`` of a Build/E2E caller template, in order: the App token of the gate status
 #: caller's publishing job and nothing else. A mod that manages the caller must keep Dependabot
 #: off that action (``template.tool``: the ignore list of ``.github/dependabot.yml``).
 ACTIVATION_ACTIONS = {GUARD_TEMPLATE: (), BUILD_TEMPLATE: (), PACKAGED_TEMPLATE: (),
-                      STATUS_TEMPLATE: (f"{APP_TOKEN} # v3.2.0",) * 3}
+                      STATUS_TEMPLATE: (f"{APP_TOKEN} # v3.2.0",) * 3, RELEASE_TEMPLATE: ()}
 #: How often ``{{PIN}}`` (and ``{{VERSION}}``) appears in each: once per kit reference, and once in
 #: the guard, which carries the pin as the literal it verifies.
-ACTIVATION_PLACEHOLDERS = {GUARD_TEMPLATE: 1, BUILD_TEMPLATE: 1, PACKAGED_TEMPLATE: 3, STATUS_TEMPLATE: 1}
+ACTIVATION_PLACEHOLDERS = {GUARD_TEMPLATE: 1, BUILD_TEMPLATE: 1, PACKAGED_TEMPLATE: 3, STATUS_TEMPLATE: 1,
+                           RELEASE_TEMPLATE: 1}
 GUARD_LITERALS = ('  MB_KIT_SHA: "{{PIN}}"', '  MB_KIT_VERSION: "{{VERSION}}"')
 #: The canonical branch filters pull request bases in all three callers and pushes in the two
 #: producers. GitHub reads these as literals, so each filter carries this placeholder line.
@@ -123,7 +126,7 @@ def pin_problem(path: Path, value: str) -> str | None:
         return None if TEMPLATE_PIN.match(value) else "a caller kit reference must be @{{PIN}} # {{VERSION}}"
     if path in ACTIVATION_CALLERS and value == LOCAL_GUARD:
         return (None if path in GUARDED_CALLERS
-                else "only the Build, packaged E2E and gate status callers call the guard")
+                else "only the Build, packaged E2E, gate status and release callers call the guard")
     if path in ACTIVATION_CALLERS and "mod-base" in value.lower():
         kit = CANARY_KIT_PIN.match(value)
         if kit is None:
@@ -341,8 +344,9 @@ class PinTests(unittest.TestCase):
         self.assertEqual(uses_values(GUARD_TEMPLATE), [], "the guard is shell alone")
 
     def test_the_branch_placeholder_is_confined_to_the_three_guarded_callers(self) -> None:
-        self.assertEqual(set(BRANCHED_CALLERS), set(GUARDED_CALLERS),
-                         "all three callers filter pull request bases to the canonical branch")
+        self.assertEqual(set(BRANCHED_CALLERS), set(GUARDED_CALLERS) - {RELEASE_TEMPLATE},
+                         "all three gate callers filter pull request bases to the canonical branch; the release "
+                         "caller runs on a dispatch, which the guard binds to the default branch")
         files = {*kit_yaml_files(), *(item for item in (ROOT / "template").rglob("*") if item.is_file())}
         self.assertTrue(set(BRANCHED_CALLERS) <= files)
         for path in sorted(files - set(BRANCHED_CALLERS)):
