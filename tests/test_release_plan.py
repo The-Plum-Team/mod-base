@@ -578,5 +578,49 @@ class SealTests(Case):
         self.rejects(admit_release, self.root / "link")
 
 
+class PlanCommandTests(Case):
+    """``release plan`` as the plan job runs it: the executing kit from its environment (at the
+    version the generation fixture names), the generation directory ``ci select-generation
+    --with-build`` writes, a sealed output and the job's outputs."""
+
+    def run_plan(self, world: World, **environ: str) -> tuple[dict[str, str], Path]:
+        import argparse
+        from unittest import mock
+
+        import mod_base
+        from mod_base.release import commands
+
+        kit = world.generation["identity"]["kit"]
+        (self.root / "generation.json").write_bytes(canonical_json(world.generation))
+        config = self.root / "mod-base-release.json"
+        config.write_bytes(canonical_json(world.config))
+        output, github_output = self.root / "sealed", self.root / "github-output"
+        args = argparse.Namespace(repo=world.repo, release_config=config, generation=self.root, output=output,
+                                  github_output=github_output)
+        environ = {"GITHUB_REPOSITORY": world.config["repository"], "MOD_BASE_KIT_SHA": kit["sha"],
+                   "MB_KIT_TREE_DIGEST": kit["tree_digest"],
+                   "GITHUB_SHA": world.generation["identity"]["tested_sha"], **environ}
+        with mock.patch.object(commands.cli, "environ", return_value=environ), \
+                mock.patch.object(mod_base, "__version__", kit["version"]):
+            self.assertEqual(commands.run_plan(args), 0)
+        lines = github_output.read_text(encoding="utf-8").splitlines()
+        return dict(line.split("=", 1) for line in lines), output
+
+    def test_the_plan_job_seals_the_plan_of_the_executing_kit(self) -> None:
+        world = self.world()
+        outputs, sealed = self.run_plan(world)
+        plan = admit_release(sealed, plan_sha256=outputs["plan_sha256"])
+        identity = world.generation["identity"]["kit"]
+        self.assertEqual(plan["kit"], {key: identity[key] for key in ("sha", "version", "tree_digest")})
+        self.assertEqual((outputs["version"], outputs["environment"]), (VERSION, world.config["environment"]))
+        self.assertEqual(outputs["tags"], " ".join(tag["tag"] for tag in plan["tags"]))
+
+    def test_the_plan_job_refuses_another_kit_or_commit(self) -> None:
+        for name, value in (("MOD_BASE_KIT_SHA", "5" * 40), ("MB_KIT_TREE_DIGEST", "sha256:" + "6" * 64),
+                            ("GITHUB_SHA", "7" * 40)):
+            with self.subTest(name=name):
+                self.rejects(self.run_plan, self.world(), **{name: value})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,24 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.8.1
+
+Patch release: the release plan job refused every release (#49). A mod moves from v1.8.0 to v1.8.1
+with an ordinary pin bump.
+
+- `release plan` gives the plan the executing kit as `{sha, version, tree_digest}`, the `kit` of a
+  `mod-base.release.plan`. It took the kit's `KitRef`, which also names the kit repository, so the
+  plan's own reader refused it with `$.kit: has unknown keys ['repository']` and no release could
+  be planned, rehearsed or published. The other release commands never build a kit identity. A
+  test now runs `release plan` as the plan job does and admits what it seals.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files and the workflows' jobs, steps and permissions are
+  those of v1.8.0. The compatibility baseline moves to the archived v1.8.0 reader
+  (`tests/fixtures/previous_release/v1.8.0`), which reads every kind of this release unchanged.
+- Upgrade: bump the pin to v1.8.1 (`python3 scripts/ci/mod_base_kit.py bump --to v1.8.1`, then
+  `verify --network` and `template check`).
+- Rollback: an ordinary pin bump back to v1.8.0, which cannot plan a release.
+
 ## v1.8.0
 
 Minor release: the shared release pipeline ([ADR 0008](docs/adr/0008-shared-release-publication.md),
