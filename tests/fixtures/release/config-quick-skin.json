@@ -2,6 +2,7 @@
   "kind": "mod-base.release.config",
   "schema_version": 1,
   "repository": "The-Plum-Team/Quick-Skin-Mod",
+  "environment": "release",
   "version": {
     "file": "gradle.properties",
     "format": "properties",

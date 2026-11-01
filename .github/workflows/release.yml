@@ -29,11 +29,14 @@ on:
       run-attempt:
         description: The run attempt whose sealed artifact holds the plan
         value: ${{ jobs.plan.outputs.run-attempt }}
+      environment:
+        description: The deployment environment the release config names for publication
+        value: ${{ jobs.plan.outputs.environment }}
 
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:b14456011c3f836b1904ed7b70ba35a304b3aefd1997090e60a1e315f7f310d8"
+  MB_KIT_TREE_DIGEST: "sha256:8964d5d6e9b3fc7c5e34169fd9339a7ce39a0c7d20c3b7b2021b4aee78e21446"
 
 jobs:
   plan:
@@ -48,6 +51,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tags: ${{ steps.release.outputs.tags }}
       run-attempt: ${{ github.run_attempt }}
+      environment: ${{ steps.release.outputs.environment }}
     steps:
       - name: Validate call inputs before any checkout
         shell: bash

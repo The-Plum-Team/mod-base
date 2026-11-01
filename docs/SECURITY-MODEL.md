@@ -26,7 +26,7 @@ This document states what mod-base protects, from whom, and with which mechanism
 | Adapter and config (`scripts/pages/mod_base_adapter.py`, `site/mod-base.json`) | the same | the same; both sit under Block Pops protected roots |
 | Managed files | only `template sync` from the pinned kit | `template check` fails on any byte of drift; `template.deferred` can never name the caller, the bootstrap, the shared documents or `CODEOWNERS` |
 | The `github-pages` environment | repository admins | deployment branch policy: the default branch only |
-| The `mod-base-release` environment and its `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN` | repository admins | deployment branch policy: the default branch only; one required reviewer; each secret reaches one step of the release caller's `publish` job, which runs no action, no adapter hook and no mod code but the managed bootstrap of the protected head |
+| The release environment the mod's release config names (never `github-pages` or `mod-base-gate`) and its `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN` | repository admins | deployment branch policy: the default branch (and, while the native release still runs, its tags); one required reviewer; each secret reaches one step of the release caller's `publish` job, which runs no action, no adapter hook and no mod code but the managed bootstrap of the protected head |
 
 Changing privileged publication code therefore always takes two protected merges: one to
 mod-base `main` (released as a tag) and one pin bump in the mod.

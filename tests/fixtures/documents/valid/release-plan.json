@@ -3,7 +3,7 @@
     "sha256": "4285a95b72e57285ec83298f4f34f5f371d84db3ce5d5dbad3f87fe475538867",
     "text": "### Added\n\n- A new skin menu.\n- Nicknames <!-- not a ledger -->."
   },
-  "config_sha256": "25d6fc60689ceb29e3d899c46cb10ca770ea32565189b7401022938b1daa8fe6",
+  "config_sha256": "497837e072339d71c8eabb6d399fb45e25968e953b47b074ddd4bfa8cf6fbcec",
   "generation_sha256": "e2738b7a54eb9259e26f6dc68eee8251a62939a1d45c602633c0294875670568",
   "identity": {
     "base_branch": "master",

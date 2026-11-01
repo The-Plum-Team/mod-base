@@ -73,6 +73,13 @@ class ReleaseCalleeTest(unittest.TestCase):
         self.assertEqual(upload["with"]["name"], "mb-rel-plan--${{ github.run_id }}--a${{ github.run_attempt }}")
         self.assertEqual(sum(1 for item in steps if str(item.get("uses", "")).startswith("actions/upload-artifact@")), 1)
 
+    def test_it_hands_the_caller_the_environment_of_the_release_config(self) -> None:
+        document = callee()
+        outputs = document["on"]["workflow_call"]["outputs"]
+        self.assertEqual(outputs["environment"]["value"], "${{ jobs.plan.outputs.environment }}")
+        self.assertEqual(document["jobs"]["plan"]["outputs"]["environment"],
+                         "${{ steps.release.outputs.environment }}")
+
     def test_every_run_step_drops_the_credentials_it_does_not_use(self) -> None:
         for item in callee()["jobs"]["plan"]["steps"]:
             if "run" not in item:
@@ -145,6 +152,13 @@ class ReleaseCallerTest(unittest.TestCase):
         admit = step(publish_steps, "Admit the sealed release plan")
         self.assertIn('--plan-attempt "$PLAN_ATTEMPT"', admit["run"])
         self.assertEqual(admit["env"]["PLAN_ATTEMPT"], "${{ needs.plan.outputs.run-attempt }}")
+        # The job runs in the environment the plan read from the protected config, and admission
+        # refuses to go on unless that config, the plan's own, names this environment.
+        self.assertEqual(admit["env"]["RELEASE_ENVIRONMENT"], "${{ needs.plan.outputs.environment }}")
+        self.assertIn('--environment "$RELEASE_ENVIRONMENT"', admit["run"])
+        self.assertIn('--release-config "$GITHUB_WORKSPACE/mod/scripts/ci/mod-base-release.json"', admit["run"])
+        validate = step(publish_steps, "Validate the plan outputs before any checkout")["run"]
+        self.assertIn('[[ "$RELEASE_ENVIRONMENT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]', validate)
 
     def test_only_the_authoritative_mode_manages_the_release_caller(self) -> None:
         self.assertEqual([mode for mode, callers in MANAGED_CALLERS.items() if RELEASE_CALLER in callers],

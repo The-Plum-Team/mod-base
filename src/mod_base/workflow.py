@@ -169,8 +169,10 @@ REL_CALLER_PERMISSIONS = {"guard": {"actions": "read", "contents": "read"},
                           "plan": {"actions": "read", "contents": "read"},
                           "publish": {"actions": "read", "contents": "write"},
                           "finish": {"actions": "read", "contents": "write"}}
-#: The one environment holding the marketplace credentials, approved once per publication.
-REL_ENVIRONMENT = "mod-base-release"
+#: The environment of the publish job: the one the mod's release config names (``environment``), which
+#: holds the marketplace credentials and is approved once per publication. The admit step checks that
+#: the protected config names the environment the job runs in.
+REL_ENVIRONMENT = "${{ needs.plan.outputs.environment }}"
 #: The secret each credentialed step of the publish job receives, by step position in
 #: ``REL_CALLER_VERBS["publish"]``.
 REL_STEP_SECRETS = {2: "MODRINTH_TOKEN", 3: "CURSEFORGE_TOKEN"}

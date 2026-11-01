@@ -2,7 +2,7 @@
 
 ``release plan`` runs in the kit callee's read-only job, after the generation consumer's steps;
 the others run in the caller's own jobs. ``admit``, ``github``, ``upload`` and ``verify --plan`` run
-in the ``publish`` job of the ``mod-base-release`` environment, each step holding only its own
+in the ``publish`` job, in the environment the release config names, each step holding only its own
 credential: ``GH_TOKEN`` (the job token, ``contents: write``) everywhere, ``MODRINTH_TOKEN`` and
 ``CURSEFORGE_TOKEN`` in their upload step alone. ``verify --drafts`` runs in the scheduled ``finish``
 job, which holds no secret. Those jobs run the kit only through the protected head's managed
@@ -67,6 +67,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     admit.add_argument("--plan-sha256", type=PLAN_SHA256, required=True)
     admit.add_argument("--plan-attempt", type=cli.POSITIVE, required=True,
                        help="the run attempt of the plan job, whose artifact holds the plan")
+    admit.add_argument("--release-config", type=cli.PATH, required=True, metavar="FILE",
+                       help="the release config of the protected checkout")
+    admit.add_argument("--environment", required=True,
+                       help="the deployment environment this job runs in, which the config must name")
     admit.add_argument("--output", type=cli.PATH, required=True, metavar="DIR")
     admit.set_defaults(handler=run_admit)
 
@@ -119,7 +123,8 @@ def run_plan(args: argparse.Namespace) -> int:
         raise MbError("the generation covers another commit than this run", reason="release")
     seal_release(args.output, plan=plan, bundle=generation_dir / "build")
     cli.write_github_output(args.github_output, {"plan_sha256": plan_digest(plan), "version": plan["version"],
-                                                 "tags": " ".join(tag["tag"] for tag in plan["tags"])})
+                                                 "tags": " ".join(tag["tag"] for tag in plan["tags"]),
+                                                 "environment": config["environment"]})
     print(f"Release {plan['version']}: {len(plan['tags'])} tag(s), "
           f"{sum(len(tag['assets']) for tag in plan['tags'])} file(s), plan {plan_digest(plan)}")
     return 0
@@ -132,6 +137,10 @@ def run_admit(args: argparse.Namespace) -> int:
     if attempt > int(_required(environ, "GITHUB_RUN_ATTEMPT")):
         raise MbError("the plan attempt is later than this run attempt", reason="release")
     sha = grammar.require_sha1(_required(environ, "GITHUB_SHA"), "GITHUB_SHA")
+    config, config_sha256 = load_release_config(args.release_config)
+    if config["environment"] != args.environment:
+        raise MbError(f"this job runs in the environment {args.environment!r}, not the release config's "
+                      f"{config['environment']!r}", reason="release")
     client = github_api.from_environment(environ, max_requests=MAX_RELEASE_ADMIT_REQUESTS)
     name = PLAN_ARTIFACT.format(run_id=run_id, attempt=attempt)
     found = [artifact for artifact in artifacts.list_run_named(client, run_id, name) if not artifact.expired]
@@ -145,6 +154,8 @@ def run_admit(args: argparse.Namespace) -> int:
         plan = admit_release(staged, plan_sha256=args.plan_sha256)
         if released_commit(plan) != sha:
             raise MbError("the sealed plan releases another commit than this run", reason="release")
+        if plan["config_sha256"] != config_sha256:
+            raise MbError("the sealed plan was derived from another release config", reason="release")
         repository = _required(environ, "GITHUB_REPOSITORY")
         branch = client.get_json(f"/repos/{repository}")["default_branch"]
         head = client.get_json(f"/repos/{repository}/commits/{branch}")["sha"]

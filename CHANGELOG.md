@@ -16,7 +16,7 @@ one approval, without compiling anything.
   `shared-build-and-e2e` activation mode: a dispatch plans (and with `publish` publishes) a
   release; an hourly schedule finishes releases that moderation held back. `template sync` adds it
   to every mod in that mode; it does nothing until the mod adds `scripts/ci/mod-base-release.json`
-  and the `mod-base-release` environment.
+  and the environment it names (`environment`) holds the marketplace tokens.
 - Managed file change: the guard `.github/workflows/mod-base-guard.yml` admits the release caller
   (`callees: release`, on `workflow_dispatch` and `schedule` only).
 - New kit callee `.github/workflows/release.yml` (one read-only job, "Plan exact release").

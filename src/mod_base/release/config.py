@@ -4,7 +4,8 @@ The file is ``scripts/ci/mod-base-release.json`` in the protected checkout, stri
 hand, so not necessarily canonical) of at most :data:`MAX_RELEASE_CONFIG_BYTES`. It names where the
 version comes from (``version.format`` ``properties``: the key ``version.key`` of a Java properties
 file; ``json``: the string at the RFC 6901 pointer ``version.pointer`` of a JSON file) and where the
-changelog comes from, how tags and release names are spelled, the marketplace
+changelog comes from, the deployment environment (``environment``) whose approval publishes and
+which alone holds the marketplace tokens, how tags and release names are spelled, the marketplace
 projects and, for every lane of the Build plan, what each marketplace is told about its production
 JAR. It names no file, command, token, workflow or JAR: the bytes come from the tested generation
 alone (:mod:`mod_base.release.plan`).
@@ -113,6 +114,10 @@ MODRINTH_VERSION_NUMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$")
 MODRINTH_PROJECT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
 #: The released project itself is named by its Modrinth id, the only name Modrinth answers with.
 MODRINTH_ID = re.compile(r"^[A-Za-z0-9]{8}$")
+#: The deployment environment that holds the mod's marketplace tokens and approves a publication.
+ENVIRONMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#: Environments the kit gives other credentials, which a release must never be approved in.
+RESERVED_ENVIRONMENTS = ("github-pages", "mod-base-gate")
 #: A CurseForge project slug.
 CURSEFORGE_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 #: An RFC 6901 JSON pointer with at least one reference token (one ``/`` before each).
@@ -231,6 +236,7 @@ _LANE = Obj({
 _CONFIG = Obj({
     **release_header("mod-base.release.config"),
     "repository": Str(g.REPOSITORY, max_len=201),
+    "environment": Str(ENVIRONMENT, max_len=64),
     "version": OneOf(
         Obj({"file": repo_path, "format": Const("properties"),
              "key": Str(PROPERTY_KEY, max_len=MAX_RELEASE_PROPERTY_KEY_CHARS)}),
@@ -267,6 +273,8 @@ def validate_release_config(document: Any, *, path: str = "$") -> dict[str, Any]
 
     _CONFIG(document, path)
     check(bool(marketplaces(document)), path, "must publish to Modrinth, CurseForge or both")
+    check(document["environment"] not in RESERVED_ENVIRONMENTS, f"{path}.environment",
+          "names an environment that holds another credential of the kit")
     per_version = "{version}" in document["changelog"]["file"]
     check(per_version == (document["changelog"].get("format", "section") == "file"), f"{path}.changelog",
           "a changelog file per version (format file) names {version} in its path, and only it does")

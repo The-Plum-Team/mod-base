@@ -888,6 +888,7 @@ reader refuses it as unknown.
 |---|---|
 | `kind`, `schema_version` | `mod-base.release.config`, 1 |
 | `repository` | `owner/name`, exactly the repository that runs the release |
+| `environment` | the deployment environment of the publish job, which holds `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN`: `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, never `github-pages` or `mod-base-gate`; `release admit` refuses a job that runs in another |
 | `version` | `{file, format: properties, key}` (one plain `key=value` line of a Java properties file) or `{file, format: json, pointer}` (an RFC 6901 pointer to a string); the version matches `X.Y[.Z[.W]]` with an optional `-`/`+` suffix |
 | `changelog` | `{file}`: the section headed `## <version> (<YYYY-MM-DD>)` of a file that opens with it; or `{file, format: file}` with `{version}` in the path: that version's whole file |
 | `tags` | `{template, group}`: `group: minecraft` makes one tag per lane Minecraft version (the template names `{minecraft}`), `group: all` one tag for every lane (it may not) |

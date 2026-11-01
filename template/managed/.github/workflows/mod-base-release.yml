@@ -3,8 +3,8 @@ name: mod-base release
 
 # The shared release of the mod (docs/RELEASE-PROTOCOL.md in the kit). A dispatch of the default
 # branch plans the release of its live head from the head's tested generation, without any
-# credential; with `publish` it then publishes that exact plan after one approval of the
-# `mod-base-release` environment: the tags and GitHub Releases, then every lane to Modrinth and
+# credential; with `publish` it then publishes that exact plan after one approval of the release
+# environment its config names: the tags and GitHub Releases, then every lane to Modrinth and
 # CurseForge, verified by content and finished in the same job when the marketplaces have accepted
 # every file. The hourly schedule finishes what moderation held back: it reads only public data and
 # publishes a draft release only when its ledger proves every row verified. The jobs that hold a
@@ -56,7 +56,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    environment: mod-base-release
+    environment: ${{ needs.plan.outputs.environment }}
     permissions:
       actions: read
       contents: write
@@ -68,6 +68,7 @@ jobs:
         env:
           PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
           PLAN_ATTEMPT: ${{ needs.plan.outputs.run-attempt }}
+          RELEASE_ENVIRONMENT: ${{ needs.plan.outputs.environment }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
@@ -75,6 +76,7 @@ jobs:
           [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
           [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed plan digest"
           [[ "$PLAN_ATTEMPT" =~ ^[1-9][0-9]{0,3}$ ]] || fail "malformed plan run attempt"
+          [[ "$RELEASE_ENVIRONMENT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail "malformed release environment"
       - name: Check out the protected mod head
         shell: bash
         env:
@@ -108,10 +110,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
           PLAN_ATTEMPT: ${{ needs.plan.outputs.run-attempt }}
+          RELEASE_ENVIRONMENT: ${{ needs.plan.outputs.environment }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
-          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release admit --plan-sha256 "$PLAN_SHA256" --plan-attempt "$PLAN_ATTEMPT" --output "$RUNNER_TEMP/mb-release"
+          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release admit --plan-sha256 "$PLAN_SHA256" --plan-attempt "$PLAN_ATTEMPT" --release-config "$GITHUB_WORKSPACE/mod/scripts/ci/mod-base-release.json" --environment "$RELEASE_ENVIRONMENT" --output "$RUNNER_TEMP/mb-release"
       - name: Create the draft releases
         id: github
         shell: bash

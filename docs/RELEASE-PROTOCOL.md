@@ -57,7 +57,7 @@ so only one job writes the ledgers at a time.
 | --- | --- | --- | --- |
 | `guard` | `mod-base-guard.yml` with `callees: release` | nothing | binds the kit pin as every managed caller does |
 | `plan` | the kit callee `release.yml` | `actions: read`, `contents: read` | authenticates the live head's tested generation, derives the release plan from the protected release config, seals the plan and the exact assets as one artifact |
-| `publish` | caller-owned, only when `publish` is true | environment `mod-base-release`; `contents: write`; `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN`, each in one step | admits the sealed plan, creates the tags and draft releases, uploads every lane to both marketplaces in parallel, verifies and publishes every release whose rows are all verified |
+| `publish` | caller-owned, only when `publish` is true | the environment the release config names (`release admit` refuses any other); `contents: write`; `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN`, each in one step | admits the sealed plan, creates the tags and draft releases, uploads every lane to both marketplaces in parallel, verifies and publishes every release whose rows are all verified |
 | `finish` | caller-owned, on the caller's hourly schedule | `actions: read` (to see a running dispatch) and `contents: write`, no environment and no secret | reads every draft release that carries a ledger, reconciles its pending rows from public data and publishes the drafts whose rows are all verified |
 
 A rehearsal runs `guard` and `plan` and stops: it proves the generation, the plan and every asset

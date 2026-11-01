@@ -2,6 +2,7 @@
   "kind": "mod-base.release.config",
   "schema_version": 1,
   "repository": "The-Plum-Team/Block-Pops-Minecraft-Mod",
+  "environment": "release",
   "version": {
     "file": "release/release-matrix.json",
     "format": "json",

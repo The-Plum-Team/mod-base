@@ -73,7 +73,11 @@ CurseForge upload duplicates files and its outcome cannot be reconciled by conte
 
 ### One approval, parallel uploads
 
-The `publish` job references the environment once, so a release asks for one approval. Inside it,
+The `publish` job references the environment once, so a release asks for one approval. The mod's
+release config names that environment, so a mod keeps the environment, and the tokens, its native
+release already used: GitHub never shows a secret again, and a token copied by hand is one more
+place it lives. `release admit` refuses a job whose environment the protected config does not name,
+and the config may not name the kit's `github-pages` or `mod-base-gate`. Inside the job,
 the GitHub step creates the tags and draft releases, then each marketplace step uploads every lane
 with at most four uploads at once. No lock serializes jobs across a release; the caller's
 concurrency groups only keep two dispatches of one mod apart, and the scheduled finish skips its

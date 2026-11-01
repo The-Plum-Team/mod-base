@@ -84,7 +84,7 @@ class SchemaTests(Case):
             with self.subTest(mutate=mutate):
                 self.rejects(self.changed(mutate))
         document = fixture()
-        for key in ("kind", "schema_version", "repository", "version", "changelog", "tags", "release_name", "lanes"):
+        for key in ("kind", "schema_version", "repository", "environment", "version", "changelog", "tags", "release_name", "lanes"):
             with self.subTest(missing=key):
                 self.rejects({k: v for k, v in document.items() if k != key})
 
@@ -92,6 +92,8 @@ class SchemaTests(Case):
         cases = [
             lambda d: d.update(schema_version=2), lambda d: d.update(schema_version=True),
             lambda d: d.update(kind="mod-base.release.plan"), lambda d: d.update(repository="../x"),
+            lambda d: d.update(environment=""), lambda d: d.update(environment="re lease"),
+            lambda d: d.update(environment="x" * 65), lambda d: d.update(environment=1),
             lambda d: d["version"].update(file="../gradle.properties"), lambda d: d["version"].update(file=".git/x"),
             lambda d: d["version"].update(key="mod version"), lambda d: d["version"].pop("format"),
             lambda d: d["version"].update(format="toml"), lambda d: d["changelog"].update(file="/CHANGELOG.md"),
@@ -122,6 +124,11 @@ class SchemaTests(Case):
         for index, mutate in enumerate(cases):
             with self.subTest(case=index):
                 self.rejects(self.changed(mutate))
+
+    def test_the_environment_never_names_another_credential_of_the_kit(self) -> None:
+        for name in ("github-pages", "mod-base-gate"):
+            with self.subTest(environment=name):
+                self.rejects(self.changed(lambda d, name=name: d.update(environment=name)), "another credential")
 
     def test_a_marketplace_is_required_and_its_dependencies_need_it(self) -> None:
         self.rejects(self.changed(lambda d: (d.pop("modrinth"), d.pop("curseforge"))), "Modrinth, CurseForge or both")
@@ -237,6 +244,29 @@ class TemplateTests(Case):
         tags["mc1.20.1-v4.0.0"]["lanes"].append("x")
         self.assertEqual(document, before)
 
+
+
+class AdmitEnvironmentTest(unittest.TestCase):
+    """``release admit`` goes no further than the config when the job runs in another environment."""
+
+    def test_admission_refuses_an_environment_the_config_does_not_name(self) -> None:
+        import argparse
+        from unittest import mock
+
+        from mod_base.release import commands
+
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "mod-base-release.json"
+            config.write_bytes((RELEASE / "config-quick-skin.json").read_bytes())
+            args = argparse.Namespace(plan_sha256="0" * 64, plan_attempt=1, release_config=config,
+                                      environment="github-pages", output=Path(temporary) / "out")
+            environ = {"GITHUB_RUN_ID": "7", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": "a" * 40}
+            with mock.patch.object(commands.cli, "environ", return_value=environ), \
+                    mock.patch.object(commands.github_api, "from_environment") as client:
+                with self.assertRaises(MbError) as caught:
+                    commands.run_admit(args)
+            self.assertIn("not the release config's 'release'", str(caught.exception))
+            client.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@
   "changelog": {
     "file": "CHANGELOG.md"
   },
+  "environment": "release",
   "kind": "mod-base.release.config",
   "lanes": {
     "fabric-1.20.1": {

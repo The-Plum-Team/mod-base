@@ -1,6 +1,6 @@
 {
   "kind": "mod-base.release.ledger",
-  "plan_sha256": "fa5c1cc097b9ce7b91f95fb1b1ec2cdac0b6da35e43b5918e24b5521f1813bf3",
+  "plan_sha256": "e73f0a11d39f62d6fe30a32bf21cc345dbf88ae9685acce00b4bc39fa0f2cd17",
   "rows": {
     "fabric-1.20.1--modrinth": {
       "remote_id": null,
