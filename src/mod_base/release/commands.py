@@ -115,7 +115,8 @@ def run_plan(args: argparse.Namespace) -> int:
     config, config_sha256 = load_release_config(args.release_config)
     if config["repository"] != _required(environ, "GITHUB_REPOSITORY"):
         raise MbError("the release config names another repository", reason="release")
-    kit = {**runtime.kit_ref(_required(environ, "MOD_BASE_KIT_SHA")),
+    executing = runtime.kit_ref(_required(environ, "MOD_BASE_KIT_SHA"))
+    kit = {"sha": executing["sha"], "version": executing["version"],
            "tree_digest": _required(environ, "MB_KIT_TREE_DIGEST")}
     plan = derive_release_plan(generation=generation, bundle=generation_dir / "build", config=config,
                                config_sha256=config_sha256, repo=args.repo, kit=kit)
