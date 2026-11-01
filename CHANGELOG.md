@@ -5,7 +5,7 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased (planned v1.8.0)
+## v1.8.0
 
 Minor release: the shared release pipeline ([ADR 0008](docs/adr/0008-shared-release-publication.md),
 [RELEASE-PROTOCOL.md](docs/RELEASE-PROTOCOL.md)). A release publishes the production files of the
@@ -28,6 +28,19 @@ one approval, without compiling anything.
   (`Quick Skin - Fabric - 1.20.1-4.0.0.jar` is stored as `Quick-Skin-Fabric-1.20.1-4.0.0.jar`).
 - The release caller is not a control path of the Build policy: editing it never forces a new
   generation.
+- Compatibility: the existing document kinds and their schema versions, `ADAPTER_API`,
+  `BUILD_ADAPTER_API` 1, `pixel_metrics_version` 1 and the workflows' jobs, steps and permissions
+  are those of v1.7.1; the three release kinds are new at schema 1, and the managed files change
+  only by the guard's `release` case and the new release caller. The compatibility baseline moves
+  to the archived v1.7.1 reader (`tests/fixtures/previous_release/v1.7.1`), which reads every
+  kind it knows unchanged.
+- Upgrade: bump the pin to v1.8.0 as usual (`python3 scripts/ci/mod_base_kit.py bump --to v1.8.0`,
+  then `verify --network` and `template check`); in `shared-build-and-e2e` the bump adds
+  `.github/workflows/mod-base-release.yml`. Nothing is released until the mod adds
+  `scripts/ci/mod-base-release.json` and its environment admits the default branch
+  ([OPERATIONS.md](docs/OPERATIONS.md#releasing-a-mod)).
+- Rollback: an ordinary pin bump back to v1.7.1, which removes the release caller. Draft releases
+  and their ledgers stay on GitHub; v1.7.1 neither reads nor changes them.
 
 ## v1.7.1
 
