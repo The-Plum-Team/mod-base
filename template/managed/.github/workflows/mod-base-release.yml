@@ -23,10 +23,10 @@ on:
 
 permissions: {}
 
-# One release of the mod at a time; a queued dispatch is never dropped for the schedule.
+# One release dispatch at a time, and one scheduled finish: the schedule never takes a pending
+# dispatch's place, and the finish job skips its hour while a dispatch is still running.
 concurrency:
-  group: mod-base-release
-  queue: max
+  group: mod-base-release-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
@@ -158,11 +158,32 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
+      actions: read
       contents: write
     env:
       KIT_SHA: ${{ needs.guard.outputs.kit-sha }}
     steps:
+      - name: Skip while a release dispatch runs
+        id: idle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
+          # A dispatch writes the same ledgers; this hour's finish waits for the next one.
+          busy="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/mod-base-release.yml/runs?event=workflow_dispatch&per_page=20" \
+            --jq '[.workflow_runs[] | select(.status != "completed")] | length')" ||
+            { printf 'Finish pending releases: cannot list the release dispatches\n' >&2; exit 1; }
+          [[ "$busy" =~ ^[0-9]+$ ]] || { printf 'Finish pending releases: malformed run count\n' >&2; exit 1; }
+          if (( busy > 0 )); then
+            printf 'A release dispatch is running: this hour finishes nothing\n'
+            printf 'idle=false\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'idle=true\n' >> "$GITHUB_OUTPUT"
+          fi
       - name: Check out the protected mod head
+        if: steps.idle.outputs.idle == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -190,6 +211,7 @@ jobs:
           pin="$(python3 -I -B mod/scripts/ci/mod_base_kit.py pin --repo mod)" || fail "the mod carries no single pin"
           [[ "${pin%% *}" == "$KIT_SHA" ]] || fail "the mod's pin is not the kit the guard bound to this run"
       - name: Verify and finish the pending releases
+        if: steps.idle.outputs.idle == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

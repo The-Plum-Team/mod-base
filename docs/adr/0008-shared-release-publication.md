@@ -75,8 +75,9 @@ CurseForge upload duplicates files and its outcome cannot be reconciled by conte
 
 The `publish` job references the environment once, so a release asks for one approval. Inside it,
 the GitHub step creates the tags and draft releases, then each marketplace step uploads every lane
-with at most four uploads at once. No lock serializes jobs across a release; the caller's single
-concurrency group only keeps two releases of one mod apart.
+with at most four uploads at once. No lock serializes jobs across a release; the caller's
+concurrency groups only keep two dispatches of one mod apart, and the scheduled finish skips its
+hour while a dispatch runs, so one job at a time writes the ledgers.
 
 ### State and resume
 

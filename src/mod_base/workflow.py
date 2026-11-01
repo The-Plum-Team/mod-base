@@ -168,13 +168,15 @@ REL_CALLER_VERBS = {"publish": ("release admit", "release github", "release uplo
 REL_CALLER_PERMISSIONS = {"guard": {"actions": "read", "contents": "read"},
                           "plan": {"actions": "read", "contents": "read"},
                           "publish": {"actions": "read", "contents": "write"},
-                          "finish": {"contents": "write"}}
+                          "finish": {"actions": "read", "contents": "write"}}
 #: The one environment holding the marketplace credentials, approved once per publication.
 REL_ENVIRONMENT = "mod-base-release"
 #: The secret each credentialed step of the publish job receives, by step position in
 #: ``REL_CALLER_VERBS["publish"]``.
 REL_STEP_SECRETS = {2: "MODRINTH_TOKEN", 3: "CURSEFORGE_TOKEN"}
-REL_LOCK = "mod-base-release"
+#: The concurrency group of the release caller, one per event: a dispatch and the schedule never
+#: take each other's pending place.
+REL_LOCK = "mod-base-release-${{ github.event_name }}"
 REL_CRON = "29 * * * *"
 REL_EVENTS = frozenset({"workflow_dispatch", "schedule"})
 REL_UPLOAD_STEP = CI_UPLOAD_STEP

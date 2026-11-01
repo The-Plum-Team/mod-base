@@ -3,7 +3,7 @@ e112952ffd5892abcbd9bca33e3cb0aaffee22a1c7c2a42a50bc768eada9899b  ./template/man
 96e9cb7d4034eeb62410058c1d242e71e86ed8e657f647ade3040900cd835c37  ./template/managed/.github/workflows/mod-base-gate-status.yml
 9b63dcf4cb6c439c02e361c3fc31551ad0a1ef49e6188f6c201f1acb3a714c0f  ./template/managed/.github/workflows/mod-base-guard.yml
 7885f9a3e4f8268c40ed3d544ec44441afb41ea47863b2e0df6c7bf063baf986  ./template/managed/.github/workflows/mod-base-packaged-e2e.yml
-ba6c78104da35ce6732c5be374036f71fe288c075ffbb07d71cf8838602e1805  ./template/managed/.github/workflows/mod-base-release.yml
+d0bc9416b2f02942277c8eed4fc8d030a9792e49c41233fa7c1b5ab0a3cf660f  ./template/managed/.github/workflows/mod-base-release.yml
 bfc724e899366a2618ebbd84a953030a3595ca7ed0a86081ea95cbe1a63da31c  ./template/managed/.github/workflows/pages.yml
 9b3aef4f40e08a64d004e67809b55641cf323b23ccbe32623e4940903d4c60a7  ./template/managed/docs/ai/shared/PUBLIC-EVIDENCE.md
 0b9fcb0dd4368b16aaaa5611a92e9909aa9e803ebe8440e33590cc9376a911a9  ./template/managed/docs/ai/shared/REPOSITORY.md

@@ -48,14 +48,17 @@ These come from the three native pipelines it replaces and from the Quick Skin 4
 
 The managed caller `mod-base-release.yml` runs on `workflow_dispatch` of the default branch only,
 with input `publish` (`false` rehearses, `true` publishes), and on an hourly schedule that only
-finishes pending releases. It holds one concurrency group, `mod-base-release`, never cancelled.
+finishes pending releases. Dispatches and the schedule hold separate concurrency groups
+(`mod-base-release-workflow_dispatch`, `mod-base-release-schedule`), never cancelled, so the schedule
+never takes a pending dispatch's place; the finish job skips its hour while a dispatch still runs,
+so only one job writes the ledgers at a time.
 
 | Job | Runs | Holds | Does |
 | --- | --- | --- | --- |
 | `guard` | `mod-base-guard.yml` with `callees: release` | nothing | binds the kit pin as every managed caller does |
 | `plan` | the kit callee `release.yml` | `actions: read`, `contents: read` | authenticates the live head's tested generation, derives the release plan from the protected release config, seals the plan and the exact assets as one artifact |
 | `publish` | caller-owned, only when `publish` is true | environment `mod-base-release`; `contents: write`; `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN`, each in one step | admits the sealed plan, creates the tags and draft releases, uploads every lane to both marketplaces in parallel, verifies and publishes every release whose rows are all verified |
-| `finish` | caller-owned, on the caller's hourly schedule | `contents: write`, no environment and no secret | reads every draft release that carries a ledger, reconciles its pending rows from public data and publishes the drafts whose rows are all verified |
+| `finish` | caller-owned, on the caller's hourly schedule | `actions: read` (to see a running dispatch) and `contents: write`, no environment and no secret | reads every draft release that carries a ledger, reconciles its pending rows from public data and publishes the drafts whose rows are all verified |
 
 A rehearsal runs `guard` and `plan` and stops: it proves the generation, the plan and every asset
 without a credential. A publication is the same run with one approval, given once to the
