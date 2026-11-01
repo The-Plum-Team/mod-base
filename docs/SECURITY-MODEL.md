@@ -26,6 +26,7 @@ This document states what mod-base protects, from whom, and with which mechanism
 | Adapter and config (`scripts/pages/mod_base_adapter.py`, `site/mod-base.json`) | the same | the same; both sit under Block Pops protected roots |
 | Managed files | only `template sync` from the pinned kit | `template check` fails on any byte of drift; `template.deferred` can never name the caller, the bootstrap, the shared documents or `CODEOWNERS` |
 | The `github-pages` environment | repository admins | deployment branch policy: the default branch only |
+| The release environment the mod's release config names (never `github-pages` or `mod-base-gate`) and its `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN` | repository admins | deployment branch policy: the default branch (and, while the native release still runs, its tags); one required reviewer; each secret reaches one step of the release caller's `publish` job, which runs no action, no adapter hook and no mod code but the managed bootstrap of the protected head |
 
 Changing privileged publication code therefore always takes two protected merges: one to
 mod-base `main` (released as a tag) and one pin bump in the mod.
@@ -131,6 +132,23 @@ sandbox against a malicious adapter:
   authority: admission re-authenticates the named run and artifact and exits cleanly on a stale or
   foreign wake.
 
+### The release pipeline
+
+- A release publishes only the production files of the tested generation of the live
+  default-branch head (`ci select-generation --with-build`, [ADR 0008](adr/0008-shared-release-publication.md));
+  nothing is compiled after the gates. The plan job is a read-only kit callee; its sealed artifact
+  is downloaded again by numeric id, digest and size by the `publish` job, which re-hashes every
+  asset (SHA-256, SHA-1, SHA-512) and requires the plan digest the plan job announced and the
+  default branch to be still at the released commit.
+- `mod_base.marketplace` is the kit's second network client. Each transport is bound to one
+  `https://` origin, refuses proxies and redirects (except the one credential-less redirect of a
+  GitHub release asset download to its storage host), bounds every response and counts every
+  request; a token travels only to its own origin. A non-idempotent upload is never retried after
+  an answer that may hide its acceptance; the ledger fences it instead.
+- The scheduled `finish` job holds no secret and no environment: it publishes a draft release only
+  when the draft's own plan asset has the digest its ledger names and every marketplace copy of
+  every lane is verified by content from public data.
+
 ### Concurrency and races
 
 - Publication and rotation use two separate locks (`mod-base-pages-publication`,
@@ -203,6 +221,9 @@ text is validated and HTML-escaped at build time.
 
 ## Residual risks and limits
 
+- **Release credentials in a managed caller:** anyone who can merge to the default branch can
+  change what the `publish` job runs, as for every caller-owned job; the environment's required
+  reviewer is the last human check, and its approval covers exactly one dispatch.
 - **Malicious adapter or configuration at the protected head:** trusted by design; the defense is
   the mod's review and rulesets. Block Pops `master` has no ruleset until precondition P1 is
   applied ([OPERATIONS.md](OPERATIONS.md#p1-ruleset-block-pops-master)), and its adoption pull

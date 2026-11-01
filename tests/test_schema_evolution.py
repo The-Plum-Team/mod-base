@@ -36,6 +36,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "documents"
 PREVIOUS = ROOT / "tests" / "fixtures" / "previous_release"
 ADR = ROOT / "docs" / "adr" / "0007-protected-build-and-packaged-runtime.md"
+#: The decision record of the release kinds (ADR 0008), read together with ADR 0007.
+RELEASE_ADR = ROOT / "docs" / "adr" / "0008-shared-release-publication.md"
 VERSION = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 RELEASE_HEADING = re.compile(f"v{VERSION}")
 UNRELEASED_HEADING = re.compile(rf"Unreleased(?: \(planned v{VERSION}\))?")
@@ -257,10 +259,10 @@ class SchemaEvolutionTest(unittest.TestCase):
                                    if entry["decision"] != "new-kind"})
 
     def test_the_decision_record_names_every_new_kind(self) -> None:
-        text = ADR.read_text(encoding="utf-8")
+        text = ADR.read_text(encoding="utf-8") + RELEASE_ADR.read_text(encoding="utf-8")
         missing = sorted(kind for kind, entry in self.ledger["kinds"].items()
                          if entry["decision"] == "new-kind" and f"`{kind}`" not in text)
-        self.assertEqual(missing, [], "ADR 0007 gives every new document kind one line")
+        self.assertEqual(missing, [], "ADR 0007 or ADR 0008 gives every new document kind one line")
 
 
 if __name__ == "__main__":

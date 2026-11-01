@@ -1310,10 +1310,27 @@ def ci_org_members(*, organization: str = "example", pr_number: int = 7, through
             "members": [202] if members is None else members}
 
 
+def release_samples() -> dict[str, dict[str, Any]]:
+    """A valid release config, the plan ``tests.test_release_plan.World`` derives from it and that
+    plan's fresh ledger: one deterministic sample of each release kind."""
+
+    import tempfile as _tempfile
+
+    from mod_base.release.ledger import new_ledger
+    from tests.test_release_plan import World
+
+    with _tempfile.TemporaryDirectory(prefix="mb-release-sample-") as temporary:
+        world = World(Path(temporary))
+        plan = world.derive()
+    return {"release-config": world.config, "release-plan": plan,
+            "release-ledger": new_ledger(plan, plan["tags"][0]["tag"])}
+
+
 def sample_documents() -> dict[str, dict[str, Any]]:
     """Fixture name -> a coherent, valid document (see ``VALID_FIXTURE_KINDS``)."""
 
     return {
+        **release_samples(),
         "ci-plan": ci_plan(),
         "ci-config": ci_config(),
         "ci-activation": ci_activation(),
@@ -1353,6 +1370,9 @@ def sample_documents() -> dict[str, dict[str, Any]]:
 
 #: Fixture name -> the document kind it holds.
 VALID_FIXTURE_KINDS = {
+    "release-config": "mod-base.release.config",
+    "release-plan": "mod-base.release.plan",
+    "release-ledger": "mod-base.release.ledger",
     "ci-plan": "mod-base.build.plan",
     "ci-config": "mod-base.build.config",
     "ci-activation": "mod-base.ci.activation",

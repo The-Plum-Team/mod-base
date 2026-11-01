@@ -342,6 +342,8 @@ Integration-round amendments:
 | MB11 | `mod_base.build_ci.system_profile`, `mod_base.build_ci.commands_system` |
 | MB11 | `mod_base.build_ci.seeds`, `mod_base.build_ci.commands_seed` |
 | MB11 | `mod_base.build_ci.scope`, `mod_base.build_ci.commands_scope` |
+| MB12 | `mod_base.release.config`, `mod_base.release.plan`, `mod_base.release.ledger`, `mod_base.release.publish`, `mod_base.release.commands` |
+| MB13 | `mod_base.marketplace.limits`, `mod_base.marketplace.transport`, `mod_base.marketplace.modrinth`, `mod_base.marketplace.curseforge`, `mod_base.marketplace.github_releases`, `mod_base.marketplace.fake` |
 
 A private module (`_name`, for example `mod_base.evidence._common`) belongs to the unit that owns
 the other modules of its package and is never imported by another unit. A package `__init__`
@@ -3119,3 +3121,363 @@ Owner: MB11. Fixed frozen inputs around the enrolled native lane verifier.
 * `def verified_checkout(checkout: Path, sha: str, tree: str | None = None) -> Path`: Bind every working file to the exact Git commit and optional tested tree, using protected plumbing, bounded inventory and source checks. No checkout code executes.
 * `def planned_pin(checkout: Path, subject: dict[str, Any], *, api: GitHubApi | None) -> dict[str, str] | None`: Strictly parse every pin reference of the verified candidate. Return `None` for the executing SHA/version, without API traffic. Otherwise return `{sha, version}` after `verify_released` when `api` is supplied; callers passing `None` must enforce the independently handed-over plan hash or separately perform release admission before publishing the plan.
 * `def verify_future_checkout(checkout: Path, pin: Pin) -> str`: Verify the fetched commit, its own Build workflow kit-digest-v1 literal, and both staged-file locks; return its digest. Unsupported representations require a compatibility-first release. Future files are data only.
+
+## `mod_base.marketplace.limits`
+
+Owner: MB13. Every numeric bound of :mod:'mod_base.marketplace', until they move into ''model/limits.py''.
+
+* `KIB`
+* `MIB`
+* `MARKETPLACE_REQUEST_ATTEMPTS`
+* `MAX_MARKETPLACE_RETRY_DELAY_SECONDS`
+* `MAX_MARKETPLACE_RETRY_WAIT_SECONDS`
+* `MARKETPLACE_REQUEST_TIMEOUT_SECONDS`
+* `MAX_MARKETPLACE_JSON_BYTES`
+* `MAX_MARKETPLACE_REQUEST_JSON_BYTES`
+* `MAX_MARKETPLACE_ERROR_BODY_BYTES`
+* `MAX_MARKETPLACE_ERROR_DETAIL_CHARS`
+* `MAX_MARKETPLACE_FILE_BYTES`
+* `MAX_MARKETPLACE_FILENAME_CHARS`
+* `MAX_MARKETPLACE_HEADER_CHARS`
+* `MAX_MARKETPLACE_HEADERS`
+* `MAX_MARKETPLACE_PATH_CHARS`
+* `MAX_MARKETPLACE_QUERY_PARAMETERS`
+* `MAX_MARKETPLACE_QUERY_VALUE_CHARS`
+* `MAX_MARKETPLACE_REDIRECT_URL_CHARS`
+* `MAX_MARKETPLACE_REQUESTS`
+* `MAX_MULTIPART_PARTS`
+* `MAX_MARKETPLACE_CHANGELOG_CHARS`
+* `MAX_MARKETPLACE_GAME_VERSIONS`
+* `MAX_MARKETPLACE_LOADERS`
+* `MAX_MARKETPLACE_DEPENDENCIES`
+* `MAX_MODRINTH_VERSIONS`
+* `MAX_MODRINTH_VERSION_FILES`
+* `MAX_MODRINTH_NAME_CHARS`
+* `MAX_MODRINTH_VERSION_NUMBER_CHARS`
+* `CURSEFORGE_PAGE_SIZE`
+* `MAX_CURSEFORGE_FILES`
+* `MAX_CURSEFORGE_PAGES`
+* `MAX_CURSEFORGE_GAME_VERSIONS`
+* `MAX_CURSEFORGE_VERSION_TYPES`
+* `MAX_CURSEFORGE_DISPLAY_NAME_CHARS`
+* `GITHUB_PER_PAGE`
+* `MAX_GITHUB_RELEASES`
+* `MAX_GITHUB_RELEASE_ASSETS`
+* `MAX_GITHUB_RELEASE_BODY_CHARS`
+* `MAX_GITHUB_RELEASE_NAME_CHARS`
+
+## `mod_base.marketplace.transport`
+
+Owner: MB13. The one HTTPS client of the marketplace package (ADR 0008 "The network").
+
+* `USER_AGENT`
+* `RETRYABLE_HTTP_STATUSES`
+* `REDIRECT_STATUSES`
+* `PUBLIC_HEADERS`
+* `RESERVED_HEADERS`
+* `class MarketplaceError`: A definitive refusal (exit 2). ''status'' is the HTTP status, 0 before or outside HTTP.
+* `class MarketplaceNotFound`: HTTP 404 (never retried).
+* `class MarketplaceUnavailable`: The service could not be reached or kept failing within the retry budget (exit 3).
+* `class MarketplaceOutcomeUnknown`: A non-replayable request got an answer that may hide its acceptance (a 5xx, a transport error or an unreadable 2xx). It was not sent again: reconcile by content before any retry.
+* `class PublicationPending`: The marketplace holds the expected file but has not finished accepting it (exit 3). Before an upload it fences a settling upload; after one it means "poll again".
+* `class Reconciliation`: One file against one marketplace: ''publish'' when no remote copy exists, otherwise the ''remote_id'' of the copy whose bytes were proven equal. Collisions raise instead.
+  * fields: `publish: bool, remote_id: str | None`
+* `def require_filename(filename: Any, label: str = 'file name') -> str`: ''filename'' when it is a plain printable-ASCII name (no slash, quote, backslash or control character, no leading or trailing space, not ''.''/''..'') of at most ''limits.MAX_MARKETPLACE_FILENAME_CHARS'' characters.
+* `def require_text(value: Any, label: str, maximum: int, *, allow_empty: bool = False, single_line: bool = True) -> str`: ''value'' when it is a string of at most ''maximum'' characters, encodable as UTF-8, without control characters (newlines and tabs allowed unless ''single_line'').
+* `def require_match(pattern: re.Pattern[str], value: Any, label: str) -> str`: ''value'' when it is a string fully matching ''pattern'' (a bounded preview names it otherwise).
+* `def require_positive(value: Any, label: str, maximum: int = 9007199254740992) -> int`
+* `def require_sha256(value: Any, label: str = 'SHA-256') -> str`: A SHA-256 hex digest, lowercased (upper-case manifests are accepted).
+* `def quote_segment(value: str) -> str`: One path segment percent-encoded completely (a slash in ''value'' stays inside the segment).
+* `def content_type_for(filename: str) -> str`: The upload ''Content-Type'' of a release file: JARs are ''application/java-archive''.
+* `class FileDigests`: Size and digests of one stable regular file, read once (''model.canonical.read_regular_file'').
+  * fields: `size: int, sha1: str, sha256: str, sha512: str`
+* `def file_digests(path: Path, *, sha256: str | None = None) -> FileDigests`: Digests of ''path'' (a stable regular file, no symlink, 1 byte to ''limits.MAX_MARKETPLACE_FILE_BYTES''). With ''sha256'', the bytes must have that digest: the upload functions bind what they send to the plan's hash before the first request.
+* `def build_opener() -> urllib.request.OpenerDirector`: No proxy route (''ProxyHandler({})'' ignores ''HTTPS_PROXY''), no redirects, default TLS.
+* `class HttpsTransport`: A client of exactly one ''https://host'' origin. Paths passed to methods are absolute (''/v2/version''); query parameters travel separately as a mapping. One transport may be shared by several threads: its budget and total wait are counted under a lock.
+  * `origin` (property)
+  * `writable` (property)
+  * `request_count` (property)
+  * `get_json(self, path: str, query: Mapping[str, str | int] | None = None) -> Any`
+  * `get_bytes(self, path: str, *, limit: int) -> bytes`
+  * `download_redirected(self, path: str, *, limit: int, accept: str = 'application/octet-stream') -> bytes`
+  * `post_json(self, path: str, body: Mapping[str, Any], *, replay: bool) -> Any`
+  * `patch_json(self, path: str, body: Mapping[str, Any]) -> Any`
+  * `post_multipart(self, path: str, fields: Sequence[tuple[str, str]], files: Sequence[tuple[str, str, Path]], *, replay: bool, expected_sha256: Mapping[str, str] | None = None) -> Any`
+  * `post_bytes(self, path: str, data_path: Path, content_type: str, query: Mapping[str, str | int] | None, *, replay: bool, expected_sha256: str | None = None) -> Any`
+* `def encode_multipart(fields: Sequence[tuple[str, str]], files: Sequence[tuple[str, str, Path]], *, expected_sha256: Mapping[str, str] | None = None) -> tuple[bytes, str]`: ''(body, content type)'' of a ''multipart/form-data'' request. Part names are unique plain tokens and file names pass :func:'require_filename', so no quoting is ever needed; the boundary is random and checked to occur in no part.
+
+## `mod_base.marketplace.modrinth`
+
+Owner: MB13. Modrinth: create one version per lane and reconcile it by SHA-512 (''https://api.modrinth.com/v2'').
+
+* `USER_AGENT`
+* `MODRINTH_ORIGIN`
+* `VERSION_TYPES`
+* `DEPENDENCY_TYPES`
+* `def headers(token: str | None) -> dict[str, str]`: The construction headers of a Modrinth transport: the raw token as ''Authorization'' (none for a public read) and the kit's ''User-Agent'', which Modrinth asks every client to set.
+* `class ModrinthVersion`: The metadata of one Modrinth version (one lane), validated against Modrinth's own bounds so a refusal happens before the upload rather than as an HTTP 400 after it.
+  * fields: `project_id: str, version_number: str, name: str, changelog: str, game_versions: tuple[str, ...], loaders: tuple[str, ...], version_type: str, dependencies: tuple[tuple[str, str], ...], featured: bool`
+* `def version_by_sha512(transport: HttpsTransport, sha512: str) -> dict[str, Any] | None`: The version holding the file whose SHA-512 is ''sha512'' (''GET /v2/version_file/{hash} ?algorithm=sha512''), or None when Modrinth knows no such file (HTTP 404).
+* `def project_versions(transport: HttpsTransport, project: str) -> list[dict[str, Any]]`: Every version of ''project'' (''GET /v2/project/{id}/version'', one unpaginated array of at most ''limits.MAX_MODRINTH_VERSIONS''). ''include_changelog=false'' drops the changelog bodies, which reconciliation never reads; the byte bound holds either way.
+* `def resolve_project(transport: HttpsTransport, project: str) -> str`: The id of the project whose id or slug is ''project'' (''GET /v2/project/{id|slug}''): Modrinth's version data names a dependency by project id only.
+* `def create_version(transport: HttpsTransport, version: ModrinthVersion, file: Path, filename: str, *, sha256: str | None = None) -> dict[str, Any]`: Create ''version'' holding ''file'' uploaded as ''filename'' and return Modrinth's version.
+* `def reconcile(remote_by_hash: dict[str, Any] | None, versions: list[dict[str, Any]], *, expected_sha512: str, size: int, project_id: str, version_number: str) -> Reconciliation`: Decide one lane against Modrinth (Quick Skin ''classify_modrinth'').
+
+## `mod_base.marketplace.curseforge`
+
+Owner: MB13. CurseForge: upload one file per lane and reconcile it from public data.
+
+* `USER_AGENT`
+* `UPLOAD_ORIGIN`
+* `LISTING_ORIGIN`
+* `CDN_ORIGIN`
+* `APPROVED_STATUS`
+* `LOADER_NAMES`
+* `RELEASE_TYPES`
+* `RELATION_TYPES`
+* `NAMED_VERSION_TYPES`
+* `def headers(token: str) -> dict[str, str]`: The construction headers of an upload-API transport: the author token as ''X-Api-Token''.
+* `def stored_name(filename: str) -> str`: The name CurseForge stores an upload under.
+* `def cdn_path(file_id: int, name: str) -> str`: The CDN path of a file: its id split into thousands and remainder, the remainder never zero-padded (a padded path answers 403), then the percent-encoded stored name.
+* `def download(cdn_transport: HttpsTransport, file_id: int, stored_name: str, *, limit: int) -> bytes`: Exactly ''limit'' bytes of a published file from the CDN (no credential travels there).
+* `def game_version_ids(transport: HttpsTransport) -> dict[str, int]`: ''{game version name: id}'' from ''/api/game/version-types'' and ''/api/game/versions'' (two requests), covering the Minecraft versions (every ''minecraft-*'' type) and the loader, environment and Java names exactly as CurseForge spells them (''1.20.1'', ''Fabric'', ''NeoForge'', ''Client'', ''Java
+* `class CurseForgeFile`: The metadata of one CurseForge upload (one lane).
+  * fields: `project_id: int, display_name: str, changelog: str, release_type: str, game_version_ids: tuple[int, ...], relations: tuple[tuple[str, str], ...]`
+* `def upload(transport: HttpsTransport, file: CurseForgeFile, path: Path, filename: str, *, sha256: str | None = None) -> int`: Upload ''path'' as ''filename'' and return the new file id (one never-replayed request).
+* `def listing(transport: HttpsTransport, project_id: int) -> list[dict[str, Any]]`: Every file of ''project_id'' from the public listing (''pageIndex'' is a page ordinal, not an item offset; ''pageSize=50''). The walk ends on an empty page or once ''totalCount'' rows were read, and is bounded by ''limits.MAX_CURSEFORGE_PAGES'' requests. A ''totalCount'' beyond ''limits.MAX_CURSEFOR
+* `def reconcile(files: list[dict[str, Any]], *, filename: str, size: int, sha1: str, sha256: str, project_id: int, fetch_bytes: Callable[[int, str, int], bytes]) -> Reconciliation`: Decide one lane against CurseForge (Quick Skin ''classify_curseforge'').
+
+## `mod_base.marketplace.github_releases`
+
+Owner: MB13. GitHub Releases: tags, draft releases, assets and their reconciliation by content.
+
+* `USER_AGENT`
+* `API_ORIGIN`
+* `UPLOADS_ORIGIN`
+* `API_VERSION`
+* `TAG`
+* `def headers(token: str) -> dict[str, str]`: The construction headers of an API or uploads transport.
+* `def asset_name(filename: str) -> str`: The name GitHub stores an upload of ''filename'' under (module docstring): spaces become periods, leading and trailing periods go. Names whose normalization is not known exactly raise.
+* `def draft_releases(transport: HttpsTransport, repo: str) -> list[dict[str, Any]]`: Every draft release of ''repo''. GitHub's tag lookup omits drafts, so this lists every release (paginated, at most ''limits.MAX_GITHUB_RELEASES'') with a token that sees drafts.
+* `def find_release(transport: HttpsTransport, repo: str, tag: str) -> dict[str, Any] | None`: The one release (draft or published) whose ''tag_name'' is ''tag'', or None. Several releases with one tag (GitHub allows several drafts) are ambiguous and raise.
+* `def get_release(transport: HttpsTransport, repo: str, release_id: int) -> dict[str, Any]`: ''GET /repos/{repo}/releases/{id}'': a fresh read of one release (a confirming read).
+* `def create_ref(transport: HttpsTransport, repo: str, tag: str, sha: str) -> None`: Create the lightweight tag ''refs/tags/{tag}'' at commit ''sha''. A tag already at exactly that commit is accepted (a resumed release); a tag elsewhere, or an annotated tag, raises.
+* `def tag_commit(transport: HttpsTransport, repo: str, tag: str) -> str | None`: The commit the lightweight tag ''tag'' names, or ''None'' when no such tag exists. An annotated tag, or a ref of another shape, raises: a release creates lightweight tags only.
+* `def latest_release(transport: HttpsTransport, repo: str) -> dict[str, Any] | None`: The repository's release marked latest, or ''None'' when it has none.
+* `def create_draft(transport: HttpsTransport, repo: str, *, tag: str, name: str, body: str, target_commitish: str) -> dict[str, Any]`: Create the draft release of ''tag'' (never replayed: GitHub would create a second draft). The tag should already exist (:func:'create_ref'); ''target_commitish'' names its commit.
+* `def update_body(transport: HttpsTransport, repo: str, release_id: int, body: str, tag: str) -> dict[str, Any]`: Replace a release's body. The edit always restates ''tag_name'': a draft edited without it loses its tag and becomes ''untagged-...'' (Quick Skin's first ledger recovery).
+* `def release_assets(transport: HttpsTransport, repo: str, release_id: int) -> list[dict[str, Any]]`: The assets of one release (''/releases/{id}/assets'', paginated, at most ''limits.MAX_GITHUB_RELEASE_ASSETS'').
+* `def bind_assets(transport: HttpsTransport, repo: str, release: dict[str, Any], local: dict[str, tuple[int, str]]) -> set[str]`: The local file names (''{filename: (size, sha256)}'') whose asset is already on ''release'' with the same bytes.
+* `def upload_asset(transport_uploads: HttpsTransport, repo: str, release_id: int, path: Path, filename: str, *, sha256: str | None = None) -> dict[str, Any]`: Upload ''path'' as the asset ''filename'' of a release (one never-replayed request to :data:'UPLOADS_ORIGIN'). ''sha256'' (the plan's digest) must match before anything is sent; the answer must name the normalized asset, its size and, when reported, its digest.
+* `def asset_bytes(transport: HttpsTransport, repo: str, asset_id: int, *, limit: int) -> bytes`: Exactly ''limit'' bytes of one asset (''Accept: application/octet-stream''): GitHub's answer is a redirect to its storage, followed once without credentials.
+* `def publish(transport: HttpsTransport, repo: str, release_id: int, tag: str, *, make_latest: bool) -> dict[str, Any]`: Publish a draft (''draft: false'', restating ''tag_name''; ''make_latest'' "true" or "false").
+
+## `mod_base.marketplace.fake`
+
+Owner: MB13. In-memory Modrinth, CurseForge and GitHub Releases for the tests (never a network).
+
+* `APPROVED`
+* `class RecordedRequest`: One request as the fake network saw it (''headers'' names are lower-case).
+  * fields: `method: str, origin: str, path: str, query: tuple[tuple[str, str], ...], headers: tuple[tuple[str, str], ...], credentials: frozenset[str], body_summary: str, body: bytes`
+  * `header(self, name: str) -> str | None`
+  * `url` (property)
+* `class FakeHttp`: A request handed to a service: ''path'' is percent-decoded per segment in ''segments''.
+  * fields: `method: str, origin: str, path: str, segments: tuple[str, ...], query: dict[str, str], headers: dict[str, str], body: bytes`
+* `class Reply`: Reply(status: 'int', body: 'bytes' = b'', headers: 'dict[str, str]' = <factory>)
+  * fields: `status: int, body: bytes = b'', headers: dict[str, str] = <factory>`
+* `def json_reply(status: int, value: Any, headers: dict[str, str] | None = None) -> Reply`
+* `class FakeNetwork`: The opener the fakes serve through (see the module docstring).
+  * `add_service(self, origin: str, handler: Callable[[FakeHttp], Reply]) -> None`
+  * `add_secret(self, label: str, value: str) -> None`
+  * `fail(self, method: str, url: str, *, status: int = 0, exception: BaseException | None = None, headers: dict[str, str] | None = None, body: bytes = b'', after: bool = False, times: int = 1) -> None`
+  * `tamper(self, method: str, url: str, *, truncate_to: int | None = None, extra_bytes: int = 0, content_length: int | None = None, omit_length: bool = False, times: int = 1) -> None`
+  * `requests_to(self, origin: str | None = None, *, method: str | None = None) -> list[RecordedRequest]`
+  * `open(self, request: Any, timeout: float | None = None) -> _Response`
+* `def parse_multipart(content_type: str, body: bytes) -> list[tuple[str, str | None, bytes]]`: ''[(part name, file name or None, content)]'' of a ''multipart/form-data'' body (strict enough for the fakes: every part has a ''Content-Disposition'' with a quoted name).
+* `class FakeModrinth`
+  * `add_project(self, project_id: str, slug: str) -> None`
+  * `add_version(self, project_id: str, version_number: str, files: list[tuple[str, bytes]], *, version_id: str | None = None) -> dict[str, Any]`
+  * `handle(self, request: FakeHttp) -> Reply`
+* `def curseforge_rename(filename: str) -> str`: CurseForge's stored-name rule, written independently of ''curseforge.stored_name''.
+* `class FakeCurseForge`
+  * `seed_game_versions(self) -> None`
+  * `add_file(self, project_id: int, file_name: str, data: bytes, *, status: int = 4, file_id: int | None = None, length: int | None = None) -> dict[str, Any]`
+  * `set_status(self, file_id: int, status: int) -> None`
+  * `handle_upload(self, request: FakeHttp) -> Reply`
+  * `handle_listing(self, request: FakeHttp) -> Reply`
+  * `handle_cdn(self, request: FakeHttp) -> Reply`
+* `def github_asset_rename(filename: str) -> str`: GitHub's asset-name rule, written independently of ''github_releases.asset_name''.
+* `class FakeGitHubReleases`
+  * `add_ref(self, tag: str, sha: str, *, annotated: bool = False) -> None`
+  * `add_release(self, tag: str, *, draft: bool = True, body: str = '', name: str | None = None, target: str = '0000000000000000000000000000000000000000') -> dict[str, Any]`
+  * `add_asset(self, release_id: int, name: str, data: bytes, *, state: str = 'uploaded', digest: bool = True) -> dict[str, Any]`
+  * `release(self, release_id: int) -> dict[str, Any]`
+  * `handle_api(self, request: FakeHttp) -> Reply`
+  * `handle_storage(self, request: FakeHttp) -> Reply`
+  * `handle_uploads(self, request: FakeHttp) -> Reply`
+
+## `mod_base.release.config`
+
+Owner: MB12. ''mod-base.release.config'' v1: the protected release data of a mod.
+
+* `def release_header(kind: str) -> dict[str, Validator]`: ''kind'' and ''schema_version'' validators of a release document: the versions :func:'mod_base.readable_schema_versions' admits (N and N-1).
+* `CHANGELOG_FORMATS`
+* `def changelog_path(changelog: dict[str, Any], version: str) -> str`: The changelog file of ''version'': the config's path with ''{version}'' filled in.
+* `RELEASE_CONFIG_PATH`
+* `MAX_RELEASE_CONFIG_BYTES`
+* `MAX_RELEASE_LANES`
+* `MAX_RELEASE_LOADERS`
+* `MAX_RELEASE_GAME_VERSIONS`
+* `MAX_RELEASE_DEPENDENCIES`
+* `MAX_RELEASE_TEXT_CHARS`
+* `MAX_RELEASE_TAG_CHARS`
+* `MAX_RELEASE_MODRINTH_VERSION_NUMBER_CHARS`
+* `MAX_RELEASE_MODRINTH_NAME_CHARS`
+* `MAX_RELEASE_PROPERTY_KEY_CHARS`
+* `MAX_RELEASE_POINTER_CHARS`
+* `MAX_RELEASE_POINTER_TOKENS`
+* `MAX_RELEASE_VERSION_CHARS`
+* `MAX_RELEASE_CURSEFORGE_PROJECT_ID`
+* `RELEASE_VERSION`
+* `SAMPLE_VERSION`
+* `TAG`
+* `MODRINTH_VERSION_NUMBER`
+* `MODRINTH_PROJECT`
+* `MODRINTH_ID`
+* `CURSEFORGE_SLUG`
+* `JSON_POINTER`
+* `VERSION_FORMATS`
+* `PROPERTY_KEY`
+* `LOADER_NAMES`
+* `VERSION_TYPES`
+* `TAG_GROUPS`
+* `MODRINTH_DEPENDENCY_TYPES`
+* `CURSEFORGE_RELATION_TYPES`
+* `MARKETPLACES`
+* `TAG_PLACEHOLDERS`
+* `LANE_PLACEHOLDERS`
+* `def is_tag(value: Any) -> bool`: A tag of :data:'TAG' that Git accepts as a ref name.
+* `def placeholders(template: str, path: str = '$') -> tuple[str, ...]`: The placeholder names of ''template'' in order. Every ''{'' and ''}'' must belong to one.
+* `def render(template: str, **values: str) -> str`: Render ''template'' with exactly the placeholders ''values'' provides; refuse an unknown placeholder, a stray brace and any text that is not one line of display text of at most :data:'MAX_RELEASE_TEXT_CHARS' characters.
+* `def pointer_tokens(pointer: str) -> list[str]`: The decoded reference tokens of a valid JSON pointer (''~1'' -> ''/'', then ''~0'' -> ''~'').
+* `def marketplaces(config: dict[str, Any]) -> tuple[str, ...]`: The marketplaces a validated config publishes to, in :data:'MARKETPLACES' order.
+* `def validate_release_config(document: Any, *, path: str = '$') -> dict[str, Any]`: The closed schema, the placeholders of every template and a rehearsal of every rendering at :data:'SAMPLE_VERSION' (:func:'release_layout').
+* `def release_layout(config: dict[str, Any], version: str, *, path: str = '$') -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]`: Render the release of ''version'' from a structurally valid ''config''.
+* `def load_release_config(path: Path) -> tuple[dict[str, Any], str]`: Read and validate the release config at ''path'' (a regular file that is no symlink; its ancestors are the caller's protected checkout). Returns the document and the SHA-256 of the file's exact bytes.
+
+## `mod_base.release.plan`
+
+Owner: MB12. ''mod-base.release.plan'' v1: what one release publishes, derived from one tested generation.
+
+* `GENERATION_MODES`
+* `EXPORT_PATHS`
+* `CURSEFORGE_RELATION_TYPES`
+* `CURSEFORGE_SLUG`
+* `LOADER_NAMES`
+* `MARKETPLACES`
+* `MAX_RELEASE_CURSEFORGE_PROJECT_ID`
+* `MAX_RELEASE_DEPENDENCIES`
+* `MAX_RELEASE_GAME_VERSIONS`
+* `MAX_RELEASE_LANES`
+* `MAX_RELEASE_LOADERS`
+* `MAX_RELEASE_MODRINTH_NAME_CHARS`
+* `MAX_RELEASE_TAG_CHARS`
+* `MAX_RELEASE_TEXT_CHARS`
+* `MAX_RELEASE_VERSION_CHARS`
+* `MODRINTH_DEPENDENCY_TYPES`
+* `MODRINTH_ID`
+* `MODRINTH_PROJECT`
+* `MODRINTH_VERSION_NUMBER`
+* `RELEASE_VERSION`
+* `VERSION_TYPES`
+* `MAX_RELEASE_PLAN_BYTES`
+* `MAX_RELEASE_ASSET_BYTES`
+* `MAX_RELEASE_TOTAL_BYTES`
+* `MAX_RELEASE_TAGS`
+* `MAX_RELEASE_ASSETS`
+* `MAX_RELEASE_VERSION_FILE_BYTES`
+* `MAX_RELEASE_CHANGELOG_FILE_BYTES`
+* `MAX_RELEASE_CHANGELOG_BYTES`
+* `PLAN_NAME`
+* `ASSETS_DIRECTORY`
+* `LEDGER_MARKER`
+* `class ReleasePlanError`: A release cannot be planned, sealed or admitted from these inputs (exit 2).
+* `def curseforge_stored_name(filename: str) -> str`: The name CurseForge stores an upload under: since late October 2026 every run of spaces and hyphens that holds a space becomes one hyphen (''mod_base.marketplace.curseforge.stored_name'').
+* `def github_asset_name(filename: str) -> str`: The name GitHub gives a release asset uploaded as ''filename'': every space becomes a period. Two files of one release must differ even after that, and without regard to case.
+* `def validate_release_plan(document: Any, *, path: str = '$') -> dict[str, Any]`: The closed schema and every rule that ties its parts together: one tag per lane, every tag's assets one production JAR per lane in lane order, then its SBOMs by path (each named as the module describes), unique paths across the plan and unique file names within a tag (also as GitHub renames them and
+* `def plan_digest(plan: dict[str, Any]) -> str`: The identity of a release plan: the SHA-256 of its canonical bytes.
+* `def released_commit(plan: dict[str, Any]) -> str`: The commit a validated plan releases, at which every tag is created.
+* `def read_version(repo: Path, version: dict[str, Any]) -> str`: The version of the release, from ''repo/<version.file>'' read through no symlink and matching :data:'mod_base.release.config.RELEASE_VERSION': the string at ''version.pointer'' of a JSON file (:func:'_json_version') or the value of ''version.key'' of a Java properties file.
+* `def read_changelog(repo: Path, changelog: dict[str, Any], version: str) -> str`: The notes of ''version'': with ''format: file'' the whole file the config's path names for that version; otherwise the section of ''version'' in the Markdown changelog ''repo/<changelog.file>''.
+* `def derive_release_plan(*, generation: dict[str, Any], bundle: Path, config: dict[str, Any], config_sha256: str, repo: Path, kit: dict[str, Any]) -> dict[str, Any]`: The release plan of the commit ''generation'' covers (see the module).
+* `def seal_release(output: Path, *, plan: dict[str, Any], bundle: Path) -> dict[str, Any]`: Publish ''output'', a new directory holding ''release-plan.json'' (the plan's canonical bytes) and a copy of every planned file of ''bundle'' at ''assets/<tag>/<filename>''. Every file is read once, its size and three digests checked while it is copied, and the whole stage is admitted (:func:'admit_
+* `def admit_release(directory: Path, *, plan_sha256: str | None = None) -> dict[str, Any]`: The plan of a sealed release directory, after checking that the directory holds exactly ''release-plan.json'' in its canonical bytes and every planned asset with its planned size, SHA-256, SHA-1 and SHA-512: no other file or directory, no symlink, no special or hard-linked file. A consistent directo
+
+## `mod_base.release.ledger`
+
+Owner: MB12. ''mod-base.release.ledger'' v1: the durable publication state of one tag of a release.
+
+* `MARKETPLACES`
+* `MAX_RELEASE_LANES`
+* `MAX_RELEASE_TAG_CHARS`
+* `MAX_RELEASE_PLAN_BYTES`
+* `MAX_RELEASE_BODY_BYTES`
+* `MAX_RELEASE_LEDGER_ROWS`
+* `MAX_RELEASE_REMOTE_ID_CHARS`
+* `MAX_PLAN_ASSET_BYTES`
+* `BLOCK_START`
+* `MARKER`
+* `BLOCK_END`
+* `TRUNCATION_LINE`
+* `STATES`
+* `TRANSITIONS`
+* `REMOTE_ID`
+* `def row_key(lane: str, marketplace: str) -> str`
+* `def expected_rows(plan: dict[str, Any], tag: str) -> list[str]`: The row keys of ''tag'' in a validated plan: its lanes by the plan's marketplaces.
+* `def validate_ledger(document: Any, *, plan: dict[str, Any] | None = None, tag: str | None = None, path: str = '$') -> dict[str, Any]`: The closed schema and the row rules; with ''tag'', the ledger is that tag's; with ''plan'', it is of exactly that plan (:func:'mod_base.release.plan.plan_digest'), its tag is one of the plan's and its rows are exactly that tag's lanes on the plan's marketplaces.
+* `def new_ledger(plan: dict[str, Any], tag: str) -> dict[str, Any]`: The ledger of ''tag'' before anything is published: every row ''unstarted''.
+* `def render_body(plan: dict[str, Any], tag: str, ledger: dict[str, Any]) -> str`: The body of ''tag'''s release: the changelog (cut as the module describes), a blank line and the ledger block.
+* `def parse_body(body: Any, *, plan: dict[str, Any] | None = None, tag: str | None = None) -> dict[str, Any]`: The ledger of a release body: exactly one block, at the very end, after a blank line, whose JSON is the canonical encoding of a valid ledger. With ''plan'' the ledger must be of that plan (and of ''tag'' when given) and the whole body exactly what :func:'render_body' writes for it, so an edited chan
+* `def advance(ledger: dict[str, Any], row: str, state: str, remote_id: str | None = None) -> dict[str, Any]`: A copy of ''ledger'' with ''row'' moved to ''state'' (see :data:'TRANSITIONS'). A remote id once recorded never changes, a move to ''uploading'' records none and a move to ''verified'' requires one.
+* `def complete(ledger: dict[str, Any]) -> bool`: Whether every row of a valid ledger is verified: the tag's release may be published.
+
+## `mod_base.release.publish`
+
+Owner: MB12. The publication state machine of one sealed release plan (docs/RELEASE-PROTOCOL.md).
+
+* `MAX_MARKETPLACE_REQUESTS`
+* `PLAN_NAME`
+* `PLAN_ASSET`
+* `UPLOAD_WORKERS`
+* `VERIFY_INTERVAL_SECONDS`
+* `MAX_VERIFY_WAIT_SECONDS`
+* `MARKETPLACES`
+* `MAX_RELEASE_REQUESTS`
+* `class FencedUpload`: A row is ''uploading'' and no marketplace lists its file: the upload may or may not have been accepted, so only an operator who checked the marketplace may reset it.
+* `class Services`: The transports of one step. A step receives only the clients its credential allows.
+  * fields: `github: HttpsTransport, github_uploads: HttpsTransport | None = None, modrinth: HttpsTransport | None = None, curseforge_upload: HttpsTransport | None = None, curseforge_listing: HttpsTransport | None = None, curseforge_cdn: HttpsTransport | None = None`
+* `class Release`: One tag of the plan and its draft release, with the lock that serializes its ledger writes.
+  * fields: `tag: dict[str, Any], release: dict[str, Any], ledger: dict[str, Any], lock: threading.Lock = <factory>`
+* `class Reconciler`: One pass of reconciliation: each project's marketplace listing is read once per pass, not once per row (a CurseForge listing can take hundreds of requests).
+  * `modrinth_project(self, project: str) -> str`
+* `def create_releases(services: Services, *, repository: str, plan_dir: Path) -> list[Release]`: Create every tag at the released commit and one draft release per tag holding its assets, the plan asset and a fresh ledger; resume what an earlier attempt created. A tag that exists at another commit, or an asset of the right name with other bytes, fails closed.
+* `def upload(services: Services, *, repository: str, plan_dir: Path, marketplace: str) -> dict[str, str]`: Upload every lane of the plan to ''marketplace'', at most :data:'UPLOAD_WORKERS' at once, and return each row's state. Every row is attempted; the first failure is raised after the others finished, so one refused file does not hold back the rest of the release.
+* `def verify(services: Services, *, repository: str, plan_dir: Path, wait_seconds: int, sleep: Callable[[float], None] = sleep, clock: Callable[[], float] = monotonic) -> bool`: Reconcile and publish the plan's releases, waiting at most ''wait_seconds'' for moderation. Returns whether every release is published; what is still pending is left to the schedule.
+* `def finish_drafts(services: Services, *, repository: str) -> dict[str, bool]`: The scheduled finish: for every draft release whose body carries a ledger, read its plan from the draft's :data:'PLAN_ASSET', require the ledger to bind that plan's digest, reconcile and publish what is complete. Returns tag -> whether it is published now. A draft that cannot be read or finished doe
+
+## `mod_base.release.commands`
+
+Owner: MB12. The ''release'' command (docs/RELEASE-PROTOCOL.md): one verb per step of the release caller.
+
+* `MAX_RELEASE_ASSETS`
+* `MAX_RELEASE_ASSET_BYTES`
+* `PLAN_ARTIFACT`
+* `PLAN_EXTRACTION`
+* `MAX_GENERATION_BYTES`
+* `MAX_RELEASE_ADMIT_REQUESTS`
+* `def register(subparsers: argparse._SubParsersAction) -> None`: Add the ''release'' command and its verbs.
+* `def run_plan(args: argparse.Namespace) -> int`
+* `def run_admit(args: argparse.Namespace) -> int`
+* `def run_github(args: argparse.Namespace) -> int`
+* `def run_upload(args: argparse.Namespace) -> int`
+* `def run_verify(args: argparse.Namespace) -> int`

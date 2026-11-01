@@ -1,8 +1,8 @@
 {
   "baseline": {
-    "commit": "acb01ca4f625a5d27f1c1a709a416d9725bef64f",
-    "source_sha256": "756a59c4fd88e886dfbaf2215abc3acce8b256d31891fe5a6bc9f4ee382bb62b",
-    "tag": "v1.7.0"
+    "commit": "d938d8bc404aec629e925ba57d8a4f4a8ada9f07",
+    "source_sha256": "0a65efdc731438573524b432ee2f5679d9e7598c154ce2b82eb668fbb92a6b93",
+    "tag": "v1.7.1"
   },
   "kinds": {
     "mod-base.build": {
@@ -139,6 +139,21 @@
       "current_version": 1,
       "decision": "unchanged",
       "previous_version": 1
+    },
+    "mod-base.release.config": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.release.ledger": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
+    },
+    "mod-base.release.plan": {
+      "current_version": 1,
+      "decision": "new-kind",
+      "previous_version": null
     },
     "mod-base.selection": {
       "current_version": 1,

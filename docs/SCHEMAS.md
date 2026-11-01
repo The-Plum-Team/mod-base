@@ -876,3 +876,54 @@ never uploaded.
 | `checked` | strictly ascending user ids, at most 300: every comment author of type `User` that did not post through a GitHub App, whatever they wrote |
 | `candidates` | strictly ascending user ids within `checked`: the authors whose comment could be a decision when the job read it (it contains the admission's command followed by `approve ` or `revoke `), the only ones whose membership was read; a decision by a checked author who is no candidate was edited in since and refuses the admission |
 | `members` | strictly ascending user ids within `candidates`: those that are active members of the organization in the role `admin` or `member` |
+
+## Release config data v1
+
+`mod-base.release.config` (`release.config.validate_release_config`, at most 256 KiB) is the mod's
+protected release data in `scripts/ci/mod-base-release.json`, read by `release plan` from the
+released commit ([RELEASE-PROTOCOL.md](RELEASE-PROTOCOL.md)). The kind is new in v1.8.0; a v1.7.1
+reader refuses it as unknown.
+
+| Field | Rule |
+|---|---|
+| `kind`, `schema_version` | `mod-base.release.config`, 1 |
+| `repository` | `owner/name`, exactly the repository that runs the release |
+| `environment` | the deployment environment of the publish job, which holds `MODRINTH_TOKEN` and `CURSEFORGE_TOKEN`: `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, never `github-pages` or `mod-base-gate`; `release admit` refuses a job that runs in another |
+| `version` | `{file, format: properties, key}` (one plain `key=value` line of a Java properties file) or `{file, format: json, pointer}` (an RFC 6901 pointer to a string); the version matches `X.Y[.Z[.W]]` with an optional `-`/`+` suffix |
+| `changelog` | `{file}`: the section headed `## <version> (<YYYY-MM-DD>)` of a file that opens with it; or `{file, format: file}` with `{version}` in the path: that version's whole file |
+| `tags` | `{template, group}`: `group: minecraft` makes one tag per lane Minecraft version (the template names `{minecraft}`), `group: all` one tag for every lane (it may not) |
+| `release_name` | the GitHub Release title template |
+| `modrinth` | optional `{project_id, version_number, name}`; a rendered version number is at most 32 characters and unique across lanes |
+| `curseforge` | optional `{project_id, display_name}`; at least one of the two marketplaces |
+| `lanes` | 1..256 lanes of the Build plan by id: `minecraft`, `loaders`, `game_versions` (holding `minecraft`), `version_type`, optional `modrinth_dependencies` and `curseforge_relations` |
+
+Templates take `{version}`, `{minecraft}`, `{tag}`, `{lane}`, `{loader}` and `{loader_name}` where
+the field allows them; any other placeholder is refused.
+
+## Release plan data v1
+
+`mod-base.release.plan` (`release.plan.validate_release_plan`, at most 4 MiB) is `release-plan.json`
+in the sealed `mb-rel-plan--<run>--a<attempt>` artifact and, once published, the
+`mod-base-release-plan.json` asset of every draft release. Its digest is the SHA-256 of its
+canonical bytes (`plan_digest`), which the plan job outputs and the ledger binds.
+
+| Field | Rule |
+|---|---|
+| `kind`, `schema_version` | `mod-base.release.plan`, 1 |
+| `identity`, `mode`, `generation_sha256` | the released commit's identity and the generation (`full` or `reuse`) it came from |
+| `config_sha256`, `kit` | the release config and the kit that planned it |
+| `version`, `changelog` | the version and its notes (`text`, `sha256`) |
+| `tags` | each tag with its `name`, `minecraft` (null for one tag of all lanes), `lanes` and `assets` (`path`, `filename`, `size`, `sha256`, `sha1`, `sha512`, `lane`; null for an SBOM) |
+| `lanes` | each lane's `tag` and its rendered `modrinth` and `curseforge` metadata |
+
+## Release ledger data v1
+
+`mod-base.release.ledger` (`release.ledger.validate_ledger`) is the publication state of one tag,
+kept as the hidden block `<!-- mod-base-release-ledger:v1 ... -->` that ends its draft release's
+body. Every write reads the body again first.
+
+| Field | Rule |
+|---|---|
+| `kind`, `schema_version` | `mod-base.release.ledger`, 1 |
+| `tag`, `plan_sha256` | the tag and the digest of the plan it publishes |
+| `rows` | one per lane and marketplace of the tag, `<lane>--<marketplace>`: `state` (`unstarted` → `uploading` → `pending` → `verified`; `unstarted` or `uploading` may go straight to `verified` when reconciliation finds the file) and `remote_id` (set once verified, never changed) |

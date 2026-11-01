@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from mod_base import readable_schema_versions
-from mod_base.build_ci.activation import ACTIVATION_PATH, CALLERS
+from mod_base.build_ci.activation import ACTIVATION_PATH, GATE_CALLERS
 from mod_base.build_ci.adapter import plan_input_name, plan_sources
 from mod_base.build_ci.protocol import BUILD_ADAPTER_API, PROFILES, SYSTEM_PROFILES, check_output_paths, repo_path
 from mod_base.errors import MbError
@@ -258,9 +258,10 @@ class AdapterFile:
 
 
 #: What decides, beside the Build config and the adapter closure, how the Build and the packaged E2E
-#: of a mod execute: its activation manifest and the caller workflows the kit can manage. A mode
-#: that leaves one of them to the mod still makes it a file that runs the mod's gates.
-CONTROL_PATHS = (ACTIVATION_PATH, *CALLERS)
+#: of a mod execute: its activation manifest and the Build/E2E caller workflows the kit can manage.
+#: A mode that leaves one of them to the mod still makes it a file that runs the mod's gates. The
+#: release caller runs no gate, so editing it never forces a new generation.
+CONTROL_PATHS = (ACTIVATION_PATH, *GATE_CALLERS)
 
 
 @dataclass(frozen=True)

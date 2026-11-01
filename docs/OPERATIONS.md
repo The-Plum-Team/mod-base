@@ -626,6 +626,47 @@ push of the default branch has one. To stop, remove `runtime_selection`. A kit r
 the one that added it refuses a config that has it: remove it before a pin rollback below that
 release.
 
+## Releasing a mod
+
+The managed caller `mod-base-release.yml` ([RELEASE-PROTOCOL.md](RELEASE-PROTOCOL.md)) exists in
+every mod whose activation mode is `shared-build-and-e2e`. Before the first release the owner:
+
+1. adds `scripts/ci/mod-base-release.json` (`mod-base.release.config`) through a reviewed pull
+   request;
+2. names in its `environment` the deployment environment that holds the secrets `MODRINTH_TOKEN`
+   and `CURSEFORGE_TOKEN`, with a deployment branch policy that admits the default branch and one
+   required reviewer. It may be the environment the native release already used (GitHub never
+   shows a secret again, so reusing it keeps the tokens where they are); its policy must then admit
+   the default branch, and the native release workflows retire once the shared one has published.
+   The config may not name `github-pages` or `mod-base-gate`.
+
+To release, merge the version bump with its dated changelog section, wait for the Build and
+packaged E2E of that head to pass (a post-merge reuse counts), then:
+
+```bash
+gh workflow run mod-base-release.yml --ref <default branch> -f publish=false   # rehearsal
+gh workflow run mod-base-release.yml --ref <default branch> -f publish=true    # publication
+```
+
+A publication asks for one approval of that environment. Nothing may merge between the dispatch
+and that approval: `release admit` refuses a moved head, and the dispatch is simply repeated.
+
+- **Resume:** dispatch with `publish=true` again, while the default branch is still at the
+  released commit and the same tested generation is selected (a new generation of the same commit
+  changes the plan's digest, which the drafts' ledgers bind). Published files are recognized by
+  content and skipped; the ledger in each draft release's body says which rows are left. No tag
+  exists until its release is published, so a release abandoned before then is cleaned up by
+  deleting its draft releases. The hourly schedule only verifies and publishes: a row left
+  `unstarted` (a skipped or refused upload) needs a new dispatch.
+- **Moderation:** what is still pending after the job's wait is finished by the caller's hourly
+  schedule. To finish sooner, re-dispatch with `publish=true`; a rehearsal publishes nothing.
+- **A fenced row** (`uploading` with no remote file) is never retried automatically. Check the
+  marketplace's author dashboard; only when it never accepted the file, edit that one row of the
+  draft's ledger back to `unstarted` and re-dispatch. A definitive refusal of an upload (a 4xx) puts
+  the row back by itself, and so does any failure before the file was sent.
+- **Kill switch:** disable `mod-base-release.yml` in the Actions settings. Drafts stay drafts;
+  nothing already published is touched.
+
 ## Canary procedure
 
 The canary is a separate public caller repository, so it exercises exactly the cross-repository

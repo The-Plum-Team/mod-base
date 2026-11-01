@@ -1,0 +1,44 @@
+{
+  "kind": "mod-base.release.config",
+  "schema_version": 1,
+  "repository": "The-Plum-Team/Example-Mod",
+  "environment": "release",
+  "version": {
+    "file": "gradle.properties",
+    "format": "properties",
+    "key": "mod_version"
+  },
+  "changelog": {
+    "file": "CHANGELOG.md"
+  },
+  "tags": {
+    "template": "mc{minecraft}-v{version}",
+    "group": "minecraft"
+  },
+  "release_name": "Example {version} for Minecraft {minecraft}",
+  "modrinth": {
+    "project_id": "ExAmPl01",
+    "version_number": "{tag}-{loader}",
+    "name": "Example-{minecraft}-v{version} [{loader_name}]"
+  },
+  "curseforge": {
+    "project_id": 4242,
+    "display_name": "Example-{minecraft}-v{version} [{loader_name}]"
+  },
+  "lanes": {
+    "fabric-1.20.1": {
+      "minecraft": "1.20.1",
+      "loaders": ["fabric"],
+      "game_versions": ["1.20.1"],
+      "version_type": "release",
+      "modrinth_dependencies": [["fabric-api", "required"]],
+      "curseforge_relations": [["fabric-api", "requiredDependency"]]
+    },
+    "neoforge-1.21.1": {
+      "minecraft": "1.21.1",
+      "loaders": ["neoforge"],
+      "game_versions": ["1.21.1"],
+      "version_type": "release"
+    }
+  }
+}

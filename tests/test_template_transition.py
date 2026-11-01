@@ -218,7 +218,7 @@ class VerifyCandidateCallersTest(unittest.TestCase):
     def test_the_callers_are_rendered_for_the_candidate_s_canonical_branch(self) -> None:
         rendered = real_callers()
         self.assertNotEqual(rendered[BUILD], real_callers(branch="main")[BUILD])
-        arguments = {"candidate": data("shadow"), "pin": PIN, "kit_root": KIT_ROOT}
+        arguments = {"candidate": data("shared-build-and-e2e"), "pin": PIN, "kit_root": KIT_ROOT}
         self.assertEqual(verify_candidate_callers(real_callers(branch="main"), branch="main", **arguments),
                          tuple(CALLERS))
         with self.assertRaisesRegex(MbError, f"{BUILD} differs from the kit template rendered for {SHA} {VERSION} "
@@ -275,7 +275,8 @@ class TransitionCommandTest(CallerCase):
             with self.subTest(state=state):
                 self.assertEqual(self.run_cli("template", "activation", "--repo", str(self.repo)),
                                  (0, "".join(f"{line}\n" for line in expected), ""))
-        self.assertEqual(self.run_cli("template", "activation", "--repo", str(self.repo))[1].count("managed: "), 4)
+        self.assertEqual(self.run_cli("template", "activation", "--repo", str(self.repo))[1].count("managed: "),
+                         len(CALLERS))
 
     def test_activation_refuses_an_inconsistent_state_with_one_line(self) -> None:
         self.make_clean_mod()
@@ -338,7 +339,8 @@ class TransitionCommandTest(CallerCase):
         self.assertIn(f"{OTHER_SHA} v1.2.4", stderr)
         active = self.checkout("active", "shadow")
         self.assertEqual(self.transition(active, candidate), (
-            0, f"transition: shadow (unchanged)\npin: {OTHER_SHA} v1.2.4\n" + "".join(f"managed: {path}\n" for path in CALLERS),
+            0, f"transition: shadow (unchanged)\npin: {OTHER_SHA} v1.2.4\n"
+            + "".join(f"managed: {path}\n" for path in CALLERS if path in MANAGED["shadow"]),
             ""))
 
     def test_the_candidate_callers_must_be_the_rendered_templates(self) -> None:
@@ -375,9 +377,10 @@ class TransitionCommandTest(CallerCase):
         enter(candidate, "disabled")
         code, _, stderr = self.transition(base, candidate)
         self.assertEqual(code, 2)
-        for path in CALLERS:
+        shadow = [path for path in CALLERS if path in MANAGED["shadow"]]
+        for path in shadow:
             self.assertIn(f"{path} must not exist in the disabled state", stderr)
-        for path in CALLERS:
+        for path in shadow:
             (candidate / path).unlink()
         self.assertEqual(self.transition(base, candidate)[:2], (0, f"transition: shadow -> disabled\npin: {SHA} {VERSION}\n"))
 
@@ -419,7 +422,7 @@ class TransitionCommandTest(CallerCase):
         self.assertIn("no mod-base pin", stderr)
 
     def test_the_synthetic_templates_are_what_this_kit_renders(self) -> None:
-        self.assertEqual(tool.expected_callers(self.kit, PIN, ci_activation("shadow")),
+        self.assertEqual(tool.expected_callers(self.kit, PIN, ci_activation("shared-build-and-e2e")),
                          {path: render(SYNTHETIC_CALLERS[path]) for path in CALLERS})
 
 

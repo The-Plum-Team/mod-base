@@ -1,0 +1,914 @@
+{
+  "kind": "mod-base.release.config",
+  "schema_version": 1,
+  "repository": "The-Plum-Team/Quick-Skin-Mod",
+  "environment": "release",
+  "version": {
+    "file": "gradle.properties",
+    "format": "properties",
+    "key": "mod_version"
+  },
+  "changelog": {
+    "file": "CHANGELOG.md"
+  },
+  "tags": {
+    "template": "mc{minecraft}-v{version}",
+    "group": "minecraft"
+  },
+  "release_name": "Quick Skin {version} for Minecraft {minecraft}",
+  "modrinth": {
+    "project_id": "zAIE84Ch",
+    "version_number": "{tag}-{loader}",
+    "name": "Quick-Skin-{minecraft}-v{version} [{loader_name}]"
+  },
+  "curseforge": {
+    "project_id": 1323980,
+    "display_name": "Quick-Skin-{minecraft}-v{version} [{loader_name}]"
+  },
+  "lanes": {
+    "fabric-1.20.1": {
+      "minecraft": "1.20.1",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.20.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.1": {
+      "minecraft": "1.21.1",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.10": {
+      "minecraft": "1.21.10",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.10"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.11": {
+      "minecraft": "1.21.11",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.11"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.2": {
+      "minecraft": "1.21.2",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.2"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.3": {
+      "minecraft": "1.21.3",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.3"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.4": {
+      "minecraft": "1.21.4",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.4"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.5": {
+      "minecraft": "1.21.5",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.5"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.6": {
+      "minecraft": "1.21.6",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.6"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.7": {
+      "minecraft": "1.21.7",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.7"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.8": {
+      "minecraft": "1.21.8",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.8"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-1.21.9": {
+      "minecraft": "1.21.9",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21.9"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-26.1": {
+      "minecraft": "26.1",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "26.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-26.1.1": {
+      "minecraft": "26.1.1",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "26.1.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-26.1.2": {
+      "minecraft": "26.1.2",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "26.1.2"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-26.2": {
+      "minecraft": "26.2",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "26.2"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "fabric-26.3": {
+      "minecraft": "26.3",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "26.3"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ],
+        [
+          "fabric-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ],
+        [
+          "fabric-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "forge-1.20.1": {
+      "minecraft": "1.20.1",
+      "loaders": [
+        "forge"
+      ],
+      "game_versions": [
+        "1.20.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.1": {
+      "minecraft": "1.21.1",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.10": {
+      "minecraft": "1.21.10",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.10"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.11": {
+      "minecraft": "1.21.11",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.11"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.2": {
+      "minecraft": "1.21.2",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.2"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.3": {
+      "minecraft": "1.21.3",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.3"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.4": {
+      "minecraft": "1.21.4",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.4"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.5": {
+      "minecraft": "1.21.5",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.5"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.6": {
+      "minecraft": "1.21.6",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.6"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.7": {
+      "minecraft": "1.21.7",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.7"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.8": {
+      "minecraft": "1.21.8",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.8"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-1.21.9": {
+      "minecraft": "1.21.9",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21.9"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-26.1": {
+      "minecraft": "26.1",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "26.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-26.1.1": {
+      "minecraft": "26.1.1",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "26.1.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-26.1.2": {
+      "minecraft": "26.1.2",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "26.1.2"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-26.2": {
+      "minecraft": "26.2",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "26.2"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    },
+    "neoforge-26.3": {
+      "minecraft": "26.3",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "26.3"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "architectury-api",
+          "required"
+        ]
+      ],
+      "curseforge_relations": [
+        [
+          "architectury-api",
+          "requiredDependency"
+        ]
+      ]
+    }
+  }
+}

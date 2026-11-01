@@ -1,0 +1,194 @@
+{
+  "changelog": {
+    "sha256": "4285a95b72e57285ec83298f4f34f5f371d84db3ce5d5dbad3f87fe475538867",
+    "text": "### Added\n\n- A new skin menu.\n- Nicknames <!-- not a ledger -->."
+  },
+  "config_sha256": "497837e072339d71c8eabb6d399fb45e25968e953b47b074ddd4bfa8cf6fbcec",
+  "generation_sha256": "e2738b7a54eb9259e26f6dc68eee8251a62939a1d45c602633c0294875670568",
+  "identity": {
+    "base_branch": "master",
+    "base_sha": "8888888888888888888888888888888888888888",
+    "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+    "controller_sha": "8888888888888888888888888888888888888888",
+    "controller_workflow": ".github/workflows/build-gate.yml",
+    "graph_version": 1,
+    "head_branch": "master",
+    "head_sha": "8888888888888888888888888888888888888888",
+    "inventory_blob": "7777777777777777777777777777777777777777",
+    "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+    "kit": {
+      "repository": "The-Plum-Team/mod-base",
+      "sha": "3333333333333333333333333333333333333333",
+      "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "version": "1.1.0"
+    },
+    "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "pr_number": 0,
+    "repository": "example/mod",
+    "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+    "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+    "source_repository": "example/mod",
+    "tested_parents": [
+      "2222222222222222222222222222222222222222"
+    ],
+    "tested_sha": "8888888888888888888888888888888888888888",
+    "tested_tree": "6666666666666666666666666666666666666666"
+  },
+  "kind": "mod-base.release.plan",
+  "kit": {
+    "sha": "3333333333333333333333333333333333333333",
+    "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "version": "1.1.0"
+  },
+  "lanes": {
+    "fabric-1.20.1": {
+      "modrinth": {
+        "dependencies": [
+          {
+            "dependency_type": "required",
+            "project_id": "fabric-api"
+          }
+        ],
+        "game_versions": [
+          "1.20.1"
+        ],
+        "loaders": [
+          "fabric",
+          "quilt"
+        ],
+        "name": "Block Pops 4.0.0 (Fabric 1.20.1)",
+        "project_id": "u1JjJR7q",
+        "version_number": "4.0.0+fabric-1.20.1",
+        "version_type": "release"
+      },
+      "tag": "v4.0.0"
+    },
+    "fabric-1.21.1": {
+      "modrinth": {
+        "dependencies": [
+          {
+            "dependency_type": "required",
+            "project_id": "fabric-api"
+          }
+        ],
+        "game_versions": [
+          "1.21",
+          "1.21.1"
+        ],
+        "loaders": [
+          "fabric"
+        ],
+        "name": "Block Pops 4.0.0 (Fabric 1.21.1)",
+        "project_id": "u1JjJR7q",
+        "version_number": "4.0.0+fabric-1.21.1",
+        "version_type": "release"
+      },
+      "tag": "v4.0.0"
+    },
+    "forge-1.20.1": {
+      "modrinth": {
+        "dependencies": [],
+        "game_versions": [
+          "1.20.1"
+        ],
+        "loaders": [
+          "forge"
+        ],
+        "name": "Block Pops 4.0.0 (Forge 1.20.1)",
+        "project_id": "u1JjJR7q",
+        "version_number": "4.0.0+forge-1.20.1",
+        "version_type": "release"
+      },
+      "tag": "v4.0.0"
+    },
+    "neoforge-1.21.1": {
+      "modrinth": {
+        "dependencies": [],
+        "game_versions": [
+          "1.21",
+          "1.21.1"
+        ],
+        "loaders": [
+          "neoforge"
+        ],
+        "name": "Block Pops 4.0.0 (NeoForge 1.21.1)",
+        "project_id": "u1JjJR7q",
+        "version_number": "4.0.0+neoforge-1.21.1",
+        "version_type": "beta"
+      },
+      "tag": "v4.0.0"
+    }
+  },
+  "mode": "reuse",
+  "schema_version": 1,
+  "tags": [
+    {
+      "assets": [
+        {
+          "filename": "Mod - fabric-1.20.1-4.0.0.jar",
+          "lane": "fabric-1.20.1",
+          "path": "files/Mod - fabric-1.20.1-4.0.0.jar",
+          "sha1": "9b34373fc69e444869c48e4ae96ce00f46144ca6",
+          "sha256": "b6279bcf2b1b81115ff7cadba5d685d3055063d88a6e46ff30bae348269bfdc5",
+          "sha512": "1783757446ca75bd81baeb0e651eb7d70799d24ec43989133db0bda78ea9969352bde663b5fb3f3c500361fca39af0a24b2862ece42ef9be02f8b46265c08128",
+          "size": 84
+        },
+        {
+          "filename": "Mod - fabric-1.21.1-4.0.0.jar",
+          "lane": "fabric-1.21.1",
+          "path": "files/Mod - fabric-1.21.1-4.0.0.jar",
+          "sha1": "e2d9b55256c71824c5869c7df17d092767136c90",
+          "sha256": "69bdedfc2d7f6129f6da4d052420411ad5e47bbf4b558d94355e3e9abaea0c04",
+          "sha512": "33a21741f13447f9b53f76995d7f0fbff91dedbf9d4c05295139f62d609538de2651514d84d3ea12775296d5b73fe536d0c41c165aaaed916ab987b82fbd1ba4",
+          "size": 84
+        },
+        {
+          "filename": "Mod - forge-1.20.1-4.0.0.jar",
+          "lane": "forge-1.20.1",
+          "path": "files/Mod - forge-1.20.1-4.0.0.jar",
+          "sha1": "53fb555925f53841f769a8badf7ce21b0e1b281d",
+          "sha256": "28a1b44181d06f7d1ae1ad9772f5402abb077961306ad0df08be6b9458f46a03",
+          "sha512": "c11140f375e561be6eb0c054290a6993a707c37e6a83b1e7a66d847091759c27addc8aaebeaa3aebd03678ac2ad7996e6cf80e0c8225afa12cbf2dbd71b73fd4",
+          "size": 81
+        },
+        {
+          "filename": "Mod - neoforge-1.21.1-4.0.0.jar",
+          "lane": "neoforge-1.21.1",
+          "path": "files/Mod - neoforge-1.21.1-4.0.0.jar",
+          "sha1": "383803e9a0a2fcc33518edcc50839454eb06fd50",
+          "sha256": "93dfffd909ee446e914611257109210de7ae3248b996cb4d722632f0e908f35a",
+          "sha512": "916e9c57dea275f2e4f67843827bc46668a5fe1cf2e8151447d2845ab0b595d0ccb5dbcaf1af8638e8c34781adbb168ebb7a3cefff194a628300655edd5cb904",
+          "size": 90
+        },
+        {
+          "filename": "1.20.1-mod.cdx.json",
+          "lane": null,
+          "path": "targets/1.20.1/sbom/mod.cdx.json",
+          "sha1": "c783c255a12e094c0eab9bec78d41365ac51d195",
+          "sha256": "97f5a3d0fdbf3874ff1036a69769447ecd929c7243e125190a9547f311744a65",
+          "sha512": "b44d7f17de1be477f495320d2c7dc78d7f09216fbb7cc7aa41ccc70691aae335fa4c0907d6e146dd6a4a780dd5797dce54874e05bc7c11a4c19b815aa0348f8c",
+          "size": 12
+        },
+        {
+          "filename": "1.21.1-mod.cdx.json",
+          "lane": null,
+          "path": "targets/1.21.1/sbom/mod.cdx.json",
+          "sha1": "aa09b61f3eace89b3dd0b633f7fe99126924c995",
+          "sha256": "71a28c8e9d6670c732a754e95547e28474b83f0bbc95629b1da3e8bb5f2a7e32",
+          "sha512": "6becb629d5a11be8020b7e88317d84f43a4daeb27cd66d79d4164d8698467494fe12ad7e92bc0ae16d494f5a4846d3004e165044183addbf9a094c1cae01711c",
+          "size": 12
+        }
+      ],
+      "lanes": [
+        "fabric-1.20.1",
+        "fabric-1.21.1",
+        "forge-1.20.1",
+        "neoforge-1.21.1"
+      ],
+      "minecraft": null,
+      "name": "Block Pops 4.0.0",
+      "tag": "v4.0.0"
+    }
+  ],
+  "version": "4.0.0"
+}

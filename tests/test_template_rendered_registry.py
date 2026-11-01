@@ -254,7 +254,7 @@ class RegistryCoherenceTest(RegistryCase):
                 self.assert_refused("the kit's caller template")
 
     def test_the_guard_literal_and_every_reference_are_rendered_from_one_pin(self) -> None:
-        self.enter("shadow")
+        self.enter("shared-build-and-e2e")
         tool.sync(self.repo, kit_root=self.kit, write=True)
         for path in CALLERS:
             data = (self.repo / path).read_bytes()

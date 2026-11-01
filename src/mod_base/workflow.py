@@ -142,6 +142,47 @@ CI_JOB_PERMISSIONS = {
     callee: {job: {"actions": "read", "contents": "read", "pull-requests": "read"} for job in CI_CALLEE_JOBS[callee]}
     for callee in CI_JOB_VERBS
 }
+# -- Release (ADR 0008, docs/RELEASE-PROTOCOL.md) ---------------------------------------------------
+#: The mod's managed release caller and the kit callee its plan job calls.
+REL_CALLER_WORKFLOW = ".github/workflows/mod-base-release.yml"
+REL_CALLEE_WORKFLOW = ".github/workflows/release.yml"
+#: The guard's ``callees`` value for the release caller.
+REL_GUARD_CALLEES = "release"
+#: Caller job key -> the bare display name of that job of the release caller.
+REL_CALLER_JOBS = {"guard": CI_GUARD_CALL, "plan": "Plan release", "publish": "Publish release",
+                   "finish": "Finish pending releases"}
+#: Callee job key -> its ``name:``.
+REL_CALLEE_JOBS = {"plan": "Plan exact release"}
+#: Callee job key -> the commands its steps issue after the prologue, one per step and in order:
+#: the generation consumer of a default-branch commit, then the release plan.
+REL_JOB_VERBS = {"plan": ("ci subject", "ci worker-prepare", "ci plan", "ci select-generation", "release plan",
+                          "ci worker-finish")}
+#: Callee job key -> its complete ``permissions:``, which the calling job must grant.
+REL_JOB_PERMISSIONS = {"plan": {"actions": "read", "contents": "read"}}
+#: Caller job key -> the ``release`` commands its steps issue, in order. Each credential reaches
+#: exactly one step: ``MODRINTH_TOKEN`` the Modrinth upload, ``CURSEFORGE_TOKEN`` the CurseForge one.
+REL_CALLER_VERBS = {"publish": ("release admit", "release github", "release upload", "release upload",
+                                "release verify"),
+                    "finish": ("release verify",)}
+#: Caller job key -> its complete ``permissions:``.
+REL_CALLER_PERMISSIONS = {"guard": {"actions": "read", "contents": "read"},
+                          "plan": {"actions": "read", "contents": "read"},
+                          "publish": {"actions": "read", "contents": "write"},
+                          "finish": {"actions": "read", "contents": "write"}}
+#: The environment of the publish job: the one the mod's release config names (``environment``), which
+#: holds the marketplace credentials and is approved once per publication. The admit step checks that
+#: the protected config names the environment the job runs in.
+REL_ENVIRONMENT = "${{ needs.plan.outputs.environment }}"
+#: The secret each credentialed step of the publish job receives, by step position in
+#: ``REL_CALLER_VERBS["publish"]``.
+REL_STEP_SECRETS = {2: "MODRINTH_TOKEN", 3: "CURSEFORGE_TOKEN"}
+#: The concurrency group of the release caller, one per event: a dispatch and the schedule never
+#: take each other's pending place.
+REL_LOCK = "mod-base-release-${{ github.event_name }}"
+REL_CRON = "29 * * * *"
+REL_EVENTS = frozenset({"workflow_dispatch", "schedule"})
+REL_UPLOAD_STEP = CI_UPLOAD_STEP
+
 PAGES_CRON = "43 * * * *"
 OPERATIONS = ("manual", "deploy", "family", "rotate")
 #: The ``operation`` the caller passes to ``publish.yml`` (a schedule becomes ``recovery``).

@@ -1,0 +1,81 @@
+{
+  "kind": "mod-base.release.config",
+  "schema_version": 1,
+  "repository": "The-Plum-Team/Block-Pops-Minecraft-Mod",
+  "environment": "release",
+  "version": {
+    "file": "release/release-matrix.json",
+    "format": "json",
+    "pointer": "/project/mod_version"
+  },
+  "changelog": {
+    "file": "CHANGELOG.md"
+  },
+  "tags": {
+    "template": "v{version}",
+    "group": "all"
+  },
+  "release_name": "Block Pops {version}",
+  "modrinth": {
+    "project_id": "u1JjJR7q",
+    "version_number": "{version}+{lane}",
+    "name": "Block Pops {version} ({loader_name} {minecraft})"
+  },
+  "lanes": {
+    "fabric-1.20.1": {
+      "minecraft": "1.20.1",
+      "loaders": [
+        "fabric",
+        "quilt"
+      ],
+      "game_versions": [
+        "1.20.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "fabric-api",
+          "required"
+        ]
+      ]
+    },
+    "fabric-1.21.1": {
+      "minecraft": "1.21.1",
+      "loaders": [
+        "fabric"
+      ],
+      "game_versions": [
+        "1.21",
+        "1.21.1"
+      ],
+      "version_type": "release",
+      "modrinth_dependencies": [
+        [
+          "fabric-api",
+          "required"
+        ]
+      ]
+    },
+    "forge-1.20.1": {
+      "minecraft": "1.20.1",
+      "loaders": [
+        "forge"
+      ],
+      "game_versions": [
+        "1.20.1"
+      ],
+      "version_type": "release"
+    },
+    "neoforge-1.21.1": {
+      "minecraft": "1.21.1",
+      "loaders": [
+        "neoforge"
+      ],
+      "game_versions": [
+        "1.21",
+        "1.21.1"
+      ],
+      "version_type": "beta"
+    }
+  }
+}

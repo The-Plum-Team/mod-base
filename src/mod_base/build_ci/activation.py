@@ -9,10 +9,11 @@ the only thing that decides which kit caller workflows are managed files of the 
 
 * ``disabled`` and a mod without a manifest manage no caller: its Build and E2E workflows stay its
   own.
-* ``shadow`` manages all four callers beside the mod's own gates, which stay authoritative.
+* ``shadow`` manages all four Build/E2E callers beside the mod's own gates, which stay authoritative.
 * ``shared-build`` manages the guard, the Build caller and the status caller; packaged E2E stays
   the mod's own.
-* ``shared-build-and-e2e`` manages all four.
+* ``shared-build-and-e2e`` manages all four and the release caller, which publishes the tested
+  generation of the default branch's head (docs/RELEASE-PROTOCOL.md).
 * ``reviewed-rollback`` keeps managing the callers of the mode it leaves (``rollback_from``) until
   the next transition, which can only be to ``disabled``.
 
@@ -49,14 +50,19 @@ GUARD_CALLER = ".github/workflows/mod-base-guard.yml"
 BUILD_CALLER = ".github/workflows/mod-base-build.yml"
 PACKAGED_CALLER = ".github/workflows/mod-base-packaged-e2e.yml"
 STATUS_CALLER = ".github/workflows/mod-base-gate-status.yml"
+#: The shared release (docs/RELEASE-PROTOCOL.md): it publishes a tested generation, so only the mode
+#: whose Build and packaged E2E are the mod's authoritative gates manages it.
+RELEASE_CALLER = ".github/workflows/mod-base-release.yml"
+#: The four Build/E2E callers.
+GATE_CALLERS = (GUARD_CALLER, BUILD_CALLER, PACKAGED_CALLER, STATUS_CALLER)
 #: Every caller workflow the activation mode can make a managed file of a mod.
-CALLERS = (GUARD_CALLER, BUILD_CALLER, PACKAGED_CALLER, STATUS_CALLER)
+CALLERS = (*GATE_CALLERS, RELEASE_CALLER)
 
 #: Mode -> the callers the kit manages in it. ``reviewed-rollback`` has no row of its own: it
 #: manages the row of the mode it leaves (:func:`managed_mode`).
 MANAGED_CALLERS: dict[str, tuple[str, ...]] = {
     "disabled": (),
-    "shadow": CALLERS,
+    "shadow": GATE_CALLERS,
     "shared-build": (GUARD_CALLER, BUILD_CALLER, STATUS_CALLER),
     "shared-build-and-e2e": CALLERS,
 }

@@ -2113,7 +2113,28 @@ def validate_kit_stamp(document: Any, *, path: str = "$") -> dict[str, Any]:
 
 # -- Dispatch ----------------------------------------------------------------------------------------
 
+def _validate_release_config(document: Any, **context: Any) -> dict[str, Any]:
+    from mod_base.release.config import validate_release_config  # the release package imports this module
+
+    return validate_release_config(document, **context)
+
+
+def _validate_release_plan(document: Any, **context: Any) -> dict[str, Any]:
+    from mod_base.release.plan import validate_release_plan
+
+    return validate_release_plan(document, **context)
+
+
+def _validate_release_ledger(document: Any, **context: Any) -> dict[str, Any]:
+    from mod_base.release.ledger import validate_ledger
+
+    return validate_ledger(document, **context)
+
+
 VALIDATORS: dict[str, Callable[..., dict[str, Any]]] = {
+    "mod-base.release.config": _validate_release_config,
+    "mod-base.release.plan": _validate_release_plan,
+    "mod-base.release.ledger": _validate_release_ledger,
     "mod-base.build.plan": validate_plan,
     "mod-base.build.config": validate_build_config,
     "mod-base.build.envelope": validate_build_envelope,
@@ -2147,6 +2168,9 @@ VALIDATORS: dict[str, Callable[..., dict[str, Any]]] = {
 
 #: Default size bound for each kind's file.
 MAX_DOCUMENT_BYTES: dict[str, int] = {
+    "mod-base.release.config": 256 * lim.KIB,
+    "mod-base.release.plan": 4 * lim.MIB,
+    "mod-base.release.ledger": lim.MIB,
     "mod-base.build.plan": lim.MAX_CI_PLAN_BYTES,
     "mod-base.build.config": lim.MAX_CI_CONFIG_BYTES,
     "mod-base.build.envelope": lim.MAX_CI_ENVELOPE_BYTES,
