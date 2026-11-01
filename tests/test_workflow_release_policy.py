@@ -87,7 +87,8 @@ class ReleaseCallerTest(unittest.TestCase):
         self.assertEqual(set(document["on"]), set(workflow.REL_EVENTS))
         self.assertEqual(document["on"]["schedule"], [{"cron": workflow.REL_CRON}])
         self.assertEqual(document["permissions"], {})
-        self.assertEqual(document["concurrency"], {"group": workflow.REL_LOCK, "cancel-in-progress": "false"})
+        self.assertEqual(document["concurrency"], {"group": workflow.REL_LOCK, "queue": "max",
+                                                   "cancel-in-progress": "false"})
         self.assertEqual(list(document["jobs"]), list(workflow.REL_CALLER_JOBS))
         for key, job in document["jobs"].items():
             self.assertEqual(job["name"], workflow.REL_CALLER_JOBS[key])
@@ -137,6 +138,14 @@ class ReleaseCallerTest(unittest.TestCase):
             expected = [workflow.REL_STEP_SECRETS[index]] if index in workflow.REL_STEP_SECRETS else []
             self.assertEqual(secrets, expected, item["name"])
         self.assertEqual(tuple(commands(jobs["finish"]["steps"])), workflow.REL_CALLER_VERBS["finish"])
+        # Once the drafts exist, each marketplace and the verification run even if another failed.
+        publish_steps = jobs["publish"]["steps"]
+        self.assertEqual(step(publish_steps, "Create the draft releases")["id"], "github")
+        for name in ("Upload to Modrinth", "Upload to CurseForge", "Verify and finish the releases"):
+            self.assertEqual(step(publish_steps, name)["if"], "${{ !cancelled() && steps.github.outcome == 'success' }}")
+        admit = step(publish_steps, "Admit the sealed release plan")
+        self.assertIn('--plan-attempt "$PLAN_ATTEMPT"', admit["run"])
+        self.assertEqual(admit["env"]["PLAN_ATTEMPT"], "${{ needs.plan.outputs.run-attempt }}")
 
     def test_only_the_authoritative_mode_manages_the_release_caller(self) -> None:
         self.assertEqual([mode for mode, callers in MANAGED_CALLERS.items() if RELEASE_CALLER in callers],

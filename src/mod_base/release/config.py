@@ -47,6 +47,26 @@ def release_header(kind: str) -> dict[str, Validator]:
     return {"kind": Const(kind), "schema_version": Int(min(readable), max(readable))}
 
 
+#: How a changelog file holds a version's notes: ``section`` (the default), the section headed
+#: ``## <version> (<date>)`` of one file that opens with it; ``file``, a whole file of its own,
+#: whose path names ``{version}``.
+CHANGELOG_FORMATS = ("section", "file")
+
+
+def _changelog_file(value: Any, path: str) -> str:
+    """A repository path, in which ``{version}`` may stand for one path component's text."""
+
+    check(isinstance(value, str) and value.count("{version}") <= 1, path,
+          "must be a repository path naming {version} at most once")
+    return repo_path(value.replace("{version}", "0.0.0"), path) and value
+
+
+def changelog_path(changelog: dict[str, Any], version: str) -> str:
+    """The changelog file of ``version``: the config's path with ``{version}`` filled in."""
+
+    return changelog["file"].replace("{version}", version)
+
+
 #: Where a mod keeps its release config.
 RELEASE_CONFIG_PATH = "scripts/ci/mod-base-release.json"
 
@@ -91,6 +111,8 @@ TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 MODRINTH_VERSION_NUMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$")
 #: A Modrinth project id or slug.
 MODRINTH_PROJECT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
+#: The released project itself is named by its Modrinth id, the only name Modrinth answers with.
+MODRINTH_ID = re.compile(r"^[A-Za-z0-9]{8}$")
 #: A CurseForge project slug.
 CURSEFORGE_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 #: An RFC 6901 JSON pointer with at least one reference token (one ``/`` before each).
@@ -214,12 +236,12 @@ _CONFIG = Obj({
              "key": Str(PROPERTY_KEY, max_len=MAX_RELEASE_PROPERTY_KEY_CHARS)}),
         Obj({"file": repo_path, "format": Const("json"), "pointer": _json_pointer}),
     ),
-    "changelog": Obj({"file": repo_path}),
+    "changelog": Obj({"file": _changelog_file}, {"format": Str(choices=CHANGELOG_FORMATS)}),
     "tags": Obj({"template": _template, "group": Str(choices=TAG_GROUPS)}),
     "release_name": _template,
     "lanes": Map(g.CI_UNIT_ID, _LANE, min_items=1, max_items=MAX_RELEASE_LANES, max_key_len=80),
 }, {
-    "modrinth": Obj({"project_id": Str(MODRINTH_PROJECT, max_len=64), "version_number": _template,
+    "modrinth": Obj({"project_id": Str(MODRINTH_ID, max_len=8), "version_number": _template,
                      "name": _template}),
     "curseforge": Obj({"project_id": Int(1, MAX_RELEASE_CURSEFORGE_PROJECT_ID), "display_name": _template}),
 })
@@ -245,6 +267,9 @@ def validate_release_config(document: Any, *, path: str = "$") -> dict[str, Any]
 
     _CONFIG(document, path)
     check(bool(marketplaces(document)), path, "must publish to Modrinth, CurseForge or both")
+    per_version = "{version}" in document["changelog"]["file"]
+    check(per_version == (document["changelog"].get("format", "section") == "file"), f"{path}.changelog",
+          "a changelog file per version (format file) names {version} in its path, and only it does")
     group = document["tags"]["group"]
     tag_names = TAG_PLACEHOLDERS if group == "minecraft" else ("version",)
     _allowed(document["tags"]["template"], tag_names, tag_names, f"{path}.tags.template")

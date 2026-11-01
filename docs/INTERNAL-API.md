@@ -3262,6 +3262,8 @@ Owner: MB13. GitHub Releases: tags, draft releases, assets and their reconciliat
 * `def find_release(transport: HttpsTransport, repo: str, tag: str) -> dict[str, Any] | None`: The one release (draft or published) whose ''tag_name'' is ''tag'', or None. Several releases with one tag (GitHub allows several drafts) are ambiguous and raise.
 * `def get_release(transport: HttpsTransport, repo: str, release_id: int) -> dict[str, Any]`: ''GET /repos/{repo}/releases/{id}'': a fresh read of one release (a confirming read).
 * `def create_ref(transport: HttpsTransport, repo: str, tag: str, sha: str) -> None`: Create the lightweight tag ''refs/tags/{tag}'' at commit ''sha''. A tag already at exactly that commit is accepted (a resumed release); a tag elsewhere, or an annotated tag, raises.
+* `def tag_commit(transport: HttpsTransport, repo: str, tag: str) -> str | None`: The commit the lightweight tag ''tag'' names, or ''None'' when no such tag exists. An annotated tag, or a ref of another shape, raises: a release creates lightweight tags only.
+* `def latest_release(transport: HttpsTransport, repo: str) -> dict[str, Any] | None`: The repository's release marked latest, or ''None'' when it has none.
 * `def create_draft(transport: HttpsTransport, repo: str, *, tag: str, name: str, body: str, target_commitish: str) -> dict[str, Any]`: Create the draft release of ''tag'' (never replayed: GitHub would create a second draft). The tag should already exist (:func:'create_ref'); ''target_commitish'' names its commit.
 * `def update_body(transport: HttpsTransport, repo: str, release_id: int, body: str, tag: str) -> dict[str, Any]`: Replace a release's body. The edit always restates ''tag_name'': a draft edited without it loses its tag and becomes ''untagged-...'' (Quick Skin's first ledger recovery).
 * `def release_assets(transport: HttpsTransport, repo: str, release_id: int) -> list[dict[str, Any]]`: The assets of one release (''/releases/{id}/assets'', paginated, at most ''limits.MAX_GITHUB_RELEASE_ASSETS'').
@@ -3319,6 +3321,8 @@ Owner: MB13. In-memory Modrinth, CurseForge and GitHub Releases for the tests (n
 Owner: MB12. ''mod-base.release.config'' v1: the protected release data of a mod.
 
 * `def release_header(kind: str) -> dict[str, Validator]`: ''kind'' and ''schema_version'' validators of a release document: the versions :func:'mod_base.readable_schema_versions' admits (N and N-1).
+* `CHANGELOG_FORMATS`
+* `def changelog_path(changelog: dict[str, Any], version: str) -> str`: The changelog file of ''version'': the config's path with ''{version}'' filled in.
 * `RELEASE_CONFIG_PATH`
 * `MAX_RELEASE_CONFIG_BYTES`
 * `MAX_RELEASE_LANES`
@@ -3339,6 +3343,7 @@ Owner: MB12. ''mod-base.release.config'' v1: the protected release data of a mod
 * `TAG`
 * `MODRINTH_VERSION_NUMBER`
 * `MODRINTH_PROJECT`
+* `MODRINTH_ID`
 * `CURSEFORGE_SLUG`
 * `JSON_POINTER`
 * `VERSION_FORMATS`
@@ -3380,6 +3385,7 @@ Owner: MB12. ''mod-base.release.plan'' v1: what one release publishes, derived f
 * `MAX_RELEASE_TEXT_CHARS`
 * `MAX_RELEASE_VERSION_CHARS`
 * `MODRINTH_DEPENDENCY_TYPES`
+* `MODRINTH_ID`
 * `MODRINTH_PROJECT`
 * `MODRINTH_VERSION_NUMBER`
 * `RELEASE_VERSION`
@@ -3396,12 +3402,13 @@ Owner: MB12. ''mod-base.release.plan'' v1: what one release publishes, derived f
 * `ASSETS_DIRECTORY`
 * `LEDGER_MARKER`
 * `class ReleasePlanError`: A release cannot be planned, sealed or admitted from these inputs (exit 2).
+* `def curseforge_stored_name(filename: str) -> str`: The name CurseForge stores an upload under: since late October 2026 every run of spaces and hyphens that holds a space becomes one hyphen (''mod_base.marketplace.curseforge.stored_name'').
 * `def github_asset_name(filename: str) -> str`: The name GitHub gives a release asset uploaded as ''filename'': every space becomes a period. Two files of one release must differ even after that, and without regard to case.
 * `def validate_release_plan(document: Any, *, path: str = '$') -> dict[str, Any]`: The closed schema and every rule that ties its parts together: one tag per lane, every tag's assets one production JAR per lane in lane order, then its SBOMs by path (each named as the module describes), unique paths across the plan and unique file names within a tag (also as GitHub renames them and
 * `def plan_digest(plan: dict[str, Any]) -> str`: The identity of a release plan: the SHA-256 of its canonical bytes.
 * `def released_commit(plan: dict[str, Any]) -> str`: The commit a validated plan releases, at which every tag is created.
 * `def read_version(repo: Path, version: dict[str, Any]) -> str`: The version of the release, from ''repo/<version.file>'' read through no symlink and matching :data:'mod_base.release.config.RELEASE_VERSION': the string at ''version.pointer'' of a JSON file (:func:'_json_version') or the value of ''version.key'' of a Java properties file.
-* `def read_changelog(repo: Path, changelog: dict[str, Any], version: str) -> str`: The section of ''version'' in the Markdown changelog ''repo/<changelog.file>''.
+* `def read_changelog(repo: Path, changelog: dict[str, Any], version: str) -> str`: The notes of ''version'': with ''format: file'' the whole file the config's path names for that version; otherwise the section of ''version'' in the Markdown changelog ''repo/<changelog.file>''.
 * `def derive_release_plan(*, generation: dict[str, Any], bundle: Path, config: dict[str, Any], config_sha256: str, repo: Path, kit: dict[str, Any]) -> dict[str, Any]`: The release plan of the commit ''generation'' covers (see the module).
 * `def seal_release(output: Path, *, plan: dict[str, Any], bundle: Path) -> dict[str, Any]`: Publish ''output'', a new directory holding ''release-plan.json'' (the plan's canonical bytes) and a copy of every planned file of ''bundle'' at ''assets/<tag>/<filename>''. Every file is read once, its size and three digests checked while it is copied, and the whole stage is admitted (:func:'admit_
 * `def admit_release(directory: Path, *, plan_sha256: str | None = None) -> dict[str, Any]`: The plan of a sealed release directory, after checking that the directory holds exactly ''release-plan.json'' in its canonical bytes and every planned asset with its planned size, SHA-256, SHA-1 and SHA-512: no other file or directory, no symlink, no special or hard-linked file. A consistent directo
@@ -3452,10 +3459,11 @@ Owner: MB12. The publication state machine of one sealed release plan (docs/RELE
 * `class Release`: One tag of the plan and its draft release, with the lock that serializes its ledger writes.
   * fields: `tag: dict[str, Any], release: dict[str, Any], ledger: dict[str, Any], lock: threading.Lock = <factory>`
 * `class Reconciler`: One pass of reconciliation: each project's marketplace listing is read once per pass, not once per row (a CurseForge listing can take hundreds of requests).
+  * `modrinth_project(self, project: str) -> str`
 * `def create_releases(services: Services, *, repository: str, plan_dir: Path) -> list[Release]`: Create every tag at the released commit and one draft release per tag holding its assets, the plan asset and a fresh ledger; resume what an earlier attempt created. A tag that exists at another commit, or an asset of the right name with other bytes, fails closed.
 * `def upload(services: Services, *, repository: str, plan_dir: Path, marketplace: str) -> dict[str, str]`: Upload every lane of the plan to ''marketplace'', at most :data:'UPLOAD_WORKERS' at once, and return each row's state. Every row is attempted; the first failure is raised after the others finished, so one refused file does not hold back the rest of the release.
 * `def verify(services: Services, *, repository: str, plan_dir: Path, wait_seconds: int, sleep: Callable[[float], None] = sleep, clock: Callable[[], float] = monotonic) -> bool`: Reconcile and publish the plan's releases, waiting at most ''wait_seconds'' for moderation. Returns whether every release is published; what is still pending is left to the schedule.
-* `def finish_drafts(services: Services, *, repository: str) -> dict[str, bool]`: The scheduled finish: for every draft release whose body carries a ledger, read its plan from the draft's :data:'PLAN_ASSET', require the ledger to bind that plan's digest, reconcile and publish what is complete. Returns tag -> whether it is published now.
+* `def finish_drafts(services: Services, *, repository: str) -> dict[str, bool]`: The scheduled finish: for every draft release whose body carries a ledger, read its plan from the draft's :data:'PLAN_ASSET', require the ledger to bind that plan's digest, reconcile and publish what is complete. Returns tag -> whether it is published now. A draft that cannot be read or finished doe
 
 ## `mod_base.release.commands`
 

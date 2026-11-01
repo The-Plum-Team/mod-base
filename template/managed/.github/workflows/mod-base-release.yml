@@ -23,8 +23,10 @@ on:
 
 permissions: {}
 
+# One release of the mod at a time; a queued dispatch is never dropped for the schedule.
 concurrency:
   group: mod-base-release
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -65,12 +67,14 @@ jobs:
         shell: bash
         env:
           PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
+          PLAN_ATTEMPT: ${{ needs.plan.outputs.run-attempt }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN GH_TOKEN
           fail() { printf 'Publish release: %s\n' "$1" >&2; exit 1; }
           [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "malformed commit identity"
           [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "malformed plan digest"
+          [[ "$PLAN_ATTEMPT" =~ ^[1-9][0-9]{0,3}$ ]] || fail "malformed plan run attempt"
       - name: Check out the protected mod head
         shell: bash
         env:
@@ -103,11 +107,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PLAN_SHA256: ${{ needs.plan.outputs.plan-sha256 }}
+          PLAN_ATTEMPT: ${{ needs.plan.outputs.run-attempt }}
         run: |
           set -euo pipefail
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
-          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release admit --plan-sha256 "$PLAN_SHA256" --output "$RUNNER_TEMP/mb-release"
-      - name: Create the tags and draft releases
+          python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release admit --plan-sha256 "$PLAN_SHA256" --plan-attempt "$PLAN_ATTEMPT" --output "$RUNNER_TEMP/mb-release"
+      - name: Create the draft releases
+        id: github
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -116,6 +122,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release github --plan "$RUNNER_TEMP/mb-release"
       - name: Upload to Modrinth
+        if: ${{ !cancelled() && steps.github.outcome == 'success' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,6 +132,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release upload --plan "$RUNNER_TEMP/mb-release" --marketplace modrinth
       - name: Upload to CurseForge
+        if: ${{ !cancelled() && steps.github.outcome == 'success' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -134,6 +142,7 @@ jobs:
           unset ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GITHUB_TOKEN
           python3 -I -B mod/scripts/ci/mod_base_kit.py run --repo mod -- release upload --plan "$RUNNER_TEMP/mb-release" --marketplace curseforge
       - name: Verify and finish the releases
+        if: ${{ !cancelled() && steps.github.outcome == 'success' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

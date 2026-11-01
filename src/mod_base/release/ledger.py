@@ -49,8 +49,10 @@ STATES = ("unstarted", "uploading", "pending", "verified")
 #: ``(from, to)`` pairs :func:`advance` allows. ``unstarted`` -> ``verified`` records a file that
 #: reconciliation found already published; ``pending`` -> ``pending`` and ``verified`` ->
 #: ``verified`` are allowed as no-ops only, with the same remote id.
+#: ``uploading`` -> ``unstarted`` is the one way back: the marketplace refused the upload with a
+#: definitive answer (an outcome that may hide an accepted upload keeps the row fenced instead).
 TRANSITIONS = frozenset({("unstarted", "uploading"), ("uploading", "pending"), ("uploading", "verified"),
-                         ("pending", "verified"), ("unstarted", "verified")})
+                         ("pending", "verified"), ("unstarted", "verified"), ("uploading", "unstarted")})
 #: A marketplace's id of an uploaded file.
 REMOTE_ID = re.compile(r"^[A-Za-z0-9]{1,80}$")
 _ROW_KEY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}--(?:modrinth|curseforge)$")

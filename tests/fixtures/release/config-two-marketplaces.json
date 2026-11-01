@@ -16,7 +16,7 @@
   },
   "release_name": "Example {version} for Minecraft {minecraft}",
   "modrinth": {
-    "project_id": "examplemod",
+    "project_id": "ExAmPl01",
     "version_number": "{tag}-{loader}",
     "name": "Example-{minecraft}-v{version} [{loader_name}]"
   },

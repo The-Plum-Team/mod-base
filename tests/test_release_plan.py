@@ -151,7 +151,7 @@ class DeriveTests(Case):
                           (None, "targets/1.21.1/sbom/mod.cdx.json", "1.21.1-mod.cdx.json")])
         lane = plan["lanes"]["fabric-1.20.1"]
         self.assertEqual(lane, {"tag": "v4.0.0", "modrinth": {
-            "project_id": "block-pops", "version_number": "4.0.0+fabric-1.20.1",
+            "project_id": "u1JjJR7q", "version_number": "4.0.0+fabric-1.20.1",
             "name": "Block Pops 4.0.0 (Fabric 1.20.1)", "game_versions": ["1.20.1"], "loaders": ["fabric", "quilt"],
             "version_type": "release", "dependencies": [{"project_id": "fabric-api", "dependency_type": "required"}]}})
         self.assertEqual(plan["lanes"]["neoforge-1.21.1"]["modrinth"]["version_type"], "beta")
@@ -389,6 +389,24 @@ class ChangelogTests(Case):
         self.rejects(world.derive, message="symlink")
 
 
+    def test_a_changelog_file_per_version_is_read_whole(self) -> None:
+        world = self.world()
+        world.config["changelog"] = {"file": "release/changelogs/{version}.md", "format": "file"}
+        validate_release_config(world.config)
+        world.write_repo(f"release/changelogs/{VERSION}.md", b"\n# Update - 4.0.0\n## New\n\n- A menu.\n\n")
+        self.assertEqual(world.derive()["changelog"]["text"], "# Update - 4.0.0\n## New\n\n- A menu.")
+        world.write_repo(f"release/changelogs/{VERSION}.md", b"\n\n")
+        self.rejects(world.derive, message="empty")
+
+    def test_a_per_version_path_and_the_file_format_go_together(self) -> None:
+        world = self.world()
+        for changelog in ({"file": "release/changelogs/{version}.md"},
+                          {"file": "CHANGELOG.md", "format": "file"},
+                          {"file": "notes/{version}/{version}.md", "format": "file"}):
+            with self.subTest(changelog=changelog), self.assertRaises(MbError):
+                validate_release_config({**world.config, "changelog": changelog})
+
+
 class ValidationTests(Case):
     def setUp(self) -> None:
         super().setUp()
@@ -447,7 +465,7 @@ class ValidationTests(Case):
             "not the tag that holds": lambda plan: plan["lanes"]["fabric-1.21.3"].update(tag="mc1.20.1-v4.0.0"),
             "other marketplaces": lambda plan: plan["lanes"]["fabric-1.21.3"].pop("curseforge"),
             "more than one modrinth project": lambda plan: plan["lanes"]["fabric-1.21.3"]["modrinth"].update(
-                project_id="other-project"),
+                project_id="OtHeR001"),
             "repeats a Modrinth version number": lambda plan: plan["lanes"]["fabric-1.21.3"]["modrinth"].update(
                 version_number=plan["lanes"]["fabric-1.20.1"]["modrinth"]["version_number"]),
             "kit the released commit pins": lambda plan: plan["kit"].update(version="9.9.9"),

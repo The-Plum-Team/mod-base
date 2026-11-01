@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import re
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -28,7 +30,9 @@ from typing import Any
 from mod_base.errors import MbError
 from mod_base.marketplace import curseforge, github_releases, modrinth
 from mod_base.marketplace.limits import MAX_MARKETPLACE_REQUESTS
-from mod_base.marketplace.transport import HttpsTransport, PublicationPending, Reconciliation
+from mod_base.marketplace.transport import (HttpsTransport, MarketplaceError, MarketplaceNotFound,
+                                            MarketplaceOutcomeUnknown, MarketplaceUnavailable, PublicationPending,
+                                            Reconciliation)
 from mod_base.model.canonical import strict_loads
 from mod_base.release import ledger as ledger_doc
 from mod_base.release.plan import PLAN_NAME, admit_release, plan_digest, released_commit, validate_release_plan
@@ -138,6 +142,15 @@ class Reconciler:
         self._lock = threading.Lock()
         self._modrinth: dict[str, list[dict[str, Any]]] = {}
         self._curseforge: dict[int, list[dict[str, Any]]] = {}
+        self._resolved: dict[str, str] = {}
+
+    def modrinth_project(self, project: str) -> str:
+        """The Modrinth id of a dependency named by id or slug, resolved once per pass."""
+
+        with self._lock:
+            if project not in self._resolved:
+                self._resolved[project] = modrinth.resolve_project(self.services.modrinth, project)
+            return self._resolved[project]
 
     def _modrinth_versions(self, project: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -163,7 +176,14 @@ class Reconciler:
                                       project_id=metadata["project_id"], version_number=metadata["version_number"])
 
         def fetch(file_id: int, stored: str, limit: int) -> bytes:
-            return curseforge.download(self.services.curseforge_cdn, file_id, stored, limit=limit)
+            try:
+                return curseforge.download(self.services.curseforge_cdn, file_id, stored, limit=limit)
+            except MarketplaceError as error:
+                # The CDN answers 403 or 404 for a while after CurseForge approves a file.
+                if isinstance(error, MarketplaceNotFound) or error.status == 403:
+                    raise PublicationPending(f"the CDN does not serve CurseForge file {file_id} yet",
+                                             reason="release") from error
+                raise
 
         return curseforge.reconcile(self._curseforge_files(metadata["project_id"]), filename=asset["filename"],
                                     size=asset["size"], sha1=asset["sha1"], sha256=asset["sha256"],
@@ -185,7 +205,13 @@ def create_releases(services: Services, *, repository: str, plan_dir: Path) -> l
     plan_sha256 = hashlib.sha256(plan_bytes).hexdigest()
     entries: list[Release] = []
     for tag in plan["tags"]:
-        github_releases.create_ref(services.github, repository, tag["tag"], sha)
+        # The tag itself is created only when its release is published (_publish_release), so a
+        # release that fails before then leaves no tag behind; one that names another commit
+        # already is refused before anything is created.
+        existing = github_releases.tag_commit(services.github, repository, tag["tag"])
+        if existing not in (None, sha):
+            raise MbError(f"the tag {tag['tag']} already names commit {existing}, not {sha}", reason="release")
+    for tag in plan["tags"]:
         release = github_releases.find_release(services.github, repository, tag["tag"])
         if release is None:
             body = ledger_doc.render_body(plan, tag["tag"], ledger_doc.new_ledger(plan, tag["tag"]))
@@ -232,49 +258,85 @@ def _curseforge_ids(names: dict[str, int], metadata: dict[str, Any]) -> tuple[in
     return tuple(names[name] for name in wanted)
 
 
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _upload_one(services: Services, plan: dict[str, Any], plan_dir: Path, entry: Release, lane: str,
                 marketplace: str, repository: str, reconcile: Reconciler,
                 game_versions: Callable[[], dict[str, int]]) -> str:
-    """Bring one row as far as an upload can: ``verified`` or ``pending``. Returns the new state."""
+    """Bring one row as far as an upload can: ``verified`` or ``pending``. Returns the new state.
+
+    Everything the upload needs (the file's digest, CurseForge's game version ids, Modrinth's
+    dependency ids) is read and checked before the row's intent is written, so a refusal at that
+    point leaves the row ``unstarted``. Once the intent is written, a definitive refusal of the
+    upload itself puts the row back too; only an outcome that may hide an accepted upload, or a
+    row sent before that no marketplace lists, stays fenced."""
 
     row = _row(lane, marketplace)
     asset = _lanes(entry.tag)[lane]
-    state = entry.ledger["rows"][row]["state"]
-    if state == "verified":
-        return state
+    recorded = entry.ledger["rows"][row]
+    if recorded["state"] == "verified":
+        return "verified"
     try:
         found = reconcile(plan, lane, marketplace, asset)
     except PublicationPending:
         # The marketplace holds this very file in moderation: it was sent, by this or an earlier job.
-        if state == "unstarted":
+        if recorded["state"] == "unstarted":
             _advance(services, repository, plan, entry, row, "uploading")
-        _advance(services, repository, plan, entry, row, "pending")
+        if entry.ledger["rows"][row]["state"] == "uploading":
+            _advance(services, repository, plan, entry, row, "pending")
         return "pending"
     if not found.publish:
         _advance(services, repository, plan, entry, row, "verified", found.remote_id)
         return "verified"
-    if state != "unstarted":
+    if recorded["state"] == "pending" and recorded["remote_id"] is not None:
+        # Accepted with this id, not listed yet: a marketplace may hide a file until it is approved.
+        return "pending"
+    if recorded["state"] != "unstarted":
         raise FencedUpload(f"{row} was sent before and {marketplace} lists no such file; check the marketplace's "
                            "author dashboard, then reset the row only if it never accepted the file",
                            reason="release")
-    _advance(services, repository, plan, entry, row, "uploading")
     path = _asset_path(plan_dir, entry.tag, asset)
+    if _sha256_of(path) != asset["sha256"]:
+        raise MbError(f"{path.name} is not the planned file", reason="release")
     metadata = plan["lanes"][lane][marketplace]
     if marketplace == "modrinth":
-        modrinth.create_version(services.modrinth, modrinth.ModrinthVersion(
+        request = modrinth.ModrinthVersion(
             project_id=metadata["project_id"], version_number=metadata["version_number"], name=metadata["name"],
             changelog=plan["changelog"]["text"], game_versions=tuple(metadata["game_versions"]),
             loaders=tuple(metadata["loaders"]), version_type=metadata["version_type"],
-            dependencies=tuple((item["project_id"], item["dependency_type"]) for item in metadata["dependencies"]),
-            featured=False), path, asset["filename"], sha256=asset["sha256"])
+            dependencies=tuple((reconcile.modrinth_project(item["project_id"]), item["dependency_type"])
+                               for item in metadata["dependencies"]),
+            featured=False)
+
+        def send() -> str:
+            return str(modrinth.create_version(services.modrinth, request, path, asset["filename"],
+                                               sha256=asset["sha256"])["id"])
     else:
-        curseforge.upload(services.curseforge_upload, curseforge.CurseForgeFile(
+        request = curseforge.CurseForgeFile(
             project_id=metadata["project_id"], display_name=metadata["display_name"],
             changelog=plan["changelog"]["text"], release_type=metadata["release_type"],
             game_version_ids=_curseforge_ids(game_versions(), metadata),
-            relations=tuple((item["slug"], item["type"]) for item in metadata["relations"])),
-            path, asset["filename"], sha256=asset["sha256"])
-    _advance(services, repository, plan, entry, row, "pending")
+            relations=tuple((item["slug"], item["type"]) for item in metadata["relations"]))
+
+        def send() -> str:
+            return str(curseforge.upload(services.curseforge_upload, request, path, asset["filename"],
+                                         sha256=asset["sha256"]))
+    _advance(services, repository, plan, entry, row, "uploading")
+    try:
+        remote_id = send()
+    except MarketplaceOutcomeUnknown:
+        raise  # the row stays fenced: the marketplace may have accepted the file
+    except (MarketplaceError, MarketplaceUnavailable):
+        # A definitive refusal, or a read that failed before the upload was sent: nothing was accepted.
+        _advance(services, repository, plan, entry, row, "unstarted")
+        raise
+    _advance(services, repository, plan, entry, row, "pending", remote_id)
     return "pending"
 
 
@@ -320,9 +382,49 @@ def upload(services: Services, *, repository: str, plan_dir: Path, marketplace: 
 # -- Verification ------------------------------------------------------------------------------------
 
 
-def _verify_entries(services: Services, repository: str, plan: dict[str, Any], entries: Iterable[Release]) -> bool:
+_TRAILING_VERSION = re.compile(r"(?:^|[-_])v?(\d{1,6}(?:\.\d{1,6}){1,3})$")
+
+
+def _version_key(text: str) -> tuple[int, ...] | None:
+    """The numeric version a tag ends with (``mc26.3-v4.0.0`` -> ``(4, 0, 0)``), or ``None``."""
+
+    match = _TRAILING_VERSION.search(text)
+    return tuple(int(part) for part in match.group(1).split(".")) if match else None
+
+
+def _minecraft_key(tag: dict[str, Any]) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", tag.get("minecraft") or ""))
+
+
+def _latest_tag(services: Services, repository: str, plan: dict[str, Any]) -> str | None:
+    """The tag of the plan to mark as the repository's latest release: the one of the highest
+    Minecraft version, and only when no release marked latest has a higher version than the plan's
+    (a release finished late by the schedule must not hide a newer one)."""
+
+    preferred = max(plan["tags"], key=_minecraft_key)["tag"]
+    current = github_releases.latest_release(services.github, repository)
+    if current is None:
+        return preferred
+    ours, theirs = _version_key(plan["version"]), _version_key(str(current.get("tag_name") or ""))
+    if ours is None or theirs is None:
+        return preferred if current.get("tag_name") in {tag["tag"] for tag in plan["tags"]} else None
+    return preferred if ours >= theirs else None
+
+
+def _publish_release(services: Services, repository: str, plan: dict[str, Any], entry: Release) -> None:
+    """Create ``entry``'s tag at the released commit and publish its draft."""
+
+    github_releases.create_ref(services.github, repository, entry.tag["tag"], released_commit(plan))
+    latest = _latest_tag(services, repository, plan) == entry.tag["tag"]
+    entry.release = github_releases.publish(services.github, repository, entry.release["id"], entry.tag["tag"],
+                                            make_latest=latest)
+
+
+def _verify_entries(services: Services, repository: str, plan: dict[str, Any], entries: Iterable[Release],
+                    errors: list[BaseException]) -> bool:
     """One pass: reconcile every row that is not verified yet and publish each complete draft.
-    Returns whether every release of ``entries`` is published."""
+    A row or a draft that fails is recorded in ``errors`` and the others go on. Returns whether
+    every release of ``entries`` is published."""
 
     reconcile = Reconciler(services)
     published = True
@@ -335,16 +437,22 @@ def _verify_entries(services: Services, repository: str, plan: dict[str, Any], e
             lane, marketplace = row.rsplit("--", 1)
             try:
                 found = reconcile(plan, lane, marketplace, _lanes(entry.tag)[lane])
+                if not found.publish:
+                    _advance(services, repository, plan, entry, row, "verified", found.remote_id)
             except PublicationPending:
                 continue
-            if not found.publish:
-                _advance(services, repository, plan, entry, row, "verified", found.remote_id)
-        if ledger_doc.complete(entry.ledger):
-            latest = entry.tag["tag"] == plan["tags"][-1]["tag"]
-            entry.release = github_releases.publish(services.github, repository, entry.release["id"],
-                                                    entry.tag["tag"], make_latest=latest)
-        else:
+            except MbError as error:
+                errors.append(error)
+                print(f"{row}: {error}", file=sys.stderr)
+        try:
+            if ledger_doc.complete(entry.ledger):
+                _publish_release(services, repository, plan, entry)
+            else:
+                published = False
+        except MbError as error:
             published = False
+            errors.append(error)
+            print(f"{entry.tag['tag']}: {error}", file=sys.stderr)
     return published
 
 
@@ -358,7 +466,11 @@ def verify(services: Services, *, repository: str, plan_dir: Path, wait_seconds:
     plan = admit_release(plan_dir)
     deadline = clock() + wait_seconds
     while True:
-        if _verify_entries(services, repository, plan, _open_releases(services, repository, plan)):
+        errors: list[BaseException] = []
+        done = _verify_entries(services, repository, plan, _open_releases(services, repository, plan), errors)
+        if errors:
+            raise errors[0]
+        if done:
             return True
         if clock() + VERIFY_INTERVAL_SECONDS > deadline:
             return False
@@ -368,28 +480,44 @@ def verify(services: Services, *, repository: str, plan_dir: Path, wait_seconds:
 def finish_drafts(services: Services, *, repository: str) -> dict[str, bool]:
     """The scheduled finish: for every draft release whose body carries a ledger, read its plan from
     the draft's :data:`PLAN_ASSET`, require the ledger to bind that plan's digest, reconcile and
-    publish what is complete. Returns tag -> whether it is published now."""
+    publish what is complete. Returns tag -> whether it is published now. A draft that cannot be
+    read or finished does not hold back the others; the first such error is raised at the end."""
 
     outcome: dict[str, bool] = {}
+    errors: list[BaseException] = []
     for release in github_releases.draft_releases(services.github, repository):
         body = release.get("body") or ""
         if ledger_doc.BLOCK_START not in body:
             continue
-        tag_name = release.get("tag_name")
-        recorded = ledger_doc.parse_body(body)
-        asset = next((item for item in release.get("assets") or ()
-                      if item.get("name") == github_releases.asset_name(PLAN_ASSET)), None)
-        if asset is None:
-            raise MbError(f"the draft of {tag_name!r} has a ledger but no plan asset", reason="release")
-        size = asset.get("size")
-        if type(size) is not int or not 0 < size <= ledger_doc.MAX_PLAN_ASSET_BYTES:
-            raise MbError(f"the plan asset of {tag_name!r} has an impossible size", reason="release")
-        data = github_releases.asset_bytes(services.github, repository, asset["id"], limit=size)
-        plan = validate_release_plan(strict_loads(data, label=PLAN_ASSET, max_bytes=ledger_doc.MAX_PLAN_ASSET_BYTES))
-        if plan_digest(plan) != recorded["plan_sha256"]:
-            raise MbError(f"the plan asset of {tag_name!r} is not the plan its ledger names", reason="release")
-        tag = next((item for item in plan["tags"] if item["tag"] == tag_name), None)
-        if tag is None:
-            raise MbError(f"the plan asset of {tag_name!r} names no such tag", reason="release")
-        outcome[tag["tag"]] = _verify_entries(services, repository, plan, [_entry(plan, tag, release)])
+        tag_name = str(release.get("tag_name"))
+        try:
+            outcome[tag_name] = _finish_draft(services, repository, release, body, errors)
+        except MbError as error:
+            outcome[tag_name] = False
+            errors.append(error)
+            print(f"{tag_name}: {error}", file=sys.stderr)
+    if errors:
+        raise errors[0]
     return outcome
+
+
+def _finish_draft(services: Services, repository: str, release: dict[str, Any], body: str,
+                  errors: list[BaseException]) -> bool:
+    tag_name = release.get("tag_name")
+    recorded = ledger_doc.parse_body(body)
+    asset = next((item for item in release.get("assets") or ()
+                  if item.get("name") == github_releases.asset_name(PLAN_ASSET)), None)
+    if asset is None:
+        raise MbError(f"the draft of {tag_name!r} has a ledger but no plan asset yet; dispatch the release "
+                      "again with publish to finish creating it", reason="release")
+    size = asset.get("size")
+    if type(size) is not int or not 0 < size <= ledger_doc.MAX_PLAN_ASSET_BYTES:
+        raise MbError(f"the plan asset of {tag_name!r} has an impossible size", reason="release")
+    data = github_releases.asset_bytes(services.github, repository, asset["id"], limit=size)
+    plan = validate_release_plan(strict_loads(data, label=PLAN_ASSET, max_bytes=ledger_doc.MAX_PLAN_ASSET_BYTES))
+    if plan_digest(plan) != recorded["plan_sha256"]:
+        raise MbError(f"the plan asset of {tag_name!r} is not the plan its ledger names", reason="release")
+    tag = next((item for item in plan["tags"] if item["tag"] == tag_name), None)
+    if tag is None:
+        raise MbError(f"the plan asset of {tag_name!r} names no such tag", reason="release")
+    return _verify_entries(services, repository, plan, [_entry(plan, tag, release)], errors)

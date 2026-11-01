@@ -130,7 +130,8 @@ class TransitionTests(Case):
 
     def test_the_allowed_transitions(self) -> None:
         self.assertEqual(TRANSITIONS, {("unstarted", "uploading"), ("uploading", "pending"),
-                                       ("uploading", "verified"), ("pending", "verified"), ("unstarted", "verified")})
+                                       ("uploading", "verified"), ("pending", "verified"), ("unstarted", "verified"),
+                                       ("uploading", "unstarted")})
         ledger = new_ledger(self.plan, self.tag)
         uploading = advance(ledger, self.ROW, "uploading")
         self.assertEqual(ledger["rows"][self.ROW]["state"], "unstarted")
@@ -145,12 +146,15 @@ class TransitionTests(Case):
         self.assertEqual(advance(identified, self.ROW, "verified", "AbC123")["rows"][self.ROW]["remote_id"], "AbC123")
         self.assertEqual(advance(uploading, self.ROW, "verified", "123")["rows"][self.ROW]["state"], "verified")
         self.assertEqual(advance(ledger, self.ROW, "verified", "4567")["rows"][self.ROW]["state"], "verified")
+        # A definitive refusal of the upload puts the row back.
+        self.assertEqual(advance(uploading, self.ROW, "unstarted")["rows"][self.ROW], {"state": "unstarted",
+                                                                                     "remote_id": None})
 
     def test_every_other_move_is_refused(self) -> None:
         for state, remote_id, target, target_id in (
                 ("unstarted", None, "unstarted", None), ("unstarted", None, "pending", None),
                 ("unstarted", None, "verified", None), ("unstarted", None, "uploading", "AbC"),
-                ("uploading", None, "uploading", None), ("uploading", None, "unstarted", None),
+                ("uploading", None, "uploading", None), ("uploading", None, "unstarted", "AbC"),
                 ("uploading", None, "verified", None),
                 ("pending", None, "uploading", None), ("pending", None, "unstarted", None),
                 ("pending", "AbC", "pending", "XyZ"), ("pending", "AbC", "pending", None),

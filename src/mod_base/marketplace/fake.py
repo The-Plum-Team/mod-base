@@ -588,6 +588,9 @@ class FakeGitHubReleases:
         rest = segments[3:]
         if rest == ("releases",) and request.method == "GET":
             return self._page(request, [copy.deepcopy(release) for release in self.releases])
+        if rest == ("releases", "latest") and request.method == "GET":
+            release = next((row for row in self.releases if row["id"] == self.latest and not row["draft"]), None)
+            return json_reply(200, copy.deepcopy(release)) if release else _not_found()
         if rest == ("releases",) and request.method == "POST":
             data = json.loads(request.body)
             release = self.add_release(data["tag_name"], draft=data.get("draft", False), body=data.get("body", ""),

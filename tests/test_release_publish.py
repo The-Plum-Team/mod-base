@@ -36,7 +36,7 @@ class Release(unittest.TestCase):
         self.network = FakeNetwork()
         self.github = FakeGitHubReleases(self.network, repo=REPO)
         self.modrinth = FakeModrinth(self.network)
-        self.modrinth.add_project("examplemod", "examplemod")
+        self.modrinth.add_project("ExAmPl01", "examplemod")
         self.modrinth.add_project("P7dR8mSH", "fabric-api")
         self.curseforge = FakeCurseForge(self.network)
         self.curseforge.seed_game_versions()
@@ -140,6 +140,40 @@ class Release(unittest.TestCase):
         with self.assertRaises(MbError):
             publish.create_releases(self.services(), repository=REPO, plan_dir=self.plan_dir)
         self.assertEqual(self.github.releases, [])
+
+    def test_no_tag_exists_until_its_release_is_published(self) -> None:
+        self.curseforge.upload_status = PENDING
+        self.assertFalse(self.publish_all())
+        self.assertEqual(self.github.refs, {}, "a release held in moderation has no tag yet")
+
+    def test_a_definitive_refusal_puts_the_row_back_and_the_next_run_sends_it(self) -> None:
+        publish.create_releases(self.services(), repository=REPO, plan_dir=self.plan_dir)
+        self.network.fail("POST", f"{FakeModrinth.ORIGIN}/v2/version", status=400, times=2)
+        with self.assertRaises(MbError):
+            publish.upload(self.services(modrinth_token=True), repository=REPO, plan_dir=self.plan_dir,
+                           marketplace="modrinth")
+        for tag in self.plan["tags"]:
+            states = {row: value["state"] for row, value in self.ledger(tag["tag"])["rows"].items()
+                      if row.endswith("--modrinth")}
+            self.assertEqual(set(states.values()), {"unstarted"}, states)
+        self.assertTrue(self.publish_all())
+        self.assertEqual(len(self.modrinth.versions), 2)
+
+    def test_a_request_that_cannot_be_built_writes_no_intent(self) -> None:
+        self.curseforge.game_versions = [row for row in self.curseforge.game_versions if row["name"] != "Fabric"]
+        publish.create_releases(self.services(), repository=REPO, plan_dir=self.plan_dir)
+        with self.assertRaises(MbError):
+            publish.upload(self.services(curseforge_token=True), repository=REPO, plan_dir=self.plan_dir,
+                           marketplace="curseforge")
+        self.assertEqual(self.uploads(FakeCurseForge.UPLOAD_ORIGIN), 1, "only the lane CurseForge can name")
+        row = f"{self.plan['tags'][0]['lanes'][0]}--curseforge"
+        self.assertEqual(self.ledger(self.plan["tags"][0]["tag"])["rows"][row]["state"], "unstarted")
+
+    def test_a_newer_latest_release_keeps_its_mark(self) -> None:
+        newer = self.github.add_release("mc1.21.1-v9.0.0", draft=False)
+        self.github.latest = newer["id"]
+        self.assertTrue(self.publish_all())
+        self.assertEqual(self.github.latest, newer["id"])
 
     def test_verify_refuses_an_unbounded_wait(self) -> None:
         with self.assertRaises(MbError):

@@ -65,6 +65,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     admit = verbs.add_parser("admit", help="download and admit this run attempt's sealed plan")
     admit.add_argument("--plan-sha256", type=PLAN_SHA256, required=True)
+    admit.add_argument("--plan-attempt", type=cli.POSITIVE, required=True,
+                       help="the run attempt of the plan job, whose artifact holds the plan")
     admit.add_argument("--output", type=cli.PATH, required=True, metavar="DIR")
     admit.set_defaults(handler=run_admit)
 
@@ -126,7 +128,9 @@ def run_plan(args: argparse.Namespace) -> int:
 def run_admit(args: argparse.Namespace) -> int:
     environ = cli.environ()
     run_id = int(_required(environ, "GITHUB_RUN_ID"))
-    attempt = int(_required(environ, "GITHUB_RUN_ATTEMPT"))
+    attempt = args.plan_attempt
+    if attempt > int(_required(environ, "GITHUB_RUN_ATTEMPT")):
+        raise MbError("the plan attempt is later than this run attempt", reason="release")
     sha = grammar.require_sha1(_required(environ, "GITHUB_SHA"), "GITHUB_SHA")
     client = github_api.from_environment(environ, max_requests=MAX_RELEASE_ADMIT_REQUESTS)
     name = PLAN_ARTIFACT.format(run_id=run_id, attempt=attempt)

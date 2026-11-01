@@ -3,7 +3,7 @@
     "sha256": "4285a95b72e57285ec83298f4f34f5f371d84db3ce5d5dbad3f87fe475538867",
     "text": "### Added\n\n- A new skin menu.\n- Nicknames <!-- not a ledger -->."
   },
-  "config_sha256": "f6523b5f61382aaae4906eec70611441d58dada7ffd0674de804b470baa014cd",
+  "config_sha256": "25d6fc60689ceb29e3d899c46cb10ca770ea32565189b7401022938b1daa8fe6",
   "generation_sha256": "e2738b7a54eb9259e26f6dc68eee8251a62939a1d45c602633c0294875670568",
   "identity": {
     "base_branch": "master",
@@ -57,7 +57,7 @@
           "quilt"
         ],
         "name": "Block Pops 4.0.0 (Fabric 1.20.1)",
-        "project_id": "block-pops",
+        "project_id": "u1JjJR7q",
         "version_number": "4.0.0+fabric-1.20.1",
         "version_type": "release"
       },
@@ -79,7 +79,7 @@
           "fabric"
         ],
         "name": "Block Pops 4.0.0 (Fabric 1.21.1)",
-        "project_id": "block-pops",
+        "project_id": "u1JjJR7q",
         "version_number": "4.0.0+fabric-1.21.1",
         "version_type": "release"
       },
@@ -95,7 +95,7 @@
           "forge"
         ],
         "name": "Block Pops 4.0.0 (Forge 1.20.1)",
-        "project_id": "block-pops",
+        "project_id": "u1JjJR7q",
         "version_number": "4.0.0+forge-1.20.1",
         "version_type": "release"
       },
@@ -112,7 +112,7 @@
           "neoforge"
         ],
         "name": "Block Pops 4.0.0 (NeoForge 1.21.1)",
-        "project_id": "block-pops",
+        "project_id": "u1JjJR7q",
         "version_number": "4.0.0+neoforge-1.21.1",
         "version_type": "beta"
       },

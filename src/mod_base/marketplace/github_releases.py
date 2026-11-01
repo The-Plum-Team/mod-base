@@ -189,6 +189,33 @@ def create_ref(transport: HttpsTransport, repo: str, tag: str, sha: str) -> None
         raise MarketplaceError(f"GitHub created the tag {tag} somewhere unexpected")
 
 
+def tag_commit(transport: HttpsTransport, repo: str, tag: str) -> str | None:
+    """The commit the lightweight tag ``tag`` names, or ``None`` when no such tag exists. An
+    annotated tag, or a ref of another shape, raises: a release creates lightweight tags only."""
+
+    _require_origin(transport, API_ORIGIN)
+    repo, tag = _repo(repo), _tag(tag)
+    try:
+        existing = transport.get_json(f"/repos/{repo}/git/ref/tags/{tag}")
+    except MarketplaceNotFound:
+        return None
+    target = existing.get("object") if isinstance(existing, dict) else None
+    if (not isinstance(target, dict) or existing.get("ref") != f"refs/tags/{tag}" or target.get("type") != "commit"
+            or not isinstance(target.get("sha"), str) or grammar.SHA1.fullmatch(target["sha"]) is None):
+        raise MarketplaceError(f"the tag {tag} exists but is not a lightweight tag of a commit")
+    return target["sha"]
+
+
+def latest_release(transport: HttpsTransport, repo: str) -> dict[str, Any] | None:
+    """The repository's release marked latest, or ``None`` when it has none."""
+
+    _require_origin(transport, API_ORIGIN)
+    try:
+        return _release(transport.get_json(f"/repos/{_repo(repo)}/releases/latest"), "latest release")
+    except MarketplaceNotFound:
+        return None
+
+
 def _body(body: Any) -> str:
     return require_text(body, "release body", limits.MAX_GITHUB_RELEASE_BODY_CHARS, allow_empty=True,
                         single_line=False)

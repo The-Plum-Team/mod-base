@@ -54,9 +54,9 @@ from mod_base.release.config import (CURSEFORGE_RELATION_TYPES, CURSEFORGE_SLUG,
                                      MAX_RELEASE_CURSEFORGE_PROJECT_ID, MAX_RELEASE_DEPENDENCIES,
                                      MAX_RELEASE_GAME_VERSIONS, MAX_RELEASE_LANES, MAX_RELEASE_LOADERS,
                                      MAX_RELEASE_MODRINTH_NAME_CHARS, MAX_RELEASE_TAG_CHARS, MAX_RELEASE_TEXT_CHARS,
-                                     MAX_RELEASE_VERSION_CHARS, MODRINTH_DEPENDENCY_TYPES, MODRINTH_PROJECT,
+                                     MAX_RELEASE_VERSION_CHARS, MODRINTH_DEPENDENCY_TYPES, MODRINTH_ID, MODRINTH_PROJECT,
                                      MODRINTH_VERSION_NUMBER, RELEASE_VERSION, VERSION_TYPES, is_tag, pointer_tokens,
-                                     release_header, release_layout, validate_release_config)
+                                     changelog_path, release_header, release_layout, validate_release_config)
 
 # Bounds (they move to model/limits.py with the release component).
 #: Bytes of the canonical plan.
@@ -161,7 +161,7 @@ _TAG = Obj({"tag": _tag, "name": _text(MAX_RELEASE_TEXT_CHARS), "minecraft": Nul
 _LOADERS = List(Str(choices=tuple(LOADER_NAMES)), min_items=1, max_items=MAX_RELEASE_LOADERS, unique=True)
 _GAME_VERSIONS = List(_MINECRAFT, min_items=1, max_items=MAX_RELEASE_GAME_VERSIONS, unique=True)
 _MODRINTH = Obj({
-    "project_id": Str(MODRINTH_PROJECT, max_len=64),
+    "project_id": Str(MODRINTH_ID, max_len=8),
     "version_number": Str(MODRINTH_VERSION_NUMBER, max_len=32),
     "name": _text(MAX_RELEASE_MODRINTH_NAME_CHARS),
     "game_versions": _GAME_VERSIONS, "loaders": _LOADERS, "version_type": Str(choices=VERSION_TYPES),
@@ -190,6 +190,13 @@ _PLAN = Obj({
     "tags": List(_TAG, min_items=1, max_items=MAX_RELEASE_TAGS, unique_by=lambda item: item["tag"]),
     "lanes": Map(g.CI_UNIT_ID, _LANE, min_items=1, max_items=MAX_RELEASE_LANES, max_key_len=80),
 })
+
+
+def curseforge_stored_name(filename: str) -> str:
+    """The name CurseForge stores an upload under: since late October 2026 every run of spaces and
+    hyphens that holds a space becomes one hyphen (``mod_base.marketplace.curseforge.stored_name``)."""
+
+    return re.sub(r"[ -]* [ -]*", "-", filename)
 
 
 def github_asset_name(filename: str) -> str:
@@ -228,6 +235,7 @@ def validate_release_plan(document: Any, *, path: str = "$") -> dict[str, Any]:
     lanes = document["lanes"]
     placed: dict[str, str] = {}
     paths: set[str] = set()
+    jar_names: set[str] = set()
     total = 0
     count = 0
     for index, tag in enumerate(document["tags"]):
@@ -259,6 +267,12 @@ def validate_release_plan(document: Any, *, path: str = "$") -> dict[str, Any]:
             spelled = {asset["filename"].casefold(), github_asset_name(asset["filename"]).casefold()}
             check(not spelled & names, f"{where}.filename", "repeats a file name of the tag")
             names |= spelled
+            if asset["lane"] is not None:
+                # One marketplace project holds the jars of every tag, under the names CurseForge
+                # stores them with, so a jar's name is unique across the whole release.
+                stored = {asset["filename"].casefold(), curseforge_stored_name(asset["filename"]).casefold()}
+                check(not stored & jar_names, f"{where}.filename", "repeats the name of a jar of another tag")
+                jar_names |= stored
             total += asset["size"]
         for lane in tag["lanes"]:
             check(lane not in placed, f"{here}.lanes", f"lane {lane} is in two tags")
@@ -413,15 +427,17 @@ def _json_version(raw: bytes, pointer: str, label: str) -> Any:
 
 
 def read_changelog(repo: Path, changelog: dict[str, Any], version: str) -> str:
-    """The section of ``version`` in the Markdown changelog ``repo/<changelog.file>``.
+    """The notes of ``version``: with ``format: file`` the whole file the config's path names for
+    that version; otherwise the section of ``version`` in the Markdown changelog ``repo/<changelog.file>``.
 
     The file is strict UTF-8 without a byte-order mark or a carriage return, read through no
     symlink. Its first ``## `` heading must be exactly ``## <version> (<YYYY-MM-DD>)`` with a real
     date; the section is every line after it up to the next ``## `` heading, without its leading
     and trailing blank lines, and must satisfy the plan's changelog text rule."""
 
-    label = f"$.changelog.file ({changelog['file']})"
-    raw = read_child_file(repo, changelog["file"], max_bytes=MAX_RELEASE_CHANGELOG_FILE_BYTES)
+    relative = changelog_path(changelog, version)
+    label = f"$.changelog.file ({relative})"
+    raw = read_child_file(repo, relative, max_bytes=MAX_RELEASE_CHANGELOG_FILE_BYTES)
     check(not raw.startswith(b"\xef\xbb\xbf"), label, "starts with a byte-order mark")
     try:
         text = raw.decode("utf-8")
@@ -429,6 +445,14 @@ def read_changelog(repo: Path, changelog: dict[str, Any], version: str) -> str:
         raise ReleasePlanError(f"{label}: is not valid UTF-8") from error
     check("\r" not in text, label, "holds a carriage return: the changelog must use LF line endings")
     lines = text.split("\n")
+    if changelog.get("format", "section") == "file":
+        # The whole file is this version's notes (a file per version, its path naming {version}).
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        check(bool(lines), label, f"the notes of version {version} are empty")
+        return _changelog_text("\n".join(lines), label)
     start = next((index for index, line in enumerate(lines) if line.startswith("## ")), None)
     check(start is not None, label, "has no release heading")
     heading = _HEADING.fullmatch(lines[start])

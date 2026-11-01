@@ -648,13 +648,19 @@ gh workflow run mod-base-release.yml --ref <default branch> -f publish=true    #
 A publication asks for one approval of `mod-base-release`. Nothing may merge between the dispatch
 and that approval: `release admit` refuses a moved head, and the dispatch is simply repeated.
 
-- **Resume:** dispatch with `publish=true` again. Published files are recognized by content and
-  skipped; the ledger in each draft release's body says which rows are left.
+- **Resume:** dispatch with `publish=true` again, while the default branch is still at the
+  released commit and the same tested generation is selected (a new generation of the same commit
+  changes the plan's digest, which the drafts' ledgers bind). Published files are recognized by
+  content and skipped; the ledger in each draft release's body says which rows are left. No tag
+  exists until its release is published, so a release abandoned before then is cleaned up by
+  deleting its draft releases. The hourly schedule only verifies and publishes: a row left
+  `unstarted` (a skipped or refused upload) needs a new dispatch.
 - **Moderation:** what is still pending after the job's wait is finished by the caller's hourly
   schedule. To finish sooner, re-dispatch with `publish=true`; a rehearsal publishes nothing.
 - **A fenced row** (`uploading` with no remote file) is never retried automatically. Check the
   marketplace's author dashboard; only when it never accepted the file, edit that one row of the
-  draft's ledger back to `unstarted` and re-dispatch.
+  draft's ledger back to `unstarted` and re-dispatch. A definitive refusal of an upload (a 4xx) puts
+  the row back by itself, and so does any failure before the file was sent.
 - **Kill switch:** disable `mod-base-release.yml` in the Actions settings. Drafts stay drafts;
   nothing already published is touched.
 

@@ -26,11 +26,14 @@ on:
       tags:
         description: The release tags, space separated
         value: ${{ jobs.plan.outputs.tags }}
+      run-attempt:
+        description: The run attempt whose sealed artifact holds the plan
+        value: ${{ jobs.plan.outputs.run-attempt }}
 
 permissions: {}
 
 env:
-  MB_KIT_TREE_DIGEST: "sha256:eecad88fed91ec8b5e2160b30ad12b410dac562b1e14b23eadb5b38b2e5f229e"
+  MB_KIT_TREE_DIGEST: "sha256:c3faf83d190b656fe33c0b0ec4ffb50d46a6529816a13730e8a95723825d23d0"
 
 jobs:
   plan:
@@ -44,6 +47,7 @@ jobs:
       plan-sha256: ${{ steps.release.outputs.plan_sha256 }}
       version: ${{ steps.release.outputs.version }}
       tags: ${{ steps.release.outputs.tags }}
+      run-attempt: ${{ github.run_attempt }}
     steps:
       - name: Validate call inputs before any checkout
         shell: bash
