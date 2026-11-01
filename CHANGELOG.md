@@ -5,7 +5,7 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
-## Unreleased (planned v1.8.1)
+## v1.8.1
 
 Patch release: the release plan job refused every release (#49). A mod moves from v1.8.0 to v1.8.1
 with an ordinary pin bump.
