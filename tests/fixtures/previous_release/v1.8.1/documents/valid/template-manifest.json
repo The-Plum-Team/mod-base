@@ -1,0 +1,59 @@
+{
+  "files": [
+    {
+      "class": "managed",
+      "path": ".gitattributes",
+      "source": "managed/.gitattributes"
+    },
+    {
+      "class": "managed",
+      "path": ".github/workflows/pages.yml",
+      "source": "managed/.github/workflows/pages.yml"
+    },
+    {
+      "class": "managed",
+      "path": "scripts/ci/mod_base_kit.py",
+      "source": "managed/scripts/ci/mod_base_kit.py"
+    },
+    {
+      "class": "managed",
+      "path": "docs/ai/shared/REPOSITORY.md",
+      "source": "managed/docs/ai/shared/REPOSITORY.md"
+    },
+    {
+      "class": "fragment",
+      "lines": [
+        "e2e-out/",
+        "out/",
+        "_site/",
+        "public-evidence/"
+      ],
+      "path": ".gitignore",
+      "source": "seed/.gitignore.base"
+    },
+    {
+      "class": "fragment",
+      "markers": [
+        "CONTRIBUTING.md",
+        "AGENTS.md",
+        "## Summary",
+        "## Validation",
+        "## AI assistance"
+      ],
+      "path": ".github/pull_request_template.md",
+      "source": "seed/.github/pull_request_template.md.tmpl"
+    },
+    {
+      "class": "fragment",
+      "path": "AGENTS.md",
+      "source": "seed/AGENTS.md.tmpl"
+    },
+    {
+      "class": "seeded",
+      "path": "CONTRIBUTING.md",
+      "source": "seed/CONTRIBUTING.md.tmpl"
+    }
+  ],
+  "kind": "mod-base.template-manifest",
+  "schema_version": 1
+}

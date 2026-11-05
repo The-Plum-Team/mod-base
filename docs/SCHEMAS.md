@@ -11,7 +11,7 @@ the organization members snapshot.
 These kinds are separate from `mod-base.build`, the Pages publication record, and no Pages
 document shape changes. The compatibility decision of every kind against the previous release is
 `tests/fixtures/documents/compatibility.json`, which `tests/test_schema_evolution.py` enforces
-with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.8.0, which
+with the archived reader in `tests/fixtures/previous_release/`. Its baseline is v1.8.1, which
 reads every kind of this release unchanged. The optional `seeds` of the Build config (v1.2.0) stays within schema 1; a reader older
 than v1.2.0 refuses a config that sets it. So does the optional `admission` (v1.3.0); a v1.2.1
 reader refuses a config that sets it. So do the optional `runtime_selection` of the Build config,
@@ -299,7 +299,7 @@ The handoff fields, plus:
 
 Rules: `files` is exactly `expectation.json`, `selection.json`, `extensions.json` (iff set) and the
 set of derivative images; with the embedded expectation every derivative size equals
-`thumbnail_size(source, image_policy.derivative_box)` (Pillow 12.3 `Image.thumbnail`), and a
+`thumbnail_size(source, image_policy.derivative_box)` (Pillow 13.0 `Image.thumbnail`), and a
 published (`complete` or `composed`) bundle embeds the **complete** expectation (R3: composed
 frames equal the complete expectation; a compose hook therefore emits the extensions from which
 the adapter re-derives the complete expectation, R2), while the intermediate embeds its selected
