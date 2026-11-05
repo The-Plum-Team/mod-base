@@ -298,7 +298,7 @@ _TESTED_FRAME_RECORD = Obj({**RUN_RECORD_REQUIRED, "jar_sha256": SHA256}, RUN_RE
 
 
 def thumbnail_size(source: tuple[int, int] | list[int], box: tuple[int, int] | list[int]) -> tuple[int, int]:
-    """Return the size Pillow 12.3 ``Image.thumbnail(box)`` produces for an image of ``source`` size.
+    """Return the size Pillow 13.0 ``Image.thumbnail(box)`` produces for an image of ``source`` size.
 
     This is a verbatim port of ``Image.thumbnail``'s ``preserve_aspect_ratio`` so the model can
     check derivative dimensions without decoding. An image already inside the box is unchanged.

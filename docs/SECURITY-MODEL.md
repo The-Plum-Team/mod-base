@@ -200,7 +200,7 @@ sandbox against a malicious adapter:
 
 - Every action is pinned to a full commit SHA; `sha_pinning_required` is recommended on the mod
   repositories and required on mod-base, whose Actions policy allows GitHub-owned actions only.
-- Pillow is installed only from the 86-hash lock (`--require-hashes --only-binary=:all:`), kept in
+- Pillow is installed only from the 82-hash lock (`--require-hashes --only-binary=:all:`), kept in
   lockstep with the mods' own locks by tests. The kit's Pages jobs install it globally; a runner
   that installs it with `pip install --user` (Block Pops' credentialless sandbox) reaches the kit's
   isolated children only through the user-site rule of "The mod adapter" above.

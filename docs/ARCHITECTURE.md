@@ -17,7 +17,7 @@ signatures). [SECURITY-MODEL.md](SECURITY-MODEL.md) explains the trust boundarie
 ```
 src/mod_base/        the Python package (stdlib + hash-locked Pillow), run as python3 -P -m mod_base
 site/                the static front end (landing page, gallery), templated at build time
-requirements/        pillow.txt: the 86-hash Pillow 12.3.0 lock shared with the mods
+requirements/        pillow.txt: the 82-hash Pillow 13.0.0 lock shared with the mods
 tools/               stdlib helpers: test runner, digest literal updater, composite tree check, API retry
 .github/workflows/   publish.yml, finalize.yml, rotate.yml (reusable, called by each mod) and ci.yml
 actions/             setup, prepare-evidence, publish-family, notify-pages (composites used by mod jobs)

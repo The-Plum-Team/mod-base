@@ -1,4 +1,4 @@
-"""Pins ``requirements/pillow.txt`` to the Pillow==12.3.0 stanza shared by both mods (SPEC §2.4, V10)."""
+"""Pins ``requirements/pillow.txt`` to the Pillow==13.0.0 stanza shared by both mods (SPEC §2.4, V10)."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ import unittest
 from pathlib import Path
 
 LOCK = Path(__file__).resolve().parents[1] / "requirements" / "pillow.txt"
-#: SHA-256 of the stanza ("Pillow==12.3.0 \\" line through the last hash line, LF, trailing newline)
+#: SHA-256 of the stanza ("Pillow==13.0.0 \\" line through the last hash line, LF, trailing newline)
 #: exactly as it appears in Quick Skin and Block Pops ``e2e/requirements.txt``.
-STANZA_SHA256 = "0e1bfea9c69d8ff40f04784e40d22d91c2d86f1670394a896258df74253b60a5"
-PAGES_HASH = "0847a763afefb695bc912d7c131e7e0632d4edc1d8698f58ddabec8e46b8b6d3"
+STANZA_SHA256 = "c81a1c836a2cd1b892001af6dcbe8e42bcc2cdc4fcafe6c21398880093a23dad"
+PAGES_HASH = "5f56499c1a74d2b862beb0c33b8016f99d095858455df9d21583bbbc1c15b582"
 
 
 def _text() -> str:
@@ -29,16 +29,16 @@ class PillowLockTest(unittest.TestCase):
 
     def test_version_and_hash_count(self) -> None:
         lines = [line for line in _text().split("\n")[1:] if line]
-        self.assertEqual(lines[0], "Pillow==12.3.0 \\")
+        self.assertEqual(lines[0], "Pillow==13.0.0 \\")
         hashes = lines[1:]
-        self.assertEqual(len(hashes), 86)
+        self.assertEqual(len(hashes), 82)
         pattern = re.compile(r"^    --hash=sha256:[0-9a-f]{64}( \\)?$")
         for line in hashes:
             self.assertRegex(line, pattern)
         self.assertFalse(hashes[-1].endswith("\\"))
         self.assertTrue(all(line.endswith(" \\") for line in hashes[:-1]))
         digests = [line.split(":")[1].split()[0] for line in hashes]
-        self.assertEqual(len(set(digests)), 86)
+        self.assertEqual(len(set(digests)), 82)
 
     def test_contains_the_pages_linux_wheel(self) -> None:
         self.assertIn(f"--hash=sha256:{PAGES_HASH}", _text())
@@ -47,7 +47,7 @@ class PillowLockTest(unittest.TestCase):
         text = _text()
         self.assertTrue(text.endswith("\n"))
         requirements = [line for line in text.split("\n") if "==" in line and not line.startswith("#")]
-        self.assertEqual(requirements, ["Pillow==12.3.0 \\"])
+        self.assertEqual(requirements, ["Pillow==13.0.0 \\"])
 
 
 if __name__ == "__main__":

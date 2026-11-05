@@ -5,6 +5,33 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.8.2
+
+Patch release: a security update of the kit's only runtime dependency. A mod moves from v1.8.1 to
+v1.8.2 with an ordinary pin bump and the same Pillow move in its own lock.
+
+- `requirements/pillow.txt` pins Pillow 13.0.0 instead of 12.3.0, with all 82 wheel hashes PyPI
+  publishes for it (12.3.0 had 86). 13.0.0 is the first release that fixes the Pillow security
+  advisories open against 12.3.0. Every Pages, prepare-evidence and setup job installs it from that
+  lock as before (`--require-hashes --only-binary=:all:`).
+- Imaging is unchanged. The Linux x86_64 CPython 3.13 wheels of 12.3.0 and 13.0.0 bundle the same
+  libwebp 1.6.0 and zlib-ng 2.3.3, and on the kit's imaging fixtures both give byte-identical
+  canonical PNGs and WebP derivatives and identical PixelMetrics and comparisons. Caches, baseline
+  archives, family caches and anchors written under v1.8.1 therefore still revalidate, and a
+  `validate --bind-raw` or anchor check never compares a 12.3.0 encoding with a 13.0.0 one.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the managed files and the workflows' jobs, steps and permissions are
+  those of v1.8.1. The compatibility baseline moves to the archived v1.8.1 reader
+  (`tests/fixtures/previous_release/v1.8.1`), which reads every kind of this release unchanged.
+- Upgrade: bump the pin to v1.8.2 (`python3 scripts/ci/mod_base_kit.py bump --to v1.8.2`, then
+  `verify --network` and `template check`) and, in the same pull request, move the mod's own
+  Pillow locks to the 13.0.0 hashes of `requirements/pillow.txt`: `e2e/requirements.txt` and
+  `scripts/pages/requirements.txt` in Quick Skin and Block Pops, plus Block Pops'
+  `scripts/visual/requirements.txt`. The mods' lockstep tests require the kit's Pillow version and
+  a subset of its hashes, and their own curation re-encodes the anchors the kit cuts.
+- Rollback: an ordinary pin bump back to v1.8.1 together with the mod's Pillow 12.3.0 stanza, which
+  reopens the advisories; evidence written under v1.8.2 stays valid under v1.8.1.
+
 ## v1.8.1
 
 Patch release: the release plan job refused every release (#49). A mod moves from v1.8.0 to v1.8.1
