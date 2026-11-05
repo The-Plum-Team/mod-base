@@ -660,6 +660,9 @@ Compiled full-match patterns (use `is_match`/`require`; the grammar is SCHEMAS.m
 * `def parse_artifact_name(name: object) -> ArtifactName | None`: Parse a kit artifact name, or return ``None`` when it is not exactly a kit name.
 * `def require_artifact_name(name: object, kind: str) -> ArtifactName`: Parse ``name`` and require its kind; raise MbError for foreign or malformed names.
 * `def is_kit_artifact_name(name: object) -> bool`: True only for names this kit may create, list, download or retire.
+* `RELEASE_PLAN_PREFIX`
+* `def release_plan_name(run_id: int, attempt: int) -> str`: ``mb-rel-plan--<run_id>--a<attempt>``, the sealed plan of one release run attempt. Not a Pages name: rotation never acquires authority over it.
+* `def parse_release_plan_name(name: object) -> tuple[int, int] | None`: ``(run_id, attempt)`` of a release plan name, or ``None`` for any other name.
 
 ## `mod_base.model.limits`
 
@@ -1057,6 +1060,7 @@ Bounded ZIP extraction (MB1).
 * `class ExtractionLimits`: Bounds for one archive. ``suffixes`` (when set) restricts every file name's extension.
   * fields: `max_entries: int, max_total_bytes: int, max_entry_bytes: int, max_ratio: int = 200, suffixes: frozenset[str] | None = None`
 * `def extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits) -> list[str]`: Validate and extract ``archive`` into the new directory ``destination``. Every entry name is a canonical bundle path (`tree.BUNDLE_PATHS`): the Pages artifacts, whose file names the kit chooses.
+* `def extract_release(archive: Path | bytes, destination: Path, limits_: ExtractionLimits) -> list[str]`: Extract a sealed release plan within ``limits_``; entry names are export paths (`tree.EXPORT_PATHS`), as `admit_release` reads them, so its assets keep the mod's own file names.
 * `def extract_build(archive: Path | bytes, destination: Path) -> list[str]`: Extract with fixed CI export bounds plus the envelope, validation record and at most one bounded report per target through the same hostile ZIP validator and exclusive publication. Entry names are export paths (`tree.EXPORT_PATHS`, the mod's own staged file names); names that differ only in case are refused as on every route. Existing Pages extract/archive_limit entry ceilings remain unchanged.
 * `def extract_runtime(archive: Path | bytes, destination: Path, *, scope: str) -> list[str]`: Extract closed lane/complete runtime data under fixed native payload bounds plus the envelope, validation record and one bounded report per lane, preserving empty logs only on this route. Entry names are export paths (`tree.EXPORT_PATHS`). Shared complete hostile ZIP checks and exclusive publication remain; exact canonical envelope/bytes/native role admission is separately mandatory. Existing Pages/Build nonempty-file contracts and limits are unchanged.
 
@@ -3471,7 +3475,6 @@ Owner: MB12. The ''release'' command (docs/RELEASE-PROTOCOL.md): one verb per st
 
 * `MAX_RELEASE_ASSETS`
 * `MAX_RELEASE_ASSET_BYTES`
-* `PLAN_ARTIFACT`
 * `PLAN_EXTRACTION`
 * `MAX_GENERATION_BYTES`
 * `MAX_RELEASE_ADMIT_REQUESTS`

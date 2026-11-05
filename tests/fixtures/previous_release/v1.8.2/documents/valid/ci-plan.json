@@ -1,0 +1,82 @@
+{
+  "build_adapter_api": 1,
+  "identity": {
+    "base_branch": "master",
+    "base_sha": "2222222222222222222222222222222222222222",
+    "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+    "controller_sha": "2222222222222222222222222222222222222222",
+    "controller_workflow": ".github/workflows/build-gate.yml",
+    "graph_version": 1,
+    "head_branch": "feature/example",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "inventory_blob": "7777777777777777777777777777777777777777",
+    "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+    "kit": {
+      "repository": "The-Plum-Team/mod-base",
+      "sha": "3333333333333333333333333333333333333333",
+      "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "version": "1.1.0"
+    },
+    "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "pr_number": 7,
+    "repository": "example/mod",
+    "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+    "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+    "source_repository": "example/mod",
+    "tested_parents": [
+      "2222222222222222222222222222222222222222",
+      "1111111111111111111111111111111111111111"
+    ],
+    "tested_sha": "5555555555555555555555555555555555555555",
+    "tested_tree": "6666666666666666666666666666666666666666"
+  },
+  "kind": "mod-base.build.plan",
+  "lanes": [
+    {
+      "id": "lane-a",
+      "native_contract_sha256": "d34a25fc38216ea602efe8e4c797d68c7265b56b3c809b2583cd24cf8d028c82",
+      "obligations": [
+        "scenario/example/server/probe"
+      ],
+      "target_id": "target-a"
+    }
+  ],
+  "plan_inputs": [
+    {
+      "name": "gradle-properties",
+      "sha256": "ff7b9b0c0dec693f12e17e119ea8ed8ebc89d8a9b60989192388146182318d43"
+    }
+  ],
+  "plan_sha256": "d58df54194e7f2b3e80305289a4eb71b4a4ee50feede2011dbc87b8e48799d80",
+  "profile": "block-pops",
+  "schema_version": 1,
+  "targets": [
+    {
+      "id": "target-a",
+      "java": 21,
+      "native_contract_sha256": "b3a80b236c6a489ddc9df5dd7549eccac288a41d726f81399a071bd00659c10d",
+      "outputs": [
+        {
+          "lane_id": "lane-a",
+          "path": "staged/lane-a/production.jar",
+          "role": "production"
+        },
+        {
+          "lane_id": "lane-a",
+          "path": "staged/lane-a/harness.jar",
+          "role": "harness"
+        },
+        {
+          "lane_id": "lane-a",
+          "path": "staged/lane-a/sbom.json",
+          "role": "sbom"
+        },
+        {
+          "lane_id": "lane-a",
+          "path": "staged/lane-a/native-report.json",
+          "role": "native-report"
+        }
+      ]
+    }
+  ]
+}

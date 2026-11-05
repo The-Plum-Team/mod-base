@@ -452,6 +452,33 @@ def is_kit_artifact_name(name: object) -> bool:
     return parse_artifact_name(name) is not None
 
 
+# The release plan has its own name too: ``release plan`` uploads it and ``release admit`` reads it
+# back from the same run attempt. It is not a Pages name, so rotation never acquires authority over
+# it; only the exact-name listing of one run and the verified download accept it beside the Pages
+# names.
+RELEASE_PLAN_PREFIX = "mb-rel-plan"
+
+
+def release_plan_name(run_id: int, attempt: int) -> str:
+    """``mb-rel-plan--<run_id>--a<attempt>``, the sealed plan of one release run attempt."""
+
+    return _finish(f"{RELEASE_PLAN_PREFIX}--{require_positive_int(run_id, 'run id')}--{_attempt_text(attempt)}")
+
+
+def parse_release_plan_name(name: object) -> tuple[int, int] | None:
+    """``(run_id, attempt)`` of a release plan name, or ``None`` for any other name."""
+
+    if not isinstance(name, str) or len(name.encode("utf-8")) > limits.MAX_ARTIFACT_NAME_BYTES:
+        return None
+    parts = name.split("--")
+    if len(parts) != 3 or parts[0] != RELEASE_PLAN_PREFIX:
+        return None
+    run_id, attempt = _parse_run_id(parts[1]), _parse_attempt(parts[2])
+    if run_id is None or attempt is None:
+        return None
+    return run_id, attempt
+
+
 # Build artifacts have their own closed grammar. The Pages parser deliberately does not
 # recognize them: Pages rotation must not acquire authority over these retained source bytes.
 CI_ARTIFACT_PREFIXES = {

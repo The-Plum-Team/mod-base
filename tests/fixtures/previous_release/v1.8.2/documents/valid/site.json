@@ -1,0 +1,65 @@
+{
+  "copy": {
+    "evidence_lead": "Every public frame comes from a successful packaged-JAR scenario.",
+    "principles": [
+      "The same staged production jars launch under their exact Minecraft and loader versions."
+    ]
+  },
+  "families": [
+    {
+      "available": true,
+      "family": "mod-compatibility",
+      "lane_count": 1,
+      "title": "Mod compatibility"
+    }
+  ],
+  "gallery_url": "e2e/",
+  "generated": {
+    "implementation_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "kit_sha": "734f6e6bc8ba05938734384ab7835c45111af4d3",
+    "kit_version": "0.9.0",
+    "pages_run_url": "https://github.com/The-Plum-Team/Quick-Skin-Mod/actions/runs/500"
+  },
+  "kind": "mod-base.site",
+  "project": {
+    "description": "Change, preview, and synchronize local skins, capes, and CPM models in-game.",
+    "eyebrow": "Minecraft appearance mod",
+    "icon": "assets/icon.png",
+    "issues_url": "https://github.com/The-Plum-Team/Quick-Skin-Mod/issues",
+    "license_label": "All Rights Reserved",
+    "links": [
+      {
+        "description": "Download Quick Skin from Modrinth.",
+        "id": "modrinth",
+        "title": "Modrinth",
+        "url": "https://modrinth.com/mod/quick-skin"
+      }
+    ],
+    "name": "Quick Skin",
+    "repository_url": "https://github.com/The-Plum-Team/Quick-Skin-Mod",
+    "tagline": "Change your look. Stay in the game."
+  },
+  "releases": [
+    {
+      "frame_count": 4,
+      "key": "mc1.20.1",
+      "label": "Minecraft 1.20.1",
+      "lane_count": 2,
+      "loader_names": [
+        "Fabric",
+        "Forge"
+      ],
+      "loaders": [
+        "fabric",
+        "forge"
+      ],
+      "minecraft": [
+        "1.20.1"
+      ],
+      "short_sha": "eb2c848e8900",
+      "subject_commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "tested_run_url": "https://github.com/The-Plum-Team/Quick-Skin-Mod/actions/runs/101"
+    }
+  ],
+  "schema_version": 1
+}

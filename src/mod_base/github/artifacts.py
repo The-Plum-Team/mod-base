@@ -23,7 +23,7 @@ from typing import Any
 from mod_base.errors import MbError
 from mod_base.github.api import GitHubApi
 from mod_base.github.jobs import actions_time
-from mod_base.io.bounded_zip import ExtractionLimits, archive_limit, extract
+from mod_base.io.bounded_zip import ExtractionLimits, archive_limit, extract, extract_release
 from mod_base.model import grammar, limits
 
 OWNER = "MB1"
@@ -36,6 +36,12 @@ MAX_ARCHIVE_BYTES = limits.MAX_ARTIFACT_BYTES
 
 def _fail(message: str) -> MbError:
     return MbError(message, reason="artifact")
+
+
+def _readable_name(name: object) -> bool:
+    """A Pages name or a release plan name: the names one run's listing and a download accept."""
+
+    return grammar.is_kit_artifact_name(name) or grammar.parse_release_plan_name(name) is not None
 
 
 def _positive(value: Any, label: str, maximum: int = limits.MAX_RUN_ID) -> int:
@@ -154,7 +160,7 @@ def list_run_named(api: GitHubApi, run_id: int, name: str, *,
     sibling finalize jobs upload concurrently, are never part of the listing."""
 
     _positive(run_id, "run id")
-    if not grammar.is_kit_artifact_name(name):
+    if not _readable_name(name):
         raise _fail(f"refusing to list a name that is not a kit artifact name: {name!r}"[:200])
     rows = api.paginate(f"/repos/{api.repository}/actions/runs/{run_id}/artifacts", field="artifacts",
                         params={"name": name}, max_items=max_items)
@@ -175,7 +181,8 @@ def download(api: GitHubApi, *, artifact_id: int, name: str, digest: str, size: 
              output: Path, extraction: ExtractionLimits) -> list[str]:
     """Download artifact ``artifact_id`` into the new directory ``output`` after re-reading its
     metadata and requiring exactly ``name``, ``digest``, ``size``, owner ``run_id`` and not expired;
-    the ZIP bytes must hash to ``digest``. Returns the extracted relative paths.
+    the ZIP bytes must hash to ``digest``. Returns the extracted relative paths. A Pages artifact's
+    entries are bundle paths; a release plan's are export paths, which keep the mod's file names.
 
     ``size`` must also fit the archive bound of ``extraction`` (:func:`bounded_zip.archive_limit`),
     so an artifact its extractor would refuse is never fetched into memory."""
@@ -185,7 +192,7 @@ def download(api: GitHubApi, *, artifact_id: int, name: str, digest: str, size: 
         raise _fail("extraction limits are required")
     _positive(size, "artifact size", min(MAX_ARCHIVE_BYTES, archive_limit(extraction)))
     _positive(run_id, "artifact run id")
-    if grammar.parse_artifact_name(name) is None:
+    if not _readable_name(name):
         raise _fail(f"refusing to download a name that is not a kit artifact name: {name!r}"[:200])
     grammar.require(grammar.DIGEST, digest, "artifact digest")
     if os.path.lexists(output):
@@ -202,6 +209,8 @@ def download(api: GitHubApi, *, artifact_id: int, name: str, digest: str, size: 
         raise _fail(f"artifact {artifact_id} download is {len(data)} bytes, not {size}")
     if "sha256:" + hashlib.sha256(data).hexdigest() != digest:
         raise _fail(f"artifact {artifact_id} bytes do not match their sha256 digest")
+    if grammar.parse_release_plan_name(name) is not None:
+        return extract_release(data, output, extraction)
     return extract(data, output, extraction)
 
 

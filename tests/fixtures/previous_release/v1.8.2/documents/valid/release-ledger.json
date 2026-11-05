@@ -1,0 +1,24 @@
+{
+  "kind": "mod-base.release.ledger",
+  "plan_sha256": "e73f0a11d39f62d6fe30a32bf21cc345dbf88ae9685acce00b4bc39fa0f2cd17",
+  "rows": {
+    "fabric-1.20.1--modrinth": {
+      "remote_id": null,
+      "state": "unstarted"
+    },
+    "fabric-1.21.1--modrinth": {
+      "remote_id": null,
+      "state": "unstarted"
+    },
+    "forge-1.20.1--modrinth": {
+      "remote_id": null,
+      "state": "unstarted"
+    },
+    "neoforge-1.21.1--modrinth": {
+      "remote_id": null,
+      "state": "unstarted"
+    }
+  },
+  "schema_version": 1,
+  "tag": "v4.0.0"
+}
