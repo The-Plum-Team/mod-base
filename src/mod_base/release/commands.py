@@ -33,8 +33,6 @@ from mod_base.release.config import load_release_config
 from mod_base.release.plan import (MAX_RELEASE_ASSETS, MAX_RELEASE_ASSET_BYTES, admit_release, derive_release_plan,
                                    plan_digest, released_commit, seal_release)
 
-#: The one artifact of a plan job: the sealed plan and its assets.
-PLAN_ARTIFACT = "mb-rel-plan--{run_id}--a{attempt}"
 #: What ``release admit`` extracts: the plan plus one file per asset.
 PLAN_EXTRACTION = ExtractionLimits(max_entries=MAX_RELEASE_ASSETS + 1,
                                    max_total_bytes=MAX_RELEASE_ASSETS * MAX_RELEASE_ASSET_BYTES,
@@ -143,7 +141,7 @@ def run_admit(args: argparse.Namespace) -> int:
         raise MbError(f"this job runs in the environment {args.environment!r}, not the release config's "
                       f"{config['environment']!r}", reason="release")
     client = github_api.from_environment(environ, max_requests=MAX_RELEASE_ADMIT_REQUESTS)
-    name = PLAN_ARTIFACT.format(run_id=run_id, attempt=attempt)
+    name = grammar.release_plan_name(run_id, attempt)
     found = [artifact for artifact in artifacts.list_run_named(client, run_id, name) if not artifact.expired]
     if len(found) != 1:
         raise MbError(f"this run attempt holds {len(found)} artifacts named {name}, not one", reason="release")

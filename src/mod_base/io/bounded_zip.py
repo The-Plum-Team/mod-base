@@ -391,6 +391,16 @@ def extract(archive: Path | bytes, destination: Path, limits_: ExtractionLimits)
     return _extract(archive, destination, limits_, limits.MAX_ZIP_ENTRIES, rule=BUNDLE_PATHS)
 
 
+def extract_release(archive: Path | bytes, destination: Path, limits_: ExtractionLimits) -> list[str]:
+    """Extract a sealed release plan within ``limits_``.
+
+    Entry names are export paths (``tree.EXPORT_PATHS``), as :func:`mod_base.release.plan.admit_release`
+    reads them: its assets keep the mod's own file names, such as
+    ``assets/<tag>/Quick Skin - Fabric - 1.20.1-4.1.0.jar``."""
+
+    return _extract(archive, destination, limits_, limits.MAX_ZIP_ENTRIES, rule=EXPORT_PATHS)
+
+
 def extract_build(archive: Path | bytes, destination: Path) -> list[str]:
     """Extract a Build export with fixed CI bounds; Pages limits remain unchanged.
 

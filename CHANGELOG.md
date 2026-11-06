@@ -5,6 +5,33 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.8.3
+
+Patch release: the publish job refused every release. A mod moves from v1.8.2 to v1.8.3 with an
+ordinary pin bump.
+
+- `release admit` lists this run attempt's sealed plan `mb-rel-plan--<run>--a<attempt>` by its
+  exact name and downloads it by id, but the artifact helpers admitted only Pages names, so the
+  first Quick Skin release stopped there ("refusing to list a name that is not a kit artifact
+  name") before any draft or upload. The release plan now has its own name grammar
+  (`grammar.release_plan_name`, `parse_release_plan_name`), which the exact-name listing of one run
+  and the verified download accept beside the Pages names. It is not a Pages name, so rotation never
+  gains authority over it.
+- The downloaded plan is extracted under the export path rule (`bounded_zip.extract_release`), the
+  rule `admit_release` reads it with, so its assets keep the mod's own file names, such as
+  `Quick Skin - Fabric - 1.20.1-4.1.0.jar`; the Pages rule refused the spaces in them. Pages
+  artifacts keep the bundle rule.
+- A test runs `release plan` and then `release admit` as the two jobs do, through the kit's own
+  artifact helpers, and admits the plan the first sealed.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the Pillow lock, the managed files and the workflows' jobs, steps and
+  permissions are those of v1.8.2. The compatibility baseline moves to the archived v1.8.2 reader
+  (`tests/fixtures/previous_release/v1.8.2`), which reads every kind of this release unchanged.
+- Upgrade: bump the pin to v1.8.3 (`python3 scripts/ci/mod_base_kit.py bump --to v1.8.3`, then
+  `verify --network` and `template check`). A release that failed at admission under v1.8.2 left no
+  draft and no tag; dispatch it again after the bump.
+- Rollback: an ordinary pin bump back to v1.8.2, under which no release can be published.
+
 ## v1.8.2
 
 Patch release: a security update of the kit's only runtime dependency. A mod moves from v1.8.1 to

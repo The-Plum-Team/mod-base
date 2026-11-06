@@ -622,5 +622,89 @@ class PlanCommandTests(Case):
                 self.rejects(self.run_plan, self.world(), **{name: value})
 
 
+class AdmitCommandTests(PlanCommandTests):
+    """``release admit`` as the publish job runs it: it lists this run attempt's sealed plan by its
+    exact name, downloads it by id through the kit's own artifact helpers, and admits it."""
+
+    RUN_ID, ATTEMPT = 42120262751, 1
+
+    class FakeApi:
+        def __init__(self, repository: str, name: str, data: bytes, head: str) -> None:
+            self.repository, self.name, self.data, self.head = repository, name, data, head
+            self.row = {"id": 77, "name": name, "size_in_bytes": len(data), "expired": False,
+                        "created_at": "2026-11-05T22:20:00Z",
+                        "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
+                        "workflow_run": {"id": AdmitCommandTests.RUN_ID, "head_branch": "master", "head_sha": head}}
+
+        def paginate(self, path, *, field, params=None, max_items=None):
+            assert path == f"/repos/{self.repository}/actions/runs/{AdmitCommandTests.RUN_ID}/artifacts", path
+            assert field == "artifacts" and dict(params or {}) == {"name": self.name}, params
+            return [self.row]
+
+        def get_json(self, path, *, params=None):
+            if path == f"/repos/{self.repository}/actions/artifacts/77":
+                return self.row
+            if path == f"/repos/{self.repository}":
+                return {"default_branch": "master"}
+            if path == f"/repos/{self.repository}/commits/master":
+                return {"sha": self.head}
+            raise AssertionError(path)
+
+        def download(self, path, *, max_bytes):
+            assert path == f"/repos/{self.repository}/actions/artifacts/77/zip" and max_bytes == len(self.data)
+            return self.data
+
+    def run_admit(self, world: World, outputs: dict[str, str], sealed: Path, **environ: str) -> Path:
+        import argparse
+        import io
+        import zipfile
+        from unittest import mock
+
+        from mod_base.model import grammar
+        from mod_base.release import commands
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(sealed.rglob("*")):
+                if path.is_file():
+                    archive.write(path, path.relative_to(sealed).as_posix())
+        name = grammar.release_plan_name(self.RUN_ID, self.ATTEMPT)
+        sha = world.generation["identity"]["tested_sha"]
+        api = self.FakeApi(world.config["repository"], name, buffer.getvalue(), sha)
+        output = self.root / "admitted"
+        args = argparse.Namespace(plan_sha256=outputs["plan_sha256"], plan_attempt=self.ATTEMPT,
+                                  release_config=self.root / "mod-base-release.json",
+                                  environment=world.config["environment"], output=output)
+        environ = {"GITHUB_RUN_ID": str(self.RUN_ID), "GITHUB_RUN_ATTEMPT": str(self.ATTEMPT), "GITHUB_SHA": sha,
+                   "GITHUB_REPOSITORY": world.config["repository"], **environ}
+        with mock.patch.object(commands.cli, "environ", return_value=environ), \
+                mock.patch.object(commands.github_api, "from_environment", return_value=api):
+            self.assertEqual(commands.run_admit(args), 0)
+        return output
+
+    def test_the_publish_job_admits_the_plan_its_plan_job_uploaded(self) -> None:
+        world = self.world()
+        outputs, sealed = self.run_plan(world)
+        admitted = self.run_admit(world, outputs, sealed)
+        self.assertEqual(admit_release(admitted, plan_sha256=outputs["plan_sha256"]),
+                         admit_release(sealed, plan_sha256=outputs["plan_sha256"]))
+
+    def test_the_plan_name_is_the_one_the_workflow_uploads(self) -> None:
+        from mod_base.model import grammar
+
+        self.assertEqual(grammar.release_plan_name(43, 2), "mb-rel-plan--43--a2")
+        self.assertEqual(grammar.parse_release_plan_name("mb-rel-plan--43--a2"), (43, 2))
+        for name in ("mb-rel-plan--43", "mb-rel-plan--0--a1", "mb-rel-plan--43--a0", "mb-rel-plan--43--2",
+                     "mb-rel-plans--43--a2", "mb-rel-plan--43--a2--x", None):
+            with self.subTest(name=name):
+                self.assertIsNone(grammar.parse_release_plan_name(name))
+
+    def test_a_release_plan_is_no_pages_name(self) -> None:
+        from mod_base.model import grammar
+
+        self.assertIsNone(grammar.parse_artifact_name("mb-rel-plan--43--a2"))
+        self.assertFalse(grammar.is_kit_artifact_name("mb-rel-plan--43--a2"))
+
+
 if __name__ == "__main__":
     unittest.main()
