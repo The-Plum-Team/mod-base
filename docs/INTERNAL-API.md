@@ -3452,7 +3452,7 @@ Owner: MB12. The publication state machine of one sealed release plan (docs/RELE
 * `MAX_MARKETPLACE_REQUESTS`
 * `PLAN_NAME`
 * `PLAN_ASSET`
-* `UPLOAD_WORKERS`
+* `LOADER_UPLOAD_ORDER`
 * `VERIFY_INTERVAL_SECONDS`
 * `MAX_VERIFY_WAIT_SECONDS`
 * `MARKETPLACES`
@@ -3465,7 +3465,8 @@ Owner: MB12. The publication state machine of one sealed release plan (docs/RELE
 * `class Reconciler`: One pass of reconciliation: each project's marketplace listing is read once per pass, not once per row (a CurseForge listing can take hundreds of requests).
   * `modrinth_project(self, project: str) -> str`
 * `def create_releases(services: Services, *, repository: str, plan_dir: Path) -> list[Release]`: Create every tag at the released commit and one draft release per tag holding its assets, the plan asset and a fresh ledger; resume what an earlier attempt created. A tag that exists at another commit, or an asset of the right name with other bytes, fails closed.
-* `def upload(services: Services, *, repository: str, plan_dir: Path, marketplace: str) -> dict[str, str]`: Upload every lane of the plan to ''marketplace'', at most :data:'UPLOAD_WORKERS' at once, and return each row's state. Every row is attempted; the first failure is raised after the others finished, so one refused file does not hold back the rest of the release.
+* `def upload_order(plan: dict[str, Any], marketplace: str, tag: dict[str, Any], lane: str) -> tuple`: Where a lane's file goes in the upload sequence: oldest Minecraft version first, then its loaders in :data:'LOADER_UPLOAD_ORDER'. The marketplaces list the newest upload first, so the project page shows the newest version on top with each version's loaders side by side.
+* `def upload(services: Services, *, repository: str, plan_dir: Path, marketplace: str) -> dict[str, str]`: Upload every lane of the plan to ''marketplace'' one at a time, in :func:'upload_order', and return each row's state. One at a time, because the marketplaces order a project's files by when each upload completed. Every row is attempted; the first failure is raised after the others finished, so one refused file does not hold back the rest of the release.
 * `def verify(services: Services, *, repository: str, plan_dir: Path, wait_seconds: int, sleep: Callable[[float], None] = sleep, clock: Callable[[], float] = monotonic) -> bool`: Reconcile and publish the plan's releases, waiting at most ''wait_seconds'' for moderation. Returns whether every release is published; what is still pending is left to the schedule.
 * `def finish_drafts(services: Services, *, repository: str) -> dict[str, bool]`: The scheduled finish: for every draft release whose body carries a ledger, read its plan from the draft's :data:'PLAN_ASSET', require the ledger to bind that plan's digest, reconcile and publish what is complete. Returns tag -> whether it is published now. A draft that cannot be read or finished doe
 

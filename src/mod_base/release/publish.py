@@ -16,7 +16,6 @@ ledger is verified, and the plan's last tag is marked the repository's latest re
 
 from __future__ import annotations
 
-import concurrent.futures
 import hashlib
 import re
 import sys
@@ -40,9 +39,9 @@ from mod_base.release.plan import PLAN_NAME, admit_release, plan_digest, release
 #: The asset of every draft release that holds the plan it publishes, so the scheduled finish job
 #: can verify a draft after the plan artifact has expired. The ledger binds its digest.
 PLAN_ASSET = "mod-base-release-plan.json"
-#: Uploads to one marketplace that run at once. Each is a multi-megabyte POST; four keep a release
-#: of 34 files to a few minutes without tripping the marketplaces' rate limits.
-UPLOAD_WORKERS = 4
+#: The order the loaders of one Minecraft version are uploaded in. Modrinth and CurseForge list a
+#: project's files newest upload first, so the last loader here shows on top of its version.
+LOADER_UPLOAD_ORDER = ("forge", "fabric", "quilt", "neoforge")
 #: How long ``verify --wait-seconds`` sleeps between two passes over the pending rows.
 VERIFY_INTERVAL_SECONDS = 60
 #: The longest ``--wait-seconds`` a publish job may ask for: the job's own timeout is an hour.
@@ -340,9 +339,21 @@ def _upload_one(services: Services, plan: dict[str, Any], plan_dir: Path, entry:
     return "pending"
 
 
+def upload_order(plan: dict[str, Any], marketplace: str, tag: dict[str, Any], lane: str) -> tuple:
+    """Where a lane's file goes in the upload sequence: oldest Minecraft version first, then its
+    loaders in :data:`LOADER_UPLOAD_ORDER`. The marketplaces list the newest upload first, so the
+    project page shows the newest version on top with each version's loaders side by side."""
+
+    loaders = plan["lanes"][lane][marketplace]["loaders"]
+    rank = min(LOADER_UPLOAD_ORDER.index(loader) if loader in LOADER_UPLOAD_ORDER else len(LOADER_UPLOAD_ORDER)
+               for loader in loaders)
+    return (_minecraft_key(tag), rank, lane)
+
+
 def upload(services: Services, *, repository: str, plan_dir: Path, marketplace: str) -> dict[str, str]:
-    """Upload every lane of the plan to ``marketplace``, at most :data:`UPLOAD_WORKERS` at once, and
-    return each row's state. Every row is attempted; the first failure is raised after the others
+    """Upload every lane of the plan to ``marketplace`` one at a time, in :func:`upload_order`, and
+    return each row's state. One at a time, because the marketplaces order a project's files by when
+    each upload completed. Every row is attempted; the first failure is raised after the others
     finished, so one refused file does not hold back the rest of the release."""
 
     if marketplace not in MARKETPLACES:
@@ -363,17 +374,16 @@ def upload(services: Services, *, repository: str, plan_dir: Path, marketplace: 
 
     jobs = [(entry, lane) for entry in entries if entry.release.get("draft") for lane in entry.tag["lanes"]
             if marketplace in plan["lanes"][lane]]
+    jobs.sort(key=lambda job: upload_order(plan, marketplace, job[0].tag, job[1]))
     states: dict[str, str] = {}
     errors: list[BaseException] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as pool:
-        futures = {pool.submit(_upload_one, services, plan, plan_dir, entry, lane, marketplace, repository,
-                               reconcile, game_versions): _row(lane, marketplace) for entry, lane in jobs}
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                states[futures[future]] = future.result()
-            except BaseException as error:  # every row is attempted before the first failure is raised
-                states[futures[future]] = "failed"
-                errors.append(error)
+    for entry, lane in jobs:
+        try:
+            states[_row(lane, marketplace)] = _upload_one(services, plan, plan_dir, entry, lane, marketplace,
+                                                          repository, reconcile, game_versions)
+        except Exception as error:  # every row is attempted before the first failure is raised
+            states[_row(lane, marketplace)] = "failed"
+            errors.append(error)
     if errors:
         raise errors[0]
     return dict(sorted(states.items()))

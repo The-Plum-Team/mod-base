@@ -5,6 +5,24 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.8.4
+
+Patch release: a release's files reach the marketplaces in order. A mod moves from v1.8.3 to
+v1.8.4 with an ordinary pin bump.
+
+- `release upload` sent four files at once, and Modrinth and CurseForge list a project's files by
+  when each upload completed, so every release came out in a different order (26.3, 26.1.2, 26.1.1,
+  26.1, 26.2, 1.21.9, 1.21.10, ...). It now uploads one file at a time, oldest Minecraft version
+  first and, within a version, Forge, Fabric, Quilt, then NeoForge (`publish.upload_order`): the
+  project page shows the newest version on top with its loaders side by side. A re-dispatch resumes
+  in the same order. A release of 34 files takes a few minutes longer, well inside the publish job's
+  hour.
+- Tests check that order through the marketplace fakes and for a realistic matrix.
+- Compatibility: document kinds and their schema versions, `ADAPTER_API`, `BUILD_ADAPTER_API` 1,
+  `pixel_metrics_version` 1, the Pillow lock, the managed files and the workflows' jobs, steps and
+  permissions are those of v1.8.3.
+- Upgrade: bump the pin to v1.8.4 (`python3 scripts/ci/mod_base_kit.py bump --to v1.8.4`).
+
 ## v1.8.3
 
 Patch release: the publish job refused every release. A mod moves from v1.8.2 to v1.8.3 with an

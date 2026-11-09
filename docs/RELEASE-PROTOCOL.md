@@ -31,8 +31,12 @@ These come from the three native pipelines it replaces and from the Quick Skin 4
 - **One approval per release.** Quick Skin needed 102 `release` environment approvals (six per tag)
   behind one repository-wide lock, one job at a time: 105 minutes, 57% of them waiting for an
   approval. A job that waits on an environment shows its run as `pending`, not `waiting`.
-- **Upload in parallel, reconcile by content.** Every upload is checked before and after it by the
-  bytes it published, so a re-dispatch resumes and never uploads a second copy.
+- **Upload in order, reconcile by content.** Modrinth and CurseForge list a project's files newest
+  upload first, so files go up one at a time: oldest Minecraft version first, and within a version
+  Forge, Fabric, Quilt, then NeoForge (`publish.upload_order`). The project page then shows the
+  newest version on top with its loaders side by side. Every upload is checked before and after it
+  by the bytes it published, so a re-dispatch resumes, in the same order, and never uploads a
+  second copy.
 - **Marketplaces rename files.** GitHub turns spaces in an asset name into periods; since late
   October 2026 CurseForge turns every run of spaces and hyphens that holds a space into one hyphen
   and its CDN answers 403 for the original name. Reconciliation knows both rules.
@@ -76,7 +80,7 @@ verifies the kit of that pin. Each step receives only its own credential through
 | `release plan --repo DIR --release-config FILE --generation DIR --output DIR --github-output F` | in `plan`, after `ci subject --producer generation`, `ci plan` and `ci select-generation --with-build`: derives `mod-base.release.plan` from the generation, its verified bundle and the protected release config, and seals it with exactly the production files it names; outputs `plan_sha256`, `version` and `tags` |
 | `release admit --plan-sha256 HEX --output DIR` | first step of `publish`: downloads this run attempt's sealed plan artifact by numeric id, checks its digest and size, admits the plan and every asset again (size, SHA-256, SHA-1, SHA-512), requires the plan's digest to be the one the plan job output and the default branch to be still at the released commit |
 | `release github --plan DIR` | `publish`: refuses a tag that already names another commit, then creates or resumes one draft release per tag with its assets, the plan itself as `mod-base-release-plan.json` and an empty ledger; each tag is created at the released commit only when its release is published |
-| `release upload --plan DIR --marketplace modrinth\|curseforge` | `publish`: uploads every lane of the plan to one marketplace, at most four at once; each row's intent reaches the ledger before its file is sent |
+| `release upload --plan DIR --marketplace modrinth\|curseforge` | `publish`: uploads every lane of the plan to one marketplace, one at a time in version and loader order; each row's intent reaches the ledger before its file is sent |
 | `release verify --plan DIR --wait-seconds N` | `publish`: reconciles every row from public data, waits within the bound for moderation and publishes each draft whose rows are all verified |
 | `release verify --drafts` | `finish`: the same for every draft release that carries a ledger, reading the plan from the draft's own `mod-base-release-plan.json` asset, whose digest the ledger binds |
 

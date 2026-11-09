@@ -95,6 +95,30 @@ class Release(unittest.TestCase):
         self.assertEqual(len(self.modrinth.versions), 2)
         self.assertEqual(len(self.curseforge.files), 2)
 
+    def test_files_are_uploaded_oldest_minecraft_first_so_the_newest_is_listed_on_top(self) -> None:
+        self.publish_all()
+        for origin in (modrinth.MODRINTH_ORIGIN, curseforge.UPLOAD_ORIGIN):
+            bodies = [request.body for request in self.network.requests_to(origin, method="POST")]
+            fabric = next(i for i, body in enumerate(bodies) if b"1.20.1" in body)
+            neoforge = next(i for i, body in enumerate(bodies) if b"1.21.1" in body)
+            self.assertLess(fabric, neoforge, origin)
+
+    def test_the_upload_order_is_version_then_loader(self) -> None:
+        def lane(loader: str) -> dict:
+            return {"curseforge": {"loaders": [loader]}}
+
+        plan = {"lanes": {"neoforge-26.3": lane("neoforge"), "fabric-26.3": lane("fabric"),
+                          "neoforge-26.2": lane("neoforge"), "fabric-26.1.2": lane("fabric"),
+                          "forge-1.20.1": lane("forge"), "fabric-1.20.1": lane("fabric"),
+                          "fabric-1.21.10": lane("fabric"), "fabric-1.21.9": lane("fabric")}}
+        minecraft = {"neoforge-26.3": "26.3", "fabric-26.3": "26.3", "neoforge-26.2": "26.2",
+                     "fabric-26.1.2": "26.1.2", "forge-1.20.1": "1.20.1", "fabric-1.20.1": "1.20.1",
+                     "fabric-1.21.10": "1.21.10", "fabric-1.21.9": "1.21.9"}
+        ordered = sorted(plan["lanes"], key=lambda name: publish.upload_order(
+            plan, "curseforge", {"minecraft": minecraft[name]}, name))
+        self.assertEqual(ordered, ["forge-1.20.1", "fabric-1.20.1", "fabric-1.21.9", "fabric-1.21.10",
+                                   "fabric-26.1.2", "neoforge-26.2", "fabric-26.3", "neoforge-26.3"])
+
     def test_a_second_run_sends_nothing_twice(self) -> None:
         self.assertTrue(self.publish_all())
         before = (self.uploads(FakeModrinth.ORIGIN), self.uploads(FakeCurseForge.UPLOAD_ORIGIN),
