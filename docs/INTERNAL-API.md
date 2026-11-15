@@ -3237,6 +3237,7 @@ Owner: MB13. CurseForge: upload one file per lane and reconcile it from public d
 * `CDN_ORIGIN`
 * `APPROVED_STATUS`
 * `LOADER_NAMES`
+* `ENVIRONMENT_NAMES`
 * `RELEASE_TYPES`
 * `RELATION_TYPES`
 * `NAMED_VERSION_TYPES`
@@ -3357,6 +3358,7 @@ Owner: MB12. ''mod-base.release.config'' v1: the protected release data of a mod
 * `TAG_GROUPS`
 * `MODRINTH_DEPENDENCY_TYPES`
 * `CURSEFORGE_RELATION_TYPES`
+* `CURSEFORGE_ENVIRONMENTS`
 * `MARKETPLACES`
 * `TAG_PLACEHOLDERS`
 * `LANE_PLACEHOLDERS`

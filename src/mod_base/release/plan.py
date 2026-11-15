@@ -50,7 +50,8 @@ from mod_base.model import grammar as g
 from mod_base.model import limits as lim
 from mod_base.model.canonical import canonical_json, canonical_sha256, sha256_hex
 from mod_base.model.validators import Int, List, Map, Nullable, Obj, Str, Validator, check, is_display_text
-from mod_base.release.config import (CURSEFORGE_RELATION_TYPES, CURSEFORGE_SLUG, LOADER_NAMES, MARKETPLACES,
+from mod_base.release.config import (CURSEFORGE_ENVIRONMENTS, CURSEFORGE_RELATION_TYPES, CURSEFORGE_SLUG,
+                                     LOADER_NAMES, MARKETPLACES,
                                      MAX_RELEASE_CURSEFORGE_PROJECT_ID, MAX_RELEASE_DEPENDENCIES,
                                      MAX_RELEASE_GAME_VERSIONS, MAX_RELEASE_LANES, MAX_RELEASE_LOADERS,
                                      MAX_RELEASE_MODRINTH_NAME_CHARS, MAX_RELEASE_TAG_CHARS, MAX_RELEASE_TEXT_CHARS,
@@ -175,6 +176,10 @@ _CURSEFORGE = Obj({
     "release_type": Str(choices=VERSION_TYPES), "game_versions": _GAME_VERSIONS, "loaders": _LOADERS,
     "relations": List(Obj({"slug": Str(CURSEFORGE_SLUG, max_len=64), "type": Str(choices=CURSEFORGE_RELATION_TYPES)}),
                       max_items=MAX_RELEASE_DEPENDENCIES, unique_by=lambda item: item["slug"]),
+}, {
+    # Written only when the config names them, so a plan without them reads as before.
+    "environments": List(Str(choices=CURSEFORGE_ENVIRONMENTS), min_items=1, max_items=len(CURSEFORGE_ENVIRONMENTS),
+                         unique=True),
 })
 _LANE = Obj({"tag": _tag}, {"modrinth": _MODRINTH, "curseforge": _CURSEFORGE})
 _KIT = Obj({"sha": SHA1, "version": Str(g.VERSION, max_len=20), "tree_digest": Str(g.DIGEST, max_len=71)})

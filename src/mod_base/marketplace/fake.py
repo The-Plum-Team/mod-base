@@ -410,10 +410,12 @@ class FakeCurseForge:
     CDN_ORIGIN = "https://mediafilez.forgecdn.net"
 
     def __init__(self, network: FakeNetwork, *, token: str = "cf-fake-curseforge-token", rename: bool = True,
-                 upload_status: int = APPROVED) -> None:
+                 upload_status: int = APPROVED, require_environment: bool = False) -> None:
         self.token = token
         self.rename = rename
         self.upload_status = upload_status
+        #: CurseForge refuses an upload naming no ``environment`` game version for some projects.
+        self.require_environment = require_environment
         self.version_types: list[dict[str, Any]] = []
         self.game_versions: list[dict[str, Any]] = []
         self.files: list[dict[str, Any]] = []
@@ -480,6 +482,11 @@ class FakeCurseForge:
             known = {row["id"] for row in self.game_versions}
             if not metadata.get("gameVersions") or any(identifier not in known for identifier in metadata["gameVersions"]):
                 return json_reply(400, {"errorCode": 1018, "errorMessage": "Invalid game version ID"})
+            sides = {row["id"] for row in self.game_versions if row["gameVersionTypeID"] in
+                     {kind["id"] for kind in self.version_types if kind["slug"] == "environment"}}
+            if self.require_environment and not sides & set(metadata["gameVersions"]):
+                return json_reply(400, {"errorCode": 1018, "errorMessage": "You must select at least one version "
+                                                                           "from the environment group of versions"})
             name = parts["file"][0]
             row = self.add_file(int(segments[2]), curseforge_rename(name) if self.rename else name, parts["file"][1],
                                 status=self.upload_status)

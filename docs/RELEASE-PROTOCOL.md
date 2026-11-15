@@ -37,6 +37,10 @@ These come from the three native pipelines it replaces and from the Quick Skin 4
   newest version on top with its loaders side by side. Every upload is checked before and after it
   by the bytes it published, so a re-dispatch resumes, in the same order, and never uploads a
   second copy.
+- **Name the sides CurseForge asks for.** A CurseForge project that uses the `environment` game
+  versions refuses an upload naming neither `Client` nor `Server`: every file of Quick Skin 4.1.0
+  was refused. The release config's `curseforge.environments` names them, and every lane's upload
+  sends them with its Minecraft versions and loaders.
 - **Marketplaces rename files.** GitHub turns spaces in an asset name into periods; since late
   October 2026 CurseForge turns every run of spaces and hyphens that holds a space into one hyphen
   and its CDN answers 403 for the original name. Reconciliation knows both rules.

@@ -250,7 +250,8 @@ def _open_releases(services: Services, repository: str, plan: dict[str, Any]) ->
 
 
 def _curseforge_ids(names: dict[str, int], metadata: dict[str, Any]) -> tuple[int, ...]:
-    wanted = (*metadata["game_versions"], *(curseforge.LOADER_NAMES[loader] for loader in metadata["loaders"]))
+    wanted = (*metadata["game_versions"], *(curseforge.LOADER_NAMES[loader] for loader in metadata["loaders"]),
+              *(curseforge.ENVIRONMENT_NAMES[side] for side in metadata.get("environments", ())))
     missing = [name for name in wanted if name not in names]
     if missing:
         raise MbError(f"CurseForge knows no game version named {', '.join(missing)}", reason="release")

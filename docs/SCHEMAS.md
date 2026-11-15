@@ -894,7 +894,7 @@ reader refuses it as unknown.
 | `tags` | `{template, group}`: `group: minecraft` makes one tag per lane Minecraft version (the template names `{minecraft}`), `group: all` one tag for every lane (it may not) |
 | `release_name` | the GitHub Release title template |
 | `modrinth` | optional `{project_id, version_number, name}`; a rendered version number is at most 32 characters and unique across lanes |
-| `curseforge` | optional `{project_id, display_name}`; at least one of the two marketplaces |
+| `curseforge` | optional `{project_id, display_name}` with an optional `environments` (since v1.8.5: one or both of `client` and `server`, unique, sent as the CurseForge game versions `Client` and `Server`; a project that uses them refuses an upload naming none); at least one of the two marketplaces |
 | `lanes` | 1..256 lanes of the Build plan by id: `minecraft`, `loaders`, `game_versions` (holding `minecraft`), `version_type`, optional `modrinth_dependencies` and `curseforge_relations` |
 
 Templates take `{version}`, `{minecraft}`, `{tag}`, `{lane}`, `{loader}` and `{loader_name}` where
@@ -914,7 +914,7 @@ canonical bytes (`plan_digest`), which the plan job outputs and the ledger binds
 | `config_sha256`, `kit` | the release config and the kit that planned it |
 | `version`, `changelog` | the version and its notes (`text`, `sha256`) |
 | `tags` | each tag with its `name`, `minecraft` (null for one tag of all lanes), `lanes` and `assets` (`path`, `filename`, `size`, `sha256`, `sha1`, `sha512`, `lane`; null for an SBOM) |
-| `lanes` | each lane's `tag` and its rendered `modrinth` and `curseforge` metadata |
+| `lanes` | each lane's `tag` and its rendered `modrinth` and `curseforge` metadata; the `curseforge` metadata holds `environments` (since v1.8.5) only when the config names them, so a plan of a config without them is the plan v1.8.4 writes |
 
 ## Release ledger data v1
 
