@@ -5,6 +5,32 @@ Every release lists what changes for mods: document kinds and schema versions, t
 rewrites. A reader of release N accepts `schema_version` N and N-1 of every kind; within one
 `schema_version` only optional fields are ever added.
 
+## v1.8.5
+
+Patch release: a release reaches a CurseForge project that asks for the sides a file runs on. A
+mod moves from v1.8.4 to v1.8.5 with an ordinary pin bump, and names those sides in its release
+config.
+
+- CurseForge refuses an upload that names no `Client` or `Server` game version for a project that
+  uses them ("You must select at least one version from the environment group of versions"): all
+  34 files of Quick Skin 4.1.0 were refused and had to be uploaded by hand. The release config's
+  `curseforge` block takes an optional `environments`, `client` and/or `server`; the plan carries
+  them in every lane's `curseforge` metadata and `release upload` sends them as `Client` and
+  `Server` (`curseforge.ENVIRONMENT_NAMES`) beside the Minecraft versions and loaders. A config
+  without them plans and sends exactly what v1.8.4 did.
+- The CurseForge fake can refuse an upload without a side, as the real project does, and tests
+  cover both a config that names them and one that does not.
+- Compatibility: `mod-base.release.config` and `mod-base.release.plan` stay at `schema_version` 1
+  with one optional field each (`curseforge.environments`, and the lanes' `curseforge.environments`
+  in the plan). The plan holds it only when the config names it, and a config that names it is
+  refused by v1.8.4 and older, so no older kit is handed such a plan; a mod that names them cannot
+  pin back below v1.8.5 without removing them first. Every other document kind and schema version,
+  `ADAPTER_API`, `BUILD_ADAPTER_API` 1, `pixel_metrics_version` 1, the Pillow lock, the managed
+  files and the workflows' jobs, steps and permissions are those of v1.8.4.
+- Upgrade: bump the pin to v1.8.5 (`python3 scripts/ci/mod_base_kit.py bump --to v1.8.5`) and, for
+  a CurseForge project that asks for them, add `"environments": ["client", "server"]` to the
+  release config's `curseforge` block.
+
 ## v1.8.4
 
 Patch release: a release's files reach the marketplaces in order. A mod moves from v1.8.3 to

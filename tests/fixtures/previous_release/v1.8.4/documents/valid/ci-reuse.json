@@ -1,0 +1,188 @@
+{
+  "identity": {
+    "base_branch": "master",
+    "base_sha": "8888888888888888888888888888888888888888",
+    "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+    "controller_sha": "8888888888888888888888888888888888888888",
+    "controller_workflow": ".github/workflows/build-gate.yml",
+    "graph_version": 1,
+    "head_branch": "master",
+    "head_sha": "8888888888888888888888888888888888888888",
+    "inventory_blob": "7777777777777777777777777777777777777777",
+    "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+    "kit": {
+      "repository": "The-Plum-Team/mod-base",
+      "sha": "3333333333333333333333333333333333333333",
+      "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "version": "1.1.0"
+    },
+    "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "pr_number": 0,
+    "repository": "example/mod",
+    "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+    "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+    "source_repository": "example/mod",
+    "tested_parents": [
+      "2222222222222222222222222222222222222222"
+    ],
+    "tested_sha": "8888888888888888888888888888888888888888",
+    "tested_tree": "6666666666666666666666666666666666666666"
+  },
+  "kind": "mod-base.ci.reuse",
+  "plan_sha256": "149432188c646857acac39a7e8e7bc5b3bef269414a057ce8b45e7d6ef7d061f",
+  "producer": {
+    "api_head_sha": "8888888888888888888888888888888888888888",
+    "event": "push",
+    "graph_sha256": "81570e1ac55cea0832cc0ce00b4afce07ad4de2677a8d902b30071840c90c222",
+    "run_attempt": 2,
+    "run_id": 44,
+    "workflow_path": ".github/workflows/mod-base-build.yml",
+    "workflow_ref": "example/mod/.github/workflows/mod-base-build.yml@refs/heads/master"
+  },
+  "profile": "block-pops",
+  "schema_version": 1,
+  "source": {
+    "build_seal": {
+      "artifact": {
+        "created_at": "2026-10-07T10:01:30Z",
+        "digest": "sha256:bf1384005094591458894db023c35be3a3b7f200bf10e3dc3e08c6a00916b4f5",
+        "expires_at": "2026-10-14T10:01:30Z",
+        "id": 100,
+        "name": "mb-ci-tested--42--a2--build",
+        "size": 512
+      },
+      "identity": {
+        "base_branch": "master",
+        "base_sha": "2222222222222222222222222222222222222222",
+        "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+        "controller_sha": "2222222222222222222222222222222222222222",
+        "controller_workflow": ".github/workflows/build-gate.yml",
+        "graph_version": 1,
+        "head_branch": "feature/example",
+        "head_sha": "1111111111111111111111111111111111111111",
+        "inventory_blob": "7777777777777777777777777777777777777777",
+        "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+        "kit": {
+          "repository": "The-Plum-Team/mod-base",
+          "sha": "3333333333333333333333333333333333333333",
+          "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1.0"
+        },
+        "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "pr_number": 7,
+        "repository": "example/mod",
+        "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+        "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+        "source_repository": "example/mod",
+        "tested_parents": [
+          "2222222222222222222222222222222222222222",
+          "1111111111111111111111111111111111111111"
+        ],
+        "tested_sha": "5555555555555555555555555555555555555555",
+        "tested_tree": "6666666666666666666666666666666666666666"
+      },
+      "plan_sha256": "d58df54194e7f2b3e80305289a4eb71b4a4ee50feede2011dbc87b8e48799d80",
+      "producer": {
+        "api_head_sha": "1111111111111111111111111111111111111111",
+        "event": "pull_request_target",
+        "graph_sha256": "e774fe528ecc0d05cd2dd854fb41baa1c789c9207320a9d813a74b52bac6e90d",
+        "run_attempt": 2,
+        "run_id": 42,
+        "upload_window": {
+          "completed_at": "2026-10-07T10:02:00Z",
+          "started_at": "2026-10-07T10:01:00Z"
+        },
+        "workflow_path": ".github/workflows/mod-base-build.yml",
+        "workflow_ref": "example/mod/.github/workflows/mod-base-build.yml@refs/heads/master"
+      },
+      "profile": "block-pops"
+    },
+    "identity": {
+      "base_branch": "master",
+      "base_sha": "2222222222222222222222222222222222222222",
+      "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+      "controller_sha": "2222222222222222222222222222222222222222",
+      "controller_workflow": ".github/workflows/build-gate.yml",
+      "graph_version": 1,
+      "head_branch": "feature/example",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "inventory_blob": "7777777777777777777777777777777777777777",
+      "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+      "kit": {
+        "repository": "The-Plum-Team/mod-base",
+        "sha": "3333333333333333333333333333333333333333",
+        "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "version": "1.1.0"
+      },
+      "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+      "pr_number": 7,
+      "repository": "example/mod",
+      "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+      "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+      "source_repository": "example/mod",
+      "tested_parents": [
+        "2222222222222222222222222222222222222222",
+        "1111111111111111111111111111111111111111"
+      ],
+      "tested_sha": "5555555555555555555555555555555555555555",
+      "tested_tree": "6666666666666666666666666666666666666666"
+    },
+    "packaged_seal": {
+      "artifact": {
+        "created_at": "2026-10-07T10:01:30Z",
+        "digest": "sha256:bf1384005094591458894db023c35be3a3b7f200bf10e3dc3e08c6a00916b4f5",
+        "expires_at": "2026-10-14T10:01:30Z",
+        "id": 103,
+        "name": "mb-ci-tested--43--a2--packaged",
+        "size": 512
+      },
+      "identity": {
+        "base_branch": "master",
+        "base_sha": "2222222222222222222222222222222222222222",
+        "controller_ref": "example/mod/.github/workflows/build-gate.yml@refs/heads/master",
+        "controller_sha": "2222222222222222222222222222222222222222",
+        "controller_workflow": ".github/workflows/build-gate.yml",
+        "graph_version": 1,
+        "head_branch": "feature/example",
+        "head_sha": "1111111111111111111111111111111111111111",
+        "inventory_blob": "7777777777777777777777777777777777777777",
+        "inventory_sha256": "b11a85b296a90afc460430434a504e7acb04b064575b7277724688af0e59d189",
+        "kit": {
+          "repository": "The-Plum-Team/mod-base",
+          "sha": "3333333333333333333333333333333333333333",
+          "tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+          "version": "1.1.0"
+        },
+        "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "pr_number": 7,
+        "repository": "example/mod",
+        "runtime_selection_sha256": "a18b869b2e81c0c529552a3c4fa5c92ed08b98a4e146aed778d71d27517f83ac",
+        "scenario_sha256": "d1a1c362651af80e00f3edf924ede8060c24213db5ca58086ae20b9beb820496",
+        "source_repository": "example/mod",
+        "tested_parents": [
+          "2222222222222222222222222222222222222222",
+          "1111111111111111111111111111111111111111"
+        ],
+        "tested_sha": "5555555555555555555555555555555555555555",
+        "tested_tree": "6666666666666666666666666666666666666666"
+      },
+      "plan_sha256": "d58df54194e7f2b3e80305289a4eb71b4a4ee50feede2011dbc87b8e48799d80",
+      "producer": {
+        "api_head_sha": "1111111111111111111111111111111111111111",
+        "event": "pull_request_target",
+        "graph_sha256": "32769be59551162877c1639c9b0e2f29b71cde76f57fdb2c5cbffd5a9ac56ffd",
+        "run_attempt": 2,
+        "run_id": 43,
+        "upload_window": {
+          "completed_at": "2026-10-07T10:02:00Z",
+          "started_at": "2026-10-07T10:01:00Z"
+        },
+        "workflow_path": ".github/workflows/mod-base-packaged-e2e.yml",
+        "workflow_ref": "example/mod/.github/workflows/mod-base-packaged-e2e.yml@refs/heads/master"
+      },
+      "profile": "block-pops"
+    },
+    "plan_sha256": "d58df54194e7f2b3e80305289a4eb71b4a4ee50feede2011dbc87b8e48799d80",
+    "profile": "block-pops"
+  }
+}

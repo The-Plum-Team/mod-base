@@ -1,0 +1,15 @@
+{
+  "arguments": {},
+  "boundary": {
+    "device": 1,
+    "gid": 121,
+    "home": "/home/runner",
+    "inode": 10,
+    "original_mode": 493,
+    "uid": 1001
+  },
+  "kind": "mod-base.ci.root-request",
+  "nonce": "cbf55746cd4ae99b18e5a4d05de18382711a3ea8cafed2ed24db61905e94bcbe",
+  "operation": "host-fence",
+  "schema_version": 1
+}

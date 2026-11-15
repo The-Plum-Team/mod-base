@@ -133,6 +133,9 @@ VERSION_TYPES = ("release", "beta", "alpha")
 TAG_GROUPS = ("minecraft", "all")
 MODRINTH_DEPENDENCY_TYPES = ("required", "optional", "incompatible", "embedded")
 CURSEFORGE_RELATION_TYPES = ("requiredDependency", "optionalDependency", "embeddedLibrary", "incompatible", "tool")
+#: The sides a mod's files run on, which CurseForge lists as the game versions ``Client`` and
+#: ``Server`` (``mod_base.marketplace.curseforge.ENVIRONMENT_NAMES``).
+CURSEFORGE_ENVIRONMENTS = ("client", "server")
 #: The marketplaces a release publishes to, in the order every document lists them.
 MARKETPLACES = ("modrinth", "curseforge")
 #: What a tag template and a release name may name (``minecraft`` only for ``tags.group`` minecraft).
@@ -249,7 +252,11 @@ _CONFIG = Obj({
 }, {
     "modrinth": Obj({"project_id": Str(MODRINTH_ID, max_len=8), "version_number": _template,
                      "name": _template}),
-    "curseforge": Obj({"project_id": Int(1, MAX_RELEASE_CURSEFORGE_PROJECT_ID), "display_name": _template}),
+    "curseforge": Obj({"project_id": Int(1, MAX_RELEASE_CURSEFORGE_PROJECT_ID), "display_name": _template}, {
+        # Absent means none: CurseForge refuses an upload without one for a project that uses them.
+        "environments": List(Str(choices=CURSEFORGE_ENVIRONMENTS), min_items=1,
+                             max_items=len(CURSEFORGE_ENVIRONMENTS), unique=True),
+    }),
 })
 
 
@@ -362,6 +369,8 @@ def release_layout(config: dict[str, Any], version: str, *,
                 "loaders": list(lane["loaders"]),
                 "relations": [{"slug": slug, "type": kind} for slug, kind in lane.get("curseforge_relations", ())],
             }
+            if "environments" in project:
+                metadata["curseforge"]["environments"] = list(project["environments"])
         lanes[lane_id] = metadata
     names = [entry["name"] for entry in tags.values()]
     check(len(set(names)) == len(names), f"{path}.release_name", "renders one name for two tags")

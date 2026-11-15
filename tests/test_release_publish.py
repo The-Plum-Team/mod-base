@@ -24,12 +24,16 @@ REPO = "The-Plum-Team/Example-Mod"
 PENDING = 1
 
 
-class Release(unittest.TestCase):
+class ReleaseCase(unittest.TestCase):
+    """A sealed plan of :attr:`CONFIG` and the three marketplace fakes."""
+
+    CONFIG = "config-two-marketplaces.json"
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
-        world = World(root, "config-two-marketplaces.json")
+        world = World(root, self.CONFIG)
         self.plan = world.derive()
         self.plan_dir = root / "sealed"
         seal_release(self.plan_dir, plan=self.plan, bundle=world.bundle)
@@ -73,6 +77,8 @@ class Release(unittest.TestCase):
     def uploads(self, origin: str) -> int:
         return len(self.network.requests_to(origin, method="POST"))
 
+
+class Release(ReleaseCase):
     def test_the_whole_release_is_published_and_verified_by_content(self) -> None:
         self.assertTrue(self.publish_all())
         sha = released_commit(self.plan)
@@ -203,6 +209,47 @@ class Release(unittest.TestCase):
         with self.assertRaises(MbError):
             publish.verify(self.services(), repository=REPO, plan_dir=self.plan_dir,
                            wait_seconds=publish.MAX_VERIFY_WAIT_SECONDS + 1)
+
+
+class Environments(ReleaseCase):
+    """CurseForge refuses an upload that names no ``Client`` or ``Server`` for a project that uses
+    them (Quick Skin 4.1.0, 11 November 2026: all 34 files refused)."""
+
+    CONFIG = "config-environments.json"
+
+    def test_curseforge_receives_the_sides_the_config_names(self) -> None:
+        self.curseforge.require_environment = True
+        self.assertTrue(self.publish_all())
+        names = {row["id"]: row["name"] for row in self.curseforge.game_versions}
+        sent = [sorted(names[identifier] for identifier in metadata["gameVersions"])
+                for metadata in self.curseforge.metadata.values()]
+        self.assertEqual(sorted(sent), [["1.20.1", "Client", "Fabric", "Server"],
+                                        ["1.21.1", "Client", "NeoForge", "Server"]])
+
+    def test_the_plan_carries_them_for_every_lane(self) -> None:
+        for lane in self.plan["lanes"].values():
+            self.assertEqual(lane["curseforge"]["environments"], ["client", "server"])
+            self.assertNotIn("environments", lane["modrinth"])
+
+
+class NoEnvironments(ReleaseCase):
+    def test_a_config_without_them_plans_and_sends_none(self) -> None:
+        self.assertTrue(self.publish_all())
+        self.assertTrue(all("environments" not in lane["curseforge"] for lane in self.plan["lanes"].values()))
+        sides = {row["id"] for row in self.curseforge.game_versions if row["name"] in ("Client", "Server")}
+        self.assertTrue(all(not sides & set(metadata["gameVersions"]) for metadata in self.curseforge.metadata.values()))
+
+    def test_a_project_that_needs_one_refuses_every_file_and_no_row_is_fenced(self) -> None:
+        self.curseforge.require_environment = True
+        publish.create_releases(self.services(), repository=REPO, plan_dir=self.plan_dir)
+        with self.assertRaisesRegex(MbError, "environment group"):
+            publish.upload(self.services(curseforge_token=True), repository=REPO, plan_dir=self.plan_dir,
+                           marketplace="curseforge")
+        self.assertEqual(self.curseforge.files, [])
+        for tag in self.plan["tags"]:
+            states = {value["state"] for row, value in self.ledger(tag["tag"])["rows"].items()
+                      if row.endswith("--curseforge")}
+            self.assertEqual(states, {"unstarted"})
 
 
 if __name__ == "__main__":

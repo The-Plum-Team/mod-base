@@ -1,0 +1,268 @@
+{
+  "expectation": {
+    "path": "expectation.json",
+    "sha256": "f3af073c4d19292b63afdf558c354fd6987c6f96d93839ce8e4226e83dd335a5",
+    "size": 2869
+  },
+  "files": [
+    {
+      "path": "expectation.json",
+      "sha256": "f3af073c4d19292b63afdf558c354fd6987c6f96d93839ce8e4226e83dd335a5",
+      "size": 2869
+    },
+    {
+      "path": "images/5f97f201b9cf3faf57454ab5f38c7546eeea7464fab95e311e4a2eba4442fb71.png",
+      "sha256": "5f97f201b9cf3faf57454ab5f38c7546eeea7464fab95e311e4a2eba4442fb71",
+      "size": 1234567
+    },
+    {
+      "path": "images/819a91ddd8f9618e238f0f1486fd24d3d0db5bcfeba54ef945e8d1187b46fe5b.png",
+      "sha256": "819a91ddd8f9618e238f0f1486fd24d3d0db5bcfeba54ef945e8d1187b46fe5b",
+      "size": 1234567
+    },
+    {
+      "path": "images/d917b03a5e9a0bfeb6616ed7885b62e4814076033614f2738210c8094963082d.png",
+      "sha256": "d917b03a5e9a0bfeb6616ed7885b62e4814076033614f2738210c8094963082d",
+      "size": 1234567
+    },
+    {
+      "path": "images/e57b6bdf109bf14c9f9520774035c552e7fdb0ac5ab0b4b71ca264ac3c7d0862.png",
+      "sha256": "e57b6bdf109bf14c9f9520774035c552e7fdb0ac5ab0b4b71ca264ac3c7d0862",
+      "size": 1234567
+    }
+  ],
+  "frames": [
+    {
+      "artifact_node": "1.20.1-fabric",
+      "capture_id": "full.client_a.title_screen",
+      "capture_order": 0,
+      "expectation": "The Quick Skin title-screen button is visible.",
+      "frame_id": "1.20.1-fabric/full/client_a/title_screen",
+      "lane_id": "1.20.1-fabric/full",
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "review_tier": "key",
+      "role": "client_a",
+      "runtime_evidence": "PASS title_screen: renderer confirmed the expected state on fabric",
+      "scenario": "full",
+      "source": {
+        "format": "png",
+        "height": 1080,
+        "path": "images/5f97f201b9cf3faf57454ab5f38c7546eeea7464fab95e311e4a2eba4442fb71.png",
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "5f97f201b9cf3faf57454ab5f38c7546eeea7464fab95e311e4a2eba4442fb71",
+          "height": 1080,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "d61e9823b060f4e31d826d02edc18d2a7288d89b40a331b8e5c878689ee219d6",
+          "width": 1920
+        },
+        "pixel_sha256": "d61e9823b060f4e31d826d02edc18d2a7288d89b40a331b8e5c878689ee219d6",
+        "sha256": "5f97f201b9cf3faf57454ab5f38c7546eeea7464fab95e311e4a2eba4442fb71",
+        "size": 1234567,
+        "width": 1920
+      },
+      "step": "title_screen",
+      "title": "Title screen"
+    },
+    {
+      "artifact_node": "1.20.1-fabric",
+      "capture_id": "full.client_a.skin_apply",
+      "capture_order": 1,
+      "expectation": "The plaid local skin renders on the player model.",
+      "frame_id": "1.20.1-fabric/full/client_a/skin_apply",
+      "lane_id": "1.20.1-fabric/full",
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "review_tier": "all",
+      "role": "client_a",
+      "runtime_evidence": "PASS skin_apply: renderer confirmed the expected state on fabric",
+      "scenario": "full",
+      "source": {
+        "format": "png",
+        "height": 1080,
+        "path": "images/e57b6bdf109bf14c9f9520774035c552e7fdb0ac5ab0b4b71ca264ac3c7d0862.png",
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "e57b6bdf109bf14c9f9520774035c552e7fdb0ac5ab0b4b71ca264ac3c7d0862",
+          "height": 1080,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "a023e39c530c7e14b8e61b789be8ca8c1de9f782eb410487a3fa0022da727f88",
+          "width": 1920
+        },
+        "pixel_sha256": "a023e39c530c7e14b8e61b789be8ca8c1de9f782eb410487a3fa0022da727f88",
+        "sha256": "e57b6bdf109bf14c9f9520774035c552e7fdb0ac5ab0b4b71ca264ac3c7d0862",
+        "size": 1234567,
+        "width": 1920
+      },
+      "step": "skin_apply",
+      "title": "Applied local skin"
+    },
+    {
+      "artifact_node": "1.20.1-forge",
+      "capture_id": "full.client_a.title_screen",
+      "capture_order": 0,
+      "expectation": "The Quick Skin title-screen button is visible.",
+      "frame_id": "1.20.1-forge/full/client_a/title_screen",
+      "lane_id": "1.20.1-forge/full",
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "review_tier": "key",
+      "role": "client_a",
+      "runtime_evidence": "PASS title_screen: renderer confirmed the expected state on forge",
+      "scenario": "full",
+      "source": {
+        "format": "png",
+        "height": 1080,
+        "path": "images/d917b03a5e9a0bfeb6616ed7885b62e4814076033614f2738210c8094963082d.png",
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "d917b03a5e9a0bfeb6616ed7885b62e4814076033614f2738210c8094963082d",
+          "height": 1080,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "e02266b5dabb22ad742285106a46c2d27d72c84516cd362229b3933291fd22d7",
+          "width": 1920
+        },
+        "pixel_sha256": "e02266b5dabb22ad742285106a46c2d27d72c84516cd362229b3933291fd22d7",
+        "sha256": "d917b03a5e9a0bfeb6616ed7885b62e4814076033614f2738210c8094963082d",
+        "size": 1234567,
+        "width": 1920
+      },
+      "step": "title_screen",
+      "title": "Title screen"
+    },
+    {
+      "artifact_node": "1.20.1-forge",
+      "capture_id": "full.client_a.skin_apply",
+      "capture_order": 1,
+      "expectation": "The plaid local skin renders on the player model.",
+      "frame_id": "1.20.1-forge/full/client_a/skin_apply",
+      "lane_id": "1.20.1-forge/full",
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "review_tier": "all",
+      "role": "client_a",
+      "runtime_evidence": "PASS skin_apply: renderer confirmed the expected state on forge",
+      "scenario": "full",
+      "source": {
+        "format": "png",
+        "height": 1080,
+        "path": "images/819a91ddd8f9618e238f0f1486fd24d3d0db5bcfeba54ef945e8d1187b46fe5b.png",
+        "pixel": {
+          "dark_fraction": 0.0123,
+          "file_sha256": "819a91ddd8f9618e238f0f1486fd24d3d0db5bcfeba54ef945e8d1187b46fe5b",
+          "height": 1080,
+          "light_fraction": 0.0012,
+          "luma_entropy": 5.123,
+          "meaningful_colors": 18,
+          "pixel_sha256": "d34250d43be72cea5f1aec68cfbc73cb6aed0c2e250ab56a9e517ddc373e0e8e",
+          "width": 1920
+        },
+        "pixel_sha256": "d34250d43be72cea5f1aec68cfbc73cb6aed0c2e250ab56a9e517ddc373e0e8e",
+        "sha256": "819a91ddd8f9618e238f0f1486fd24d3d0db5bcfeba54ef945e8d1187b46fe5b",
+        "size": 1234567,
+        "width": 1920
+      },
+      "step": "skin_apply",
+      "title": "Applied local skin"
+    }
+  ],
+  "key": "mc1.20.1",
+  "kind": "mod-base.evidence.anchor",
+  "kit": {
+    "repository": "The-Plum-Team/mod-base",
+    "sha": "734f6e6bc8ba05938734384ab7835c45111af4d3",
+    "version": "0.9.0"
+  },
+  "lanes": [
+    {
+      "artifact_node": "1.20.1-fabric",
+      "elapsed_s": 312.5,
+      "jars": {
+        "harness_sha256": "32f726f0475f32347de8ac8010bad51bd874ed3a03b824988c9d528caac32da6",
+        "production_sha256": "57f55ced0ebcdd25a75a2cb06ec6626f9ecf337ae77f693007117231b35033b1"
+      },
+      "java": 17,
+      "lane_id": "1.20.1-fabric/full",
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "profile": "pr",
+      "roles": [
+        "client_a"
+      ],
+      "scenario": "full",
+      "status": "pass"
+    },
+    {
+      "artifact_node": "1.20.1-forge",
+      "elapsed_s": 312.5,
+      "jars": {
+        "harness_sha256": "88a49da634439788e45aeaa4b6b7fe954c563e455dbf2b2cfa1e84fee432ab99",
+        "production_sha256": "b069ccac2d21ed0a4eb12dc76482790f431e239887f55630575b829cb2e70556"
+      },
+      "java": 17,
+      "lane_id": "1.20.1-forge/full",
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "profile": "pr",
+      "roles": [
+        "client_a"
+      ],
+      "scenario": "full",
+      "status": "pass"
+    }
+  ],
+  "provenance": {
+    "handoff": {
+      "branch": "master",
+      "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "controller_branch": "master",
+      "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "run_attempt": 1,
+      "run_id": 101,
+      "workflow_path": ".github/workflows/on-demand-e2e.yml"
+    },
+    "tested": {
+      "branch": "master",
+      "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "controller_branch": "master",
+      "controller_sha": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+      "run_attempt": 1,
+      "run_id": 101,
+      "workflow_path": ".github/workflows/on-demand-e2e.yml"
+    }
+  },
+  "reference": {
+    "artifact_nodes": [
+      "1.20.1-fabric",
+      "1.20.1-forge"
+    ],
+    "loaders": [
+      "fabric",
+      "forge"
+    ],
+    "minecraft": [
+      "1.20.1"
+    ]
+  },
+  "repository": "The-Plum-Team/Quick-Skin-Mod",
+  "schema_version": 1,
+  "source_artifact": {
+    "digest": "sha256:807b77b12c66fdd98579bde15fa7568d3314330a21efbb36f91805aec1da52fa",
+    "id": 9001,
+    "name": "mb-handoff--mc1.20.1--a1",
+    "run_attempt": 1,
+    "run_id": 101
+  },
+  "subject": {
+    "branch": "master",
+    "commit": "eb2c848e89009c3f78ec15dddc51f0afdb532989",
+    "tree": "5459e70b2b7c2688978c36fedc9a4958a5b2cde0"
+  }
+}

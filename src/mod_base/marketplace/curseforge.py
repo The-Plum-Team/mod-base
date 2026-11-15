@@ -48,9 +48,9 @@ from mod_base.marketplace.transport import (
 )
 from mod_base.model.canonical import canonical_json
 
-__all__ = ["UPLOAD_ORIGIN", "LISTING_ORIGIN", "CDN_ORIGIN", "APPROVED_STATUS", "LOADER_NAMES", "RELEASE_TYPES",
-           "RELATION_TYPES", "CurseForgeFile", "Reconciliation", "headers", "stored_name", "cdn_path", "download",
-           "game_version_ids", "upload", "listing", "reconcile"]
+__all__ = ["UPLOAD_ORIGIN", "LISTING_ORIGIN", "CDN_ORIGIN", "APPROVED_STATUS", "LOADER_NAMES",
+           "ENVIRONMENT_NAMES", "RELEASE_TYPES", "RELATION_TYPES", "CurseForgeFile", "Reconciliation", "headers",
+           "stored_name", "cdn_path", "download", "game_version_ids", "upload", "listing", "reconcile"]
 
 UPLOAD_ORIGIN = "https://minecraft.curseforge.com"
 LISTING_ORIGIN = "https://www.curseforge.com"
@@ -58,6 +58,10 @@ CDN_ORIGIN = "https://mediafilez.forgecdn.net"
 APPROVED_STATUS = 4
 #: Modrinth-style loader ids to the game version names CurseForge spells them with.
 LOADER_NAMES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "quilt": "Quilt"}
+#: The sides a file runs on, to the game version names of CurseForge's ``environment`` type. A
+#: project that uses them is refused an upload naming none ("You must select at least one version
+#: from the environment group of versions").
+ENVIRONMENT_NAMES = {"client": "Client", "server": "Server"}
 RELEASE_TYPES = ("release", "beta", "alpha")
 RELATION_TYPES = ("requiredDependency", "optionalDependency", "embeddedLibrary", "incompatible", "tool")
 #: Game version types whose names :func:`game_version_ids` maps: every ``minecraft-*`` type plus these.
